@@ -188,7 +188,7 @@ Level(
 
                 // On the rim.
                 Gem(pos: (24.0, 46.8, 33.5), colour: Some((1.0, 0.8, 0.3))),
-                Trampoline(pos: (17.6, 46.0, 17.6)),
+                Trampoline(pos: (17.6, 46.0, 17.6), radius: 1.5),
 
                 // The lift: rests on the rim's east side, climbs to half a
                 // metre off the island's south face.

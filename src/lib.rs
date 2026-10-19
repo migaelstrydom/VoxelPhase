@@ -45,6 +45,7 @@ pub mod systems;
 pub mod terrain;
 pub mod terrain_perf;
 pub mod time;
+pub mod trampoline;
 pub mod utils;
 pub mod water;
 pub mod water_perf;

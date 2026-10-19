@@ -90,6 +90,15 @@ impl Beat {
         }
     }
 
+    /// Jump on the first frame from where it stands, and stand.
+    pub fn hop(duration: f32) -> Self {
+        Self {
+            label: "hop",
+            jump: true,
+            ..Self::stand(duration)
+        }
+    }
+
     /// Throw on the first frame of this beat, whatever else it is doing.
     pub fn throwing(mut self) -> Self {
         self.throw = true;

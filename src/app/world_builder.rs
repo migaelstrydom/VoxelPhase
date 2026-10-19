@@ -45,6 +45,7 @@ use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::{FrameStart, PhysicsResource};
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
+use crate::trampoline::Trampoline;
 
 /// Builds and configures the ECS World with all components and resources
 pub struct WorldBuilder {
@@ -103,6 +104,7 @@ impl WorldBuilder {
         world.register::<DriveIntent>();
         world.register::<BodyMotion>();
         world.register::<MovingPlatform>();
+        world.register::<Trampoline>();
         world.register::<Grenade>();
         world.register::<HeldGrenade>();
         world.register::<Lifetime>();

@@ -22,6 +22,7 @@ use serde::Deserialize;
 use crate::collision::AABB;
 use crate::fracture::DebrisBudget;
 use crate::terrain::SegmentFrame;
+use crate::trampoline::TrampolineShape;
 
 use super::footprint::{Footprint, Support};
 
@@ -1324,21 +1325,16 @@ pub enum LevelObject {
         #[serde(default = "IcosahedronDef::default_friction")]
         friction: f32,
     },
-    /// Trampoline — bouncy pad on four short legs.
+    /// Trampoline — a round bed on coil springs, sprung from a hoop on legs.
     Trampoline {
         /// Ground point under its centre, where its feet stand.
         pos: (f32, f32, f32),
         /// Rotation about `+Y` in degrees, within the segment's frame.
         #[serde(default)]
         yaw: f32,
-        #[serde(default = "TrampolineDef::default_pad_half_extents")]
-        pad_half_extents: (f32, f32, f32),
-        #[serde(default = "TrampolineDef::default_leg_half_extents")]
-        leg_half_extents: (f32, f32, f32),
-        #[serde(default = "TrampolineDef::default_density")]
-        density: f32,
-        #[serde(default = "TrampolineDef::default_restitution")]
-        restitution: f32,
+        /// Radius of the hoop's centreline, in metres.
+        #[serde(default = "TrampolineDef::default_radius")]
+        radius: f32,
     },
     /// Table — compound body (top slab + 4 legs).
     Table {
@@ -1835,11 +1831,10 @@ impl LevelObject {
             LevelObject::Jenga {
                 block_half_length, ..
             } => rect(*block_half_length, *block_half_length, 0.0),
-            LevelObject::Trampoline {
-                pad_half_extents,
-                yaw,
-                ..
-            } => rect(pad_half_extents.0, pad_half_extents.2, *yaw),
+            LevelObject::Trampoline { radius, yaw, .. } => {
+                let reach = TrampolineShape::with_radius(*radius).footprint_radius();
+                rect(reach, reach, *yaw)
+            }
             LevelObject::Table {
                 top_half_extents,
                 yaw,
@@ -2705,20 +2700,10 @@ impl LevelObject {
                 friction: *friction,
             }),
 
-            LevelObject::Trampoline {
-                pos,
-                yaw,
-                pad_half_extents,
-                leg_half_extents,
-                density,
-                restitution,
-            } => Box::new(TrampolineDef {
+            LevelObject::Trampoline { pos, yaw, radius } => Box::new(TrampolineDef {
                 pos: *pos,
                 yaw: *yaw,
-                pad_half_extents: *pad_half_extents,
-                leg_half_extents: *leg_half_extents,
-                density: *density,
-                restitution: *restitution,
+                radius: *radius,
             }),
 
             LevelObject::Table {

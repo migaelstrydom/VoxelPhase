@@ -10,6 +10,7 @@ mod dome;
 mod fissured_shell;
 mod heart;
 mod sphere;
+mod tube;
 
 pub use capsule::generate_capsule;
 pub use cube::{generate_cube_indices, generate_cube_vertices};
@@ -23,3 +24,4 @@ pub use sphere::{
     generate_magic_sphere_vertices, generate_sphere_indices, generate_sphere_vertices,
     MagicSphereConfig,
 };
+pub use tube::{append_tube, coil_path, generate_tube};

@@ -37,7 +37,6 @@ impl SurfaceFinish {
     };
 
     /// Polished metal: highlight takes the base colour, no diffuse response.
-    #[allow(dead_code)]
     pub const METAL: Self = Self {
         roughness: 0.25,
         metallic: 1.0,

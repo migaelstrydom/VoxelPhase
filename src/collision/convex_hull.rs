@@ -579,6 +579,47 @@ pub fn cube_hull(half_extents: Vector3<f32>) -> ConvexHull {
     ConvexHull::new(vertices, faces)
 }
 
+/// A regular prism standing on +Y: `sides` faces round a circle of `radius`
+/// (to its corners), `half_height` above and below the origin. A disc, for a
+/// collider that should be round.
+pub fn prism_hull(sides: u16, radius: f32, half_height: f32) -> ConvexHull {
+    let sides = sides.max(3);
+    let corner = |i: u16, y: f32| {
+        let angle = i as f32 / sides as f32 * std::f32::consts::TAU;
+        Vector3::new(radius * angle.cos(), y, radius * angle.sin())
+    };
+    let mut vertices = Vec::with_capacity(2 * sides as usize);
+    for i in 0..sides {
+        vertices.push(corner(i, half_height));
+    }
+    for i in 0..sides {
+        vertices.push(corner(i, -half_height));
+    }
+
+    // Corners run anticlockwise seen from above (+Y), so the top face lists
+    // them in reverse to wind anticlockwise from outside.
+    let mut faces = vec![
+        HullFace {
+            vertex_indices: (0..sides).rev().collect(),
+            normal: Vector3::y(),
+        },
+        HullFace {
+            vertex_indices: (sides..2 * sides).collect(),
+            normal: -Vector3::y(),
+        },
+    ];
+    for i in 0..sides {
+        let next = (i + 1) % sides;
+        let middle = (i as f32 + 0.5) / sides as f32 * std::f32::consts::TAU;
+        faces.push(HullFace {
+            vertex_indices: SmallVec::from_slice(&[i, next, sides + next, sides + i]),
+            normal: Vector3::new(middle.cos(), 0.0, middle.sin()),
+        });
+    }
+
+    ConvexHull::new(vertices, faces)
+}
+
 /// A regular dodecahedron with edges `edge` long, centred at the origin.
 ///
 /// Its vertices are the eight corners of a cube plus three golden rectangles,
@@ -1060,5 +1101,16 @@ mod centroid_tests {
         )
         .expect("a corner comes off");
         (halves.front, halves.back)
+    }
+
+    #[test]
+    fn a_prism_hull_holds_the_prisms_volume() {
+        let (sides, radius, half_height) = (16u16, 1.5, 0.025);
+        let hull = prism_hull(sides, radius, half_height);
+        let area =
+            0.5 * sides as f32 * radius * radius * (std::f32::consts::TAU / sides as f32).sin();
+        let expected = area * 2.0 * half_height;
+        assert!((hull.compute_volume() - expected).abs() < 1.0e-3 * expected);
+        assert_eq!(hull.faces.len(), sides as usize + 2);
     }
 }

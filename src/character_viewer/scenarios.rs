@@ -28,12 +28,32 @@ const LEVEL: &str = "levels/swim_test.level.ron";
 const GARDEN: &str = "levels/rubble_garden.level.ron";
 const PARK: &str = "levels/water_park.level.ron";
 const ISLAND: &str = "levels/island_sea.level.ron";
+const YARD: &str = "levels/wrecking_yard.level.ron";
 
 /// Facing +x, down the beach into the sea.
 const SEAWARD: f32 = FRAC_PI_2;
 
 pub fn catalogue() -> Vec<Scenario> {
     let mut scenarios = vec![
+        Scenario {
+            name: "trampoline",
+            summary:
+                "jump onto the Wrecking Yard's trampoline, ride it out, then pump it with hops",
+            level: YARD,
+            start: (71.4, 34.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(0.5))
+                .then(Beat::jump(0.7).named("on"))
+                .then(Beat::stand(3.0).named("ride"))
+                .then(Beat::hop(1.0).named("pump"))
+                .then(Beat::hop(1.0).named("pump"))
+                .then(Beat::hop(1.0).named("pump"))
+                .then(Beat::hop(1.2).named("pump"))
+                .then(Beat::stand(2.0).named("ride")),
+            camera: CameraRig::side().with_distance(7.0).with_elevation(10.0),
+            station: None,
+        },
         Scenario {
             name: "wade_in",
             summary: "walk down the beach into the sea until it is too deep to stand",

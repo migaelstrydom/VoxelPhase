@@ -1,28 +1,65 @@
-//! Trampoline spawnable — bouncy pad on four short legs.
+//! Trampoline spawnable: a round bed on a ring of coil springs, sprung from a
+//! glossy hoop on splayed chrome legs.
 //!
-//! A compound body with a high-restitution top surface that launches
-//! anything that lands on it. The legs are low-restitution so only the
-//! pad bounces.
+//! Two bodies. The frame — hoop, legs and feet — stands on the ground; the
+//! bed is a light disc held to it by a `SpringSlider`, rigid in every
+//! direction but up and down. Whatever lands on the bed drives it down, the
+//! spring throws it back, and a jump at the bottom of the dip pushes the bed
+//! deeper and comes back higher. Nothing is bouncy by restitution.
+//!
+//! The frame is drawn as a model; the bed and springs are redrawn every frame
+//! by `trampoline::TrampolineBedSystem`, dipping and stretching as the bed
+//! rides.
 
-use nalgebra::{Point3, Vector3};
+use std::sync::Arc;
+
+use nalgebra::{Isometry3, Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::models::multi_material_compound_cuboid_model;
 use super::shared::orientation::Yaw;
-use super::shared::textures::seed_from_position;
-use super::shared::textures::TextureRng;
-use super::shared::textures::*;
+use super::shared::textures::{hue_to_rgb, seed_from_position, Rgb, TextureRng};
 use super::spawnable::{MaterialCtx, Spawnable};
+use crate::collision::convex_hull::prism_hull;
 use crate::components::{
-    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
+    ModelInstance, Orientation, Position, ProceduralMesh, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::physics::{ColliderDesc, RigidBodyDesc};
-use crate::rendering::material::{Material, MaterialId};
+use crate::geometry::{generate_sphere_indices, generate_sphere_vertices, generate_tube};
+use crate::model::{MeshPrimitive, Model, ModelPart};
+use crate::physics::{
+    ColliderDesc, ConstraintKind, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, Spring,
+    SpringSlider,
+};
+use crate::rendering::colour::Colour;
+use crate::rendering::material::{Material, MaterialId, SurfaceFinish};
+use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
+use crate::trampoline::{Trampoline, TrampolineShape, STEEL};
 
-const TEXTURE_SIZE: u32 = 128;
+/// Side of the bed's fabric texture, in pixels.
+const TEXTURE_SIZE: u32 = 256;
+
+/// The load the spring is tuned against: about what the player weighs.
+const DESIGN_LOAD_KG: f32 = 57.0;
+/// How fast a jumper of [`DESIGN_LOAD_KG`] bobs on the bed. Stiff enough that
+/// a landing from a few metres stays clear of the ground, soft enough that
+/// the bed visibly takes it.
+const BOUNCE_HZ: f32 = 2.2;
+/// The spring's damping ratio: low, so a bounce keeps most of its height.
+const BOUNCE_DAMPING: f32 = 0.03;
+
+/// Density of the frame's colliders, which are solid stand-ins for tubes.
+const FRAME_DENSITY: f32 = 120.0;
+/// Mass of the bed: a few kilograms of fabric, light beside a jumper so a
+/// landing gives little of its energy to the bed itself.
+const BED_MASS_KG: f32 = 3.5;
+/// Grip of the bed's fabric.
+const BED_FRICTION: f32 = 0.9;
+/// Facets round the bed's collider.
+const BED_SIDES: u16 = 16;
+/// Box colliders round the hoop.
+const HOOP_SEGMENTS: u32 = 24;
 
 #[derive(Deserialize)]
 pub struct TrampolineDef {
@@ -31,246 +68,319 @@ pub struct TrampolineDef {
     /// Rotation about `+Y`, in degrees. A rotated segment adds its own yaw.
     #[serde(default)]
     pub yaw: f32,
-    /// Half-extents of the bouncy pad (x, y_thickness, z).
-    #[serde(default = "TrampolineDef::default_pad_half_extents")]
-    pub pad_half_extents: (f32, f32, f32),
-    /// Half-extents of each leg.
-    #[serde(default = "TrampolineDef::default_leg_half_extents")]
-    pub leg_half_extents: (f32, f32, f32),
-    /// Density of the entire trampoline.
-    #[serde(default = "TrampolineDef::default_density")]
-    pub density: f32,
-    /// Restitution of the pad surface. Values above 1.0 add energy (super-bounce).
-    #[serde(default = "TrampolineDef::default_restitution")]
-    pub restitution: f32,
+    /// Radius of the hoop's centreline, in metres.
+    #[serde(default = "TrampolineDef::default_radius")]
+    pub radius: f32,
 }
 
 impl TrampolineDef {
-    pub fn default_pad_half_extents() -> (f32, f32, f32) {
-        (1.8, 0.06, 1.8)
+    pub fn default_radius() -> f32 {
+        1.8
     }
-    pub fn default_leg_half_extents() -> (f32, f32, f32) {
-        (0.12, 0.36, 0.12)
-    }
-    pub fn default_density() -> f32 {
-        300.0
-    }
-    pub fn default_restitution() -> f32 {
-        1.5
-    }
-}
 
-impl TrampolineDef {
-    fn pad_he(&self) -> Vector3<f32> {
-        Vector3::new(
-            self.pad_half_extents.0,
-            self.pad_half_extents.1,
-            self.pad_half_extents.2,
+    /// The hue the hoop and the bed's markings share, and a seed for the
+    /// fabric's grain: chosen from the position, so a trampoline keeps its
+    /// colours from one load to the next.
+    fn palette(&self) -> (f32, u32) {
+        let rng = &mut TextureRng::new(seed_from_position(self.pos, 0));
+        (rng.range(0.0, 6.0), rng.u32())
+    }
+
+    /// The hoop's glossy plastic.
+    fn plastic(&self) -> Colour {
+        let rgb = hue_to_rgb(self.palette().0, 0.75, 0.95);
+        Colour::rgb(rgb.r, rgb.g, rgb.b)
+    }
+
+    fn shape(&self) -> TrampolineShape {
+        TrampolineShape::with_radius(self.radius)
+    }
+
+    /// The trampoline's ground frame in the world.
+    fn ground_frame(&self) -> Isometry3<f32> {
+        Isometry3::from_parts(
+            Vector3::new(self.pos.0, self.pos.1, self.pos.2).into(),
+            Yaw::degrees(self.yaw).rotation(),
         )
-    }
-
-    fn leg_he(&self) -> Vector3<f32> {
-        Vector3::new(
-            self.leg_half_extents.0,
-            self.leg_half_extents.1,
-            self.leg_half_extents.2,
-        )
-    }
-
-    fn total_height(&self) -> f32 {
-        self.leg_he().y * 2.0 + self.pad_he().y * 2.0
     }
 }
 
 impl Spawnable for TrampolineDef {
     fn material_count(&self) -> usize {
-        2
+        3
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        // [0] = fabric pad, [1] = metal legs
-        let fabric_pixels = generate_trampoline_fabric(seed_from_position(self.pos, 0));
-        let fabric_tex =
+        // [0] = bed fabric, [1] = chrome (legs, springs), [2] = hoop plastic
+        let (hue, seed) = self.palette();
+        let fabric_pixels = generate_bed_fabric(hue, seed);
+        let fabric_texture =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &fabric_pixels, true)?;
-        let fabric_mat = ctx.materials.register(Material::textured(fabric_tex));
-
-        let metal_pixels = generate_leg_metal(seed_from_position(self.pos, 1));
-        let metal_tex =
-            ctx.textures
-                .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &metal_pixels, true)?;
-        let metal_mat = ctx.materials.register(Material::textured(metal_tex));
-
-        Ok(vec![fabric_mat, metal_mat])
+        let fabric =
+            ctx.materials.register(
+                Material::textured(fabric_texture).with_finish(SurfaceFinish {
+                    roughness: 0.6,
+                    metallic: 0.0,
+                }),
+            );
+        // Both colours ride on the frame's vertices.
+        let chrome = ctx
+            .materials
+            .register(Material::coloured(Colour::WHITE).with_finish(SurfaceFinish::METAL));
+        let hoop = ctx
+            .materials
+            .register(Material::coloured(Colour::WHITE).with_finish(SurfaceFinish::POLISHED));
+        Ok(vec![fabric, chrome, hoop])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
-        let pad_he = self.pad_he();
-        let leg_he = self.leg_he();
-        let total_height = self.total_height();
-        // The body's frame is at the middle of its height, so its feet are
-        // half of that below it.
-        let initial_pos = Point3::new(self.pos.0, self.pos.1 + total_height * 0.5, self.pos.2);
+        let shape = self.shape();
+        let ground = self.ground_frame();
+        let (fabric, chrome, plastic) = (materials[0], materials[1], materials[2]);
 
-        let pad_y = total_height * 0.5 - pad_he.y;
-        let leg_y = -pad_he.y;
-        let leg_x = pad_he.x - leg_he.x;
-        let leg_z = pad_he.z - leg_he.z;
-
-        let leg_positions = [
-            Vector3::new(-leg_x, leg_y, -leg_z),
-            Vector3::new(leg_x, leg_y, -leg_z),
-            Vector3::new(-leg_x, leg_y, leg_z),
-            Vector3::new(leg_x, leg_y, leg_z),
-        ];
-
-        // Build compound model — pad gets fabric, legs get metal
-        let fabric_mat = materials[0];
-        let metal_mat = materials[1];
-        let mut boxes = vec![(pad_he, Vector3::new(0.0, pad_y, 0.0), fabric_mat)];
-        for &pos in &leg_positions {
-            boxes.push((leg_he, pos, metal_mat));
-        }
-        let model = multi_material_compound_cuboid_model(&boxes);
-
-        // Create compound physics body
-        let body_handle = {
+        let (frame, bed, ground_to_body) = {
             let mut physics = world.write_resource::<PhysicsResource>();
-
-            let body_desc = RigidBodyDesc::dynamic()
-                .position(initial_pos)
-                .rotation(Yaw::degrees(self.yaw).rotation())
-                .gravity_scale(1.0)
-                .linear_damping(0.01)
-                .angular_damping(0.005);
-
-            let body_handle = physics.world.create_body(body_desc);
-
-            // Bouncy pad — high restitution
-            physics.world.attach_collider(
-                body_handle,
-                ColliderDesc::box_shape(pad_he)
-                    .offset_translation(Vector3::new(0.0, pad_y, 0.0))
-                    .density(self.density)
-                    .restitution(self.restitution)
-                    .friction(0.8),
-            );
-
-            // Four legs — low restitution, just structural
-            for &pos in &leg_positions {
-                physics.world.attach_collider(
-                    body_handle,
-                    ColliderDesc::box_shape(leg_he)
-                        .offset_translation(pos)
-                        .density(self.density)
-                        .restitution(0.1)
-                        .friction(0.6),
-                );
-            }
-
-            body_handle
+            build_bodies(&mut physics.world, &shape, &ground)
         };
 
-        vec![world
-            .create_entity()
-            .with(Position(Vector3::new(
-                initial_pos.x,
-                initial_pos.y,
-                initial_pos.z,
-            )))
-            .with(Velocity(Vector3::zeros()))
-            .with(Orientation(Yaw::degrees(self.yaw).rotation()))
-            .with(RigidBodyComponent(body_handle))
+        let model = frame_model(&shape, ground_to_body, chrome, (plastic, self.plastic()));
+        let trampoline = Trampoline {
+            frame,
+            bed,
+            shape,
+            ground_to_body,
+            bed_material: fabric,
+            spring_material: chrome,
+        };
+        // Drawn at rest until `TrampolineBedSystem` first runs, so a view
+        // of the level as authored shows the bed.
+        let at_rest = ProceduralMesh {
+            primitives: trampoline.bed_primitives(0.0),
+        };
+        let frame_entity = body_entity(world, frame)
             .with(ModelInstance::new(model))
+            .with(at_rest)
+            .with(trampoline)
             .with(Renderable)
-            .build()]
+            .build();
+        let bed_entity = body_entity(world, bed).build();
+        vec![frame_entity, bed_entity]
     }
 }
 
-// ---------------------------------------------------------------------------
-// Procedural trampoline fabric texture
-// ---------------------------------------------------------------------------
+/// The trampoline's two bodies and the spring between them, its ground frame
+/// at `ground`. Returns the frame, the bed, and what moves a point in the
+/// ground frame into the frame body's own.
+pub(crate) fn build_bodies(
+    world: &mut PhysicsWorld,
+    shape: &TrampolineShape,
+    ground: &Isometry3<f32>,
+) -> (RigidBodyHandle, RigidBodyHandle, Vector3<f32>) {
+    // Laid out in the ground frame, then re-centred: a body's origin is its
+    // centre of mass, which sits up among the hoop.
+    let frame = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(Point3::from(ground.translation.vector))
+            .rotation(ground.rotation),
+    );
+    for collider in frame_colliders(shape) {
+        world.attach_collider(frame, collider);
+    }
+    let ground_to_body = -world.recenter_on_colliders(frame);
 
-/// Generates a brushed steel texture for the trampoline legs.
-fn generate_leg_metal(seed: u32) -> Vec<u8> {
-    let rng = &mut TextureRng::new(seed);
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
+    let bed = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(ground * shape.bed_rest_centre())
+            .rotation(ground.rotation),
+    );
+    let hull = prism_hull(
+        BED_SIDES,
+        shape.bed_collider_radius,
+        shape.bed_thickness * 0.5,
+    );
+    let density = BED_MASS_KG / hull.compute_volume();
+    world.attach_collider(
+        bed,
+        ColliderDesc::convex_hull(Arc::new(hull))
+            .density(density)
+            .restitution(0.0)
+            .friction(BED_FRICTION),
+    );
 
-    let base = Rgb::new(0.55, 0.57, 0.62);
-    let seed = rng.u32();
+    world.create_constraint(ConstraintKind::SpringSlider(SpringSlider {
+        body_a: Some(frame),
+        body_b: bed,
+        local_anchor_a: shape.bed_rest_centre().coords + ground_to_body,
+        local_anchor_b: Vector3::zeros(),
+        local_axis_a: Vector3::y_axis(),
+        reference: UnitQuaternion::identity(),
+        spring: Spring::from_hz(BOUNCE_HZ, BOUNCE_DAMPING),
+        reference_mass: DESIGN_LOAD_KG,
+    }));
+    (frame, bed, ground_to_body)
+}
 
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
+/// An entity tracking `body`, posed where the body is.
+fn body_entity(world: &mut World, body: RigidBodyHandle) -> specs::EntityBuilder<'_> {
+    let (position, rotation) = {
+        let physics = world.read_resource::<PhysicsResource>();
+        let body = physics.world.body(body).expect("the body was just made");
+        (body.position(), body.rotation())
+    };
+    world
+        .create_entity()
+        .with(Position(position.coords))
+        .with(Velocity(Vector3::zeros()))
+        .with(Orientation(rotation))
+        .with(RigidBodyComponent(body))
+}
 
-            let brush =
-                crate::utils::noise::fbm_2d_periodic(u * 6.0, v * 30.0, 3, 0.5, 2.0, seed, Some(6));
-            let scratches = crate::utils::noise::fbm_2d_periodic(
-                u * 20.0,
-                v * 20.0,
-                2,
-                0.3,
-                2.0,
-                seed + 7,
-                Some(20),
-            );
-            let c_factor = 0.82 + brush * 0.12 + scratches * 0.06;
-            let c = base.scale(c_factor).scale(edge_vignette(u, v));
-
-            c.write_rgba(&mut pixels);
+/// The frame's colliders in its ground frame: capsules round the hoop and
+/// along each run of each leg, and a ball on each foot. Capsules because the
+/// rods are round: a box's corners would reach in toward the bed's edge and
+/// hold it.
+fn frame_colliders(shape: &TrampolineShape) -> Vec<ColliderDesc> {
+    let mut colliders = Vec::new();
+    let hoop = shape.hoop_path(HOOP_SEGMENTS);
+    for (i, start) in hoop.iter().enumerate() {
+        let end = hoop[(i + 1) % hoop.len()];
+        colliders.push(rod(*start, end, shape.hoop_tube_radius));
+    }
+    for leg in 0..shape.leg_count {
+        let path = shape.leg_path(leg);
+        for run in path.windows(2) {
+            colliders.push(rod(run[0], run[1], shape.leg_tube_radius));
         }
+        let foot = *path.last().expect("a leg has a foot");
+        colliders.push(
+            ColliderDesc::sphere(shape.foot_radius)
+                .offset_translation(foot.coords)
+                .density(FRAME_DENSITY)
+                .friction(0.8),
+        );
     }
-    pixels
+    colliders
 }
 
-/// Generates a woven fabric texture with bold concentric target rings
-/// and a cross-hatch weave pattern.
-fn generate_trampoline_fabric(seed: u32) -> Vec<u8> {
-    let rng = &mut TextureRng::new(seed);
+/// A straight tube of `radius` from `start` to `end`.
+fn rod(start: Point3<f32>, end: Point3<f32>, radius: f32) -> ColliderDesc {
+    let run = end - start;
+    let rotation = UnitQuaternion::rotation_between(&Vector3::y(), &run)
+        .unwrap_or_else(UnitQuaternion::identity);
+    ColliderDesc::capsule(run.norm() * 0.5, radius)
+        .offset_translation(nalgebra::center(&start, &end).coords)
+        .offset_rotation(rotation)
+        .density(FRAME_DENSITY)
+        .friction(0.6)
+}
+
+/// The frame as drawn: a glossy hoop with balls on its feet, chrome legs.
+/// Built in the ground frame and moved by `ground_to_body` into the body's.
+fn frame_model(
+    shape: &TrampolineShape,
+    ground_to_body: Vector3<f32>,
+    chrome: MaterialId,
+    (plastic, plastic_colour): (MaterialId, Colour),
+) -> Arc<Model> {
+    let shifted = |mut vertices: Vec<Vertex>| {
+        for vertex in &mut vertices {
+            vertex.pos += ground_to_body;
+        }
+        vertices
+    };
+
+    let (hoop_vertices, hoop_indices) = generate_tube(
+        &shape.hoop_path(96),
+        shape.hoop_tube_radius,
+        14,
+        true,
+        plastic_colour,
+    );
+    let mut plastic_part = MeshPrimitive {
+        vertices: shifted(hoop_vertices),
+        indices: hoop_indices,
+        material: plastic,
+    };
+
+    let mut legs = MeshPrimitive {
+        vertices: Vec::new(),
+        indices: Vec::new(),
+        material: chrome,
+    };
+    const FOOT_SEGMENTS: u32 = 16;
+    const FOOT_RINGS: u32 = 10;
+    let foot_indices = generate_sphere_indices(FOOT_SEGMENTS, FOOT_RINGS);
+    for leg in 0..shape.leg_count {
+        let path = shape.leg_path(leg);
+        let (vertices, indices) = generate_tube(&path, shape.leg_tube_radius, 10, false, STEEL);
+        append(&mut legs, shifted(vertices), &indices);
+
+        let foot = path.last().expect("a leg has a foot").coords + ground_to_body;
+        let mut ball =
+            generate_sphere_vertices(shape.foot_radius, FOOT_SEGMENTS, FOOT_RINGS, plastic_colour);
+        for vertex in &mut ball {
+            vertex.pos += foot;
+        }
+        append(&mut plastic_part, ball, &foot_indices);
+    }
+
+    Arc::new(Model::flat(vec![
+        ModelPart::new(vec![plastic_part]),
+        ModelPart::new(vec![legs]),
+    ]))
+}
+
+/// Append a mesh to a primitive, re-basing its indices.
+fn append(primitive: &mut MeshPrimitive, vertices: Vec<Vertex>, indices: &[u32]) {
+    let base = primitive.vertices.len() as u32;
+    primitive.vertices.extend(vertices);
+    primitive
+        .indices
+        .extend(indices.iter().map(|index| index + base));
+}
+
+// ---------------------------------------------------------------------------
+// Procedural bed fabric
+// ---------------------------------------------------------------------------
+
+/// The bed's fabric over its disc: a dark woven mat with a bright ring round
+/// the sweet spot, a mark at the centre, and a hem in the hoop's colour.
+/// `hue` is the hoop's.
+fn generate_bed_fabric(hue: f32, seed: u32) -> Vec<u8> {
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    // Pick a vibrant base colour for the fabric
-    let hue = rng.range(0.0, 6.0);
-    let base = hue_to_rgb(hue, 0.70, 0.85);
-    let accent = hue_to_rgb((hue + 3.0) % 6.0, 0.65, 0.90);
-    let seed = rng.u32();
+    let mat = Rgb::new(0.05, 0.06, 0.09);
+    let accent = hue_to_rgb(hue, 0.7, 1.0);
+    let hem = hue_to_rgb(hue, 0.8, 0.75);
 
     for y in 0..size {
         for x in 0..size {
             let u = x as f32 / size as f32;
             let v = y as f32 / size as f32;
+            let (cx, cy) = (u * 2.0 - 1.0, v * 2.0 - 1.0);
+            let r = (cx * cx + cy * cy).sqrt();
 
-            // Concentric rings from center — alternating base/accent
-            let cx = (u - 0.5) * 2.0;
-            let cy = (v - 0.5) * 2.0;
-            let dist = (cx * cx + cy * cy).sqrt();
-            let ring = ((dist * 6.0).sin() * 0.5 + 0.5).powf(0.4);
-            let mut c = base.lerp(accent, ring * 0.6);
+            // A tight basket weave: alternate threads catch the light.
+            let (tu, tv) = (u * size as f32 * 0.5, v * size as f32 * 0.5);
+            let over = ((tu.floor() + tv.floor()) as i32 & 1) == 0;
+            let thread = if over {
+                0.5 + 0.5 * (tu.fract() * std::f32::consts::PI).sin()
+            } else {
+                0.5 + 0.5 * (tv.fract() * std::f32::consts::PI).sin()
+            };
+            let grain =
+                crate::utils::noise::fbm_2d_periodic(u * 8.0, v * 8.0, 2, 0.5, 2.0, seed, Some(8));
+            let mut c = mat.scale(0.75 + thread * 0.4 + grain * 0.15);
 
-            // Cross-hatch weave pattern — subtle grid of light/dark threads
-            let thread_u = ((u * size as f32 * 2.0).sin() * 0.5 + 0.5).powf(4.0);
-            let thread_v = ((v * size as f32 * 2.0).sin() * 0.5 + 0.5).powf(4.0);
-            let weave = (thread_u + thread_v) * 0.5;
-            c = c.scale(0.92 + weave * 0.08);
-
-            // Subtle fabric noise
-            let noise = crate::utils::noise::fbm_2d_periodic(
-                u * 16.0,
-                v * 16.0,
-                2,
-                0.3,
-                2.0,
-                seed,
-                Some(16),
-            );
-            c = c.scale(0.94 + noise * 0.06);
-
-            // Edge border — darker frame ring
-            let edge = border_band(u, v, 0.08);
-            c = c.scale(1.0 - edge * 0.4);
+            let band = |inner: f32, outer: f32| {
+                let soft = 1.5 / size as f32;
+                ((r - inner) / soft).clamp(0.0, 1.0) * ((outer - r) / soft).clamp(0.0, 1.0)
+            };
+            c = c.lerp(accent, band(0.48, 0.53) * 0.9);
+            c = c.lerp(accent, band(0.0, 0.07) * 0.9);
+            c = c.lerp(hem, band(0.93, 1.2));
 
             c.write_rgba(&mut pixels);
         }
