@@ -154,6 +154,17 @@ struct JumpShare {
     impulse: Vector3<f32>,
     point: Point3<f32>,
     partner: Option<RigidBodyHandle>,
+    /// The most speed this share may give the partner, in m/s: the jumper's
+    /// own change of speed, split as the impulse is.
+    ///
+    /// A jump is one impulse, but a real push lasts long enough for whatever
+    /// holds a light partner up to take most of it. Handed the whole
+    /// reaction at once, a trampoline bed a twentieth of the jumper's mass
+    /// would leave at twenty times the jumper's speed, and its spring would
+    /// hand that back as energy nobody put in. So a partner moves away no
+    /// faster than the jumper does; a heavier one takes the whole reaction
+    /// as before.
+    partner_speed_limit: f32,
 }
 
 /// Spend one substep's allowances.
@@ -182,7 +193,8 @@ pub fn apply_allowances(
         if body.allowance_command().is_inert() {
             continue;
         }
-        let Some(plan) = plan_body(body, handle, supports, world_up, dt, first_substep) else {
+        let Some(plan) = plan_body(bodies, body, handle, supports, world_up, dt, first_substep)
+        else {
             continue;
         };
         plans.push(plan);
@@ -200,6 +212,7 @@ pub fn apply_allowances(
 
 /// Work out what one body's allowance does this substep.
 fn plan_body(
+    bodies: &Arena<RigidBody>,
     body: &RigidBody,
     handle: RigidBodyHandle,
     supports: &SupportSets,
@@ -245,18 +258,30 @@ fn plan_body(
         if let Some(speed) = command.verbs.jump_speed {
             match support {
                 Some(set) => {
-                    let delta = speed - speed_along;
+                    // Off something moving, the speed is taken relative to it,
+                    // as a walk's is: a jump off a climbing lift carries the
+                    // climb, and one off a sinking trampoline bed does not
+                    // also cancel the fall the bed shares.
+                    let ground_speed = set
+                        .surface_velocity(|partner, point| {
+                            bodies
+                                .get(partner.0)
+                                .map_or(Vector3::zeros(), |partner| partner.velocity_at(point))
+                        })
+                        .dot(&axis);
+                    let delta = speed + ground_speed - speed_along;
                     if delta > 0.0 {
                         let contacts = set.contacts();
-                        let share = mass * delta / contacts.len() as f32;
+                        let count = contacts.len() as f32;
                         for contact in contacts {
                             plan.jump.push(JumpShare {
-                                impulse: axis * share,
+                                impulse: axis * (mass * delta / count),
                                 point: contact.point,
                                 partner: contact.partner,
+                                partner_speed_limit: delta / count,
                             });
                         }
-                        speed_along = speed;
+                        speed_along = speed + ground_speed;
                     }
                 }
                 None => {
@@ -347,7 +372,9 @@ fn apply_plan(bodies: &mut Arena<RigidBody>, plan: &AllowancePlan, ledger: &mut 
         if let Some(partner) = share.partner {
             if let Some(body) = bodies.get_mut(partner.0) {
                 if body.is_dynamic() {
-                    body.apply_impulse_at_point(-share.impulse, share.point);
+                    let limit = body.mass() * share.partner_speed_limit;
+                    let reaction = share.impulse.cap_magnitude(limit);
+                    body.apply_impulse_at_point(-reaction, share.point);
                 }
             }
         }
