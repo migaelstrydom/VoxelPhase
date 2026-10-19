@@ -3,7 +3,7 @@ use std::sync::Arc;
 use nalgebra::{UnitQuaternion, Vector3};
 use specs::{Component, DenseVecStorage, VecStorage};
 
-use crate::model::Model;
+use crate::model::{MeshPrimitive, Model};
 use crate::physics::constraint::ConstraintHandle;
 use crate::physics::RigidBodyHandle;
 use crate::rendering::camera::Camera;
@@ -50,6 +50,17 @@ impl ModelInstance {
     pub fn new(model: Arc<Model>) -> Self {
         Self { model }
     }
+}
+
+/// A mesh whose shape changes every frame, rebuilt by the system that owns
+/// that shape and drawn in the entity's frame, as a [`ModelInstance`] is. Its
+/// primitives are uploaded afresh each frame, so it is for small meshes that
+/// deform: a trampoline's bed, not a level's worth of props.
+#[derive(Component, Default)]
+#[storage(VecStorage)]
+pub struct ProceduralMesh {
+    /// The mesh's primitives, in the entity's own frame.
+    pub primitives: Vec<MeshPrimitive>,
 }
 
 #[derive(Component, Debug, Default)]

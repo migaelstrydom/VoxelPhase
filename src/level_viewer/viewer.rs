@@ -40,7 +40,9 @@ use specs::{Join, World, WorldExt};
 use crate::animation::critter::CritterAnimator;
 use crate::animation::peeper::PeeperAnimator;
 use crate::app::world_builder::WorldBuilder;
-use crate::components::{ModelInstance, Orientation, Position, Renderable, Rotation};
+use crate::components::{
+    ModelInstance, Orientation, Position, ProceduralMesh, Renderable, Rotation,
+};
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
 use crate::level::{
@@ -54,7 +56,7 @@ use crate::rendering::resident::VersionedMeshId;
 use crate::rendering::water::WaterScene;
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
-use crate::systems::probe_owner;
+use crate::systems::{entity_rotation, probe_owner};
 use crate::terrain::{self, BlastConfig, TerrainWorld};
 use crate::water::{Disturbance, Disturbances, WaterWorld};
 
@@ -321,15 +323,8 @@ impl LevelViewer {
             for (entity, model, position, _) in
                 (&entities, &models, &positions, &renderables).join()
             {
-                let rotation = if let Some(orientation) = orientations.get(entity) {
-                    orientation.0.to_homogeneous()
-                } else if let Some(rotation) = rotations.get(entity) {
-                    Matrix4::from_axis_angle(&Vector3::y_axis(), rotation.0)
-                } else {
-                    Matrix4::identity()
-                };
-
-                let world_matrix = Matrix4::new_translation(&position.0) * rotation;
+                let world_matrix = Matrix4::new_translation(&position.0)
+                    * entity_rotation(entity, &orientations, &rotations);
                 let part_transforms = vec![Transform::default(); model.model.parts.len()];
 
                 self.renderer.draw_model(
@@ -342,6 +337,23 @@ impl LevelViewer {
                     SurfaceModulation::IDENTITY,
                     Some(probe_owner(entity)),
                 )?;
+            }
+
+            let procedural = self.world.read_storage::<ProceduralMesh>();
+            for (entity, mesh, position, _) in
+                (&entities, &procedural, &positions, &renderables).join()
+            {
+                let world_matrix = Matrix4::new_translation(&position.0)
+                    * entity_rotation(entity, &orientations, &rotations);
+                for primitive in &mesh.primitives {
+                    self.renderer.draw_procedural_primitive(
+                        cb,
+                        primitive,
+                        &world_matrix,
+                        &self.material_manager,
+                        &self.texture_manager,
+                    )?;
+                }
             }
         }
 

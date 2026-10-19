@@ -154,7 +154,9 @@ This persistence is the single largest contributor to stable resting contact.
 manifolds. The default is `ShockPropagationConditioner`. It runs a BFS outward from static
 geometry through the contact graph, orders manifolds top-down, and gives each manifold
 within 45° of vertical a mass scale so that the lower body appears heavier
-(`shock_alpha` 0.3).
+(`shock_alpha` 0.3). Rigid two-body joints join the graph; a spring does not
+(`ConstraintKind::stacks`): a sprung body made to look heavier stops what lands on it
+dead instead of taking it into the spring.
 
 - A single-body constraint (`KeepAttitude` on the player) does not make a body
   "ground". Only static geometry roots the BFS.
@@ -222,7 +224,10 @@ DriveCommand ─┬─ support-anchored ──▶ traction targets (friction wit
   bounded by `max_accel·dt`, solved alongside gravity.
 - **Allowance**: the one sanctioned non-conservative authority (jumping, air steering).
   It is opt-in, bounded per entity, and spent before the solve, so contacts still answer it.
-  Edge-triggered verbs fire on the first substep only.
+  Edge-triggered verbs fire on the first substep only. A supported jump establishes its
+  speed relative to what it pushes off, and gives a dynamic partner no more speed than
+  the jumper gains: one instant impulse would otherwise fire a light partner (a
+  trampoline bed) off at many times the jumper's speed.
 - Both cheats (`drive_gain` > 1 and allowances) are measured in `TractionLedger` /
   `AllowanceLedger` and printed under F3.
 

@@ -3,8 +3,8 @@ use crate::animation::critter::CritterAnimator;
 use crate::animation::peeper::PeeperAnimator;
 use crate::animation::CharacterAnimator;
 use crate::components::{
-    CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
-    RigidBodyComponent, Rotation, TerrainMeshInstance,
+    CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, ProceduralMesh,
+    Renderable, RigidBodyComponent, Rotation, TerrainMeshInstance,
 };
 use crate::core::error::{EngineError, EngineResult};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
@@ -33,23 +33,41 @@ use specs::{
 };
 use std::time::{Duration, Instant};
 
-/// Every procedurally-rigged character in the world.
+/// Every mesh regenerated each frame: the procedurally-rigged characters,
+/// which their animators pose in world space, and every [`ProceduralMesh`],
+/// which its owning system reshapes in its entity's frame.
 ///
 /// Grouped rather than listed alongside the rest of the system's data
 /// because each new rig is one more storage, and the flat tuple is already
-/// at the limit specs implements. Each of these draws the same way — a
-/// world-space mesh the animator regenerates — so the group also says
-/// something true about them.
+/// at the limit specs implements. All of them are uploaded afresh every
+/// frame, so the group also says something true about them.
 #[derive(SystemData)]
-pub struct RigAnimators<'a> {
+pub struct RebuiltMeshes<'a> {
     humanoid: WriteStorage<'a, CharacterAnimator>,
     critter: WriteStorage<'a, CritterAnimator>,
     peeper: WriteStorage<'a, PeeperAnimator>,
+    procedural: ReadStorage<'a, ProceduralMesh>,
+}
+
+/// An entity's rotation as a matrix: its 3D orientation if it has one, else
+/// its turn about +Y, else none.
+pub fn entity_rotation(
+    entity: Entity,
+    orientations: &ReadStorage<Orientation>,
+    rotations: &ReadStorage<Rotation>,
+) -> Matrix4<f32> {
+    if let Some(orient) = orientations.get(entity) {
+        orient.0.to_homogeneous()
+    } else if let Some(rot) = rotations.get(entity) {
+        Matrix4::from_axis_angle(&Vector3::y_axis(), rot.0)
+    } else {
+        Matrix4::identity()
+    }
 }
 
 /// The debug resources the render system reads toggles from and reports into.
 ///
-/// Grouped for the same reason as [`RigAnimators`]: the system's flat tuple is
+/// Grouped for the same reason as [`RebuiltMeshes`]: the system's flat tuple is
 /// at the limit specs implements.
 #[derive(SystemData)]
 pub struct DebugChannels<'a> {
@@ -211,7 +229,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, Orientation>,
         ReadStorage<'a, Renderable>,
         ReadStorage<'a, CameraComponent>,
-        RigAnimators<'a>,
+        RebuiltMeshes<'a>,
         ReadStorage<'a, OnFire>,
         ReadStorage<'a, RigidBodyComponent>,
         ReadExpect<'a, super::PhysicsResource>,
@@ -239,7 +257,7 @@ impl<'a> System<'a> for RenderSystem {
             orientations,
             renderables,
             camera_components,
-            mut rigs,
+            mut rebuilt,
             on_fires,
             rigid_bodies,
             physics_resource,
@@ -396,16 +414,8 @@ impl<'a> System<'a> for RenderSystem {
                     for (entity, model_instance, pos, _renderable) in
                         (&entities, &model_instances, &positions, &renderables).join()
                     {
-                        // Prefer 3D orientation (quaternion) if available, fall back to Y-axis rotation
-                        let rotation_matrix = if let Some(orient) = orientations.get(entity) {
-                            orient.0.to_homogeneous()
-                        } else if let Some(rot) = rotations.get(entity) {
-                            Matrix4::from_axis_angle(&Vector3::y_axis(), rot.0)
-                        } else {
-                            Matrix4::identity()
-                        };
-
-                        let world_matrix = Matrix4::new_translation(&pos.0) * rotation_matrix;
+                        let world_matrix = Matrix4::new_translation(&pos.0)
+                            * entity_rotation(entity, &orientations, &rotations);
 
                         // No animation, use identity transforms
                         let part_transforms: Vec<Transform> =
@@ -429,6 +439,26 @@ impl<'a> System<'a> for RenderSystem {
                             log::error!("RenderSystem: Failed to draw model: {}", e);
                         }
                     }
+                    for (entity, procedural, pos, _renderable) in
+                        (&entities, &rebuilt.procedural, &positions, &renderables).join()
+                    {
+                        let entity_matrix = Matrix4::new_translation(&pos.0)
+                            * entity_rotation(entity, &orientations, &rotations);
+                        for primitive in &procedural.primitives {
+                            if let Err(e) = renderer.draw_procedural_primitive(
+                                draw_cb,
+                                primitive,
+                                &entity_matrix,
+                                &material_manager,
+                                &texture_manager,
+                            ) {
+                                log::error!(
+                                    "RenderSystem: Failed to draw a procedural mesh: {}",
+                                    e
+                                );
+                            }
+                        }
+                    }
                     renderer.record_stage(RenderStage::Models, lap.elapsed());
 
                     // Draw every procedurally-rigged character.
@@ -441,17 +471,17 @@ impl<'a> System<'a> for RenderSystem {
                     let identity = Matrix4::identity();
                     let mut rig_meshes: Vec<(&[Vertex], &[u32])> = Vec::new();
                     for (controller, _pos, _rot, _renderable) in
-                        (&mut rigs.humanoid, &positions, &rotations, &renderables).join()
+                        (&mut rebuilt.humanoid, &positions, &rotations, &renderables).join()
                     {
                         rig_meshes.push(controller.mesh());
                     }
                     for (animator, _pos, _rot, _renderable) in
-                        (&mut rigs.critter, &positions, &rotations, &renderables).join()
+                        (&mut rebuilt.critter, &positions, &rotations, &renderables).join()
                     {
                         rig_meshes.push(animator.mesh());
                     }
                     for (animator, _pos, _rot, _renderable) in
-                        (&mut rigs.peeper, &positions, &rotations, &renderables).join()
+                        (&mut rebuilt.peeper, &positions, &rotations, &renderables).join()
                     {
                         rig_meshes.push(animator.mesh());
                     }

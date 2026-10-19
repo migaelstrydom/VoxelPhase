@@ -12,8 +12,8 @@ use crate::character::{
 };
 use crate::cleave::BrittleSolid;
 use crate::components::{
-    CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
-    RigidBodyComponent, Rotation, TerrainAnchored, Velocity,
+    CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, ProceduralMesh,
+    Renderable, RigidBodyComponent, Rotation, TerrainAnchored, Velocity,
 };
 use crate::core::error::EngineResult;
 use crate::creature::{AlertTelegraph, Brain, Collectable, MeleeAttack, Perception, Roller};
@@ -66,6 +66,7 @@ impl WorldBuilder {
         world.register::<Rotation>();
         world.register::<Orientation>();
         world.register::<ModelInstance>();
+        world.register::<ProceduralMesh>();
         world.register::<Renderable>();
         world.register::<CameraComponent>();
         world.register::<Player>();

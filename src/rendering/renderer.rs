@@ -24,7 +24,7 @@ use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
 use crate::fire::renderer::{ActiveFire, FireRenderer};
 use crate::lighting::ActiveLights;
-use crate::model::{Model, Transform};
+use crate::model::{MeshPrimitive, Model, Transform};
 use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::frame::{DrawInfo, LightUbo, SceneLighting, SceneUbo};
@@ -848,6 +848,31 @@ impl Renderer {
             surface,
             texture_manager,
             options,
+        )
+    }
+
+    /// Draw a primitive rebuilt this frame, shaded by its own material: what
+    /// `draw_model` does for a resident model's primitive, for one whose
+    /// vertices are uploaded afresh.
+    pub fn draw_procedural_primitive(
+        &mut self,
+        cb: vk::CommandBuffer,
+        primitive: &MeshPrimitive,
+        world_transform: &Matrix4<f32>,
+        material_manager: &MaterialManager,
+        texture_manager: &TextureManager,
+    ) -> EngineResult<()> {
+        let texture = material_manager.get_effective_texture(primitive.material);
+        let surface = material_manager.get_surface_params(primitive.material);
+        self.draw_mesh_internal(
+            cb,
+            &primitive.vertices,
+            &primitive.indices,
+            world_transform,
+            texture,
+            surface,
+            texture_manager,
+            DrawOptions::OPAQUE,
         )
     }
 
