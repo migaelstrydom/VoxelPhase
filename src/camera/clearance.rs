@@ -30,8 +30,10 @@ use crate::physics::{CastObstacles, PhysicsWorld, SphereCast, StaticGeometry};
 /// rubble passing between are seen through rather than chased.
 #[derive(Debug, Clone)]
 pub struct CameraClearance {
-    /// Whether the camera keeps clear of the scenery at all. Off, it passes
-    /// through terrain, which is how geometry is inspected from any angle.
+    /// Whether the camera keeps clear of the scenery at all. Off by default:
+    /// in play it zoomed out sluggishly and snapped and jittered in tunnels
+    /// (`docs/CAMERA_CLEARANCE.md`). Off, the camera passes through terrain,
+    /// which is also how geometry is inspected from any angle.
     pub enabled: bool,
     /// Radius of the sphere the camera is swept as, in metres. It must exceed
     /// the near plane's half-extent so the near plane stays out of what the
@@ -53,7 +55,7 @@ pub struct CameraClearance {
 impl Default for CameraClearance {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             radius: 0.3,
             occlusion_delay: 0.25,
             thin_occluder: 1.0,
@@ -257,6 +259,14 @@ mod tests {
     const PIVOT: Point3<f32> = Point3::new(2.0, 1.0, 0.0);
     const DT: f32 = 1.0 / 60.0;
 
+    /// The clearance switched on, which is what most tests examine.
+    fn active() -> CameraClearance {
+        CameraClearance {
+            enabled: true,
+            ..CameraClearance::default()
+        }
+    }
+
     fn scene<'a>(physics: &'a PhysicsWorld, geometry: &'a dyn StaticGeometry) -> Scenery<'a> {
         Scenery { physics, geometry }
     }
@@ -297,7 +307,7 @@ mod tests {
         let world = PhysicsWorld::default();
         let wall = WallAndFloorGeometry::new(10.0, 4.0);
         let wanted = Point3::new(6.0, 1.5, 1.0);
-        let camera = settle(&CameraClearance::default(), &world, &wall, wanted, 1.0);
+        let camera = settle(&active(), &world, &wall, wanted, 1.0);
         assert!((camera - wanted).norm() < 1.0e-4, "camera at {camera:?}");
     }
 
@@ -305,7 +315,7 @@ mod tests {
     fn a_camera_moving_into_rock_stops_at_its_surface() {
         let world = PhysicsWorld::default();
         let wall = WallAndFloorGeometry::new(10.0, 4.0);
-        let clearance = CameraClearance::default();
+        let clearance = active();
         let mut state = ClearanceState::default();
         let camera = clearance.resolve(
             &mut state,
@@ -327,7 +337,7 @@ mod tests {
         let wall = WallAndFloorGeometry::new(10.0, 4.0);
         let clearance = CameraClearance {
             occlusion_delay: f32::INFINITY,
-            ..CameraClearance::default()
+            ..active()
         };
         let mut state = ClearanceState::default();
         let camera = clearance.resolve(
@@ -349,20 +359,14 @@ mod tests {
     fn a_thin_occluder_is_looked_past() {
         let world = world_with_box(RigidBodyDesc::static_body(), Vector3::new(0.2, 0.5, 0.2));
         let wanted = Point3::new(-3.0, 1.0, 0.0);
-        let camera = settle(
-            &CameraClearance::default(),
-            &world,
-            &EmptyGeometry,
-            wanted,
-            2.0,
-        );
+        let camera = settle(&active(), &world, &EmptyGeometry, wanted, 2.0);
         assert!((camera - wanted).norm() < 1.0e-4, "camera at {camera:?}");
     }
 
     #[test]
     fn a_thick_occluder_draws_the_camera_in_only_after_the_delay() {
         let world = world_with_box(RigidBodyDesc::static_body(), Vector3::new(1.0, 0.5, 1.0));
-        let clearance = CameraClearance::default();
+        let clearance = active();
         let wanted = Point3::new(-3.0, 1.0, 0.0);
 
         let early = settle(&clearance, &world, &EmptyGeometry, wanted, 0.2);
@@ -384,7 +388,7 @@ mod tests {
         let wall =
             world.create_body(RigidBodyDesc::static_body().position(Point3::new(0.0, 1.0, 0.0)));
         world.attach_collider(wall, ColliderDesc::box_shape(Vector3::new(1.0, 0.5, 1.0)));
-        let clearance = CameraClearance::default();
+        let clearance = active();
         let wanted = Point3::new(-3.0, 1.0, 0.0);
         let mut state = ClearanceState::default();
         let mut camera = wanted;
@@ -430,13 +434,7 @@ mod tests {
     fn a_moving_body_is_seen_through() {
         let world = world_with_box(RigidBodyDesc::dynamic(), Vector3::new(1.0, 0.5, 1.0));
         let wanted = Point3::new(-3.0, 1.0, 0.0);
-        let camera = settle(
-            &CameraClearance::default(),
-            &world,
-            &EmptyGeometry,
-            wanted,
-            2.0,
-        );
+        let camera = settle(&active(), &world, &EmptyGeometry, wanted, 2.0);
         assert!((camera - wanted).norm() < 1.0e-4, "camera at {camera:?}");
     }
 
@@ -444,10 +442,7 @@ mod tests {
     fn disabled_the_camera_passes_through_rock() {
         let world = PhysicsWorld::default();
         let wall = WallAndFloorGeometry::new(10.0, 4.0);
-        let clearance = CameraClearance {
-            enabled: false,
-            ..CameraClearance::default()
-        };
+        let clearance = CameraClearance::default();
         let mut state = ClearanceState::default();
         let wanted = Point3::new(-3.0, 1.0, 0.0);
         let camera = clearance.resolve(
