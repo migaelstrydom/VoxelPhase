@@ -5,7 +5,7 @@ use super::cells::FieldCells;
 
 /// Fastest a face may carry water in a chunk that counts as calm, m²/s: at a
 /// metre's depth, a millimetre a second.
-const CALM_DISCHARGE: f32 = 1.0e-3;
+pub(super) const CALM_DISCHARGE: f32 = 1.0e-3;
 
 /// Seconds a chunk stays calm before it sleeps.
 const SLEEP_AFTER: f32 = 2.0;

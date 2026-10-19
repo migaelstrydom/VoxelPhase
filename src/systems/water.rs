@@ -1,11 +1,12 @@
-//! System that steps the water and turns what bodies do in it, and where
-//! its falls land, into spray.
+//! System that steps the water and turns what bodies do in it, where its
+//! falls land and where it surges over dry ground, into spray.
 
 use nalgebra::{Point3, Vector3, Vector4};
 use rand::Rng;
 use specs::{Join, LendJoin, Read, ReadStorage, System, Write};
 
 use super::fall_spray::FallSpray;
+use super::front_spray::FrontSpray;
 use crate::components::{CameraComponent, Position, RigidBodyComponent, Velocity};
 use crate::debug::DebugLog;
 use crate::drive::Actuator;
@@ -23,10 +24,11 @@ use crate::water::{
 /// tiles by distance from the camera, advances the field and its waves by
 /// the frame's delta time, then lets the coupler find bodies entering or
 /// moving through water, for ripples and for splash and wake spray, and
-/// throws spray and mist where its falls land.
+/// throws spray and mist where its falls land and spume where it surges.
 #[derive(Default)]
 pub struct WaterSystem {
     spray: FallSpray,
+    surge: FrontSpray,
 }
 
 impl<'a> System<'a> for WaterSystem {
@@ -80,6 +82,8 @@ impl<'a> System<'a> for WaterSystem {
             time.delta_seconds(),
             &mut particle_pool,
         );
+        self.surge
+            .emit(water.field(), eye, time.delta_seconds(), &mut particle_pool);
 
         if let Some(mut coupler) = coupler_opt {
             let snapshots =

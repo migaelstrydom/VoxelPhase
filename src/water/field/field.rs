@@ -27,6 +27,7 @@ use super::cells::{FieldCells, CELL_AREA};
 use super::currents;
 use super::faces::{lay_faces, link_faces, SeaBoundary};
 use super::fill::{fill_fed, fill_pool, fill_sea, pool_seed, SpillLevels};
+use super::fronts::{self, Front};
 use super::remap::carry;
 use super::solver::{FieldSolver, FlowParams, StepStats};
 use super::sources::{Sink, Source};
@@ -351,6 +352,12 @@ impl WaterField {
         }
         let span = self.graph.span_at(column, at.y)?;
         self.cells.index(&self.graph, column, span.ordinal)
+    }
+
+    /// Where the water runs out over ground it has not covered yet: all of
+    /// it, or what may lie within `near`'s range of its point.
+    pub fn fronts(&self, near: Option<(Point3<f32>, f32)>) -> impl Iterator<Item = Front> + '_ {
+        fronts::fronts(&self.cells, near)
     }
 
     /// Depth-averaged velocity in a cell, m/s, x and z.

@@ -3,9 +3,11 @@
 mod camera;
 mod character_control;
 mod fall_spray;
+mod front_spray;
 mod physics_sync;
 mod player_input;
 mod render;
+mod spray_budget;
 mod terrain_anchor;
 mod terrain_update;
 mod water;

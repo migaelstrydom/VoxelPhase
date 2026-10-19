@@ -18,6 +18,7 @@
 use nalgebra::{Point3, Vector3, Vector4};
 use rand::Rng;
 
+use super::spray_budget::{share, SprayBudget};
 use crate::particles::{ColourRamp, Particle, ParticlePool};
 use crate::water::falling::{FallingWater, Landing};
 
@@ -37,12 +38,20 @@ const FULL_POWER: f32 = 2000.0;
 /// Farthest from the eye a landing throws spray, m.
 const SPRAY_RANGE: f32 = 80.0;
 
-/// Spray and mist where falls land; carries the budget's fractions between
-/// frames.
-#[derive(Debug, Default)]
+/// Spray and mist where falls land, on budgets carried between frames.
+#[derive(Debug)]
 pub struct FallSpray {
-    droplets_owed: f32,
-    mist_owed: f32,
+    droplets: SprayBudget,
+    mist: SprayBudget,
+}
+
+impl Default for FallSpray {
+    fn default() -> Self {
+        Self {
+            droplets: SprayBudget::new(DROPLETS_PER_SECOND),
+            mist: SprayBudget::new(MIST_PER_SECOND),
+        }
+    }
 }
 
 impl FallSpray {
@@ -62,36 +71,15 @@ impl FallSpray {
             .filter(|&(_, power)| power > LEAST_POWER)
             .collect();
         let total: f32 = landings.iter().map(|&(_, power)| power).sum();
-        if total <= 0.0 {
-            self.droplets_owed = 0.0;
-            self.mist_owed = 0.0;
-            return;
-        }
-        let share = (total / FULL_POWER).min(1.0);
-        self.droplets_owed += DROPLETS_PER_SECOND * share * dt;
-        self.mist_owed += MIST_PER_SECOND * share * dt;
-
+        let share = share(total, FULL_POWER);
         let mut rng = rand::thread_rng();
-        let pick = |rng: &mut rand::rngs::ThreadRng| {
-            let mut left = rng.gen_range(0.0..total);
-            for &(landing, power) in &landings {
-                left -= power;
-                if left <= 0.0 {
-                    return landing;
-                }
-            }
-            landings[landings.len() - 1].0
-        };
-        while self.droplets_owed >= 1.0 {
-            self.droplets_owed -= 1.0;
-            let landing = pick(&mut rng);
-            pool.spawn(droplet(&landing, &mut rng));
-        }
-        while self.mist_owed >= 1.0 {
-            self.mist_owed -= 1.0;
-            let landing = pick(&mut rng);
-            pool.spawn(mist(&landing, &mut rng));
-        }
+        self.droplets
+            .spend(&landings, share, dt, &mut rng, |l, rng| {
+                pool.spawn(droplet(l, rng))
+            });
+        self.mist.spend(&landings, share, dt, &mut rng, |l, rng| {
+            pool.spawn(mist(l, rng))
+        });
     }
 }
 
