@@ -1011,63 +1011,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "wall-clock benchmark; its ~0.1 ms loops read noise, not speed, on a loaded \
-                machine. Run alone with --ignored."]
-    fn sat_cache_throughput_separated_pairs() {
-        // Micro-benchmark: measure cached vs uncached throughput for separated
-        // pairs. Uses rotated boxes so the separating axis is NOT the first face
-        // normal tested — this is where caching helps most.
-        let rot_a = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.7)
-            * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.4);
-        let rot_b = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -0.6)
-            * UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.3);
-        let a = Obb::new(Point3::origin(), rot_a, Vector3::new(1.0, 1.0, 1.0));
-        let b = Obb::new(
-            Point3::new(3.5, 0.5, 0.2),
-            rot_b,
-            Vector3::new(1.0, 1.0, 1.0),
-        );
-
-        // Verify they're actually separated.
-        assert!(obb_obb_manifold(&a, &b, 0.0).is_empty());
-
-        let iterations = 10_000;
-
-        // Warm up the cache.
-        let mut cache = SatCache::new();
-        let _ = obb_obb_manifold_cached(&a, &b, 0.0, &mut cache);
-
-        // Uncached path.
-        let t0 = std::time::Instant::now();
-        for _ in 0..iterations {
-            let m = obb_obb_manifold(&a, &b, 0.0);
-            std::hint::black_box(&m);
-        }
-        let uncached_ns = t0.elapsed().as_nanos();
-
-        // Cached path.
-        let t1 = std::time::Instant::now();
-        for _ in 0..iterations {
-            let m = obb_obb_manifold_cached(&a, &b, 0.0, &mut cache);
-            std::hint::black_box(&m);
-        }
-        let cached_ns = t1.elapsed().as_nanos();
-
-        let ratio = uncached_ns as f64 / cached_ns.max(1) as f64;
-        eprintln!(
-            "SAT cache throughput: uncached={uncached_ns}ns, cached={cached_ns}ns, \
-             speedup={ratio:.2}x over {iterations} iterations"
-        );
-
-        // Cached should be faster. In release mode the gain is smaller since
-        // the uncached path is already heavily optimized by LLVM.
-        assert!(
-            ratio > 1.1,
-            "Cached path should be faster: speedup was only {ratio:.2}x"
-        );
-    }
-
-    #[test]
     fn obb_obb_colliding_throughput() {
         // Measures manifold generation for overlapping OBBs (exercises the
         // full clipping path: find faces → clip_against_sides → project).
