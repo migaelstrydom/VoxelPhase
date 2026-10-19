@@ -1410,7 +1410,7 @@ mod falling_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "water_scenarios"))]
 mod falls_in_a_level {
     use std::path::Path;
 
@@ -1513,7 +1513,6 @@ mod falls_in_a_level {
     }
 
     #[test]
-    #[ignore = "release: opens island_sea"]
     fn the_crag_springs_jet_carries_a_crate_along_it() {
         let (dry_at, dry_v) = crate_dropped(false, in_the_jet);
         let (wet_at, wet_v) = crate_dropped(true, in_the_jet);
@@ -1535,7 +1534,6 @@ mod falls_in_a_level {
     }
 
     #[test]
-    #[ignore = "release: opens island_sea"]
     fn the_east_falls_drive_a_crate_down() {
         let (_, dry_v) = crate_dropped(false, in_the_east_falls);
         let (_, wet_v) = crate_dropped(true, in_the_east_falls);
@@ -1550,7 +1548,6 @@ mod falls_in_a_level {
     }
 
     #[test]
-    #[ignore = "release: opens island_sea"]
     fn the_end_of_the_east_falls_spins_a_crate_half_in_it() {
         let (_, _, dry) = crate_motion(false, at_the_east_falls_end);
         let (_, _, wet) = crate_motion(true, at_the_east_falls_end);

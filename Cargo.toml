@@ -25,9 +25,14 @@ rustc-hash = "2.1.1"
 ron = "0.8"                  # Rusty Object Notation for level files
 serde = { version = "1", features = ["derive"] }
 
+# Scenario test suites, one per area: whole scenes simulated for seconds,
+# which `cargo test` leaves out. Unit tests always run.
 [features]
 default = []
-bench_harness = []
+physics_scenarios = []
+water_scenarios = []
+rubble_scenarios = []
+level_scenarios = []
 
 
 [dev-dependencies]

@@ -4,8 +4,6 @@
 use super::driver::{run as run_scenario, Run, RunConfig};
 use super::scenarios::{catalogue, find};
 
-/// Scenarios run on the field are long: run these with
-/// `cargo test --release --lib water_viewer::tests -- --ignored`.
 fn run(name: &str) -> Run {
     let scenario = find(name).unwrap_or_else(|| panic!("no scenario {name}"));
     run_scenario(&scenario, RunConfig::default(), &[], |_, _, _| {}).unwrap()
@@ -20,7 +18,6 @@ fn probe(run: &Run, name: &str) -> Vec<Option<f32>> {
 /// river above the crater keeps its level while the crater fills, and the
 /// river below comes back to the level it ran at before.
 #[test]
-#[ignore]
 fn a_crater_in_a_river_leaves_the_river_above_it_alone() {
     let run = run("river_blast");
     for name in ["upper", "above"] {
@@ -48,7 +45,6 @@ fn a_crater_in_a_river_leaves_the_river_above_it_alone() {
 /// Every scenario: the ledger balances, no cell goes below empty, and
 /// nothing becomes infinite or NaN.
 #[test]
-#[ignore]
 fn every_scenario_conserves_water_and_stays_finite() {
     for scenario in catalogue() {
         let run = run_scenario(&scenario, RunConfig::default(), &[], |_, _, _| {}).unwrap();
@@ -76,7 +72,6 @@ fn every_scenario_conserves_water_and_stays_finite() {
 /// Water nothing disturbs does not move, and once it has been seen to be
 /// calm, a few seconds after the level opens, it costs nothing.
 #[test]
-#[ignore]
 fn still_water_sleeps_where_it_stands() {
     let run = run("island_pool");
     for s in &run.samples {
@@ -89,7 +84,6 @@ fn still_water_sleeps_where_it_stands() {
 
 /// Water a blast set moving comes to rest, and sleeps.
 #[test]
-#[ignore]
 fn disturbed_water_comes_to_rest() {
     for name in ["sea_wall", "spill_merge"] {
         let run = run(name);
@@ -105,7 +99,6 @@ fn disturbed_water_comes_to_rest() {
 /// A pit opening into a closed tunnel fills it to its roof and no further,
 /// then goes on rising above it.
 #[test]
-#[ignore]
 fn a_full_cave_takes_no_more_water() {
     const ROOF: f32 = 3.0;
     let run = run("cave_pool");
@@ -122,7 +115,6 @@ fn a_full_cave_takes_no_more_water() {
 /// seed is: not the valley below a lake authored above its rim, and all of
 /// a pond seeded on its slope.
 #[test]
-#[ignore]
 fn a_pool_fills_its_own_hollow() {
     let breached = run("river");
     assert!(
@@ -139,7 +131,6 @@ fn a_pool_fills_its_own_hollow() {
 /// flow towards the dry bank ahead of it held a diagonal river 11 cm high
 /// here and rising, as if its bed were rougher.
 #[test]
-#[ignore]
 fn a_river_runs_as_deep_across_the_lattice_as_along_it() {
     let run = run("bearing");
     let (along, across) = (probe(&run, "along"), probe(&run, "across"));

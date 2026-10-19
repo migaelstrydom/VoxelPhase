@@ -288,7 +288,7 @@ asleep.** Body-level impulse methods bypass the wake, so use `PhysicsWorld`'s me
 ## Tools and tests
 
 - `src/physics/bench_harness/`: `PhysicsBenchScenario`s run headlessly by
-  `run_scenario()` with assertions in `tests/` (`--features bench_harness`, release), and
+  `run_scenario()` with assertions in `tests/` (`--features physics_scenarios`, release), and
   in a window by `bench_viewer`.
 - `physics_fuzz`: seeded structures disturbed by the real player body, judged by
   `EnergyAudit`.

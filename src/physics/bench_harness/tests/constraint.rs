@@ -354,7 +354,6 @@ fn hinge_holds_under_sustained_force() {
 /// peak must decay monotonically (within 5% tolerance for solver noise).
 /// Total kinetic energy at t=3s must be < 1% of energy at t=0.2s.
 #[test]
-#[cfg(feature = "bench_harness")]
 fn hinge_angular_ngs_no_oscillation() {
     let scenario = HingeSettlesUnderLoadScenario::new();
     let cfg = BenchRunConfig {
@@ -494,7 +493,6 @@ fn hinge_axis_no_drift_zero_gravity() {
 /// fall. A heavy sphere dropped from above impacts one box, stressing the joint
 /// beyond its impulse limit. The joint must break cleanly.
 #[test]
-#[cfg(feature = "bench_harness")]
 fn breakable_fixed_joint_breaks_cleanly() {
     let geometry = FlatQuadGeometry::new(10.0);
     let mut config = PhysicsConfig::default();
@@ -624,7 +622,6 @@ fn breakable_fixed_joint_breaks_cleanly() {
 /// A weld holds the pose it was made in — not upright, which is all it held
 /// once, snapping every tilted stone it anchored straight on its first step.
 #[test]
-#[cfg(feature = "bench_harness")]
 fn a_tilted_weld_holds_its_pose_and_returns_to_it_when_struck() {
     let geometry = FlatQuadGeometry::new(10.0);
     let mut config = PhysicsConfig::default();
@@ -713,7 +710,6 @@ fn a_tilted_weld_holds_its_pose_and_returns_to_it_when_struck() {
 /// Two bodies welded at an angle and knocked off it come back to it, even
 /// while they tumble together.
 #[test]
-#[cfg(feature = "bench_harness")]
 fn a_weld_between_two_bodies_restores_the_angle_between_them() {
     let geometry = FlatQuadGeometry::new(10.0);
     let mut config = PhysicsConfig::default();
@@ -778,7 +774,6 @@ fn a_weld_between_two_bodies_restores_the_angle_between_them() {
 /// A 5 m/s horizontal impulse starts the pendulum swinging. After 5 seconds
 /// it must have settled nearly directly below the anchor.
 #[test]
-#[cfg(feature = "bench_harness")]
 fn pendulum_ball_joint_settles() {
     let scenario = PendulumBallJointSettlesScenario::new();
     let cfg = BenchRunConfig {

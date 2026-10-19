@@ -139,7 +139,7 @@ fn a_heavy_cube_on_a_tall_light_column_stands() {
 /// at the game's iteration count and fewer.
 ///
 /// ```text
-/// cargo test --release --features bench_harness --lib mass_ratio_sweep -- --ignored --nocapture
+/// cargo test --release --features physics_scenarios --lib mass_ratio_sweep -- --ignored --nocapture
 /// ```
 #[test]
 #[ignore]

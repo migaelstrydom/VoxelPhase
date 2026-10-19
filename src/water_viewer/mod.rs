@@ -9,7 +9,7 @@ mod hunt;
 mod report;
 mod scenario;
 mod scenarios;
-#[cfg(test)]
+#[cfg(all(test, feature = "water_scenarios"))]
 mod tests;
 
 pub use driver::{run, Run, RunConfig, Sample, SETTLE_LIMIT, TICK_RATE};

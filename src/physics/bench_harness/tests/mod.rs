@@ -1,4 +1,4 @@
-#![cfg(all(test, feature = "bench_harness"))]
+#![cfg(all(test, feature = "physics_scenarios"))]
 
 mod assertions;
 mod bedded;

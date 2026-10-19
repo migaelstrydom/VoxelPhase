@@ -295,8 +295,8 @@ impl FieldMasks<'_> {
     }
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(all(test, feature = "water_scenarios"))]
+mod in_a_level {
     use std::path::Path;
 
     use super::*;
@@ -307,7 +307,6 @@ mod tests {
     /// A splash on island_sea's open sea wakes a tile, whose ripples spread
     /// out from it and move the surface floating bodies read.
     #[test]
-    #[ignore = "release: opens island_sea"]
     fn a_splash_on_still_water_ripples_it() {
         let level = load_level(Path::new("levels/island_sea.level.ron")).unwrap();
         let terrain = build_terrain(&level);
@@ -332,7 +331,6 @@ mod tests {
     /// downstream: none reaches as far upstream. Read from the ripples
     /// themselves, as the river is still settling under them.
     #[test]
-    #[ignore = "release: opens island_sea"]
     fn a_splash_on_a_river_is_carried_downstream() {
         let level = load_level(Path::new("levels/island_sea.level.ron")).unwrap();
         let terrain = build_terrain(&level);

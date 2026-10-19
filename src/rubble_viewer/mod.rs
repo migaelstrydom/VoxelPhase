@@ -35,7 +35,7 @@ mod garden;
 mod report;
 mod scenario;
 mod scenarios;
-#[cfg(test)]
+#[cfg(all(test, feature = "rubble_scenarios"))]
 mod tests;
 
 pub use driver::{run, BlastRecord, BlastTiming, FragmentRecord, Run};

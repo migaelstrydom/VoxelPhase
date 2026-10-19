@@ -479,10 +479,8 @@ pub fn check_rest(trial: &mut RestTrial, report: &mut Report) -> Section {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
-    use crate::level::{load_level, resolve_placements};
+    use crate::level::resolve_placements;
     use crate::level_check::build_terrain;
 
     /// Flat ground at y = 0, and one crate with its centre at `crate_y`.
@@ -590,39 +588,46 @@ mod tests {
         assert!(outcome.settled_after.is_some());
     }
 
-    /// Every shipped level's objects rest where they were authored.
-    ///
-    /// In the game each of them starts asleep, so one that is not at rest
-    /// hangs, floats or sits embedded exactly as authored until something
-    /// disturbs it. Slow in a debug build; run with `--release`.
-    #[test]
-    #[ignore = "simulates every shipped level; run with --release -- --ignored"]
-    fn shipped_levels_are_at_rest_where_authored() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("levels");
-        let mut paths: Vec<_> = std::fs::read_dir(&dir)
-            .expect("levels directory should be readable")
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.to_string_lossy().ends_with(".level.ron"))
-            .collect();
-        paths.sort();
+    #[cfg(feature = "level_scenarios")]
+    mod shipped {
+        use std::path::Path;
 
-        let mut problems = Vec::new();
-        for path in &paths {
-            let level = load_level(path).expect("shipped level should load");
-            for drift in trial(&level).drifts {
-                problems.push(format!(
-                    "{}: {} — {}",
-                    path.file_name().unwrap().to_string_lossy(),
-                    drift.label,
-                    drift.describe()
-                ));
+        use super::*;
+        use crate::level::load_level;
+
+        /// Every shipped level's objects rest where they were authored.
+        ///
+        /// In the game each of them starts asleep, so one that is not at rest
+        /// hangs, floats or sits embedded exactly as authored until something
+        /// disturbs it.
+        #[test]
+        fn shipped_levels_are_at_rest_where_authored() {
+            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("levels");
+            let mut paths: Vec<_> = std::fs::read_dir(&dir)
+                .expect("levels directory should be readable")
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.to_string_lossy().ends_with(".level.ron"))
+                .collect();
+            paths.sort();
+
+            let mut problems = Vec::new();
+            for path in &paths {
+                let level = load_level(path).expect("shipped level should load");
+                for drift in trial(&level).drifts {
+                    problems.push(format!(
+                        "{}: {} — {}",
+                        path.file_name().unwrap().to_string_lossy(),
+                        drift.label,
+                        drift.describe()
+                    ));
+                }
             }
+            assert!(
+                problems.is_empty(),
+                "{} object(s) not at rest where authored:\n{}",
+                problems.len(),
+                problems.join("\n")
+            );
         }
-        assert!(
-            problems.is_empty(),
-            "{} object(s) not at rest where authored:\n{}",
-            problems.len(),
-            problems.join("\n")
-        );
     }
 }

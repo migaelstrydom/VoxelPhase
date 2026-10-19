@@ -168,8 +168,8 @@ impl RiverParts {
     }
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(all(test, feature = "water_scenarios"))]
+mod in_a_level {
     use std::path::Path;
 
     use nalgebra::Point3;
@@ -195,7 +195,6 @@ mod tests {
     /// After a dam on water_park is blasted and its water runs, every
     /// surface read again in place matches the same surface built afresh.
     #[test]
-    #[ignore = "release: opens water_park"]
     fn refreshed_surfaces_match_fresh_builds() {
         let dam = [Point3::new(-52.2, 2.0, 49.8)];
         assert_refreshes_match("levels/water_park.level.ron", &dam, 180, Some(0));
@@ -204,7 +203,6 @@ mod tests {
     /// The same, over a ditch blasted from thin_ice's lake to the map's
     /// edge, where the water falls off the map.
     #[test]
-    #[ignore = "release: opens thin_ice"]
     fn refreshed_sheets_off_the_map_match_fresh_builds() {
         let ditch: Vec<_> = (0..10)
             .map(|i| Point3::new(42.0, 5.0, 82.0 + 1.5 * i as f32))
@@ -300,7 +298,6 @@ mod tests {
     /// After a blast on a level's water, every surface meets its
     /// neighbours on their shared borders, frame by frame.
     #[test]
-    #[ignore = "release: opens water_park and thin_ice"]
     fn neighbouring_surfaces_meet() {
         for (level, at) in [
             ("water_park", Point3::new(-52.2, 2.0, 49.8)),

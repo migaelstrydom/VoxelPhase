@@ -440,6 +440,12 @@ mod tests {
             "a box half inside the riser went unreported: {warnings:?}"
         );
     }
+}
+
+#[cfg(all(test, feature = "level_scenarios"))]
+mod shipped {
+    use super::*;
+    use crate::level_check::report::Severity;
 
     /// Both shipped levels must pass. If this fails, either a level or the
     /// check is wrong — and the report says which.
