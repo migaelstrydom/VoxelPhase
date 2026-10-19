@@ -1,12 +1,15 @@
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{CameraComponent, Position};
 use crate::input::{GameplayActions, InputState};
+use crate::systems::PhysicsResource;
+use crate::terrain::TerrainWorld;
 use crate::time::Time;
 use nalgebra::{Point3, Vector3};
-use specs::{Entities, Join, ReadExpect, ReadStorage, System, WriteStorage};
+use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, WriteStorage};
 
 /// Updates cameras that have a FollowTarget component.
-/// Handles smooth following, mouse orbit, and zoom controls.
+/// Handles smooth following, mouse orbit, zoom controls, and keeping clear
+/// of the scenery between the camera and its target.
 pub struct CameraControlSystem;
 
 impl<'a> System<'a> for CameraControlSystem {
@@ -16,14 +19,26 @@ impl<'a> System<'a> for CameraControlSystem {
         ReadExpect<'a, InputState>,
         ReadExpect<'a, GameplayActions>,
         ReadExpect<'a, CameraConfig>,
+        ReadExpect<'a, PhysicsResource>,
+        Option<Read<'a, TerrainWorld>>,
         ReadStorage<'a, Position>,
         WriteStorage<'a, FollowTarget>,
         WriteStorage<'a, CameraComponent>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (entities, time, input, actions, config, positions, mut follow_targets, mut cameras) =
-            data;
+        let (
+            entities,
+            time,
+            input,
+            actions,
+            config,
+            physics,
+            terrain,
+            positions,
+            mut follow_targets,
+            mut cameras,
+        ) = data;
 
         let dt = time.delta_seconds();
 
@@ -86,6 +101,15 @@ impl<'a> System<'a> for CameraControlSystem {
             cam.target.x += (target_pos.x - cam.target.x) * t;
             cam.target.y += (target_pos.y - cam.target.y) * t;
             cam.target.z += (target_pos.z - cam.target.z) * t;
+
+            if let Some(terrain) = terrain.as_deref() {
+                cam.position = config.clearance.clear_position(
+                    &physics.world,
+                    terrain,
+                    cam.target,
+                    cam.position,
+                );
+            }
 
             // // Debug logging (every ~60 frames to avoid spam)
             // if time.frame_count() % 60 == 0 {

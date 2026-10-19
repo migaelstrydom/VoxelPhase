@@ -1,3 +1,5 @@
+use super::clearance::CameraClearance;
+
 /// Configuration for camera behavior.
 /// This is an ECS resource that can be tuned without code changes.
 #[derive(Debug, Clone)]
@@ -33,6 +35,9 @@ pub struct CameraConfig {
 
     /// Maximum height angle (radians) - prevents camera from going directly overhead
     pub max_pitch: f32,
+
+    /// How the camera keeps clear of scenery between it and the target.
+    pub clearance: CameraClearance,
 }
 
 impl Default for CameraConfig {
@@ -48,6 +53,7 @@ impl Default for CameraConfig {
             height_gradient: 0.3,
             min_pitch: -2.0,                              // ~6 degrees above horizon
             max_pitch: std::f32::consts::FRAC_PI_2 - 0.5, // ~60 degrees
+            clearance: CameraClearance::default(),
         }
     }
 }
