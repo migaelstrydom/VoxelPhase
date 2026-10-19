@@ -42,8 +42,8 @@ impl SurfaceSource {
     /// terrain, whose isosurface is re-meshed on every crater.
     pub const ALBEDO_TRIPLANAR: Self = Self(1 << 0);
 
-    /// The location-2 vertex channel carries surface character (hardness),
-    /// not texture coordinates.
+    /// The location-2 vertex channel carries surface character (hardness and
+    /// pile, `rendering::vertex::surface_character`), not texture coordinates.
     ///
     /// Only meaningful on a mesh that does not need its UVs, which in practice
     /// means one that also sets [`ALBEDO_TRIPLANAR`](Self::ALBEDO_TRIPLANAR).

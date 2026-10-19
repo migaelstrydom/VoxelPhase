@@ -20,6 +20,8 @@ pub struct MarchingCubesMesh {
     /// colour is, so a vertex's finish and its colour always describe the same
     /// material.
     pub hardness: Vec<f32>,
+    /// Per-vertex `VoxelMaterial::pile`, from the same corner as the colour.
+    pub pile: Vec<f32>,
     /// Per-triangle material: the one at least two of its vertices took their
     /// colour from, or the first vertex's when all three differ. What the
     /// physics reads as the triangle's surface.
@@ -36,6 +38,7 @@ impl MarchingCubesMesh {
             normals: Vec::new(),
             colors: Vec::new(),
             hardness: Vec::new(),
+            pile: Vec::new(),
             triangle_materials: Vec::new(),
             indices: Vec::new(),
         }
@@ -176,6 +179,7 @@ impl MarchingCubes {
         let mut edge_vertices = [Point3::origin(); 12];
         let mut edge_colors = [[0.0f32; 4]; 12];
         let mut edge_hardness = [0.0f32; 12];
+        let mut edge_pile = [0.0f32; 12];
         let mut edge_materials = [VoxelMaterial::Air; 12];
         let mut edge_normals = [Vector3::zeros(); 12];
 
@@ -193,6 +197,7 @@ impl MarchingCubes {
                 let solid_corner = if d0 > self.iso_level { v0 } else { v1 };
                 edge_colors[i] = corners[solid_corner].material.color();
                 edge_hardness[i] = corners[solid_corner].material.hardness();
+                edge_pile[i] = corners[solid_corner].material.pile();
                 edge_materials[i] = corners[solid_corner].material;
                 let grad = corner_gradients[v0].lerp(&corner_gradients[v1], t);
                 let n = -grad;
@@ -216,6 +221,7 @@ impl MarchingCubes {
                 mesh.positions.push(edge_vertices[edge]);
                 mesh.colors.push(edge_colors[edge]);
                 mesh.hardness.push(edge_hardness[edge]);
+                mesh.pile.push(edge_pile[edge]);
                 mesh.normals.push(edge_normals[edge]);
                 mesh.indices.push(base_index + (i + j) as u32);
             }

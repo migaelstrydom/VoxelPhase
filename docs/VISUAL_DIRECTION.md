@@ -62,8 +62,8 @@ sun, fixed geometry — or before/after comparison is worthless.
 - **One shadow cascade**, so the map's resolution is spread across the whole
   frustum fit (lighting plan stage 7).
 - **Terrain's surface structure stops at the material level** — triplanar
-  projection, detail normals and a physics-derived finish have landed (§4.1-4.3);
-  slope zoning, grass sheen and fresh-cut destruction have not.
+  projection, detail normals, a physics-derived finish and grass sheen have
+  landed (§4.1-4.3, §4.5); slope zoning and fresh-cut destruction have not.
 
 ### How it looked before §1, and what fixed it
 
@@ -618,6 +618,35 @@ paint.
 Worth keeping distinct precisely because it is the one item here that no amount
 of normal detail or roughness tuning will produce.
 
+#### Landed
+
+`shader/pile.glsl`, for any surface whose material has a pile
+(`VoxelMaterial::pile`, 1 for grass), carried per vertex in terrain's spare
+`tex_coords.y`. Three terms:
+
+- **Depth.** Seen face-on, a pile returns 80% of the surface's light, because the
+  eye looks down into the shaded gaps between blades; edge-on, all of it.
+- **Sheen.** A Charlie lobe for the sun (alpha 0.35) and a grazing
+  `(1 - n·v)^5` cast from the sky irradiance, in the albedo lifted and
+  desaturated (`sqrt`).
+- **Transmission.** Sunlight through the blades, in the albedo's hue at full
+  value, `(v·-l)^2`, peaked at the terminator `(1 - n·l)^2`, seen across the
+  blades `(1 - n·v)^2`, shadowed like the sun.
+
+What the renders taught, worth keeping:
+
+- **Additive terms wash grass out.** The first cut, a broad sheen plus the sky
+  sheen and a hotspot, added about 25% to every tilted slope and pushed the green
+  up the tonemap's shoulder (the light level is pinned by content, see the
+  lighting rules). Depth shade is what pays for the sheen. The hotspot was cut
+  for good: it adds light where grass is already brightest.
+- **Transmission without the terminator and grazing weights lights everything.**
+  Under a high sun, flat ground facing into it took as much transmitted light as
+  direct, and a backlit hill lost its modelling and texture. Weighted, the glow
+  gathers on crests and lips, and a slope seen face-on keeps its shape.
+- With the sun at 45-50 degrees, as in the game, transmission is a crest effect.
+  A lower sun would make it carry much more of the frame.
+
 ### 4.6 Fresh destruction reads as fresh
 
 Terrain carved by an explosion exposes a different surface to the one outside the
@@ -660,9 +689,7 @@ merits and with its own perf budget, not attached to §4.1.
 3. ~~**4.2 detail normals with variance-coupled roughness**~~ — landed, and it
    was the core: by far the largest visible change in this section, and the
    thing that finally made 4.3's roughness legible.
-4. **4.5 grass sheen** — next by default: small, independent, and now the most
-   obvious remaining gap, since grass currently reads as textured ground rather
-   than as anything furry.
+4. ~~**4.5 grass sheen**~~ — landed (`shader/pile.glsl`).
 5. **4.4 slope zoning** — on top of a surface system that already works.
 6. **4.6 fresh destruction** — last, because it is a modulation of everything
    above.

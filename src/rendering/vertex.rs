@@ -23,8 +23,9 @@ pub struct Vertex {
 ///
 /// A triplanar-projected mesh derives its texture coordinates from world
 /// position, so its authored UVs are dead payload — terrain spends them on
-/// `VoxelMaterial::hardness` instead, which the fragment shader turns into
-/// roughness. The two meanings never overlap: the draw's projection scale picks
+/// `VoxelMaterial::hardness` (x), which the fragment shader turns into
+/// roughness, and `VoxelMaterial::pile` (y), which it shades as a layer of
+/// blades (`shader/pile.glsl`). The two meanings never overlap: the draw's projection scale picks
 /// one, and it is the same flag the shader already branches on to decide how to
 /// sample.
 ///
@@ -33,8 +34,8 @@ pub struct Vertex {
 /// in the game, so a wider vertex costs bandwidth on exactly the geometry that
 /// can least afford it — the same reasoning that made ambient occlusion narrow
 /// `pos` instead of growing the struct.
-pub fn surface_character(hardness: f32) -> Vector2<f32> {
-    Vector2::new(hardness, 0.0)
+pub fn surface_character(hardness: f32, pile: f32) -> Vector2<f32> {
+    Vector2::new(hardness, pile)
 }
 
 impl Vertex {

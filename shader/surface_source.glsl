@@ -10,7 +10,8 @@
 /// Sample the albedo by world position across the three axis planes.
 const uint SOURCE_ALBEDO_TRIPLANAR = 1u << 0;
 
-/// The location-2 vertex channel carries surface character, not UVs.
+/// The location-2 vertex channel carries surface character (hardness, pile),
+/// not UVs.
 const uint SOURCE_CHARACTER_IN_TEXCOORD = 1u << 1;
 
 /// Derive roughness per fragment from surface character.

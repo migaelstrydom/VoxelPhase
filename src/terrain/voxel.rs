@@ -115,6 +115,19 @@ impl VoxelMaterial {
         }
     }
 
+    /// How much of this material's surface is standing fibre — blades, not a
+    /// solid face — on a 0-to-1 scale.
+    ///
+    /// The renderer shades a pile as a layer of thin, translucent strands
+    /// (`shader/pile.glsl`): soft sheen where it is seen edge-on, a glow where
+    /// the sun shines through it. Only grass has one.
+    pub fn pile(&self) -> f32 {
+        match self {
+            VoxelMaterial::Grass => 1.0,
+            _ => 0.0,
+        }
+    }
+
     /// Whether no charge can remove this material.
     pub fn is_indestructible(&self) -> bool {
         self.toughness().is_none()

@@ -282,7 +282,7 @@ impl MeshOctree {
                     mesh.colors[i][2],
                     mesh.colors[i][3],
                 ),
-                tex_coords: vertex::surface_character(mesh.hardness[i]),
+                tex_coords: vertex::surface_character(mesh.hardness[i], mesh.pile[i]),
                 normal: mesh.normals[i],
                 ao: 1.0,
             })

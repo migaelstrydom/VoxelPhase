@@ -17,6 +17,7 @@
 #include "relief.glsl"
 #include "transparency.glsl"
 #include "aerial.glsl"
+#include "pile.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -64,6 +65,7 @@ void main() {
     // A world-textured mesh has no use for its UVs, so terrain sends per-vertex
     // surface character through that channel instead.
     float character = sourceHas(source, SOURCE_CHARACTER_IN_TEXCOORD) ? inTexCoord.x : 0.0;
+    float pile = sourceHas(source, SOURCE_CHARACTER_IN_TEXCOORD) ? inTexCoord.y : 0.0;
 
     vec3 albedo_wash;
     float texture_alpha;
@@ -197,10 +199,13 @@ void main() {
     // The sky supplies both hemisphere irradiance and the reflection a glossy
     // or metallic surface shows. `ambient_colour` remains on top as an author's
     // fill for lifting a scene without moving the sky.
-    vec3 litColor = totalResponse(sun_response) * sun_visibility
-                  + shadeEnvironment(surface, sun.direction, reflectedRadiance(surface, sun.direction))
-                  + shadeAmbient(surface, scene.ambient_colour.rgb)
-                  + materialEmissive();
+    vec3 litColor = (totalResponse(sun_response) * sun_visibility
+                     + shadeEnvironment(surface, sun.direction, reflectedRadiance(surface, sun.direction))
+                     + shadeAmbient(surface, scene.ambient_colour.rgb))
+                      * pileDepthShade(surface, pile)
+                  + materialEmissive()
+                  + pileSunResponse(surface, sun, pile) * sun_visibility
+                  + pileSkyResponse(surface, sun.direction, pile);
 
     // Bounded by the live light count, not just MAX_ACTIVE_LIGHTS, to skip
     // shading unused slots. But also clamped to MAX_ACTIVE_LIGHTS: `count` comes
