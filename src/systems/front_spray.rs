@@ -24,8 +24,8 @@ use crate::particles::{ColourRamp, Particle, ParticlePool};
 use crate::water::field::{Front, WaterField};
 
 /// Puffs of spume and droplets spawned a second, over every front at once.
-const SPUME_PER_SECOND: f32 = 700.0;
-const DROPLETS_PER_SECOND: f32 = 300.0;
+const SPUME_PER_SECOND: f32 = 1600.0;
+const DROPLETS_PER_SECOND: f32 = 800.0;
 
 /// Heights a front's water stands over the floor ahead that it is weighed
 /// over, m: lower, it creeps on rather than breaks; higher counts no more.
@@ -40,9 +40,14 @@ const FULL_WEIGHT: f32 = 12.0;
 /// which the surface is drawn over a front's face.
 const TILT_SHARE: f32 = 0.35;
 
+/// How far past the ends of its face a front's spray reaches, as a share of
+/// the face's half width: neighbouring fronts' spray overlaps, so a stepped
+/// edge is covered across its steps.
+const SIDEWAYS: f32 = 2.0;
+
 /// Furthest out over the floor ahead spray starts, m: past the half column
 /// the drawn surface carries on beyond the front's face.
-const AHEAD: f32 = 0.6;
+const AHEAD: f32 = 0.9;
 
 /// Farthest from the eye a front throws spray, m.
 const SPRAY_RANGE: f32 = 60.0;
@@ -98,7 +103,7 @@ impl FrontSpray {
 /// but well below the crest: higher, seen from above, the spray would stand
 /// over the water behind the edge.
 fn on_face(front: &Front, rng: &mut impl Rng) -> Vector3<f32> {
-    let along = front.across * rng.gen_range(-1.0..1.0) * Front::HALF_WIDTH;
+    let along = front.across * rng.gen_range(-1.0..1.0) * Front::HALF_WIDTH * SIDEWAYS;
     let out = front
         .velocity
         .try_normalize(1.0e-6)
@@ -113,7 +118,7 @@ fn on_face(front: &Front, rng: &mut impl Rng) -> Vector3<f32> {
 /// and gone within a second.
 fn spume(front: &Front, rng: &mut impl Rng) -> Particle {
     let ramp = ColourRamp::fade(
-        Vector4::new(0.92, 0.96, 1.0, 0.45),
+        Vector4::new(0.92, 0.96, 1.0, 0.55),
         Vector4::new(0.9, 0.95, 1.0, 0.0),
     );
     let velocity =
@@ -121,8 +126,8 @@ fn spume(front: &Front, rng: &mut impl Rng) -> Particle {
     let mut puff = Particle::new(
         on_face(front, rng),
         velocity,
-        rng.gen_range(0.08..0.18),
-        rng.gen_range(0.4..0.8),
+        rng.gen_range(0.12..0.26),
+        rng.gen_range(0.5..1.0),
         ramp,
     )
     .with_dynamics(0.1, 1.5);
@@ -146,8 +151,8 @@ fn droplet(front: &Front, rng: &mut impl Rng) -> Particle {
     Particle::new(
         on_face(front, rng),
         velocity,
-        rng.gen_range(0.03..0.07),
-        rng.gen_range(0.4..0.7),
+        rng.gen_range(0.04..0.09),
+        rng.gen_range(0.5..0.9),
         ramp,
     )
     .with_dynamics(1.0, 0.4)
