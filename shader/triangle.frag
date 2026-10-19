@@ -16,6 +16,7 @@
 #include "grain.glsl"
 #include "relief.glsl"
 #include "transparency.glsl"
+#include "aerial.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -233,6 +234,8 @@ void main() {
     // A highlight is light that bounced off the front and never went through,
     // so it survives however clear the body of the surface is.
     coverage = max(coverage, highlightCoverage(sun_specular));
+
+    litColor = applyAerialPerspective(litColor, inWorldPos, scene.camera_pos, sun.direction);
 
     outColor = vec4(litColor, texture_alpha * inColor.a * coverage);
 }

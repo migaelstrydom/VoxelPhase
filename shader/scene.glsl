@@ -11,7 +11,8 @@ layout(set = 0, binding = 0) uniform SceneUbo {
     mat4 proj;
     /// World space to the sun's clip space, for shadow map lookups.
     mat4 light_view_proj;
-    /// xyz = camera world position, w unused.
+    /// xyz = camera world position, w = aerial perspective visibility in m
+    /// (0 for no haze).
     vec4 camera_pos;
     /// xyz = normalized direction from surface towards the sun, w = intensity.
     vec4 sun_direction;

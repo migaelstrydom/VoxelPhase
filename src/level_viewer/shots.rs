@@ -59,6 +59,16 @@ impl ViewerShot {
             environment: daylight(),
         }
     }
+
+    /// A shot of the level from outside, framed to fit it whole.
+    ///
+    /// Such a camera stands hundreds of metres back, far beyond any the game
+    /// uses, and the aerial perspective there would veil the level being judged.
+    fn from_outside(label: impl Into<String>, camera: SceneCamera) -> Self {
+        let mut shot = Self::new(label, camera);
+        shot.environment = shot.environment.without_aerial_perspective();
+        shot
+    }
 }
 
 /// The lighting every standard shot uses.
@@ -78,11 +88,11 @@ pub fn standard_shots(level: &Level, terrain: &TerrainWorld, aspect: f32) -> Vec
     let mut shots = Vec::new();
 
     let whole = content_bounds(terrain).unwrap_or(*terrain.bounds());
-    shots.push(ViewerShot::new(
+    shots.push(ViewerShot::from_outside(
         "overview ne",
         frame(&whole, Vector3::new(1.0, 0.85, 1.0), aspect),
     ));
-    shots.push(ViewerShot::new(
+    shots.push(ViewerShot::from_outside(
         "overview sw",
         frame(&whole, Vector3::new(-1.0, 0.85, -1.0), aspect),
     ));
@@ -96,7 +106,7 @@ pub fn standard_shots(level: &Level, terrain: &TerrainWorld, aspect: f32) -> Vec
         let Some(bounds) = segment_content_bounds(segment) else {
             continue;
         };
-        shots.push(ViewerShot::new(
+        shots.push(ViewerShot::from_outside(
             name,
             frame(&bounds, Vector3::new(1.0, 0.7, 1.0), aspect),
         ));

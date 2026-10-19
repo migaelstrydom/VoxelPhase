@@ -42,7 +42,8 @@ pub struct SceneUbo {
     /// `ShadowVolume::light_view_proj`.
     pub light_view_proj: Matrix4<f32>,
 
-    /// xyz = camera world position, w unused. Needed for specular response.
+    /// xyz = camera world position, needed for specular response;
+    /// w = `SceneLighting::aerial_visibility`, 0 when there is no haze.
     pub camera_pos: [f32; 4],
 
     /// xyz = normalized direction from surface towards the sun, w = intensity.
@@ -193,6 +194,24 @@ pub struct SceneLighting {
 
     /// Linear ambient fill applied to all surfaces.
     pub ambient_colour: Colour,
+
+    /// Distance at which aerial perspective has faded a surface 63% of the way
+    /// to the sky behind it, m (`shader/aerial.glsl`); `None` draws no haze.
+    pub aerial_visibility: Option<f32>,
+}
+
+/// The game's aerial perspective visibility, m.
+///
+/// Sized against the game camera's 500 m far plane: the haze has to be all but
+/// complete there, or the sea's cut-off edge shows against the sky. The shader's
+/// falloff keeps everything inside a hundred metres or so crisp.
+pub const AERIAL_VISIBILITY: f32 = 330.0;
+
+impl SceneLighting {
+    /// `aerial_visibility` as the shaders read it: 0 for no haze.
+    pub fn aerial_visibility_uniform(&self) -> f32 {
+        self.aerial_visibility.unwrap_or(0.0)
+    }
 }
 
 impl Default for SceneLighting {
@@ -237,6 +256,7 @@ impl Default for SceneLighting {
             // cool-fill split, and a merely slightly-blue fill does not read as
             // one against a warm sun.
             ambient_colour: Colour::new(0.045, 0.070, 0.125, 1.0),
+            aerial_visibility: Some(AERIAL_VISIBILITY),
         }
     }
 }
@@ -644,7 +664,12 @@ impl FrameData {
             view: *view,
             proj: *proj,
             light_view_proj: shadow.light_view_proj,
-            camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
+            camera_pos: [
+                camera_pos.x,
+                camera_pos.y,
+                camera_pos.z,
+                lighting.aerial_visibility_uniform(),
+            ],
             sun_direction: [sun.x, sun.y, sun.z, lighting.sun_intensity],
             sun_colour: [
                 lighting.sun_colour.r,

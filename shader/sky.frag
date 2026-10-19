@@ -4,6 +4,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "sky_model.glsl"
+#include "aerial.glsl"
 
 layout(location = 0) in vec2 fragClipPos;
 layout(location = 0) out vec4 outColor;
@@ -168,7 +169,9 @@ void main() {
     vec3 sunDir = normalize(pc.sun_direction.xyz);
     float time = pc.sun_direction.w;
 
-    vec3 color = skyRadiance(rayDir, sunDir) + sunDiscRadiance(rayDir, sunDir);
+    // Below the horizon the sky pass only shows where a ray runs past the far
+    // plane, through more air than anything drawn: it is all haze.
+    vec3 color = aerialRadiance(rayDir, sunDir) + sunDiscRadiance(rayDir, sunDir);
 
     // Over the sun disc too: cirrus passing in front of the sun veils it.
     color = mix(color, cloudRadiance(rayDir, sunDir), cloudDensity(rayDir, time));

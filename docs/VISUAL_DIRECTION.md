@@ -41,6 +41,8 @@ sun, fixed geometry — or before/after comparison is worthless.
 - One directional sun, up to 16 point lights, flat constant ambient colour.
 - HDR target, ACES tonemap with a hue-preservation dial, bloom.
 - Procedural sky with atmospheric scattering, written as linear HDR radiance.
+- Aerial perspective (§5.3): distance fades lit geometry and water toward the
+  sky's horizon radiance (`shader/aerial.glsl`).
 - Sky-based environment lighting: hemisphere irradiance plus a specular sky
   reflection on a split-sum BRDF fit (`shader/environment.glsl`, §1.1 and §1.2).
 - A single uncascaded sun shadow map (`src/rendering/shadow/`, lighting plan
@@ -700,6 +702,26 @@ Fade distant geometry toward the sky colour along the view ray. Costs almost
 nothing and is one of the strongest "this is a modern renderer" signals there
 is, because it is what makes *distance* legible — without it, a far cliff and a
 near one are equally crisp and the eye can't order them.
+
+#### Landed
+
+`applyAerialPerspective` in `shader/aerial.glsl`, called last by
+`triangle.frag` and `water.frag`, mixes a surface toward `skyRadiance` at the
+horizon on the ray's bearing. The sky pass draws that same colour below the
+horizon, so a surface hazed out entirely is indistinguishable from the sky
+beside it. That is what removed the island sea's hard horizon, which was the
+game camera's 500 m far plane cutting off the ocean ring (it runs to 1 km).
+
+- **The curve is `1 - exp(-(d/V)^3)`, not exponential.** Exponential haze tuned
+  to close by the far plane turned the whole sea milky from 100 m out. The cube
+  leaves under 3% at 100 m and about 20% at 200 m, and is about 97% complete at
+  500 m. `V` is `SceneLighting::aerial_visibility` (330 m in the game), carried in
+  the scene UBO's and the water push constants' `camera_pos.w`.
+- **`None` turns it off.** `level_viewer`'s overview and segment shots stand
+  hundreds of metres back, and the haze there veiled the level being judged;
+  they draw without it. The spawn view and `--eye` shots keep it.
+- Particles and force fields are not hazed: nothing draws them far enough away
+  to matter yet.
 
 ---
 

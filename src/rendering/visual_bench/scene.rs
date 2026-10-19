@@ -134,6 +134,13 @@ impl SceneEnvironment {
         self
     }
 
+    /// Draw no aerial perspective: for a shot judging something from farther
+    /// back than any player stands, where the haze would only veil it.
+    pub fn without_aerial_perspective(mut self) -> Self {
+        self.lighting.aerial_visibility = None;
+        self
+    }
+
     pub fn with_point_light(mut self, light: ActiveLight) -> Self {
         self.point_lights.push(light);
         self

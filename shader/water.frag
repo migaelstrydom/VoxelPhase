@@ -5,6 +5,7 @@
 
 #include "ripple.glsl"
 #include "swell.glsl"
+#include "aerial.glsl"
 
 // --- Tuning constants ---
 const float REFRACTION_STRENGTH = 0.01;
@@ -111,7 +112,7 @@ layout(set = 0, binding = 0) uniform sampler2D colorSampler;
 layout(set = 0, binding = 1) uniform sampler2D depthSampler;
 
 layout(push_constant) uniform FragPushConstants {
-    layout(offset = 160) vec4 cameraPos;
+    layout(offset = 160) vec4 cameraPos;     // xyz, w = aerial visibility
     layout(offset = 176) vec4 sunDir;
     layout(offset = 192) vec4 projParams;    // (near, far, time, unused)
     layout(offset = 208) vec4 screenParams;  // (width, height, unused, unused)
@@ -516,8 +517,9 @@ void main() {
 
     if (sheet) {
         // Past its foot, falling water is the foam where it lands.
-        outColor = fragSheet.x > fragSheet.y ? shadePlunge(L, time)
-                                             : shadeSheet(noiseN1, V, L, opticalDepth, time);
+        vec4 fall = fragSheet.x > fragSheet.y ? shadePlunge(L, time)
+                                              : shadeSheet(noiseN1, V, L, opticalDepth, time);
+        outColor = vec4(applyAerialPerspective(fall.rgb, fragWorldPos, fpc.cameraPos, L), fall.a);
         return;
     }
 
@@ -546,6 +548,8 @@ void main() {
         discard;
     }
     vec3 behind = texture(colorSampler, screenUV).rgb;
+    // Only the water's own colour: what is behind it was hazed when it was drawn.
+    color = applyAerialPerspective(color, fragWorldPos, fpc.cameraPos, L);
 
     // Scene radiance, like `colorSampler`: the water is drawn into the HDR
     // scene target and resolved with everything around it.

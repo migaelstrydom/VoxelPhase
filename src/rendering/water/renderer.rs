@@ -124,11 +124,14 @@ pub struct WaterView {
     pub time: f32,
     /// The render target's size in pixels.
     pub screen: Vector2<f32>,
+    /// `SceneLighting::aerial_visibility` as the shaders read it, m: 0 for no
+    /// haze.
+    pub aerial_visibility: f32,
 }
 
 impl WaterView {
-    /// The fragment stage's constants: camera, sun, near and far planes and
-    /// time, screen size.
+    /// The fragment stage's constants: camera and aerial visibility, sun, near
+    /// and far planes and time, screen size.
     fn fragment_constants(&self) -> [f32; 16] {
         // For a Vulkan perspective projection (depth [0,1]):
         //   proj[2][2] = far / (near - far)
@@ -143,7 +146,7 @@ impl WaterView {
             self.camera.x,
             self.camera.y,
             self.camera.z,
-            0.0,
+            self.aerial_visibility,
             self.sun.x,
             self.sun.y,
             self.sun.z,

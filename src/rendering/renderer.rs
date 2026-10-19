@@ -1438,6 +1438,7 @@ impl Renderer {
             sun: self.sky_renderer.sun_direction(),
             time,
             screen: Vector2::new(extent.width as f32, extent.height as f32),
+            aerial_visibility: self.lighting.aerial_visibility_uniform(),
         };
         let frame = self.water_renderer.prepare(water, &view)?;
         self.water_footprint = frame.footprint.pixels(extent);
