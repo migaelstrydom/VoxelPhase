@@ -134,7 +134,7 @@ impl ContactGraph {
         // depth 0; one that only holds its attitude leaves it to its contacts.
         // Two-body constraints add bidirectional edges.
         for (_, constraint) in constraints.iter() {
-            if !constraint.active {
+            if !constraint.active || !constraint.kind.stacks() {
                 continue;
             }
             let refs = constraint.kind.referenced_bodies();

@@ -343,6 +343,17 @@ impl ConstraintKind {
         }
     }
 
+    /// Whether the bodies this ties together stack as one: whether shock
+    /// propagation may order them, making the lower appear heavier to what
+    /// rests on the upper.
+    ///
+    /// A spring does not. Its whole response is the give between its
+    /// bodies, and a sprung body made to look heavier to what lands on it
+    /// stops that load dead instead of taking it into the spring.
+    pub fn stacks(&self) -> bool {
+        !matches!(self, ConstraintKind::SpringSlider(_))
+    }
+
     /// Whether this constraint references the given body.
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {
