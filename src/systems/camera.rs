@@ -1,4 +1,4 @@
-use crate::camera::{CameraConfig, FollowTarget};
+use crate::camera::{CameraConfig, FollowTarget, Scenery};
 use crate::components::{CameraComponent, Position};
 use crate::input::{GameplayActions, InputState};
 use crate::systems::PhysicsResource;
@@ -93,6 +93,7 @@ impl<'a> System<'a> for CameraControlSystem {
             let t = 1.0 - (-config.follow_speed * dt).exp();
 
             let cam = &mut camera.0;
+            let from = cam.position;
             cam.position.x += (desired_pos.x - cam.position.x) * t;
             cam.position.y += (desired_pos.y - cam.position.y) * t;
             cam.position.z += (desired_pos.z - cam.position.z) * t;
@@ -103,11 +104,17 @@ impl<'a> System<'a> for CameraControlSystem {
             cam.target.z += (target_pos.z - cam.target.z) * t;
 
             if let Some(terrain) = terrain.as_deref() {
-                cam.position = config.clearance.clear_position(
-                    &physics.world,
-                    terrain,
+                let scenery = Scenery {
+                    physics: &physics.world,
+                    geometry: terrain,
+                };
+                cam.position = config.clearance.resolve(
+                    &mut follow.clearance,
+                    &scenery,
                     cam.target,
+                    from,
                     cam.position,
+                    dt,
                 );
             }
 

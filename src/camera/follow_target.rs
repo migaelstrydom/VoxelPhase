@@ -1,5 +1,7 @@
 use specs::{Component, DenseVecStorage, Entity};
 
+use super::clearance::ClearanceState;
+
 /// Component that makes a camera follow a target entity.
 /// Attach this to a camera entity to make it follow another entity.
 #[derive(Component, Debug)]
@@ -16,6 +18,9 @@ pub struct FollowTarget {
 
     /// Current distance from target
     pub distance: f32,
+
+    /// What keeping clear of the scenery carries between frames.
+    pub clearance: ClearanceState,
 }
 
 impl FollowTarget {
@@ -25,6 +30,7 @@ impl FollowTarget {
             orbit_angle: 0.0,
             pitch: 0.25, // Start looking slightly down
             distance: initial_distance,
+            clearance: ClearanceState::default(),
         }
     }
 }
