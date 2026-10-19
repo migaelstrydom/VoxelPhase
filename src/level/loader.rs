@@ -211,6 +211,24 @@ fn validate_segment(segment: &super::data::SegmentDef) -> Result<(), LevelError>
         }
     }
 
+    for volume in &segment.terrain.volumes {
+        if let super::data::VolumeFeature::Caves { region, mouths, .. } = volume {
+            if !mouths.is_empty() && region.is_none() {
+                return Err(LevelError::Validation(format!(
+                    "segment '{name}': cave mouths need a region, the centre they bore to"
+                )));
+            }
+            if mouths
+                .iter()
+                .any(|m| m.half_width <= 0.0 || m.half_height <= 0.0)
+            {
+                return Err(LevelError::Validation(format!(
+                    "segment '{name}': a cave mouth's half_width and half_height must be positive"
+                )));
+            }
+        }
+    }
+
     let mut seen: Vec<&str> = Vec::new();
     for anchor in &segment.anchors {
         if seen.contains(&anchor.name.as_str()) {

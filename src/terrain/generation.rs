@@ -23,7 +23,7 @@ use super::traversal::{excavate, rasterise, route_plan, RoutePart};
 use super::voxel::{Voxel, VoxelMaterial};
 use crate::collision::AABB;
 use crate::level::{
-    CaveDepthPoint, CaveRegion, MaterialLayer, Terrain, TerrainFeature, VolumeFeature,
+    CaveDepthPoint, CaveMouth, CaveRegion, MaterialLayer, Terrain, TerrainFeature, VolumeFeature,
     VoxelMaterialId,
 };
 use crate::utils::noise::{fbm_2d_periodic, fbm_3d};
@@ -645,6 +645,7 @@ fn apply_volume(
             ref region,
             ref material_layers,
             floor_bias,
+            ref mouths,
         } => {
             let cave_layers = if material_layers.is_empty() {
                 layers
@@ -661,6 +662,7 @@ fn apply_volume(
                 region.as_ref(),
                 cave_layers,
                 floor_bias,
+                mouths,
                 bounds,
                 step,
             );
@@ -1103,6 +1105,7 @@ fn apply_caves(
     region: Option<&CaveRegion>,
     cave_layers: &[MaterialLayer],
     floor_bias: f32,
+    mouths: &[CaveMouth],
     bounds: &AABB,
     step: f32,
 ) {
@@ -1206,19 +1209,106 @@ fn apply_caves(
         x += step;
     }
 
+    // Pass A2: bore the mouths in from the open. The loader holds a region
+    // to every cave with mouths: the centre is where they lead.
+    let (mut min, mut max) = (
+        Point3::new(min_x, min_y, min_z),
+        Point3::new(max_x, max_y, max_z),
+    );
+    if let Some(r) = region {
+        let noise = CaveNoise {
+            frequency,
+            octaves,
+            seed,
+        };
+        let centre = Point3::new(r.center.0, r.center.1, r.center.2);
+        for mouth in mouths {
+            let (lo, hi) = carve_cave_mouth(grid, mouth, centre, &noise, bounds, step);
+            min = min.inf(&lo);
+            max = max.sup(&hi);
+        }
+    }
+
     // Pass B: reassign materials on cave-exposed surfaces.
     fixup_cave_materials(
         grid,
-        &terrain.material_layers,
         cave_layers,
-        min_x,
-        min_z,
-        max_x,
-        max_z,
-        min_y,
-        max_y,
+        min.x,
+        min.z,
+        max.x,
+        max.z,
+        min.y,
+        max.y,
         step,
     );
+}
+
+/// The noise a cave carves by, which its mouths roughen their walls with too.
+struct CaveNoise {
+    frequency: f32,
+    octaves: u32,
+    seed: u32,
+}
+
+impl CaveNoise {
+    /// The noise at `p`, centred on zero: about -1 to 1.
+    fn centred(&self, p: Point3<f32>) -> f32 {
+        let f = self.frequency;
+        fbm_3d(p.x * f, p.y * f, p.z * f, self.octaves, 0.5, 2.0, self.seed) * 2.0 - 1.0
+    }
+}
+
+/// How far the cave's noise moves a mouth's walls in and out, as a share of
+/// its smaller half-extent.
+const MOUTH_ROUGHNESS: f32 = 0.35;
+
+/// How much finer than the cave's own noise a mouth's roughness is. At the
+/// cave's scale a mouth's few metres of wall take one gentle bulge and the
+/// opening reads as a bored arch; finer, it breaks into the crags of a cleft.
+const MOUTH_DETAIL: f32 = 3.0;
+
+/// Bore `mouth` from its point in the open to `centre`: a passage of elliptical
+/// section, its walls roughened by the cave's noise. Returns the box it
+/// carved within, clipped to `bounds`.
+fn carve_cave_mouth(
+    grid: &mut ChunkGrid,
+    mouth: &CaveMouth,
+    centre: Point3<f32>,
+    noise: &CaveNoise,
+    bounds: &AABB,
+    step: f32,
+) -> (Point3<f32>, Point3<f32>) {
+    let start = Point3::new(mouth.from.0, mouth.from.1, mouth.from.2);
+    let axis = centre - start;
+    let length_sq = axis.norm_squared().max(1e-6);
+    let smaller = mouth.half_width.min(mouth.half_height);
+    let reach = mouth.half_width.max(mouth.half_height) * (1.0 + MOUTH_ROUGHNESS) + step;
+    let pad = nalgebra::Vector3::repeat(reach);
+    let lo = (start.inf(&centre) - pad).sup(&bounds.min);
+    let hi = (start.sup(&centre) + pad).inf(&bounds.max);
+
+    let (i0, i1) = index_range(lo.x, hi.x, step);
+    let (j0, j1) = index_range(lo.y, hi.y, step);
+    let (k0, k1) = index_range(lo.z, hi.z, step);
+    for i in i0..=i1 {
+        for j in j0..=j1 {
+            for k in k0..=k1 {
+                let p = Point3::new(i as f32 * step, j as f32 * step, k as f32 * step);
+                let t = ((p - start).dot(&axis) / length_sq).clamp(0.0, 1.0);
+                let off = p - (start + axis * t);
+                let across = off.x.hypot(off.z) / mouth.half_width;
+                let up = off.y / mouth.half_height;
+                // Distance to the elliptical wall, in metres of the smaller
+                // half-extent: exact on the axes, close enough between.
+                let wall = (across.hypot(up) - 1.0) * smaller
+                    + MOUTH_ROUGHNESS * smaller * noise.centred(p * MOUTH_DETAIL);
+                if wall < step {
+                    carve_with_sdf(grid, p, wall, step);
+                }
+            }
+        }
+    }
+    (lo, hi)
 }
 
 /// After cave carving, reassign materials on newly-exposed underground surfaces
@@ -1229,7 +1319,6 @@ fn apply_caves(
 /// an underground air gap (a cave) do we switch to cave layers.
 fn fixup_cave_materials(
     grid: &mut ChunkGrid,
-    terrain_layers: &[MaterialLayer],
     cave_layers: &[MaterialLayer],
     min_x: f32,
     min_z: f32,
@@ -1258,12 +1347,13 @@ fn fixup_cave_materials(
                         depth_below_surface = 0.0;
                         in_solid = true;
                     }
-                    let layers = if seen_underground_air {
-                        cave_layers
-                    } else {
-                        terrain_layers
-                    };
-                    let material = material_at_depth(depth_below_surface, layers);
+                    // The first run is the terrain's own surface, laid by the
+                    // heightfield with its bands and faces; it keeps them.
+                    if !seen_underground_air {
+                        y -= step;
+                        continue;
+                    }
+                    let material = material_at_depth(depth_below_surface, cave_layers);
                     // The world's floor is not a surface to re-skin: a cave that
                     // reaches bedrock must not turn it into ordinary rock.
                     if voxel.material != material && !voxel.material.is_indestructible() {
@@ -1517,6 +1607,54 @@ mod tests {
         assert_eq!(
             bared, 0,
             "{bared} of {soil} buried soil voxels open onto a cliff"
+        );
+    }
+
+    /// A cave mouth bores from the open through the plateau's cliff to the
+    /// cave's centre, so the cave opens onto the face where the level put it,
+    /// not wherever its noise happens to reach.
+    #[test]
+    fn a_cave_mouth_opens_onto_the_cliff() {
+        let voxel_size = 0.5;
+        let mut terrain = cliffed_plateau(voxel_size);
+        // Carve nothing by noise: the chamber is the mouth's own end.
+        terrain.volumes.push(VolumeFeature::Caves {
+            frequency: 0.2,
+            octaves: 2,
+            seed: 1,
+            depth_curve: vec![CaveDepthPoint {
+                depth: 0.0,
+                threshold: 1.0,
+            }],
+            region: Some(CaveRegion {
+                center: (0.0, 3.5, 0.0),
+                radius: 2.0,
+                falloff: 1.0,
+            }),
+            material_layers: Vec::new(),
+            floor_bias: 0.0,
+            mouths: vec![CaveMouth {
+                from: (7.0, 3.5, 0.0),
+                half_width: 1.2,
+                half_height: 1.5,
+            }],
+        });
+        let bounds = AABB::new(Point3::new(-8.0, 0.0, -8.0), Point3::new(8.0, 10.0, 8.0));
+        let mut grid = ChunkGrid::new(voxel_size);
+        generate_terrain(&mut grid, &terrain, &bounds);
+
+        // Every voxel on the axis, from outside the cliff to the centre, is open.
+        for i in 0..=14 {
+            let p = Point3::new(7.0 - i as f32 * 0.5, 3.5, 0.0);
+            assert!(
+                grid.get(p).density <= 0.0,
+                "solid at {p:?} on the mouth's axis"
+            );
+        }
+        // And the rock above the passage still stands.
+        assert!(
+            grid.get(Point3::new(1.0, 6.0, 0.0)).density > 0.0,
+            "the passage's roof fell in"
         );
     }
 }

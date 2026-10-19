@@ -21,7 +21,8 @@
 //
 // Things to try: blow the tarn's lip and send it all over the falls; blow
 // the lake's south shore and give the river a new course; blow the sea cliff
-// under the north spring; float the crate on the lake down the river.
+// under the north spring; float the crate on the lake down the river; swim
+// into the sea cave in the east cliff.
 Level(
     name: "Island Sea",
 
@@ -159,6 +160,26 @@ Level(
                     ),
                 ],
 
+                volumes: [
+                    // A sea cave in the east cliff: a chamber at sea level
+                    // under ten metres of rock, its mouth a cleft the sea
+                    // runs into, its floor a strip of sand at the back.
+                    Caves(
+                        frequency: 0.18, octaves: 3, seed: 41,
+                        depth_curve: [
+                            (depth: 0.0, threshold: 1.0),
+                            (depth: 4.0, threshold: 1.0),
+                            (depth: 6.0, threshold: 0.42),
+                        ],
+                        region: Some((center: (34.0, 1.0, -4.0), radius: 4.0, falloff: 2.0)),
+                        material_layers: [
+                            (depth: 1.0,   material: Sand),
+                            (depth: 999.0, material: Rock),
+                        ],
+                        floor_bias: 0.3,
+                        mouths: [(from: (44.0, 1.0, -4.0), half_width: 2.4, half_height: 4.6)],
+                    ),
+                ],
             ),
 
             objects: [

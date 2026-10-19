@@ -490,6 +490,20 @@ pub struct CaveRegion {
     pub falloff: f32,
 }
 
+/// An opening into a cave: a passage bored from a point in the open to the
+/// cave region's centre, its walls roughened by the cave's own noise.
+#[derive(Deserialize, Clone)]
+pub struct CaveMouth {
+    /// Where the passage starts: a point outside the terrain, so the passage
+    /// breaks through whatever face lies between it and the cave.
+    pub from: (f32, f32, f32),
+    /// Half the opening's width.
+    pub half_width: f32,
+    /// Half the opening's height. Taller than wide reads as a sea cave's
+    /// cleft; wider than tall, as a low arch.
+    pub half_height: f32,
+}
+
 /// Volumetric features operate in 3D, directly placing or carving voxels.
 /// Applied as a second pass after the heightfield.
 #[derive(Deserialize)]
@@ -551,6 +565,11 @@ pub enum VolumeFeature {
         /// cave floors, making them more walkable. 0.0 = no flattening.
         #[serde(default)]
         floor_bias: f32,
+        /// Openings bored from the open into the region's centre: how a cave
+        /// meets a cliff face, a hillside or the sea, rather than staying
+        /// wherever the noise happens to leave it. Requires `region`.
+        #[serde(default)]
+        mouths: Vec<CaveMouth>,
     },
     /// Solid rock lip extending horizontally from a cliff edge, creating
     /// a dramatic overhang. Pairs with `TerrainFeature::Cliff`.
