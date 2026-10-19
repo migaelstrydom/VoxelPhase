@@ -296,7 +296,10 @@ away from the sun.
 
 Shorelines are found per pixel, not meshed. Each wet cell's surface runs on
 as a skirt over the dry columns beside it (`FieldScene::skirt`), each quarter
-of a column laid by one wet cell so skirts never overlap. The terrain hides
+of a column laid by one wet cell so skirts never overlap. A film's skirt
+(under `FILM_DEPTH`) runs its depth out to nothing across the dry column, so
+a front's thin edge ends there even where the floor ahead is level with it
+and no bank rises to meet it. The terrain hides
 the skirt wherever the ground stands above the water. `water.frag` reads how
 far below the surface the ground behind each pixel lies from the scene's
 depth copy (`groundDepth`, which needs the 32-bit depth buffer), and how

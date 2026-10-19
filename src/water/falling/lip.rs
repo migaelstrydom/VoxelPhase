@@ -8,11 +8,6 @@ use crate::water::geometry::Step;
 /// Gravity, m/s².
 pub const GRAVITY: f32 = 9.81;
 
-/// Surfaces further apart than this do not share a corner, m: a step this
-/// high between two wet cells is water going over an edge. Lower steps are
-/// water running down a slope, up to 200 %, unless the water `falls`.
-pub const JOIN: f64 = 1.0;
-
 /// Least step, m, at which water standing on a floor above the water below
 /// it falls rather than slopes: steeper than 45° across a column.
 const FALL: f64 = 0.5;
@@ -29,12 +24,14 @@ const LIP_SPEED: f32 = 0.8;
 const MAX_THROW: f32 = 1.6;
 
 /// Whether water at `upper` on a bed at `bed` goes over an edge to water at
-/// `lower`, falling between them rather than sloping: a step over `JOIN`, or
-/// over `FALL` where the upper water's own floor stands above the lower
-/// water, which a slope between them would run through.
+/// `lower`, falling between them rather than sloping: a step over `FALL`
+/// where the upper water's own floor stands above the lower water, which a
+/// slope between them would run through. However high the step, water whose
+/// floor lies below the water beside it has no edge to go over: it is a
+/// front running out over a floor, as where a breach floods a tunnel, and
+/// slopes down to the water ahead of it.
 pub fn falls(upper: f64, bed: f64, lower: f64) -> bool {
-    let step = upper - lower;
-    step > JOIN || (step > FALL && bed > lower)
+    upper - lower > FALL && bed > lower
 }
 
 /// The water a surface at `level` falls to off the map's edge: the sea's
@@ -77,5 +74,22 @@ pub fn ledge_reach(step: Step, (sx, sz): (i32, i32), quarters: &[f32; 4], ledge:
         (false, _) => 0.0,
         (true, false) => 0.5,
         (true, true) => 1.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn water_on_a_floor_above_the_water_below_falls_to_it() {
+        assert!(falls(3.1, 3.0, 2.0));
+        assert!(!falls(2.4, 2.3, 2.0), "a step under FALL slopes");
+    }
+
+    #[test]
+    fn a_front_on_a_floor_below_the_water_ahead_slopes_however_high() {
+        // A breach's water 1.4 m deep beside a film on the same floor.
+        assert!(!falls(0.65, -0.75, -0.74));
     }
 }

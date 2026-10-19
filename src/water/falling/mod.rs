@@ -11,6 +11,6 @@ mod lip;
 mod path;
 mod streams;
 
-pub use lip::{falls, ledge_reach, off_map, thrown, GRAVITY, JOIN};
+pub use lip::{falls, ledge_reach, off_map, thrown, GRAVITY};
 pub use path::{FallPath, Slab};
 pub use streams::{FallingWater, Landing, Strike};

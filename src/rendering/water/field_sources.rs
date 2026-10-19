@@ -269,11 +269,13 @@ pub(super) enum VertexSource {
     Edge { from: u32 },
     /// A skirt's corner out over a dry column: the surface of the cell
     /// whose quad's corners are vertices `first..first + 4`, at `within`
-    /// its square (`skirt_vertex`). The skirt stands while the `dry` cells
-    /// stay dry: the one under it, and those that would lay it if wet.
+    /// its square, `past` columns out from it (`skirt_vertex`). The skirt
+    /// stands while the `dry` cells stay dry: the one under it, and those
+    /// that would lay it if wet.
     Skirt {
         first: u32,
         within: Vector2<f32>,
+        past: f32,
         dry: SmallVec<[SpanIndex; 4]>,
     },
     /// A falling sheet's top: vertex `from`'s corner, drawn as deep as the
@@ -431,9 +433,14 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 vertex.depth = source.depth;
                 vertex.flow = source.flow;
             }
-            VertexSource::Skirt { first, within, dry } => {
+            VertexSource::Skirt {
+                first,
+                within,
+                past,
+                dry,
+            } => {
                 held &= dry.iter().all(|&c| !cells.drawn(c));
-                let from = skirt_vertex(&mesh.vertices, *first, *within);
+                let from = skirt_vertex(&mesh.vertices, *first, *within, *past);
                 let vertex = &mut mesh.vertices[v];
                 vertex.surface = from.surface;
                 vertex.depth = from.depth;

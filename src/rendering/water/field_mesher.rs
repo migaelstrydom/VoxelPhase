@@ -15,7 +15,8 @@
 //!                down to the water it lands in, and foam where it lands
 //!   dry column beside one
 //!            ──▶ a skirt carrying the cell's surface over it, each quarter
-//!                of the column laid by one wet cell
+//!                of the column laid by one wet cell; a film's running out
+//!                across the column
 //! ```
 //!
 //! The mesher does not decide where a shore is. The skirt reaches past it,
@@ -371,7 +372,8 @@ impl<'a> FieldScene<'a> {
                 let base = mesh.vertices.len() as u32;
                 for (x, z) in [(xa, za), (xb, za), (xb, zb), (xa, zb)] {
                     let within = Vector2::new(x.clamp(0.0, 1.0), z.clamp(0.0, 1.0));
-                    let from = skirt_vertex(&mesh.vertices, first, within);
+                    let past = (x - within.x).abs().max((z - within.y).abs());
+                    let from = skirt_vertex(&mesh.vertices, first, within, past);
                     mesh.vertices.push(RiverVertex {
                         xz: Vector2::new(x0 + x * COLUMN_SIZE, z0 + z * COLUMN_SIZE),
                         ..from
@@ -379,6 +381,7 @@ impl<'a> FieldScene<'a> {
                     mesh.sources.vertices.push(VertexSource::Skirt {
                         first,
                         within,
+                        past,
                         dry: held.clone(),
                     });
                 }
@@ -438,11 +441,19 @@ fn skirt_owner(
 
 /// The cell's surface at `within` its square, in columns from its minimum
 /// corner: its quad's corners (vertex `first + i`, counter-clockwise from
-/// the minimum) blended across it.
+/// the minimum) blended across it, `past` columns out from it (0 on its
+/// edge, 1 at the dry column's far side).
+///
+/// A film's depth runs out to nothing across the dry column, so the draw's
+/// shore depth ends it there wherever the ground does not end it first: a
+/// front's thin edge on a floor level with it, which no bank rises to meet.
+/// Deeper water keeps its depth to be cut by the bank beside it, and to
+/// meet the sea's ring past the map's edge.
 pub(super) fn skirt_vertex(
     vertices: &[RiverVertex],
     first: u32,
     within: Vector2<f32>,
+    past: f32,
 ) -> RiverVertex {
     let corner = |i: usize| vertices[first as usize + i];
     let (u, v) = (within.x, within.y);
@@ -457,8 +468,16 @@ pub(super) fn skirt_vertex(
         out.depth += w * c.depth;
         out.flow += c.flow * w;
     }
+    if out.depth < FILM_DEPTH {
+        out.depth *= 1.0 - past;
+    }
     out
 }
+
+/// Depth under which a skirt's water is a film that runs out across the dry
+/// column, m: the depth from which `water.frag` reads the ground behind the
+/// water as its depth (`GROUND_TRUSTED_DEPTH`).
+const FILM_DEPTH: f32 = 0.3;
 
 /// Most steps a fall is drawn on past (`FieldScene::landing`).
 const MAX_STEPS_PASSED: usize = 16;
