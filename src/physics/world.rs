@@ -1,5 +1,6 @@
 //! Physics world containing all simulation state.
 
+use std::sync::Mutex;
 use std::time::Instant;
 
 use generational_arena::Arena;
@@ -12,6 +13,7 @@ use super::ccd::{
     pair_separation, CcdContext, CcdStrategy, ContactPairKey, NarrowphaseOwnership, SweepClampCcd,
 };
 use super::collider::{Collider, ColliderDesc, ColliderShape};
+use super::collider_bounds::ColliderBounds;
 use super::constraint::types::Constraint;
 use super::constraint::{ConstraintHandle, ConstraintKind};
 use super::contact_event::{ContactEvent, ContactSource};
@@ -39,9 +41,13 @@ use super::pipeline::pair::SolverManifold;
 use super::profile::{FrameProfile, PhysicsStage};
 use super::sleep::{SleepManager, SleepManagerConfig};
 use super::solver::{ConstraintSolver, ManifoldConditioner, ManifoldConditions, PgsNgsSolver};
+use super::sphere_cast::{CastObstacles, SphereCast, SphereCastHit};
 use super::static_geometry::StaticGeometry;
+use super::sweep::{BodySweep, SweepObstacle};
 use crate::collision::convex_hull::ConvexHull;
 use crate::collision::obb::Obb;
+use crate::collision::shape_view::ShapeView;
+use crate::collision::AABB;
 use crate::debug::DebugLines;
 use crate::physics::ShockPropagationConditioner;
 use crate::sensing::{ProbeHit, ProbeTarget};
@@ -248,6 +254,13 @@ pub struct PhysicsWorld {
     narrowphase_work_buffer: NarrowphaseWorkBuffer,
     /// Where the current frame's time went, stage by stage.
     profile: FrameProfile,
+    /// Bumped by everything that can move, make or remove a collider: a
+    /// step, a body moved or handed out mutably, a collider attached or
+    /// detached. The scene queries' bounds are taken afresh after a bump.
+    pose_epoch: u64,
+    /// The colliders' bounds as of `pose_epoch`, for scene queries. Behind
+    /// a lock because queries take `&self` and refresh it lazily.
+    collider_bounds: Mutex<ColliderBounds>,
 }
 
 impl PhysicsWorld {
@@ -320,6 +333,8 @@ impl PhysicsWorld {
             gjk_cache_map: GjkCacheMap::new(),
             narrowphase_work_buffer: NarrowphaseWorkBuffer::new(),
             profile: FrameProfile::default(),
+            pose_epoch: 0,
+            collider_bounds: Mutex::new(ColliderBounds::default()),
         }
     }
 
@@ -438,6 +453,7 @@ impl PhysicsWorld {
 
         let body = RigidBody::new(desc);
         let handle = RigidBodyHandle(self.bodies.insert(body));
+        self.pose_epoch += 1;
 
         if start_asleep {
             self.sleep_manager.sleep_body(handle);
@@ -452,6 +468,7 @@ impl PhysicsWorld {
         let Some(body) = self.bodies.remove(handle.0) else {
             return false;
         };
+        self.pose_epoch += 1;
 
         for collider_handle in body.colliders() {
             self.manifold_cache.remove_collider(*collider_handle);
@@ -480,12 +497,64 @@ impl PhysicsWorld {
 
     /// Get a mutable reference to a rigid body.
     pub fn body_mut(&mut self, handle: RigidBodyHandle) -> Option<&mut RigidBody> {
+        self.pose_epoch += 1;
         self.bodies.get_mut(handle.0)
     }
 
     /// Get a reference to a collider.
     pub fn collider(&self, handle: ColliderHandle) -> Option<&Collider> {
         self.colliders.get(handle.0)
+    }
+
+    /// Append every body collider whose bounds, padded by
+    /// `collider_bounds::BOUNDS_MARGIN`, meet `region`, in the order a scan
+    /// of the arenas visits them: the scene queries' broadphase.
+    pub(crate) fn colliders_meeting(
+        &self,
+        region: &AABB,
+        out: &mut Vec<(RigidBodyHandle, ColliderHandle)>,
+    ) {
+        self.collider_bounds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .meeting(self.pose_epoch, &self.bodies, &self.colliders, region, out);
+    }
+
+    /// The first thing a sphere swept along a ray touches: `static_geometry`
+    /// or any body not in the cast's exclusion list. `None` if it travels
+    /// the whole way.
+    pub fn cast_sphere(
+        &self,
+        static_geometry: &dyn StaticGeometry,
+        cast: &SphereCast<'_>,
+    ) -> Option<SphereCastHit> {
+        let sphere = ColliderShape::Sphere {
+            radius: cast.radius,
+        };
+        let view = ShapeView {
+            center: cast.origin,
+            rotation: UnitQuaternion::identity(),
+            shape: &sphere,
+        };
+        let mut sweep = BodySweep::new(self).against_static(static_geometry);
+        if cast.solid_bodies {
+            sweep = sweep.solid_bodies();
+        }
+        if cast.obstacles == CastObstacles::Scenery {
+            sweep = sweep.scenery_only();
+        }
+        let hit = sweep.cast_shape(&view, cast.direction * cast.length, cast.exclude)?;
+        Some(SphereCastHit {
+            point: hit.point,
+            normal: hit.normal,
+            face_normal: hit.face_normal,
+            distance: hit.distance,
+            body: match hit.obstacle {
+                SweepObstacle::Body(handle) => Some(handle),
+                SweepObstacle::Static => None,
+            },
+            surface: hit.surface,
+        })
     }
 
     /// What a fluid sees of a body: its declared envelope, or its colliders.
@@ -550,6 +619,7 @@ impl PhysicsWorld {
         }
         body.set_position(position);
         body.set_rotation(rotation);
+        self.pose_epoch += 1;
         self.sleep_manager.note_kinematic_move(handle);
         true
     }
@@ -762,6 +832,7 @@ impl PhysicsWorld {
 
         let collider = Collider::new(desc);
         let collider_handle = ColliderHandle(self.colliders.insert(collider));
+        self.pose_epoch += 1;
 
         // Update body's mass properties
         if let Some(body) = self.bodies.get_mut(body_handle.0) {
@@ -786,6 +857,7 @@ impl PhysicsWorld {
         if !body.remove_collider(collider_handle) {
             return None;
         }
+        self.pose_epoch += 1;
         // The bulk described the whole body; what is left of it is described
         // by its own colliders.
         body.clear_bulk();
@@ -1046,6 +1118,7 @@ impl PhysicsWorld {
         force_providers: &[&dyn SubstepForceProvider],
     ) {
         self.profile.substeps += 1;
+        self.pose_epoch += 1;
         let lap = Instant::now();
         let sleeping_snapshot = if self.config.sleep.enabled {
             Some(self.sleep_manager.sleeping_snapshot())
@@ -1361,6 +1434,7 @@ impl PhysicsWorld {
         if local_com.norm_squared() < RECENTER_EPSILON * RECENTER_EPSILON {
             return Vector3::zeros();
         }
+        self.pose_epoch += 1;
 
         for ch in &collider_handles {
             if let Some(collider) = self.colliders.get_mut(ch.0) {

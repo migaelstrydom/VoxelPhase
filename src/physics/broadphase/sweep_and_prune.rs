@@ -81,7 +81,7 @@ impl SweepAndPrune {
 /// Sweeping along the widest axis is what makes the early `break` pay: the
 /// narrower the overlap in that axis, the sooner each scan terminates. Any axis
 /// yields the same set of pairs, so this is a cost heuristic and nothing more.
-fn pick_sweep_axis(bounds: &[AABB]) -> usize {
+pub(super) fn pick_sweep_axis(bounds: &[AABB]) -> usize {
     let mut min = [f32::MAX; 3];
     let mut max = [f32::MIN; 3];
     for b in bounds {

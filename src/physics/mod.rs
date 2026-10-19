@@ -40,6 +40,7 @@ mod broadphase;
 mod bulk;
 pub mod ccd;
 mod collider;
+mod collider_bounds;
 pub mod constraint;
 mod contact_event;
 mod contact_work;
@@ -58,6 +59,7 @@ pub mod profile;
 mod rest_pose;
 mod sleep;
 pub mod solver;
+mod sphere_cast;
 mod static_geometry;
 mod static_surface;
 pub mod stepping;
@@ -86,8 +88,9 @@ pub use solver::{
     ConstraintSolver, IdentityConditioner, ManifoldConditioner, ManifoldConditions, PgsNgsConfig,
     PgsNgsSolver, ShockPropagationConditioner, ShockPropagationConfig,
 };
+pub use sphere_cast::{CastObstacles, SphereCast, SphereCastHit};
 pub use static_geometry::StaticGeometry;
 pub use static_surface::{StaticSurface, SurfaceResponse};
 pub use stepping::{FixedTimestep, SequentialStepper, Stepper};
-pub use sweep::{BodySweep, SweepHit, SweepObstacle};
+pub use sweep::{BodySweep, SweepHit, SweepObstacle, SweptSurface};
 pub use world::{BodyProbeHit, PhysicsConfig, PhysicsWorld};

@@ -856,16 +856,7 @@ fn is_sane_query(aabb: &AABB) -> bool {
 
 impl StaticGeometry for TerrainWorld {
     fn query_region(&self, aabb: &AABB) -> MeshPatch {
-        // A body that has run away asks for the whole level. Refusing costs it
-        // its contacts, which for a body already in that state is no loss, and
-        // keeps one broken body from being able to exhaust memory.
-        if !is_sane_query(aabb) {
-            log::error!(
-                "Terrain: refusing a collision query spanning {:?} — from {:?} to {:?}",
-                aabb.max - aabb.min,
-                aabb.min,
-                aabb.max,
-            );
+        if !admit_query(aabb) {
             return MeshPatch {
                 triangles: Vec::new(),
             };
@@ -922,6 +913,9 @@ impl StaticGeometry for TerrainWorld {
     /// skipping the `ref_to_index` map and per-triangle neighbour resolution
     /// that `query_region` needs.
     fn query_region_triangles(&self, aabb: &AABB) -> Vec<crate::collision::Triangle> {
+        if !admit_query(aabb) {
+            return Vec::new();
+        }
         let mut triangles = Vec::new();
         for segment in self.segments.iter() {
             if !segment.bounds().intersects(aabb) {
@@ -937,9 +931,48 @@ impl StaticGeometry for TerrainWorld {
         triangles
     }
 
+    /// Adjacency-free, with each triangle's material: segment by segment,
+    /// in the order `query_region` gives them, so a sweep finds the same
+    /// first hit either way.
+    fn query_region_surfaces(&self, aabb: &AABB) -> Vec<(crate::collision::Triangle, SurfaceId)> {
+        if !admit_query(aabb) {
+            return Vec::new();
+        }
+        let mut triangles = Vec::new();
+        for segment in self.segments.iter() {
+            if !segment.bounds().intersects(aabb) {
+                continue;
+            }
+            triangles.extend(
+                segment
+                    .query_region(aabb)
+                    .into_iter()
+                    .map(|(_, triangle, material)| (triangle, material.surface_id())),
+            );
+        }
+        triangles
+    }
+
     fn surface(&self, id: SurfaceId) -> Option<StaticSurface> {
         VoxelMaterial::from_surface_id(id).and_then(|material| material.surface())
     }
+}
+
+/// Whether to answer a collision query over `aabb`. A body that has run away
+/// asks for the whole level. Refusing costs it its contacts, which for a body
+/// already in that state is no loss, and keeps one broken body from being
+/// able to exhaust memory.
+fn admit_query(aabb: &AABB) -> bool {
+    let sane = is_sane_query(aabb);
+    if !sane {
+        log::error!(
+            "Terrain: refusing a collision query spanning {:?} — from {:?} to {:?}",
+            aabb.max - aabb.min,
+            aabb.min,
+            aabb.max,
+        );
+    }
+    sane
 }
 
 impl ProbeTarget for TerrainWorld {

@@ -42,7 +42,7 @@ pub fn sphere_triangle_collision(
 
 /// Find the closest point on a triangle to a given point.
 /// Uses barycentric coordinates and Voronoi regions.
-fn closest_point_on_triangle(point: Point3<f32>, tri: &Triangle) -> Point3<f32> {
+pub fn closest_point_on_triangle(point: Point3<f32>, tri: &Triangle) -> Point3<f32> {
     let ab = tri.v1 - tri.v0;
     let ac = tri.v2 - tri.v0;
     let ap = point - tri.v0;

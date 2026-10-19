@@ -40,6 +40,17 @@ pub trait StaticGeometry: Sync {
             .collect()
     }
 
+    /// Query triangles intersecting an AABB region with what each is made
+    /// of, without adjacency, in the order [`Self::query_region`] gives
+    /// them: what a sweep reads.
+    fn query_region_surfaces(&self, aabb: &AABB) -> Vec<(Triangle, SurfaceId)> {
+        self.query_region(aabb)
+            .triangles
+            .into_iter()
+            .map(|pt| (pt.triangle, pt.surface))
+            .collect()
+    }
+
     /// What the triangles tagged `id` are made of.
     ///
     /// `None` — the default, and the answer for [`SurfaceId::UNSPECIFIED`] —
