@@ -25,6 +25,9 @@ pub struct GroundForgiveness {
     remaining: f32,
     /// The last support actually observed, reported while the window is open.
     last: Grounding,
+    /// The last support actually observed, kept after the window closes:
+    /// what the body most recently left.
+    departed: Grounding,
 }
 
 impl GroundForgiveness {
@@ -35,6 +38,7 @@ impl GroundForgiveness {
         if grounding.is_grounded {
             self.remaining = window.max(0.0);
             self.last = *grounding;
+            self.departed = *grounding;
             return *grounding;
         }
 
@@ -45,6 +49,12 @@ impl GroundForgiveness {
             self.last = Grounding::airborne();
             Grounding::airborne()
         }
+    }
+
+    /// The support the body was last actually on, however long ago: what a
+    /// body in the air most recently left. Airborne if it has never stood.
+    pub fn departed(&self) -> &Grounding {
+        &self.departed
     }
 
     /// Close the window immediately.
@@ -114,6 +124,16 @@ mod tests {
             (elapsed - WINDOW).abs() <= DT,
             "held for {elapsed}s, expected {WINDOW}s within one frame"
         );
+    }
+
+    #[test]
+    fn the_support_left_is_remembered_after_the_window_closes() {
+        let mut f = GroundForgiveness::default();
+        f.observe(&platform(), DT, WINDOW);
+        for _ in 0..30 {
+            f.observe(&Grounding::airborne(), DT, WINDOW);
+        }
+        assert_eq!(f.departed(), &platform());
     }
 
     #[test]

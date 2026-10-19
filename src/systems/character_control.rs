@@ -264,7 +264,12 @@ impl<'a> System<'a> for CharacterControlSystem {
             if swimming {
                 rule.target += across(immersion.current(), &up);
             }
-            apply_movement_rule(drive, rule);
+            // Whether the ground the character last stood on was still as it
+            // left. `support` has let go by the time a walk-off clamps, so the
+            // ground left is asked for by name.
+            let left_still_ground =
+                state.ground_forgiveness.departed().surface_velocity.norm() <= STILL_GROUND;
+            apply_movement_rule(drive, rule, left_still_ground);
 
             // --- Attitude: lie over to stroke, stand up to tread or wade ---
             let stroking = swimming && move_dir.magnitude() > 0.001;
@@ -526,13 +531,24 @@ pub fn resolve_ground_speed(
 /// The rate travels with it for the one case the contacts cannot answer: with
 /// nothing underneath, the same target is chased out of the actuator's
 /// allowance instead, at this rate and no faster.
-fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule) {
+///
+/// A rule that clamps the rise does so only when `left_still_ground`. The
+/// clamp is for a crest of still ground, which would otherwise launch a
+/// walker on the climb rate it carried over the top. Ground that was moving
+/// gave the character its motion honestly: a trampoline bed's throw, a
+/// lift's climb. A light bed has often turned back by the time its jumper
+/// leaves it, so whether it was moving says more than which way.
+fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule, left_still_ground: bool) {
     drive.linear_target = rule.target;
     drive.steer_accel = rule.steer_accel;
-    if rule.clamp_up {
+    if rule.clamp_up && left_still_ground {
         drive.clamp_rise();
     }
 }
+
+/// How slow, in m/s, the ground a character leaves must be moving to count
+/// as still: above a resting body's settling, below anything that moves.
+const STILL_GROUND: f32 = 0.05;
 
 /// The part of `velocity` that lies across `up` — the plane a gait is walked
 /// in. Zero `up` (a world with no gravity) leaves the velocity untouched,
@@ -577,7 +593,7 @@ mod tests {
     #[test]
     fn the_gaits_target_is_commanded_as_it_stands() {
         let mut drive = DriveIntent::default();
-        apply_movement_rule(&mut drive, walk_east(8.0));
+        apply_movement_rule(&mut drive, walk_east(8.0), true);
         assert_eq!(drive.linear_target, Vector3::new(5.0, 0.0, 0.0));
     }
 
@@ -586,7 +602,7 @@ mod tests {
     #[test]
     fn the_steering_rate_crosses_with_the_target() {
         let mut drive = DriveIntent::default();
-        apply_movement_rule(&mut drive, walk_east(8.0));
+        apply_movement_rule(&mut drive, walk_east(8.0), true);
         assert_eq!(drive.steer_accel, Some(8.0));
 
         apply_movement_rule(
@@ -595,6 +611,7 @@ mod tests {
                 steer_accel: None,
                 ..walk_east(8.0)
             },
+            true,
         );
         assert_eq!(drive.steer_accel, None);
     }
@@ -611,6 +628,7 @@ mod tests {
                 target: Vector3::zeros(),
                 ..walk_east(8.0)
             },
+            true,
         );
         assert_eq!(drive.linear_target, Vector3::zeros());
     }
@@ -624,11 +642,27 @@ mod tests {
                 clamp_up: true,
                 ..walk_east(8.0)
             },
+            true,
         );
         // The verb is a command, not an edit: the projection is what cancels
         // the rise, and the planar target is untouched by it.
         assert_eq!(drive.linear_target.x, 5.0);
         assert!(drive.vertical_projection.clamp_positive);
+    }
+
+    /// Leaving a trampoline bed or a lift keeps what it gave.
+    #[test]
+    fn a_walk_off_from_moving_ground_keeps_its_rise() {
+        let mut drive = DriveIntent::default();
+        apply_movement_rule(
+            &mut drive,
+            MovementRule {
+                clamp_up: true,
+                ..walk_east(8.0)
+            },
+            false,
+        );
+        assert!(!drive.vertical_projection.clamp_positive);
     }
 
     /// A world holding one grounded character, with everything
