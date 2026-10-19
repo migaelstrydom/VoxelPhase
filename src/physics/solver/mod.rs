@@ -14,6 +14,7 @@ pub(crate) mod normal;
 pub(crate) mod normal_block;
 pub(crate) mod pgs_ngs;
 pub(crate) mod position_correction;
+pub(crate) mod row_refresh;
 pub mod shock_propagation;
 pub(crate) mod solver_bodies;
 pub(crate) mod solver_islands;

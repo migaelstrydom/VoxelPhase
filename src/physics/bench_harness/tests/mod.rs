@@ -11,6 +11,7 @@ mod mass_ratio;
 mod mesh_pipeline;
 mod moving_platform;
 mod solver;
+mod spring_slider;
 mod stability;
 mod static_bodies;
 mod substep_budget;

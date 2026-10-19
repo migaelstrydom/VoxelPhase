@@ -1,9 +1,11 @@
 //! Constraint type definitions: persistent constraints, solver-ready rows, and the kind enum.
 
-use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector3};
+use nalgebra::{Isometry3, Point3, UnitQuaternion, UnitVector3, Vector3};
 use smallvec::SmallVec;
 
 use crate::physics::handle::RigidBodyHandle;
+
+use super::spring_slider::{self, SpringSlider};
 
 /// Handle to a constraint in the physics world.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -170,6 +172,10 @@ pub enum ConstraintKind {
         angular_max_impulse: f32,
     },
 
+    /// Holds body_b on a line through body_a, sprung along it: a prismatic
+    /// joint whose free axis pushes back toward rest. See `spring_slider`.
+    SpringSlider(SpringSlider),
+
     /// A medium-anchored drive: world-anchored motor rows that push the body
     /// toward a target velocity against nothing at all.
     ///
@@ -290,6 +296,7 @@ impl ConstraintKind {
             ConstraintKind::Fixed { .. } => 6,
             ConstraintKind::Hinge { .. } => 5,
             ConstraintKind::FollowPoint { .. } => 6,
+            ConstraintKind::SpringSlider(_) => spring_slider::ROW_COUNT,
             ConstraintKind::MediumDrive { .. } => crate::physics::drive::medium::ROW_COUNT,
         }
     }
@@ -305,7 +312,11 @@ impl ConstraintKind {
             ConstraintKind::Fixed { body_a, .. }
             | ConstraintKind::BallJoint { body_a, .. }
             | ConstraintKind::Hinge { body_a, .. } => body_a.is_none(),
-            ConstraintKind::KeepUpright { .. }
+            // A spring's body slows to nothing at the end of every swing,
+            // where the sleep test's speed threshold would freeze it short
+            // of rest.
+            ConstraintKind::SpringSlider(_)
+            | ConstraintKind::KeepUpright { .. }
             | ConstraintKind::KeepAttitude { .. }
             | ConstraintKind::FollowPoint { .. }
             | ConstraintKind::MediumDrive { .. } => false,
@@ -324,6 +335,7 @@ impl ConstraintKind {
             ConstraintKind::Fixed { body_a, .. }
             | ConstraintKind::BallJoint { body_a, .. }
             | ConstraintKind::Hinge { body_a, .. } => body_a.is_none(),
+            ConstraintKind::SpringSlider(slider) => slider.body_a.is_none(),
             ConstraintKind::MediumDrive { .. } => true,
             ConstraintKind::KeepUpright { .. }
             | ConstraintKind::KeepAttitude { .. }
@@ -340,6 +352,9 @@ impl ConstraintKind {
             | ConstraintKind::Fixed { body_a, body_b, .. }
             | ConstraintKind::Hinge { body_a, body_b, .. } => {
                 body_a.map_or(false, |a| a == handle) || *body_b == handle
+            }
+            ConstraintKind::SpringSlider(slider) => {
+                slider.body_a == Some(handle) || slider.body_b == handle
             }
             ConstraintKind::FollowPoint { body_a, body_b, .. } => {
                 *body_a == handle || *body_b == handle
@@ -363,6 +378,14 @@ impl ConstraintKind {
                     bodies.push(*a);
                 }
                 bodies.push(*body_b);
+                bodies
+            }
+            ConstraintKind::SpringSlider(slider) => {
+                let mut bodies = SmallVec::new();
+                if let Some(a) = slider.body_a {
+                    bodies.push(a);
+                }
+                bodies.push(slider.body_b);
                 bodies
             }
             ConstraintKind::FollowPoint { body_a, body_b, .. } => {
@@ -477,4 +500,27 @@ pub struct ConstraintRow {
     pub row_kind: RowKind,
     /// Whether the post-solve projection pass enforces this row exactly.
     pub enforcement: Enforcement,
+    /// How the row recomputes its bias before each substep, for a row whose
+    /// force must follow its error (a spring). `None`: the bias set at
+    /// expansion holds for the whole frame.
+    pub refresh: Option<RowRefresh>,
+}
+
+/// What a refreshed row needs to recompute its bias from the bodies' motion
+/// since the row was expanded.
+///
+/// The row's error moves, to first order, by the Jacobian times the
+/// displacement of its bodies, so the bias before each substep is
+/// `bias_rate · (error + J · Δq)`.
+#[derive(Debug, Clone, Copy)]
+pub struct RowRefresh {
+    /// The row's position error when it was expanded, in the units its
+    /// Jacobian measures (metres along a linear row).
+    pub error: f32,
+    /// Bias per unit of error, in 1/s: the bias is `bias_rate · error`.
+    pub bias_rate: f32,
+    /// Body A's pose at expansion; `None` for a world-anchored side.
+    pub pose_a: Option<Isometry3<f32>>,
+    /// Body B's pose at expansion; `None` for a world-anchored side.
+    pub pose_b: Option<Isometry3<f32>>,
 }

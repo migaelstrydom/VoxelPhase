@@ -92,6 +92,26 @@ pub fn expand_constraints(
                 ));
             }
 
+            ConstraintKind::SpringSlider(slider) => {
+                let Some(rigid_body_b) = bodies.get(slider.body_b.0) else {
+                    continue;
+                };
+                let body_a_pair = slider
+                    .body_a
+                    .and_then(|ha| bodies.get(ha.0).map(|ba| (ba, ha)));
+                if slider.body_a.is_some() && body_a_pair.is_none() {
+                    continue;
+                }
+                rows.extend(slider.expand(
+                    body_a_pair,
+                    rigid_body_b,
+                    dt,
+                    beta,
+                    index,
+                    &constraint.warm_impulses,
+                ));
+            }
+
             ConstraintKind::BallJoint {
                 body_a,
                 body_b,

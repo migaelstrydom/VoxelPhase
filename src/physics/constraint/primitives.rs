@@ -97,6 +97,7 @@ pub fn lock_linear_axis(
         correction_mode: CorrectionMode::PositionAndVelocity,
         row_kind: RowKind::Linear,
         enforcement: Enforcement::Iterative,
+        refresh: None,
     }
 }
 
@@ -137,6 +138,7 @@ pub fn drive_linear_axis(
         correction_mode: CorrectionMode::VelocityOnly,
         row_kind: RowKind::Linear,
         enforcement: Enforcement::Iterative,
+        refresh: None,
     }
 }
 
@@ -227,5 +229,6 @@ pub fn lock_angular_axis(
         correction_mode,
         row_kind: RowKind::Angular,
         enforcement,
+        refresh: None,
     }
 }

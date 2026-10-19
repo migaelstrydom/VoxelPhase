@@ -20,6 +20,7 @@ use super::closing_allowance::set_closing_allowances;
 use super::conditioning::ManifoldConditions;
 use super::island_solver::{IslandManifold, IslandSolver};
 use super::position_correction::{self, PositionCorrectionConfig};
+use super::row_refresh::refresh_rows;
 use super::solver_islands::SolverIslands;
 use super::ConstraintSolver;
 
@@ -142,6 +143,7 @@ impl ConstraintSolver for PgsNgsSolver {
         }
 
         set_closing_allowances(bodies, manifolds, &self.contact_generation_positions, dt);
+        refresh_rows(bodies, constraint_rows);
 
         // Phases 1–3: the velocity phase, island by island. Islands share no
         // movable body, so they run in parallel, each gathering, warm-starting

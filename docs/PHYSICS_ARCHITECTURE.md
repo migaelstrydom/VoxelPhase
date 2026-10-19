@@ -40,12 +40,20 @@ connects them.
   `ColliderMaterial` (friction, restitution, density). Colliders attach to and detach from
   bodies at runtime. `detach_collider` swap-removes, so collider order changes after a split.
 - Constraints (`constraint/`): persistent definitions in an arena, `ConstraintKind` =
-  `KeepUpright`, `KeepAttitude`, `Fixed`, `BallJoint`, `Hinge`, `FollowPoint`. Each is
-  expanded every frame into solver `ConstraintRow`s (`expand.rs`, built from
-  `primitives.rs`). The enforcement mode is `Iterative` (PGS, optionally NGS) or
+  `KeepUpright`, `KeepAttitude`, `Fixed`, `BallJoint`, `Hinge`, `FollowPoint`,
+  `SpringSlider`. Each is expanded every frame into solver `ConstraintRow`s (`expand.rs`,
+  built from `primitives.rs`). The enforcement mode is `Iterative` (PGS, optionally NGS) or
   `HardProjection` (a post-solve velocity projection). Compliance rules out hard
   projection. A constraint whose bodies are all asleep is skipped, and
   `ConstraintKind::permits_sleep` decides whether a constrained body may sleep.
+- Springs (`constraint/spring.rs`): a `Spring` is stated by frequency and damping ratio
+  against a reference mass, and `soft_step` turns it into a soft row's softness and bias
+  rate (Box2D v3's soft step). Rows are expanded once a frame, so a spring row carries a
+  `RowRefresh` and its bias is recomputed before every substep from the bodies' motion
+  since (`solver/row_refresh.rs`); otherwise twelve substeps would all push with the
+  compression the frame began with. `SpringSlider` is the one user: a prismatic joint
+  whose axis is sprung, all of its rows velocity-only because NGS would pin the anchors
+  together and undo the travel.
 
 ## A frame
 

@@ -70,6 +70,8 @@ pub use body::{BodyType, RigidBody, RigidBodyDesc};
 pub use bulk::{BulkShape, Envelope, EnvelopePart, MassPartRef, MassParts, Volume};
 pub use ccd::{CcdStrategy, SweepClampCcd};
 pub use collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape, FrictionModel};
+pub use constraint::spring::Spring;
+pub use constraint::spring_slider::SpringSlider;
 pub use constraint::{Constraint, ConstraintHandle, ConstraintKind};
 pub use contact_event::{ContactEvent, ContactSource};
 pub use contact_work::ContactWorkLedger;
