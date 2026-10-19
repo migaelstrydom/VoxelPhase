@@ -10,6 +10,15 @@
 // --- Tuning constants ---
 const float REFRACTION_STRENGTH = 0.01;
 const float SSS_INTENSITY = 1.9;
+// Extinction of light along a ray through the water body, per metre and per
+// channel. Red goes first, then green: what lies under the water turns from
+// its own colour through turquoise and teal to the water's own blue as the
+// ray through the water lengthens. Clearer than real coastal water, for a
+// tropical sea that shows its floor.
+const vec3  WATER_EXTINCTION = vec3(0.24, 0.06, 0.045);
+// Light the water body scatters back towards the eye, where the ray through it
+// is long enough that nothing behind shows: deep water's own colour.
+const vec3  WATER_SCATTER = vec3(0.015, 0.11, 0.21);
 const vec3  SSS_COLOR = vec3(0.15, 0.5, 0.4);
 // How long the noise is carried by the flow before it starts over, s. Two
 // phases half a period apart cross-fade, each faded out as it starts over,
@@ -473,33 +482,26 @@ void main() {
     float refractedTerrainDist = linearizeDepth(refractedDepthRaw, near, far);
     float refractedOpticalDepth = max(refractedTerrainDist - waterDist, 0.0);
 
-    // Depth-based absorption: red absorbs fastest (realistic turquoise tint).
-    // Uses the optical depth at the refracted UV for correct absorption.
-    vec3 refractedTerrain = terrainColor * exp(-vec3(0.04, 0.01, 0.02) * refractedOpticalDepth);
-
-    // Deep water blend factor at the refracted point (matches the terrain we're showing).
-    float refractedDepthFactor = 1.0 - exp(-refractedOpticalDepth * 0.06);
+    // What survives the water between the eye and what is behind it, per
+    // channel, along the ray to the refracted point (the one shown).
+    vec3 transmittance = exp(-WATER_EXTINCTION * refractedOpticalDepth);
 
     // --- Fresnel reflectance (Schlick approximation) ---
     float F0 = 0.02;
     float NdotV = max(dot(N, V), 0.0);
     float fresnel = F0 + (1.0 - F0) * pow(1.0 - NdotV, 5.0);
 
-    // Sky/reflection color approximated from reflected direction.
+    // The sky the surface mirrors, from the sky model the sky pass draws. A
+    // reflected ray that dips below the horizon on a wave's back sees the
+    // horizon, as `aerialRadiance` does, not the ground tone under it.
     vec3 R = reflect(-V, N);
-    float skyFactor = max(R.y, 0.0);
-    vec3 horizonColor = vec3(0.6, 0.7, 0.8);
-    vec3 zenithColor  = vec3(0.25, 0.4, 0.7);
-    vec3 reflectionColor = mix(horizonColor, zenithColor, skyFactor);
+    vec3 reflectionColor = aerialRadiance(R, L);
 
-    // Deep water color (only this gets diffuse lighting).
-    vec3 deepColor = vec3(0.02, 0.12, 0.22);
+    // The water's own light (only this gets diffuse lighting): what the body
+    // scatters back, taking each channel's place as that channel is absorbed.
     float NdotL = max(dot(N, L), 0.0);
-    vec3 litDeepColor = deepColor * (0.5 + 0.5 * NdotL);
-
-    // Blend refracted terrain toward deep water as optical depth increases.
-    // Uses refracted depth factor so the blend matches the terrain being shown.
-    vec3 waterBody = mix(refractedTerrain, litDeepColor, refractedDepthFactor);
+    vec3 scattered = WATER_SCATTER * (0.5 + 0.5 * NdotL);
+    vec3 waterBody = terrainColor * transmittance + scattered * (1.0 - transmittance);
 
     // Blend water body with reflection via Fresnel.
     vec3 color = mix(waterBody, reflectionColor, fresnel);
