@@ -810,6 +810,37 @@ to be subtler than first instinct suggests, and individually disableable.
 
 ---
 
+## What the look costs
+
+GPU time measured by `render_perf` on Island Sea at 2400×1600, the quiet
+frames before the grenade, each build run three times interleaved (spans
+agree within about 0.02 ms between runs). Each row is that feature over the
+row above it, from the game's camera (`--eye 6,38,72 --look 0,4,-8`) and over
+the bay's shallows (`--eye -6,7,42 --look 0,0,18`).
+
+| Feature | Commit | Game view | Bay view |
+|---|---|---|---|
+| Baseline | `f2ffe9e` | 10.44 ms total: scene 2.04, water 7.45 | 9.51 ms total: scene 2.40, water 5.21 |
+| Aerial perspective (§5.3) | `eab3656` | +0.30 (scene +0.17, water +0.13) | — |
+| Grass sheen (§4.5) | `3441328` | +0.12 (scene) | — |
+| Slope zoning (§4.4) | `302579f` | +0.04 (scene) | +0.37 total over baseline for all three |
+| Water extinction and sky reflection | `ea9c453` | +0.13 (water) | +0.11 (water) |
+| Caustics | `8815eb4` | +0.50 (water) | +0.81 (water) |
+| **All of it** | | **+1.1 ms (+10%)** | **+1.3 ms (+14%)** |
+
+The close terrain view (`--eye 2,12,22 --look 8,9,0`) swung 0.7 ms between
+runs of the same build, more than any of the terrain features cost, so it is
+not in the table. Two things worth knowing from it:
+
+- **The water pass is the frame.** Over open sea it is three times all the
+  opaque geometry together, so anything per water pixel is where the cost
+  goes. Caustics were 1.0 to 1.6 ms as first written (two Voronoi layers, a
+  `sin` hash, to 9 m); one bent layer, an arithmetic hash and a 6 m cut-off
+  halved that.
+- Aerial perspective is the dearest of the terrain-side features because it
+  evaluates `skyRadiance` per fragment. A per-vertex haze colour would take
+  most of that back if it is ever needed.
+
 ## Suggested ordering
 
 Not a schedule, just the order that maximises visible change per unit of work.
