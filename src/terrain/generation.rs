@@ -171,7 +171,7 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
                                 let material = if y <= floor_y + terrain.bedrock_thickness {
                                     VoxelMaterial::Bedrock
                                 } else {
-                                    material_at_depth(depth, column.layers)
+                                    column.material_at(y, depth, step)
                                 };
                                 let mut voxel = Voxel::solid(material);
                                 // Near the surface, the SDF density lands
@@ -211,6 +211,12 @@ struct Column<'a> {
     stretch: f32,
     /// The layers the column is laid with.
     layers: &'a [MaterialLayer],
+    /// The layers on the column's side where a drop to a neighbour bares it:
+    /// those of a surface as steep as the drop.
+    face_layers: &'a [MaterialLayer],
+    /// The lowest neighbouring surface. The column's voxels above it are
+    /// exposed on that side, on the face of the drop.
+    face_below: f32,
 }
 
 impl<'a> Column<'a> {
@@ -224,11 +230,12 @@ impl<'a> Column<'a> {
                 .surface_bands
                 .iter()
                 .any(|band| band.steeper_than.is_some());
-        let slope = if needs_slope {
-            surface_slope(x, z, step, terrain)
+        let neighbours = if needs_slope {
+            Some(neighbour_heights(x, z, step, terrain))
         } else {
-            0.0
+            None
         };
+        let slope = neighbours.map_or(0.0, |around| surface_slope(&around, step));
         let stretch = if terrain.smooth_slopes {
             slope.hypot(1.0)
         } else {
@@ -237,13 +244,41 @@ impl<'a> Column<'a> {
         let top = (((height / step).ceil() as i32) - 1).max(iy0);
         // The last lattice plane within one voxel's distance above the surface.
         let air_top = ((((height + step * stretch) / step).ceil() as i32) - 1).max(top + 1);
+        let layers = surface_layers(height, slope, terrain);
+        let face_below =
+            neighbours.map_or(height, |around| around.into_iter().fold(height, f32::min));
+        let face_slope = (height - face_below) / step;
         Self {
             height,
             top,
             air_top,
             stretch,
-            layers: surface_layers(height, slope, terrain),
+            layers,
+            face_layers: surface_layers(height, face_slope.max(slope), terrain),
+            face_below,
         }
+    }
+
+    /// The material `depth` below the column's top voxel, at height `y`.
+    ///
+    /// Where the column stands above a neighbour, its side is bared down to
+    /// that neighbour's surface, and that side is a face as steep as the drop.
+    /// Laying it with the column's own layers is what put soil on a cliff: the
+    /// last column short of a band's `steeper_than` showed its whole grass and
+    /// dirt down the drop beside the first column past it, and along a lip
+    /// running across the lattice those columns alternate, hanging teeth of
+    /// turf down the cliff. The top voxel keeps the column's own material,
+    /// so the turf still runs to the edge.
+    fn material_at(&self, y: f32, depth: f32, step: f32) -> VoxelMaterial {
+        let on_face = depth >= step && y > self.face_below;
+        material_at_depth(
+            depth,
+            if on_face {
+                self.face_layers
+            } else {
+                self.layers
+            },
+        )
     }
 
     /// Density at height `y`: the signed distance to the surface in voxels,
@@ -289,11 +324,21 @@ fn surface_layers(height: f32, slope: f32, terrain: &Terrain) -> &[MaterialLayer
         .map_or(&terrain.material_layers, |band| &band.layers)
 }
 
-/// Steepness of the heightfield at (x, z), rise over run, from the heights a
-/// voxel away on either side.
-fn surface_slope(x: f32, z: f32, step: f32, terrain: &Terrain) -> f32 {
-    let along_x = height_at(x + step, z, terrain) - height_at(x - step, z, terrain);
-    let along_z = height_at(x, z + step, terrain) - height_at(x, z - step, terrain);
+/// Heights of the heightfield a voxel away from (x, z): +x, -x, +z, -z.
+fn neighbour_heights(x: f32, z: f32, step: f32, terrain: &Terrain) -> [f32; 4] {
+    [
+        height_at(x + step, z, terrain),
+        height_at(x - step, z, terrain),
+        height_at(x, z + step, terrain),
+        height_at(x, z - step, terrain),
+    ]
+}
+
+/// Steepness of the heightfield, rise over run, from the heights a voxel away
+/// on either side (`neighbour_heights`).
+fn surface_slope(around: &[f32; 4], step: f32) -> f32 {
+    let along_x = around[0] - around[1];
+    let along_z = around[2] - around[3];
     along_x.hypot(along_z) / (2.0 * step)
 }
 
@@ -1369,4 +1414,109 @@ pub(super) fn point_to_segment_projection(
     let dx = px - closest_x;
     let dz = pz - closest_z;
     (t, (dx * dx + dz * dz).sqrt())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::level::{Extent, SurfaceBand};
+
+    /// A plateau laid with grass over dirt, its cliffs bare rock. Its coast
+    /// is warped, so the lip where the slope passes the band's runs across
+    /// the lattice, and its rise is short, so the slope passes the band's
+    /// within a column, as on the island's massif.
+    fn cliffed_plateau(voxel_size: f32) -> Terrain {
+        Terrain {
+            bedrock_thickness: 0.0,
+            voxel_size,
+            bounds: Extent {
+                min: (-8.0, 0.0, -8.0),
+                max: (8.0, 10.0, 8.0),
+            },
+            base_height: 2.0,
+            material_layers: vec![
+                MaterialLayer {
+                    depth: 0.6,
+                    material: VoxelMaterialId::Grass,
+                },
+                MaterialLayer {
+                    depth: 999.0,
+                    material: VoxelMaterialId::Dirt,
+                },
+            ],
+            surface_bands: vec![SurfaceBand {
+                below: None,
+                steeper_than: Some(1.5),
+                layers: vec![MaterialLayer {
+                    depth: 999.0,
+                    material: VoxelMaterialId::Rock,
+                }],
+            }],
+            smooth_slopes: true,
+            features: vec![TerrainFeature::Landmass {
+                outline: vec![(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)],
+                shore_height: 2.0,
+                height: 7.0,
+                rise: 1.5,
+                skirt: 0.0,
+                warp: 1.0,
+                relief: 0.0,
+                seed: 4,
+            }],
+            volumes: Vec::new(),
+        }
+    }
+
+    /// No soil below a column's top voxel opens onto a cliff. The last column
+    /// short of the cliff band once laid its grass and dirt down the drop
+    /// beside the first column past it: teeth of turf hanging down the cliff
+    /// wherever the lip ran across the lattice.
+    #[test]
+    fn a_drop_beside_a_column_is_laid_as_a_face() {
+        let voxel_size = 0.5;
+        let terrain = cliffed_plateau(voxel_size);
+        let bounds = AABB::new(Point3::new(-8.0, 0.0, -8.0), Point3::new(8.0, 10.0, 8.0));
+        let mut grid = ChunkGrid::new(voxel_size);
+        generate_terrain(&mut grid, &terrain, &bounds);
+
+        let solid = |p: Point3<f32>| grid.get(p).density > 0.0;
+        let (mut soil, mut bared) = (0, 0);
+        let n = (8.0 / voxel_size) as i32;
+        // Clear of the bounds' walls and floor, which open every side.
+        for ix in -n + 2..n - 1 {
+            for iz in -n + 2..n - 1 {
+                for iy in (1.0 / voxel_size) as i32..(10.0 / voxel_size) as i32 {
+                    let p = Point3::new(ix as f32, iy as f32, iz as f32) * voxel_size;
+                    let voxel = grid.get(p);
+                    let is_soil =
+                        matches!(voxel.material, VoxelMaterial::Grass | VoxelMaterial::Dirt);
+                    // The top voxel is the turf's edge, and keeps its soil.
+                    let covered = solid(p + nalgebra::Vector3::y() * voxel_size);
+                    if voxel.density <= 0.0 || !is_soil || !covered {
+                        continue;
+                    }
+                    soil += 1;
+                    // A side open here and a voxel down is a drop of two
+                    // voxels or more: a slope of 2, past the band's 1.5, so
+                    // a cliff. A shallower drop is a bank the band leaves to
+                    // the soil.
+                    let sides = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
+                    if sides.iter().any(|&(dx, dz)| {
+                        let beside = p + nalgebra::Vector3::new(dx, 0.0, dz) * voxel_size;
+                        !solid(beside) && !solid(beside - nalgebra::Vector3::y() * voxel_size)
+                    }) {
+                        bared += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            soil > 0,
+            "the plateau lays no soil, so the check proves nothing"
+        );
+        assert_eq!(
+            bared, 0,
+            "{bared} of {soil} buried soil voxels open onto a cliff"
+        );
+    }
 }
