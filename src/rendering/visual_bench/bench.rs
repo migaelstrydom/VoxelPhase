@@ -132,6 +132,16 @@ impl VisualBench {
             )?;
         }
 
+        for columns in &shot.force_fields {
+            renderer.draw_force_field(
+                cb,
+                &columns.vertices,
+                &columns.indices,
+                material_manager,
+                texture_manager,
+            )?;
+        }
+
         // Water and particles are drawn in the scene pass, submitted before it
         // closes, the water first — the same place and the same order as in a
         // level.

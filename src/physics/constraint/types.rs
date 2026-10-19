@@ -6,6 +6,7 @@ use smallvec::SmallVec;
 use crate::physics::handle::RigidBodyHandle;
 
 use super::spring_slider::{self, SpringSlider};
+use super::suspension::{self, Suspension};
 
 /// Handle to a constraint in the physics world.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -199,6 +200,11 @@ pub enum ConstraintKind {
         /// Angular acceleration budget, in rad/s².
         angular_max_accel: f32,
     },
+
+    /// A body held up on a spring above whatever a cast from it hits, with
+    /// friction where it stands. Produces 4 rows: spring, friction pair,
+    /// torsion. See `suspension`.
+    Suspension(Box<Suspension>),
 }
 
 impl ConstraintKind {
@@ -298,6 +304,7 @@ impl ConstraintKind {
             ConstraintKind::FollowPoint { .. } => 6,
             ConstraintKind::SpringSlider(_) => spring_slider::ROW_COUNT,
             ConstraintKind::MediumDrive { .. } => crate::physics::drive::medium::ROW_COUNT,
+            ConstraintKind::Suspension(_) => suspension::ROW_COUNT,
         }
     }
 
@@ -320,6 +327,10 @@ impl ConstraintKind {
             | ConstraintKind::KeepAttitude { .. }
             | ConstraintKind::FollowPoint { .. }
             | ConstraintKind::MediumDrive { .. } => false,
+            // Standing on the world answers only to the body's own motion;
+            // standing on a body that moves ties the two together, and
+            // islands are built from contacts alone, so both stay awake.
+            ConstraintKind::Suspension(suspension) => suspension.partner().is_none(),
         }
     }
 
@@ -340,6 +351,9 @@ impl ConstraintKind {
             ConstraintKind::KeepUpright { .. }
             | ConstraintKind::KeepAttitude { .. }
             | ConstraintKind::FollowPoint { .. } => false,
+            // A suspension holds its body up the way a contact does, and a
+            // contact is not an anchor either.
+            ConstraintKind::Suspension(_) => false,
         }
     }
 
@@ -351,7 +365,10 @@ impl ConstraintKind {
     /// bodies, and a sprung body made to look heavier to what lands on it
     /// stops that load dead instead of taking it into the spring.
     pub fn stacks(&self) -> bool {
-        !matches!(self, ConstraintKind::SpringSlider(_))
+        !matches!(
+            self,
+            ConstraintKind::SpringSlider(_) | ConstraintKind::Suspension(_)
+        )
     }
 
     /// Whether this constraint references the given body.
@@ -371,6 +388,9 @@ impl ConstraintKind {
                 *body_a == handle || *body_b == handle
             }
             ConstraintKind::MediumDrive { body, .. } => *body == handle,
+            ConstraintKind::Suspension(suspension) => {
+                suspension.body() == handle || suspension.partner() == Some(handle)
+            }
         }
     }
 
@@ -403,6 +423,14 @@ impl ConstraintKind {
                 smallvec::smallvec![*body_a, *body_b]
             }
             ConstraintKind::MediumDrive { body, .. } => smallvec::smallvec![*body],
+            ConstraintKind::Suspension(suspension) => {
+                let mut bodies = SmallVec::new();
+                bodies.push(suspension.body());
+                if let Some(partner) = suspension.partner() {
+                    bodies.push(partner);
+                }
+                bodies
+            }
         }
     }
 }
@@ -515,6 +543,9 @@ pub struct ConstraintRow {
     /// force must follow its error (a spring). `None`: the bias set at
     /// expansion holds for the whole frame.
     pub refresh: Option<RowRefresh>,
+    /// A bound that follows a sibling row's live impulse rather than the
+    /// fixed `bounds`. `None`: `bounds` applies.
+    pub coupling: Option<CoupledBound>,
 }
 
 /// What a refreshed row needs to recompute its bias from the bodies' motion
@@ -534,4 +565,39 @@ pub struct RowRefresh {
     pub pose_a: Option<Isometry3<f32>>,
     /// Body B's pose at expansion; `None` for a world-anchored side.
     pub pose_b: Option<Isometry3<f32>>,
+}
+
+/// A row's impulse bound given as a multiple of a sibling row's live
+/// accumulated impulse: the way friction is bounded by load.
+///
+/// The sibling is named by its `row_index` within the same constraint, which
+/// survives any reordering of the row slice; the solver resolves it to a slot
+/// when the rows are prepared, as ODE's `findex` does.
+///
+/// The bound covers the whole reaction along the row: the row's own impulse
+/// plus the load row's share along it, `|λ + λ_load · load_share|`. Two rows
+/// naming each other through `cone_with` are bounded together, as a disc,
+/// rather than each on its own (a square, with √2 more grip on the
+/// diagonals).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoupledBound {
+    /// `row_index` of the load row this bound follows.
+    pub coupled_to: u32,
+    /// `row_index` of the row sharing this one's cone, if any.
+    pub cone_with: Option<u32>,
+    /// Bound per unit of load impulse: `μ` times whatever turns the load
+    /// row's impulse into a normal load (and a patch radius for a torsional
+    /// row).
+    pub coefficient: f32,
+    /// The load row's impulse along this row's direction, per unit of its
+    /// impulse.
+    pub load_share: f32,
+}
+
+impl CoupledBound {
+    /// The bound on the whole reaction for a load row's impulse `load`. A
+    /// load row pulling rather than pushing bounds it at zero.
+    pub fn radius(&self, load: f32) -> f32 {
+        self.coefficient * load.max(0.0)
+    }
 }

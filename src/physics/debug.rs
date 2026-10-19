@@ -7,6 +7,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::body::RigidBody;
 use super::collider::Collider;
+use super::constraint::suspension::SuspensionReadout;
 use super::contact_event::{ContactEvent, ContactSource};
 use super::handle::RigidBodyHandle;
 use super::pipeline::pair::{PairHeader, PairManifold, SolverManifold};
@@ -33,6 +34,8 @@ pub struct PhysicsDebugConfig {
     pub draw_broadphase_patches_sleeping: bool,
     /// Draw collider shapes as transparent overlays.
     pub draw_collider_shapes: bool,
+    /// Draw each suspension's cast, hit and load.
+    pub draw_suspensions: bool,
 }
 
 impl Default for PhysicsDebugConfig {
@@ -44,6 +47,7 @@ impl Default for PhysicsDebugConfig {
             draw_broadphase_patches: false,
             draw_broadphase_patches_sleeping: false,
             draw_collider_shapes: false,
+            draw_suspensions: false,
         }
     }
 }
@@ -393,6 +397,53 @@ impl PhysicsDebugger {
                 }
             }
         }
+    }
+
+    /// Draw each suspension's cast, hit and load.
+    pub fn add_suspension_overlays(
+        &self,
+        suspensions: impl Iterator<Item = SuspensionReadout>,
+        overlays: &mut DebugOverlays,
+    ) {
+        if !self.config.draw_suspensions {
+            return;
+        }
+        for readout in suspensions {
+            add_suspension_overlay(&readout, overlays);
+        }
+    }
+}
+
+/// Length of the load bar at `max_force`, in metres.
+const SUSPENSION_LOAD_BAR: f32 = 1.0;
+
+/// Draw one suspension: the spring from its anchor to the cast sphere's centre
+/// (cyan when it is a support, grey in reach of nothing), the hit point and
+/// its normal, and a bar up from the sphere's centre as long as the load is a
+/// share of `max_force`, green to red as it nears the cap. Nothing when the
+/// cast hit nothing.
+pub fn add_suspension_overlay(readout: &SuspensionReadout, overlays: &mut DebugOverlays) {
+    let Some(hit) = readout.hit else {
+        return;
+    };
+    let centre = hit.sphere_centre();
+    let anchor = centre + hit.axis * readout.length;
+    let spring = if readout.grounded {
+        Colour::new(0.2, 0.9, 1.0, 1.0)
+    } else {
+        Colour::new(0.5, 0.5, 0.5, 1.0)
+    };
+    overlays.add_line(anchor, centre, spring);
+    overlays.add_sphere(hit.point, 0.04, spring);
+    overlays.add_line(hit.point, hit.point + hit.normal * 0.3, Colour::YELLOW);
+    let fraction = readout.load_fraction.clamp(0.0, 1.0);
+    if fraction > 0.0 {
+        overlays.add_line_with_radius(
+            centre,
+            centre + hit.axis * (fraction * SUSPENSION_LOAD_BAR),
+            0.035,
+            Colour::GREEN.lerp(Colour::RED, fraction),
+        );
     }
 }
 

@@ -14,6 +14,7 @@ mod glowing_orb;
 mod goal;
 mod hex_prism;
 mod house;
+mod hover_sled;
 mod ice;
 mod icosahedron;
 mod jack;
@@ -57,6 +58,9 @@ pub use glowing_orb::GlowingOrbDef;
 pub use goal::GoalDef;
 pub use hex_prism::{HexPrismDef, HoneycombWallDef};
 pub use house::HouseDef;
+pub use hover_sled::{
+    pod_anchors as hover_sled_pod_anchors, sled_parts as hover_sled_parts, HoverSledDef,
+};
 /// Exported for the cleave system's tests, which break a real block rather
 /// than a stand-in for one.
 #[cfg(test)]

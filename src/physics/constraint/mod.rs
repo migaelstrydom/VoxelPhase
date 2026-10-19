@@ -8,6 +8,7 @@ pub mod keep_upright;
 pub mod primitives;
 pub mod spring;
 pub mod spring_slider;
+pub mod suspension;
 pub mod types;
 
 pub use types::{

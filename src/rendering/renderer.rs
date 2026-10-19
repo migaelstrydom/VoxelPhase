@@ -50,7 +50,7 @@ use crate::rendering::target::frame_targets::DEPTH_FORMAT;
 use crate::rendering::target::{
     AcquiredFrame, FrameOutput, FrameTargets, OffscreenOutput, SurfaceInfo, SwapchainOutput,
 };
-use crate::rendering::transparency::{BlendedDraw, MeshBounds, TransparentQueue};
+use crate::rendering::transparency::{BlendedDraw, BlendedShading, MeshBounds, TransparentQueue};
 use crate::rendering::vertex::Vertex;
 use crate::rendering::view_volume::ViewVolume;
 use crate::rendering::water::{Side, WaterDivide, WaterRenderer, WaterScene, WaterView, NO_CLIP};
@@ -127,6 +127,8 @@ struct DrawOptions {
     in_probes: InProbes,
     /// The object the mesh belongs to, which its own probe leaves out.
     owner: Option<ProbeOwner>,
+    /// How the draw is shaded if it lands in the blended pass.
+    shading: BlendedShading,
 }
 
 impl DrawOptions {
@@ -141,6 +143,7 @@ impl DrawOptions {
         casts_shadow: true,
         in_probes: InProbes::Bounded,
         owner: None,
+        shading: BlendedShading::Surface,
     };
 
     /// Debug overlay geometry, composited after tonemapping. Casts nothing:
@@ -153,6 +156,19 @@ impl DrawOptions {
         casts_shadow: false,
         in_probes: InProbes::Hidden,
         owner: None,
+        shading: BlendedShading::Surface,
+    };
+
+    /// A force-field column: light in the blended pass, sorted with the
+    /// glass and the particles. It casts nothing and no probe sees it, for
+    /// the reasons the overlay casts nothing.
+    const FORCE_FIELD: Self = Self {
+        pass: DrawPass::SceneBlended,
+        wireframe_overlay: false,
+        casts_shadow: false,
+        in_probes: InProbes::Hidden,
+        owner: None,
+        shading: BlendedShading::ForceField,
     };
 }
 
@@ -932,6 +948,31 @@ impl Renderer {
         )
     }
 
+    /// Draw a force-field column, built this frame in world space by
+    /// `force_field::column`, as light in the sorted blended pass.
+    ///
+    /// The column's shader reads nothing but its vertices and the scene, but
+    /// every geometry draw binds a texture set, so it is given the fallback.
+    pub fn draw_force_field(
+        &mut self,
+        cb: vk::CommandBuffer,
+        vertices: &[Vertex],
+        indices: &[u32],
+        material_manager: &MaterialManager,
+        texture_manager: &TextureManager,
+    ) -> EngineResult<()> {
+        self.draw_mesh_internal(
+            cb,
+            vertices,
+            indices,
+            &Matrix4::identity(),
+            material_manager.fallback_texture(),
+            SurfaceParams::MATTE,
+            texture_manager,
+            DrawOptions::FORCE_FIELD,
+        )
+    }
+
     /// Draw a mesh with a specific texture handle and lighting parameters.
     ///
     /// This is a lower-level method used by draw_model and terrain rendering.
@@ -1065,8 +1106,11 @@ impl Renderer {
         match pass {
             DrawPass::SceneBlended => {
                 self.profile.counters.blended_draws += 1;
-                self.transparent_queue
-                    .push(BlendedDraw::new(geometry).sorted_from(&self.camera_pos, &bounds()));
+                self.transparent_queue.push(
+                    BlendedDraw::new(geometry)
+                        .shaded(options.shading)
+                        .sorted_from(&self.camera_pos, &bounds()),
+                );
             }
             DrawPass::Opaque => {
                 self.profile.counters.opaque_draws += 1;
@@ -1306,8 +1350,15 @@ impl Renderer {
                 recorder.interrupted();
             }
 
-            recorder.draw_clipped(pipeline.scene_blended_back, &draw.geometry, clip);
-            recorder.draw_clipped(pipeline.scene_blended_front, &draw.geometry, clip);
+            match draw.shading {
+                BlendedShading::Surface => {
+                    recorder.draw_clipped(pipeline.scene_blended_back, &draw.geometry, clip);
+                    recorder.draw_clipped(pipeline.scene_blended_front, &draw.geometry, clip);
+                }
+                BlendedShading::ForceField => {
+                    recorder.draw_clipped(pipeline.force_field, &draw.geometry, clip);
+                }
+            }
         }
 
         if particles_drawn < particles.end {

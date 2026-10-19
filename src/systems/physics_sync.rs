@@ -408,6 +408,10 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             physics.world.colliders_arena(),
             &mut debug_overlays,
         );
+        physics.world.debugger().add_suspension_overlays(
+            physics.world.suspensions().map(|(_, _, readout)| readout),
+            &mut debug_overlays,
+        );
         Self::log_frame_profile(physics.world.frame_profile(), &mut debug_log);
         Self::log_traction_usage(&physics.world, &actuators, &bodies, &mut debug_log);
         Self::log_allowance_usage(&physics.world, &actuators, &bodies, &mut debug_log);

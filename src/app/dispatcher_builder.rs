@@ -16,6 +16,7 @@ use crate::damage::{
 use crate::explosion::{BlastLightSystem, ExplosionSystem};
 use crate::fire::light::FireLightSystem;
 use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
+use crate::force_field::ForceFieldSystem;
 use crate::fracture::{DebrisCullSystem, FractureSystem};
 use crate::glass::GlassCrackSystem;
 use crate::input::InputActionSystem;
@@ -29,6 +30,7 @@ use crate::projectile::{
 };
 use crate::rubble::{BoulderCullSystem, RubbleSpawnSystem, ScreeSystem};
 use crate::sensing::SensorProbeSystem;
+use crate::sled::HoverSledSystem;
 use crate::systems::{
     CameraControlSystem, CharacterControlSystem, PhysicsSyncSystem, PlayerInputSystem,
     RenderSystem, TerrainAnchorSystem, TerrainUpdateSystem, WaterSystem,
@@ -66,6 +68,9 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // character systems do, and must land before physics_sync turns it
         // into a drive target.
         .with(MovingPlatformSystem, "moving_platform", &["input_actions"])
+        // A sled's thrust is read from where its riders stand, and lands in
+        // the step this frame's physics_sync takes.
+        .with(HoverSledSystem, "hover_sled", &["character_control"])
         // Physics engine (buoyancy forces computed per-substep internally)
         .with(
             PhysicsSyncSystem::default(),
@@ -75,6 +80,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
                 "roller_locomotion",
                 "alert_telegraph",
                 "moving_platform",
+                "hover_sled",
             ],
         )
         // Brittle sheets craze under this frame's impacts first, so that a
@@ -253,6 +259,9 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["explosion", "grenade_visuals"],
         )
         .with(ParticleUpdateSystem, "particle_update", &["particle_spawn"])
+        // Force fields read the step's suspensions, throw up their kick-up
+        // and move their underglow, which the lights collected next must see.
+        .with(ForceFieldSystem, "force_field", &["physics_sync"])
         // Per-frame point light selection. Must see the final camera position
         // and every light attached this frame, so it runs after both the camera
         // and the systems that create or remove lights. RenderSystem is
@@ -265,6 +274,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
                 "fire_light",
                 "grenade_visuals",
                 "blast_light",
+                "force_field",
             ],
         )
         // Rendering (thread-local)

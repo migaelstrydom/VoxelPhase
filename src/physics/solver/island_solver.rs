@@ -23,6 +23,9 @@ use crate::physics::pipeline::pair::SolverManifold;
 use super::conditioning::ManifoldConditions;
 use super::constraint_row::{solve_constraint_row, warm_start_constraint_row, RowSlots};
 use super::contact_row::ContactRows;
+use super::coupled_row::{
+    resolve_coupled_slots, solve_coupled_row, warm_start_coupled_row, CoupledSlots,
+};
 use super::friction::{manifold_friction_projection, solve_friction_impulse};
 use super::iteration_budget::IterationBudget;
 use super::normal::solve_normal_impulse;
@@ -46,6 +49,9 @@ pub(crate) struct IslandSolver {
     contact_rows: ContactRows,
     /// Solver slots of each of the island's joint rows' bodies.
     constraint_slots: Vec<RowSlots>,
+    /// Where each joint row's coupled siblings sit in the island's rows;
+    /// `None` for a row bounded on its own.
+    coupled_slots: Vec<Option<CoupledSlots>>,
     /// The island's contact measurements, which set its iteration count.
     budget: IterationBudget,
 }
@@ -113,6 +119,9 @@ impl IslandSolver {
                         .and_then(|handle| solver_bodies.gather(bodies, handle.0)),
                 )
             }));
+        self.coupled_slots.clear();
+        self.coupled_slots
+            .extend(resolve_coupled_slots(constraint_rows));
     }
 
     /// Apply the impulses cached from the previous frame: joints first, then
@@ -124,8 +133,23 @@ impl IslandSolver {
         config: &PgsNgsConfig,
     ) {
         let solver_bodies = &mut self.solver_bodies;
-        for (row, &slots) in constraint_rows.iter_mut().zip(&self.constraint_slots) {
-            warm_start_constraint_row(solver_bodies, slots, row, config.warm_start_scale);
+        for index in 0..constraint_rows.len() {
+            match self.coupled_slots[index] {
+                None => warm_start_constraint_row(
+                    solver_bodies,
+                    self.constraint_slots[index],
+                    constraint_rows[index],
+                    config.warm_start_scale,
+                ),
+                Some(coupled) => warm_start_coupled_row(
+                    solver_bodies,
+                    &self.constraint_slots,
+                    constraint_rows,
+                    index,
+                    coupled,
+                    config.warm_start_scale,
+                ),
+            }
         }
         for (i, (_, manifold)) in manifolds.iter_mut().enumerate() {
             let header = &manifold.header;
@@ -158,9 +182,23 @@ impl IslandSolver {
         let solver_bodies = &mut self.solver_bodies;
 
         // Joint constraints first — solved early so contacts get the last
-        // word for penetration prevention.
-        for (row, &slots) in constraint_rows.iter_mut().zip(&self.constraint_slots) {
-            solve_constraint_row(solver_bodies, slots, row);
+        // word for penetration prevention. In slice order, so a load row is
+        // solved before the rows coupled to it are bounded by it.
+        for index in 0..constraint_rows.len() {
+            match self.coupled_slots[index] {
+                None => solve_constraint_row(
+                    solver_bodies,
+                    self.constraint_slots[index],
+                    constraint_rows[index],
+                ),
+                Some(coupled) => solve_coupled_row(
+                    solver_bodies,
+                    &self.constraint_slots,
+                    constraint_rows,
+                    index,
+                    coupled,
+                ),
+            }
         }
 
         for (i, (_, manifold)) in manifolds.iter_mut().enumerate() {

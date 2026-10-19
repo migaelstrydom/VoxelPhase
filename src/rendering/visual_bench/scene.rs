@@ -3,6 +3,7 @@
 use nalgebra::{Matrix4, Point3, Vector3};
 
 use crate::core::error::EngineResult;
+use crate::force_field::ColumnMesh;
 use crate::lighting::{ActiveLight, ActiveLights};
 use crate::particles::ParticlePool;
 use crate::rendering::colour::Colour;
@@ -210,6 +211,10 @@ pub struct SceneShot {
     /// Particles to draw with the shot, placed directly rather than simulated —
     /// a still of a burst, so the sheet is reproducible frame for frame.
     pub particles: Option<ParticlePool>,
+
+    /// Force-field columns, in world space, drawn as light in the blended
+    /// pass (`force_field::column`).
+    pub force_fields: Vec<ColumnMesh>,
 }
 
 impl SceneShot {
@@ -221,6 +226,7 @@ impl SceneShot {
             meshes: Vec::new(),
             water: None,
             particles: None,
+            force_fields: Vec::new(),
         }
     }
 
@@ -246,6 +252,11 @@ impl SceneShot {
 
     pub fn with_particles(mut self, particles: ParticlePool) -> Self {
         self.particles = Some(particles);
+        self
+    }
+
+    pub fn with_force_field(mut self, columns: ColumnMesh) -> Self {
+        self.force_fields.push(columns);
         self
     }
 }

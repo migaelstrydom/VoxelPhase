@@ -5,6 +5,7 @@ pub mod conditioning;
 pub(crate) mod constraint_row;
 mod constraint_solver;
 pub(crate) mod contact_row;
+pub(crate) mod coupled_row;
 pub(crate) mod diagnostics;
 pub(crate) mod friction;
 pub(crate) mod impulse;

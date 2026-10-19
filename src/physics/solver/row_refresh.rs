@@ -87,6 +87,7 @@ mod tests {
             row_kind: RowKind::Linear,
             enforcement: Enforcement::Iterative,
             refresh,
+            coupling: None,
         }
     }
 

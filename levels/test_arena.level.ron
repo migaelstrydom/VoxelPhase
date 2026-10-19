@@ -235,6 +235,9 @@ Level(
                     length: 10.0,
                 ),
 
+                // A hover sled at the bridge's south end, nose to it.
+                HoverSled(pos: (8.0, 0.0, 2.5), yaw: -90.0),
+
                 FencePost(
                     pos: (5.0, -13.0),
                     half_height: 1.0,

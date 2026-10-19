@@ -9,6 +9,7 @@ use crate::components::{
 use crate::core::error::{EngineError, EngineResult};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::fire::components::OnFire;
+use crate::force_field::{ring_draws, ring_model, ColumnMesh, ForceFieldVisual};
 use crate::hud::{Hud, HudContext};
 use crate::lighting::ActiveLights;
 use crate::model::Transform;
@@ -236,6 +237,7 @@ impl<'a> System<'a> for RenderSystem {
         Read<'a, FrameStart>,
         Read<'a, ActiveLights>,
         Read<'a, AimState>,
+        ReadStorage<'a, ForceFieldVisual>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -264,6 +266,7 @@ impl<'a> System<'a> for RenderSystem {
             frame_start,
             active_lights,
             aim_state,
+            force_fields,
         ) = data;
 
         let camera = camera_components.join().next();
@@ -457,6 +460,33 @@ impl<'a> System<'a> for RenderSystem {
                                     e
                                 );
                             }
+                        }
+                    }
+
+                    // Force fields: their rings are opaque and bloom, their
+                    // columns are light, held back and sorted with the glass.
+                    for visual in (&force_fields).join() {
+                        for ring in ring_draws(visual.looks(), &visual.style) {
+                            if let Err(e) = renderer.draw_model_as(
+                                draw_cb,
+                                ring_model(),
+                                &ring.transform,
+                                material_manager.fallback_texture(),
+                                ring.surface,
+                                &texture_manager,
+                            ) {
+                                log::error!("RenderSystem: Failed to draw a field ring: {}", e);
+                            }
+                        }
+                        let columns = ColumnMesh::of(visual.looks());
+                        if let Err(e) = renderer.draw_force_field(
+                            draw_cb,
+                            &columns.vertices,
+                            &columns.indices,
+                            &material_manager,
+                            &texture_manager,
+                        ) {
+                            log::error!("RenderSystem: Failed to draw a force field: {}", e);
                         }
                     }
                     renderer.record_stage(RenderStage::Models, lap.elapsed());

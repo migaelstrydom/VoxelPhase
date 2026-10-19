@@ -98,6 +98,7 @@ pub fn lock_linear_axis(
         row_kind: RowKind::Linear,
         enforcement: Enforcement::Iterative,
         refresh: None,
+        coupling: None,
     }
 }
 
@@ -139,6 +140,7 @@ pub fn drive_linear_axis(
         row_kind: RowKind::Linear,
         enforcement: Enforcement::Iterative,
         refresh: None,
+        coupling: None,
     }
 }
 
@@ -230,5 +232,6 @@ pub fn lock_angular_axis(
         row_kind: RowKind::Angular,
         enforcement,
         refresh: None,
+        coupling: None,
     }
 }

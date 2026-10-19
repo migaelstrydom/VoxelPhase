@@ -95,7 +95,6 @@ impl Emission {
 
     /// Uniform glow in the given colour at the given luminance, with no rim
     /// enhancement.
-    #[allow(dead_code)]
     pub fn glow(colour: Colour, strength: f32) -> Self {
         Self {
             colour,
@@ -452,6 +451,27 @@ impl SurfaceParams {
         probe: None,
         projection_anchor: [0.0; 3],
     };
+
+    /// An untextured surface with `finish` that radiates `emission`: geometry
+    /// an effect draws and restyles every frame, which no registered material
+    /// could describe.
+    pub fn glowing(finish: SurfaceFinish, emission: Emission) -> Self {
+        Self {
+            emissive: [
+                emission.colour.r,
+                emission.colour.g,
+                emission.colour.b,
+                emission.radiance_scale(),
+            ],
+            surface: [
+                finish.roughness,
+                finish.metallic,
+                emission.rim_strength,
+                emission.rim_power,
+            ],
+            ..Self::MATTE
+        }
+    }
 
     /// Give this surface a microstructure, projected from the object's own
     /// frame so that it stays put when the object moves.

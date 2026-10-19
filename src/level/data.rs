@@ -30,11 +30,12 @@ use crate::app::creatures::{HeartCritterDef, PeeperDef, RollerDef};
 use crate::app::spawnables::{
     BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef,
     DolosDef, DominoDef, FencePostDef, FramedWindowDef, GemDef, GlassSheetDef, GlowingOrbDef,
-    GoalDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IceBoxDef, IceWallDef,
-    IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef,
-    OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, RockDef,
-    SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef,
-    TrampolineDef, TrilithonDef, VoussoirArchDef, BARREL_RADIUS, BEACH_BALL_RADIUS,
+    GoalDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, HoverSledDef, IceBoxDef,
+    IceWallDef, IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef,
+    MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef,
+    PyramidDef, RockDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef,
+    TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef, BARREL_RADIUS,
+    BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -1325,6 +1326,16 @@ pub enum LevelObject {
         #[serde(default = "IcosahedronDef::default_friction")]
         friction: f32,
     },
+    /// Hover sled — a plastic hull riding four force-field pods, steered by
+    /// where its rider stands.
+    HoverSled {
+        /// Ground point under its middle; it spawns hovering over it.
+        pos: (f32, f32, f32),
+        /// Rotation about `+Y` in degrees, within the segment's frame: 0
+        /// points its nose along `+X`.
+        #[serde(default)]
+        yaw: f32,
+    },
     /// Trampoline — a round bed on coil springs, sprung from a hoop on legs.
     Trampoline {
         /// Ground point under its centre, where its feet stand.
@@ -1650,6 +1661,7 @@ impl LevelObject {
             LevelObject::HexPrism { pos, .. } => ("HexPrism", point(pos)),
             LevelObject::HoneycombWall { base, .. } => ("HoneycombWall", point(base)),
             LevelObject::Icosahedron { pos, .. } => ("Icosahedron", point(pos)),
+            LevelObject::HoverSled { pos, .. } => ("HoverSled", point(pos)),
             LevelObject::Trampoline { pos, .. } => ("Trampoline", point(pos)),
             LevelObject::Table { pos, .. } => ("Table", point(pos)),
             LevelObject::Pyramid { base, .. } => ("Pyramid", point(base)),
@@ -1831,6 +1843,7 @@ impl LevelObject {
             LevelObject::Jenga {
                 block_half_length, ..
             } => rect(*block_half_length, *block_half_length, 0.0),
+            LevelObject::HoverSled { yaw, .. } => rect(0.78, 0.5, *yaw),
             LevelObject::Trampoline { radius, yaw, .. } => {
                 let reach = TrampolineShape::with_radius(*radius).footprint_radius();
                 rect(reach, reach, *yaw)
@@ -1983,6 +1996,7 @@ impl LevelObject {
             | LevelObject::BoxWall { .. }
             | LevelObject::HoneycombWall { .. }
             | LevelObject::Trampoline { .. }
+            | LevelObject::HoverSled { .. }
             | LevelObject::Table { .. }
             | LevelObject::Dolos { .. }
             | LevelObject::Trilithon { .. }
@@ -2149,6 +2163,10 @@ impl LevelObject {
                 *yaw += turn;
             }
             LevelObject::Icosahedron { pos, .. } => p3(pos),
+            LevelObject::HoverSled { pos, yaw } => {
+                p3(pos);
+                *yaw += turn;
+            }
             LevelObject::Trampoline { pos, yaw, .. } => {
                 p3(pos);
                 *yaw += turn;
@@ -2698,6 +2716,11 @@ impl LevelObject {
                 density: *density,
                 restitution: *restitution,
                 friction: *friction,
+            }),
+
+            LevelObject::HoverSled { pos, yaw } => Box::new(HoverSledDef {
+                pos: *pos,
+                yaw: *yaw,
             }),
 
             LevelObject::Trampoline { pos, yaw, radius } => Box::new(TrampolineDef {

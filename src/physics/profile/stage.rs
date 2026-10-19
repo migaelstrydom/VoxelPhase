@@ -14,6 +14,7 @@
 /// stage times sum to the whole frame's physics cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PhysicsStage {
+    SuspensionCast,
     StaticNarrowphase,
     DynamicNarrowphase,
     ManifoldMerge,
@@ -27,10 +28,11 @@ pub enum PhysicsStage {
 }
 
 impl PhysicsStage {
-    pub const COUNT: usize = 10;
+    pub const COUNT: usize = 11;
 
     /// Every stage, in the order a frame runs them.
     pub const ALL: [PhysicsStage; Self::COUNT] = [
+        PhysicsStage::SuspensionCast,
         PhysicsStage::StaticNarrowphase,
         PhysicsStage::DynamicNarrowphase,
         PhysicsStage::ManifoldMerge,
@@ -45,6 +47,7 @@ impl PhysicsStage {
 
     pub fn label(self) -> &'static str {
         match self {
+            PhysicsStage::SuspensionCast => "suspension_cast",
             PhysicsStage::StaticNarrowphase => "static_narrowphase",
             PhysicsStage::DynamicNarrowphase => "dynamic_narrowphase",
             PhysicsStage::ManifoldMerge => "manifold_merge",

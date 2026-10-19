@@ -24,6 +24,10 @@ mod bytecode {
     pub const MAIN_VERTEX: &[u8] = embedded_spirv!("triangle.vert");
     pub const MAIN_FRAGMENT: &[u8] = embedded_spirv!("triangle.frag");
 
+    /// Force-field columns: the field a suspension stands on
+    pub const FORCE_FIELD_VERTEX: &[u8] = embedded_spirv!("force_field.vert");
+    pub const FORCE_FIELD_FRAGMENT: &[u8] = embedded_spirv!("force_field.frag");
+
     /// Overlay/UI pipeline shaders
     pub const OVERLAY_VERTEX: &[u8] = embedded_spirv!("overlay.vert");
     pub const OVERLAY_FRAGMENT: &[u8] = embedded_spirv!("overlay.frag");
@@ -73,6 +77,20 @@ impl ShaderManager {
     /// Load the main 3D fragment shader.
     pub fn load_main_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
         Self::load_shader(device, bytecode::MAIN_FRAGMENT, ShaderStage::Fragment)
+    }
+
+    /// Load the force-field column vertex shader.
+    pub fn load_force_field_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::FORCE_FIELD_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the force-field column fragment shader.
+    pub fn load_force_field_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(
+            device,
+            bytecode::FORCE_FIELD_FRAGMENT,
+            ShaderStage::Fragment,
+        )
     }
 
     /// Load the shadow map vertex shader.

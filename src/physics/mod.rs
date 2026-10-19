@@ -72,9 +72,13 @@ pub use ccd::{CcdStrategy, SweepClampCcd};
 pub use collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape, FrictionModel};
 pub use constraint::spring::Spring;
 pub use constraint::spring_slider::SpringSlider;
+pub use constraint::suspension::{
+    SuspensionAxis, SuspensionDesc, SuspensionHit, SuspensionReadout,
+};
 pub use constraint::{Constraint, ConstraintHandle, ConstraintKind};
 pub use contact_event::{ContactEvent, ContactSource};
 pub use contact_work::ContactWorkLedger;
+pub use debug::add_suspension_overlay;
 pub use drive::{
     Allowance, AllowanceCommand, AllowanceUsage, DriveCommand, ReactionAnchor, SupportConfig,
     SupportContact, SupportResolver, SupportSet, SupportSets, VerticalProjection, VerticalVerbs,

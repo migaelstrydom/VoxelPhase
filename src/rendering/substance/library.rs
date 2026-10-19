@@ -378,6 +378,18 @@ pub const TITANIUM: Substance = pure_metal(
     Palette::from_base_const(Colour::new(0.62, 0.6, 0.57, 1.0), 0.08),
 );
 
+/// Chrome plate: the mirror of the library, for trim on the toys. Its
+/// physics is chromium's; its look is almost all reflection, a shade cool,
+/// and polished past any of the bare metals.
+pub const CHROME: Substance = pure_metal(
+    "chrome",
+    7190.0,
+    0.3,
+    0.3,
+    0.07,
+    Palette::from_base_const(Colour::new(0.94, 0.95, 0.97, 1.0), 0.04),
+);
+
 /// Bouncy and grippy, and deliberately smooth: bounce reads as a coated,
 /// rubbery surface, and grain on it would read as perished.
 pub const RUBBER: Substance = Substance {
@@ -504,8 +516,8 @@ mod tests {
     /// all of them.
     const ALL: &[Substance] = &[
         GRANITE, LIMESTONE, SARSEN, MARBLE, SANDSTONE, CONCRETE, BRICK, SLATE, OAK, PINE, STEEL,
-        TUNGSTEN, GOLD, COPPER, ALUMINIUM, BISMUTH, LITHIUM, OSMIUM, TITANIUM, RUBBER, PLASTIC,
-        ICE, GLASS,
+        TUNGSTEN, GOLD, COPPER, ALUMINIUM, BISMUTH, LITHIUM, OSMIUM, TITANIUM, CHROME, RUBBER,
+        PLASTIC, ICE, GLASS,
     ];
 
     /// The metals, which are the only things that read as metal.
@@ -519,6 +531,7 @@ mod tests {
         "lithium",
         "osmium",
         "titanium",
+        "chrome",
     ];
 
     /// Nothing is lighter than balsa or denser than osmium, the densest

@@ -41,6 +41,19 @@ use nalgebra::Vector3;
 use crate::rendering::geometry_draw::GeometryDraw;
 use crate::rendering::vertex::Vertex;
 
+/// How a blended draw is shaded, which decides the pipelines it is recorded
+/// with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BlendedShading {
+    /// A see-through surface (ice, glass): lit by the scene's own shaders and
+    /// recorded twice, back faces then front faces.
+    #[default]
+    Surface,
+    /// A force-field column: light rather than a surface, recorded once with
+    /// both faces (`force_field::column`).
+    ForceField,
+}
+
 /// One blended draw, held back for the sorted flush.
 ///
 /// Holding a draw costs no borrow of the mesh it came from: the geometry is
@@ -50,6 +63,9 @@ use crate::rendering::vertex::Vertex;
 pub struct BlendedDraw {
     /// The draw itself, as recorded at the flush.
     pub geometry: GeometryDraw,
+
+    /// How it is shaded.
+    pub shading: BlendedShading,
 
     /// Squared distance from the camera to the mesh's world-space centre.
     ///
@@ -82,6 +98,12 @@ impl BlendedDraw {
         self
     }
 
+    /// Shade this draw as `shading` rather than as a surface.
+    pub fn shaded(mut self, shading: BlendedShading) -> Self {
+        self.shading = shading;
+        self
+    }
+
     /// The world-space sphere around the mesh: its centre and radius. A draw
     /// never given its bounds is taken to reach everywhere.
     pub fn sphere(&self) -> (Vector3<f32>, f32) {
@@ -101,6 +123,7 @@ impl BlendedDraw {
     pub fn new(geometry: GeometryDraw) -> Self {
         Self {
             geometry,
+            shading: BlendedShading::Surface,
             depth_key: f32::INFINITY,
             centre: geometry.model.fixed_view::<3, 1>(0, 3).into_owned(),
             radius: f32::INFINITY,

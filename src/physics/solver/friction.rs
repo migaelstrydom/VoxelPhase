@@ -48,6 +48,44 @@ fn tangential_error(target: &Vector3<f32>, relative: &Vector3<f32>, tangent: &Ve
     (target - relative).dot(tangent)
 }
 
+/// A tangential impulse, as two components in a tangent basis, after being
+/// held inside a Coulomb cone.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ConeProjection {
+    /// The component along the first tangent.
+    pub t1: f32,
+    /// The component along the second tangent.
+    pub t2: f32,
+    /// The impulse's magnitude before it was projected.
+    pub magnitude: f32,
+    /// Whether it lay outside the cone and was scaled back to its edge.
+    pub saturated: bool,
+}
+
+/// Hold a tangential impulse `(t1, t2)` inside the cone of radius `radius`:
+/// scaled back along itself to the edge when it lies outside, untouched
+/// otherwise.
+///
+/// Bounded as a disc rather than per component, so friction grips as hard on
+/// a diagonal as along either tangent. Shared by contact friction and by
+/// coupled constraint rows (`coupled_row.rs`).
+pub(crate) fn project_onto_cone(t1: f32, t2: f32, radius: f32) -> ConeProjection {
+    let magnitude = (t1 * t1 + t2 * t2).sqrt();
+    let saturated = magnitude > radius;
+    let (t1, t2) = if saturated {
+        let scale = radius / magnitude;
+        (t1 * scale, t2 * scale)
+    } else {
+        (t1, t2)
+    };
+    ConeProjection {
+        t1,
+        t2,
+        magnitude,
+        saturated,
+    }
+}
+
 /// Solve one contact's tangential row toward the Target Relative Velocity the
 /// drive asks for at this point. Zero — the default the planner leaves on
 /// every contact nothing is driving through — is ordinary friction.
@@ -95,17 +133,13 @@ pub(crate) fn solve_friction_impulse(
     let delta_t1 = tangential_error(target_relative_velocity, &rel_vel, &t1) / effective_mass_t1;
     let delta_t2 = tangential_error(target_relative_velocity, &rel_vel, &t2) / effective_mass_t2;
 
-    let mut new_t1 = curr_t1 + delta_t1;
-    let mut new_t2 = curr_t2 + delta_t2;
-
     let max_friction = mu * contact.accumulated_normal_impulse;
-    let mag = (new_t1 * new_t1 + new_t2 * new_t2).sqrt();
-    let saturated = mag > max_friction;
-    if saturated {
-        let scale = max_friction / mag;
-        new_t1 *= scale;
-        new_t2 *= scale;
-    }
+    let ConeProjection {
+        t1: new_t1,
+        t2: new_t2,
+        magnitude: mag,
+        saturated,
+    } = project_onto_cone(curr_t1 + delta_t1, curr_t2 + delta_t2, max_friction);
 
     // What the gain bought, measured rather than assumed (§11). The row's
     // honest ceiling is the same bound without the gain; anything the

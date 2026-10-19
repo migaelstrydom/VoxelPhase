@@ -260,6 +260,7 @@ fn windows(frames: &[FrameRecord], window: f32) -> impl Iterator<Item = &[FrameR
 
 fn abbreviation(stage: PhysicsStage) -> &'static str {
     match stage {
+        PhysicsStage::SuspensionCast => "susp",
         PhysicsStage::StaticNarrowphase => "static",
         PhysicsStage::DynamicNarrowphase => "dyn",
         PhysicsStage::ManifoldMerge => "merge",

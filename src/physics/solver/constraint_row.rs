@@ -14,7 +14,11 @@ use super::solver_bodies::{SolverBodies, SolverBody};
 pub(crate) type RowSlots = (Option<usize>, Option<usize>);
 
 /// Compute the constraint-space velocity: Cdot = J · v.
-fn jacobian_dot_velocity(bodies: &SolverBodies, slots: RowSlots, row: &ConstraintRow) -> f32 {
+pub(crate) fn jacobian_dot_velocity(
+    bodies: &SolverBodies,
+    slots: RowSlots,
+    row: &ConstraintRow,
+) -> f32 {
     let mut cdot = 0.0;
 
     if let Some(slot) = slots.0 {
@@ -36,7 +40,7 @@ fn jacobian_dot_velocity(bodies: &SolverBodies, slots: RowSlots, row: &Constrain
 ///
 /// Linear: v += inv_mass * J_lin * impulse
 /// Angular: ω += I_world_inv * J_ang * impulse
-fn apply_constraint_impulse(
+pub(crate) fn apply_constraint_impulse(
     bodies: &mut SolverBodies,
     slots: RowSlots,
     row: &ConstraintRow,

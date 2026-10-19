@@ -10,6 +10,7 @@ use super::follow_point;
 use super::hinge;
 use super::keep_attitude;
 use super::keep_upright;
+use super::suspension;
 use super::types::{Constraint, ConstraintKind, ConstraintRow};
 use crate::physics::body::RigidBody;
 use crate::physics::drive::medium;
@@ -272,6 +273,23 @@ pub fn expand_constraints(
                 );
                 rows.extend(expanded);
             }
+
+            ConstraintKind::Suspension(held) => {
+                let Some(rigid_body) = bodies.get(held.body().0) else {
+                    continue;
+                };
+                let partner = held
+                    .partner()
+                    .and_then(|handle| bodies.get(handle.0).map(|body| (body, handle)));
+                rows.extend(suspension::expand(
+                    held,
+                    rigid_body,
+                    partner,
+                    dt,
+                    index,
+                    &constraint.warm_impulses,
+                ));
+            }
         }
     }
 }
@@ -296,13 +314,14 @@ pub fn write_back_constraints(constraints: &mut Arena<Constraint>, rows: &[Const
 /// (max_impulse < f32::MAX). When any row's accumulated impulse reaches the
 /// bound, the joint cannot provide enough force and is permanently deactivated.
 ///
-/// `KeepUpright`, `KeepAttitude` and `MediumDrive` are exempt. Their bounds are the authority
+/// `KeepUpright`, `KeepAttitude`, `MediumDrive` and `Suspension` are exempt. Their bounds are the authority
 /// of an actuator, not the failure load of a joint: a thruster-stabilised
 /// platform that saturates while righting an off-centre load is working
 /// exactly as intended, and a motor at full throttle is a motor, not a broken
 /// one. Without this exemption a bounded KeepUpright deactivates on its first
 /// saturated frame and never rights anything again, and a platform stops dead
-/// the first time it is asked for all the acceleration it has.
+/// the first time it is asked for all the acceleration it has. A suspension's
+/// spring at `max_force` is a hard landing, not a broken leg.
 pub fn check_constraint_breakage(constraints: &mut Arena<Constraint>, rows: &[ConstraintRow]) {
     const SATURATION_THRESHOLD: f32 = 0.999;
 
@@ -318,6 +337,7 @@ pub fn check_constraint_breakage(constraints: &mut Arena<Constraint>, rows: &[Co
                     ConstraintKind::KeepUpright { .. }
                         | ConstraintKind::KeepAttitude { .. }
                         | ConstraintKind::MediumDrive { .. }
+                        | ConstraintKind::Suspension(_)
                 ) {
                     continue;
                 }

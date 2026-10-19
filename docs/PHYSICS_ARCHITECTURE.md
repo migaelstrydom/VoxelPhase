@@ -41,7 +41,7 @@ connects them.
   bodies at runtime. `detach_collider` swap-removes, so collider order changes after a split.
 - Constraints (`constraint/`): persistent definitions in an arena, `ConstraintKind` =
   `KeepUpright`, `KeepAttitude`, `Fixed`, `BallJoint`, `Hinge`, `FollowPoint`,
-  `SpringSlider`. Each is expanded every frame into solver `ConstraintRow`s (`expand.rs`,
+  `SpringSlider`, `MediumDrive`, `Suspension`. Each is expanded every frame into solver `ConstraintRow`s (`expand.rs`,
   built from `primitives.rs`). The enforcement mode is `Iterative` (PGS, optionally NGS) or
   `HardProjection` (a post-solve velocity projection). Compliance rules out hard
   projection. A constraint whose bodies are all asleep is skipped, and
@@ -51,9 +51,17 @@ connects them.
   rate (Box2D v3's soft step). Rows are expanded once a frame, so a spring row carries a
   `RowRefresh` and its bias is recomputed before every substep from the bodies' motion
   since (`solver/row_refresh.rs`); otherwise twelve substeps would all push with the
-  compression the frame began with. `SpringSlider` is the one user: a prismatic joint
-  whose axis is sprung, all of its rows velocity-only because NGS would pin the anchors
-  together and undo the travel.
+  compression the frame began with. `SpringSlider` uses it: a prismatic joint whose axis
+  is sprung, all of its rows velocity-only because NGS would pin the anchors together and
+  undo the travel.
+- `Suspension` (`constraint/suspension/`): the raycast wheel of vehicle physics. A body
+  held up on a push-only spring above whatever a per-frame sphere cast from it hits
+  (`cast_suspensions`, before the narrowphase, waking a sleeping body it stands on), with
+  a friction pair and a torsion row at the hit. Those rows carry a `CoupledBound`: their
+  bound follows the spring row's live impulse, the pair as one Coulomb cone that includes
+  the spring's own share along the surface. The hover sled's pods are suspensions. It is
+  not a Support Set source: a body on suspensions is not "supported" for the drive, and
+  `PhysicsWorld::suspension` readouts are what gameplay and visuals read.
 
 ## A frame
 
@@ -64,6 +72,7 @@ which prevents a spiral of death). A frame is **one contact pass, then N substep
 ```text
 PhysicsWorld::update_contacts(dt, substeps)         once per frame
   ├─ sleep bookkeeping, wake events, one-shot impulses (explosions)
+  ├─ cast_suspensions                                one sphere cast per awake suspension
   ├─ generate_contacts                               static, then dynamic; repeated for
   │     └─ narrowphase (+ speculative contacts)      bodies each pass wakes, until none do
   ├─ ManifoldCache::merge                            match by FeatureId → warm-start impulses
@@ -185,7 +194,10 @@ done. The result is independent of thread scheduling. Within an iteration:
   for a drive.
 - **Torsional** (`torsional.rs`): spin about the normal, bounded by μ·N·r. It is inert
   unless an actuator declares a patch radius.
-- **Constraint rows** (`constraint_row.rs`), using Baumgarte bias for joints.
+- **Constraint rows** (`constraint_row.rs`), using Baumgarte bias for joints, solved
+  before contacts in slice order. A row with a `CoupledBound` (`coupled_row.rs`) is
+  bounded by its load row's impulse as it stands, a pair of them through the same cone
+  projection contact friction uses (`friction::project_onto_cone`).
 - Restitution applies only above `restitution_velocity_threshold`. Warm starting is
   whole (`warm_start_scale` 1.0), and fast contacts are not warm-started.
 - Iterations: base 3, plus extra passes earned by an island's hardest body (many contacts,

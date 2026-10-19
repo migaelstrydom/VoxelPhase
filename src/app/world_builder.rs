@@ -23,6 +23,7 @@ use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::explosion::Explosion;
 use crate::fire::components::{Flammable, OnFire};
 use crate::fire::light::FireLight;
+use crate::force_field::ForceFieldVisual;
 use crate::fracture::{CompoundFracture, Debris, DebrisBudget};
 use crate::glass::BrittleSheet;
 use crate::input::{GameplayActions, InputState};
@@ -42,6 +43,7 @@ use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 use crate::rubble::RubbleQueue;
 use crate::sensing::{ContactCandidates, SensorSet};
+use crate::sled::HoverSled;
 use crate::systems::{FrameStart, PhysicsResource};
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
@@ -121,6 +123,8 @@ impl WorldBuilder {
         world.register::<PointLight>();
         world.register::<MaterialModulation>();
         world.register::<FireLight>();
+        world.register::<HoverSled>();
+        world.register::<ForceFieldVisual>();
     }
 
     pub fn with_renderer(mut self, renderer: Renderer) -> Self {

@@ -14,6 +14,9 @@ use super::ccd::{
 };
 use super::collider::{Collider, ColliderDesc, ColliderShape};
 use super::collider_bounds::ColliderBounds;
+use super::constraint::suspension::{
+    cast_suspension, Suspension, SuspensionDesc, SuspensionReadout,
+};
 use super::constraint::types::Constraint;
 use super::constraint::{ConstraintHandle, ConstraintKind};
 use super::contact_event::{ContactEvent, ContactSource};
@@ -475,7 +478,13 @@ impl PhysicsWorld {
             self.colliders.remove(collider_handle.0);
         }
 
-        // Remove constraints that reference this body.
+        // A suspension standing on this body loses its footing, not its
+        // existence; every other constraint referencing it goes with it.
+        for (_, constraint) in self.constraints.iter_mut() {
+            if let ConstraintKind::Suspension(suspension) = &mut constraint.kind {
+                suspension.forget_partner(handle);
+            }
+        }
         let to_remove: Vec<_> = self
             .constraints
             .iter()
@@ -587,6 +596,83 @@ impl PhysicsWorld {
             self.sleep_manager.wake_body(handle);
         }
         ConstraintHandle(self.constraints.insert(Constraint::new(kind)))
+    }
+
+    /// Hold a body up on a suspension (`constraint::suspension`). It finds
+    /// its footing on the next frame's cast.
+    pub fn create_suspension(&mut self, desc: SuspensionDesc) -> ConstraintHandle {
+        self.create_constraint(ConstraintKind::Suspension(Box::new(Suspension::new(desc))))
+    }
+
+    /// A suspension's state as of the last step: what it stands on, how far
+    /// it is pressed in and what it carries. `None` if `handle` is not a
+    /// suspension or its body is gone.
+    pub fn suspension(&self, handle: ConstraintHandle) -> Option<SuspensionReadout> {
+        let constraint = self.constraints.get(handle.0)?;
+        let ConstraintKind::Suspension(suspension) = &constraint.kind else {
+            return None;
+        };
+        let body = self.bodies.get(suspension.body().0)?;
+        Some(suspension.readout(body, Suspension::spring_impulse(&constraint.warm_impulses)))
+    }
+
+    /// Every suspension whose body still exists: its handle, the body it
+    /// holds up, and its readout.
+    pub fn suspensions(
+        &self,
+    ) -> impl Iterator<Item = (ConstraintHandle, RigidBodyHandle, SuspensionReadout)> + '_ {
+        self.constraints
+            .iter()
+            .filter_map(|(index, constraint)| match &constraint.kind {
+                ConstraintKind::Suspension(suspension) => {
+                    let handle = ConstraintHandle(index);
+                    let body = suspension.body();
+                    Some((handle, body, self.suspension(handle)?))
+                }
+                _ => None,
+            })
+    }
+
+    /// Cast every awake suspension for the frame and store what it hit.
+    ///
+    /// Before the narrowphase, so a sleeping body a suspension now stands on
+    /// is woken in time to have its own contacts generated this frame. A
+    /// suspension whose partner changed, or that hit nothing, starts again
+    /// from no warm impulse.
+    fn cast_suspensions(&mut self, static_geometry: &dyn StaticGeometry, dt: f32) {
+        let frame_dt = dt * self.substeps_this_frame as f32;
+        let casts: Vec<_> = self
+            .constraints
+            .iter()
+            .filter_map(|(index, constraint)| {
+                let ConstraintKind::Suspension(suspension) = &constraint.kind else {
+                    return None;
+                };
+                if !constraint.active || self.sleep_manager.is_sleeping(suspension.body()) {
+                    return None;
+                }
+                let body = self.bodies.get(suspension.body().0)?;
+                let hit = cast_suspension(self, static_geometry, suspension, body, frame_dt);
+                Some((index, hit))
+            })
+            .collect();
+
+        for (index, hit) in casts {
+            let Some(constraint) = self.constraints.get_mut(index) else {
+                continue;
+            };
+            let ConstraintKind::Suspension(suspension) = &mut constraint.kind else {
+                continue;
+            };
+            if suspension.land(hit, dt) {
+                constraint.warm_impulses.fill(0.0);
+            }
+            if let Some(partner) = hit.and_then(|hit| hit.partner) {
+                if self.sleep_manager.is_sleeping(partner) {
+                    self.sleep_manager.wake_body(partner);
+                }
+            }
+        }
     }
 
     /// Remove a constraint.
@@ -980,6 +1066,10 @@ impl PhysicsWorld {
         self.narrowphase_work_buffer.begin_frame();
         self.profile
             .record(PhysicsStage::Bookkeeping, lap.elapsed());
+        let lap = Instant::now();
+        self.cast_suspensions(static_geometry, dt);
+        self.profile
+            .record(PhysicsStage::SuspensionCast, lap.elapsed());
         self.generate_contacts(dt, static_geometry);
         let lap = Instant::now();
         let raw_manifolds = self.narrowphase_work_buffer.manifolds();

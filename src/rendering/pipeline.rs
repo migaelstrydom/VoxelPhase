@@ -25,14 +25,30 @@ pub enum BlendMode {
     Alpha,
     /// Additive blending: src + dst.
     Additive,
+    /// Premultiplied alpha: src + dst*(1-a). The source carries its own
+    /// light in rgb and how much of what is behind it it hides in alpha, so
+    /// one draw can both glow and tint.
+    Premultiplied,
 }
 
-/// Configurable fixed-function state for a standard geometry pipeline variant.
+/// Which shader pair a pipeline variant runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShaderProgram {
+    /// `triangle.vert/frag`: every lit surface in the scene.
+    Surface,
+    /// `force_field.vert/frag`: the field a suspension stands on, shaded as
+    /// light (see `force_field::column`).
+    ForceField,
+}
+
+/// Configurable state for a standard geometry pipeline variant.
 ///
-/// All variants share the same vertex format ([`Vertex`]), shaders
-/// (`triangle.vert/frag`), pipeline layout, and descriptor set layouts.
-/// Only rasterization, depth, and blend state vary between variants.
+/// All variants share the same vertex format ([`Vertex`]), pipeline layout,
+/// and descriptor set layouts. The shader pair, rasterization, depth, and
+/// blend state vary between variants.
 pub struct PipelineVariantConfig {
+    /// The shaders the variant runs.
+    pub program: ShaderProgram,
     /// Polygon fill mode (fill, line, point).
     pub polygon_mode: vk::PolygonMode,
     /// Which faces to cull (back, front, none).
@@ -43,27 +59,47 @@ pub struct PipelineVariantConfig {
     pub blend_mode: BlendMode,
 }
 
+/// A vertex and fragment shader module, loaded together.
+#[derive(Clone, Copy)]
+struct ShaderPair {
+    vertex: vk::ShaderModule,
+    fragment: vk::ShaderModule,
+}
+
 /// Creates standard-geometry `vk::Pipeline` handles from variant configs.
 ///
-/// Owns the shared shader modules and stamps out pipelines that all use the
-/// same vertex format ([`Vertex`]) and shader pair (`triangle.vert/frag`).
+/// Owns the shader modules of every [`ShaderProgram`] and stamps out
+/// pipelines that all use the same vertex format ([`Vertex`]).
 pub struct PipelineFactory {
     device: Arc<ManagedDevice>,
-    vertex_shader_module: vk::ShaderModule,
-    fragment_shader_module: vk::ShaderModule,
+    surface: ShaderPair,
+    force_field: ShaderPair,
     extent: vk::Extent2D,
 }
 
 impl PipelineFactory {
     fn new(device: Arc<ManagedDevice>, extent: vk::Extent2D) -> EngineResult<Self> {
-        let vertex_shader_module = ShaderManager::load_main_vertex(&device)?;
-        let fragment_shader_module = ShaderManager::load_main_fragment(&device)?;
+        let surface = ShaderPair {
+            vertex: ShaderManager::load_main_vertex(&device)?,
+            fragment: ShaderManager::load_main_fragment(&device)?,
+        };
+        let force_field = ShaderPair {
+            vertex: ShaderManager::load_force_field_vertex(&device)?,
+            fragment: ShaderManager::load_force_field_fragment(&device)?,
+        };
         Ok(Self {
             device,
-            vertex_shader_module,
-            fragment_shader_module,
+            surface,
+            force_field,
             extent,
         })
+    }
+
+    fn shaders(&self, program: ShaderProgram) -> ShaderPair {
+        match program {
+            ShaderProgram::Surface => self.surface,
+            ShaderProgram::ForceField => self.force_field,
+        }
     }
 
     /// Create a pipeline variant with the given fixed-function configuration.
@@ -86,14 +122,15 @@ impl PipelineFactory {
             .vertex_attribute_descriptions(&attribute_descriptions);
 
         let entry_name = c"main";
+        let shaders = self.shaders(config.program);
         let shader_stages = [
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::VERTEX)
-                .module(self.vertex_shader_module)
+                .module(shaders.vertex)
                 .name(entry_name),
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(self.fragment_shader_module)
+                .module(shaders.fragment)
                 .name(entry_name),
         ];
 
@@ -166,6 +203,16 @@ impl PipelineFactory {
                 alpha_blend_op: vk::BlendOp::ADD,
                 color_write_mask: vk::ColorComponentFlags::RGBA,
             },
+            BlendMode::Premultiplied => vk::PipelineColorBlendAttachmentState {
+                blend_enable: vk::TRUE,
+                src_color_blend_factor: vk::BlendFactor::ONE,
+                dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                color_blend_op: vk::BlendOp::ADD,
+                src_alpha_blend_factor: vk::BlendFactor::ONE,
+                dst_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                alpha_blend_op: vk::BlendOp::ADD,
+                color_write_mask: vk::ColorComponentFlags::RGBA,
+            },
         };
 
         let color_blend_attachments = [color_blend_attachment];
@@ -204,12 +251,12 @@ impl PipelineFactory {
 impl Drop for PipelineFactory {
     fn drop(&mut self) {
         unsafe {
-            self.device
-                .device
-                .destroy_shader_module(self.vertex_shader_module, None);
-            self.device
-                .device
-                .destroy_shader_module(self.fragment_shader_module, None);
+            for pair in [self.surface, self.force_field] {
+                self.device.device.destroy_shader_module(pair.vertex, None);
+                self.device
+                    .device
+                    .destroy_shader_module(pair.fragment, None);
+            }
         }
     }
 }
@@ -263,6 +310,9 @@ pub struct GraphicsPipeline {
     pub scene_blended_back: vk::Pipeline,
     /// Blended scene geometry, front faces only. The second of the two draws.
     pub scene_blended_front: vk::Pipeline,
+    /// Force-field columns: premultiplied, both faces in one draw, and no
+    /// depth written, since a field is light and hides nothing drawn after it.
+    pub force_field: vk::Pipeline,
     /// Pipeline layout shared by all standard geometry variants.
     pub layout: vk::PipelineLayout,
     /// Render pass for the HDR scene: opaque geometry, then blended.
@@ -340,6 +390,7 @@ impl GraphicsPipeline {
             renderpass,
             layout,
             &PipelineVariantConfig {
+                program: ShaderProgram::Surface,
                 polygon_mode: vk::PolygonMode::FILL,
                 cull_mode: vk::CullModeFlags::BACK,
                 depth_write: true,
@@ -351,6 +402,7 @@ impl GraphicsPipeline {
             renderpass,
             layout,
             &PipelineVariantConfig {
+                program: ShaderProgram::Surface,
                 polygon_mode: vk::PolygonMode::LINE,
                 cull_mode: vk::CullModeFlags::FRONT,
                 depth_write: true,
@@ -379,6 +431,7 @@ impl GraphicsPipeline {
         // that crosses the surface is clipped at it and drawn in two halves,
         // so its depth never hides the water behind it.
         let blended_scene_config = |cull_mode| PipelineVariantConfig {
+            program: ShaderProgram::Surface,
             polygon_mode: vk::PolygonMode::FILL,
             cull_mode,
             depth_write: true,
@@ -397,10 +450,23 @@ impl GraphicsPipeline {
             &blended_scene_config(vk::CullModeFlags::BACK),
         )?;
 
+        let force_field = factory.create(
+            renderpass,
+            layout,
+            &PipelineVariantConfig {
+                program: ShaderProgram::ForceField,
+                polygon_mode: vk::PolygonMode::FILL,
+                cull_mode: vk::CullModeFlags::NONE,
+                depth_write: false,
+                blend_mode: BlendMode::Premultiplied,
+            },
+        )?;
+
         let transparent = factory.create(
             transparent_renderpass,
             layout,
             &PipelineVariantConfig {
+                program: ShaderProgram::Surface,
                 polygon_mode: vk::PolygonMode::FILL,
                 cull_mode: vk::CullModeFlags::NONE,
                 depth_write: false,
@@ -414,6 +480,7 @@ impl GraphicsPipeline {
             transparent,
             scene_blended_back,
             scene_blended_front,
+            force_field,
             layout,
             renderpass,
             resume_renderpass,
@@ -726,6 +793,7 @@ impl Drop for GraphicsPipeline {
             self.device
                 .device
                 .destroy_pipeline(self.scene_blended_front, None);
+            self.device.device.destroy_pipeline(self.force_field, None);
             self.device
                 .device
                 .destroy_pipeline_layout(self.layout, None);
