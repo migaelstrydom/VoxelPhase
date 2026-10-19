@@ -35,6 +35,15 @@ tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 
 
 
+# Debug builds run the physics far too slowly to test or play: basic
+# optimisation for this crate (the generic maths it instantiates is compiled
+# here), full optimisation for dependencies, which are compiled once and cached.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
 # A build to share or ship: `cargo build --profile dist`, output in target/dist/.
 # Fat LTO took the contact solver 13% faster on a crate stack but tripled the
 # rebuild after a one-file edit, so everyday --release builds go without it.
