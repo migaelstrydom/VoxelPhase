@@ -188,6 +188,23 @@ Level(
                 Dropped(BeachBall(pos: (27.0, 6.0, 6.0))),
                 Dropped(Crate(pos: (24.0, 6.0, -1.0), size: 0.5)),
                 Dropped(BeachBall(pos: (22.5, 6.0, 1.5))),
+
+                // A shoal in the bay, in front of the spawn beach.
+                Fish(pos: (2.0, 27.0)),
+                Fish(pos: (3.0, 28.5)),
+                Fish(pos: (1.0, 29.5)),
+                Fish(pos: (5.0, 27.5)),
+                Fish(pos: (-2.0, 29.0)),
+                Fish(pos: (6.5, 30.0)),
+                Fish(pos: (0.0, 32.0)),
+                Fish(pos: (4.0, 33.0)),
+                // A few in the lake under the falls, clear of the flotsam.
+                Fish(pos: (26.5, -0.5)),
+                Fish(pos: (21.0, -1.5)),
+                Fish(pos: (24.5, 3.5)),
+                // Turtles: one in the bay, one by the sandbar to the west.
+                Turtle(pos: (8.0, 33.0)),
+                Turtle(pos: (-38.0, -11.0)),
             ],
         ),
     ],

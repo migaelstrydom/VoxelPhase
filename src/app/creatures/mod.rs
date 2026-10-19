@@ -15,10 +15,16 @@
 //! a prefab; what the creature *does* comes from the generic systems in
 //! [`crate::creature`] that read the components it attached.
 
+mod body_parts;
+mod fish;
 mod heart_critter;
+mod in_water;
 mod peeper;
 mod roller;
+mod turtle;
 
+pub use fish::FishDef;
 pub use heart_critter::HeartCritterDef;
 pub use peeper::PeeperDef;
 pub use roller::RollerDef;
+pub use turtle::TurtleDef;

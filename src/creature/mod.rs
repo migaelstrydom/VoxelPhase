@@ -26,6 +26,7 @@ mod melee;
 mod perception;
 mod roller;
 pub mod steering;
+mod swimmer;
 
 pub use alert_telegraph::{AlertTelegraph, AlertTelegraphSystem};
 pub use brain::{Behaviour, Brain, BrainSystem, Temperament};
@@ -33,3 +34,4 @@ pub use collectable::{Collectable, CollectionSystem, Reward};
 pub use melee::{MeleeAttack, MeleeAttackSystem, StrikePhase};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
 pub use roller::{Roller, RollerLocomotionSystem};
+pub use swimmer::{Swimmer, SwimmerLocomotionSystem};

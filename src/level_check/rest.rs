@@ -27,8 +27,9 @@
 //! Two kinds of body are judged differently, because the game holds them to
 //! something other than their authored pose:
 //!
-//! - A driven body (an `Actuator`: platforms, creatures) is left asleep and
-//!   unmeasured. Its drive decides where it is, and there is no drive here.
+//! - A driven body (an `Actuator`: platforms, creatures; a `Swimmer`) is left
+//!   asleep and unmeasured. Its drive decides where it is, and there is no
+//!   drive here.
 //! - A body that ends up afloat is judged on how far it rose, sank and turned,
 //!   not on how far it went: a current carries a floater off by design.
 //!
@@ -43,6 +44,7 @@ use specs::{Join, World, WorldExt};
 
 use crate::app::world_builder::WorldBuilder;
 use crate::components::RigidBodyComponent;
+use crate::creature::Swimmer;
 use crate::debug::DebugLines;
 use crate::drive::Actuator;
 use crate::level::drop::DropOutcome;
@@ -424,11 +426,17 @@ pub(super) fn is_at_rest(world: &PhysicsWorld, handle: RigidBodyHandle) -> bool 
         && body.angular_velocity().norm() < sleep.angular_threshold
 }
 
-/// Every body a drive holds, rather than its authored pose.
+/// Every body a drive holds, rather than its authored pose: an `Actuator`'s,
+/// and a swimmer's, which holds itself in the water by thrust.
 fn driven_bodies(world: &World) -> Vec<RigidBodyHandle> {
     let bodies = world.read_storage::<RigidBodyComponent>();
     let actuators = world.read_storage::<Actuator>();
-    (&bodies, &actuators).join().map(|(b, _)| b.0).collect()
+    let swimmers = world.read_storage::<Swimmer>();
+    (&bodies, &actuators)
+        .join()
+        .map(|(b, _)| b.0)
+        .chain((&bodies, &swimmers).join().map(|(b, _)| b.0))
+        .collect()
 }
 
 /// Run a trial and report every object that did not stay where it was put.

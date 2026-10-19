@@ -26,7 +26,7 @@ use crate::trampoline::TrampolineShape;
 
 use super::footprint::{Footprint, Support};
 
-use crate::app::creatures::{HeartCritterDef, PeeperDef, RollerDef};
+use crate::app::creatures::{FishDef, HeartCritterDef, PeeperDef, RollerDef, TurtleDef};
 use crate::app::spawnables::{
     BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef,
     DolosDef, DominoDef, FencePostDef, FramedWindowDef, GemDef, GlassSheetDef, GlowingOrbDef,
@@ -1179,6 +1179,23 @@ pub enum LevelObject {
         #[serde(default = "HeartCritterDef::default_reward")]
         reward: f32,
     },
+    /// Fish — a small reef fish that darts away from the player. Starts in
+    /// the water over its position; nothing spawns where there is none.
+    /// See `src/app/creatures/`.
+    Fish {
+        /// Position (x, z). Y is a share of the way down the water there.
+        pos: (f32, f32),
+        #[serde(default = "FishDef::default_flee_range")]
+        flee_range: f32,
+    },
+    /// Turtle — a sea turtle cruising just under the surface. Starts in the
+    /// water over its position. See `src/app/creatures/`.
+    Turtle {
+        /// Position (x, z). Y is just under the water's surface there.
+        pos: (f32, f32),
+        #[serde(default = "TurtleDef::default_flee_range")]
+        flee_range: f32,
+    },
     /// Peeper — a one-eyed stalker on stilts that pecks at whoever it
     /// notices. Fragile and killable, unlike the roller.
     /// See `src/app/creatures/`.
@@ -1660,6 +1677,8 @@ impl LevelObject {
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
             LevelObject::Roller { pos, .. } => ("Roller", anchored(pos)),
             LevelObject::HeartCritter { pos, .. } => ("HeartCritter", anchored(pos)),
+            LevelObject::Fish { pos, .. } => ("Fish", anchored(pos)),
+            LevelObject::Turtle { pos, .. } => ("Turtle", anchored(pos)),
             LevelObject::Peeper { pos, .. } => ("Peeper", anchored(pos)),
             LevelObject::Pendulum { pos, .. } => ("Pendulum", anchored(pos)),
             LevelObject::MovingPlatform { waypoints, .. } => (
@@ -1946,6 +1965,8 @@ impl LevelObject {
             // Small and it moves off immediately; the footprint is only
             // ever about what it is standing on at spawn.
             LevelObject::HeartCritter { .. } => Disc { radius: 0.15 },
+            LevelObject::Fish { .. } => Disc { radius: 0.2 },
+            LevelObject::Turtle { .. } => Disc { radius: 0.45 },
             // All legs: what it stands on is a stance barely wider than
             // its own haunch, whatever the eye on top of it measures.
             LevelObject::Peeper { .. } => Disc { radius: 0.25 },
@@ -2040,6 +2061,8 @@ impl LevelObject {
             | LevelObject::FencePost { .. }
             | LevelObject::Roller { .. }
             | LevelObject::HeartCritter { .. }
+            | LevelObject::Fish { .. }
+            | LevelObject::Turtle { .. }
             | LevelObject::Peeper { .. }
             | LevelObject::PlayWheel { .. }
             | LevelObject::Tetrahedron { .. }
@@ -2164,6 +2187,8 @@ impl LevelObject {
             LevelObject::FencePost { pos, .. } => p2(pos),
             LevelObject::Roller { pos, .. } => p2(pos),
             LevelObject::HeartCritter { pos, .. } => p2(pos),
+            LevelObject::Fish { pos, .. } => p2(pos),
+            LevelObject::Turtle { pos, .. } => p2(pos),
             LevelObject::Peeper { pos, .. } => p2(pos),
             LevelObject::Pendulum { pos, .. } => p2(pos),
             LevelObject::MovingPlatform { waypoints, .. } => {
@@ -2555,6 +2580,16 @@ impl LevelObject {
                 speed: *speed,
                 spin_up_time: *spin_up_time,
                 sight_range: *sight_range,
+            }),
+
+            LevelObject::Fish { pos, flee_range } => Box::new(FishDef {
+                pos: *pos,
+                flee_range: *flee_range,
+            }),
+
+            LevelObject::Turtle { pos, flee_range } => Box::new(TurtleDef {
+                pos: *pos,
+                flee_range: *flee_range,
             }),
 
             LevelObject::HeartCritter {

@@ -8,7 +8,7 @@ use crate::character::{ContactGroundingSystem, ImmersionSystem};
 use crate::cleave::SolidCleaveSystem;
 use crate::creature::{
     AlertTelegraphSystem, BrainSystem, CollectionSystem, MeleeAttackSystem, PerceptionSystem,
-    RollerLocomotionSystem,
+    RollerLocomotionSystem, SwimmerLocomotionSystem,
 };
 use crate::damage::{
     BlastDamageSystem, BurnDamageSystem, DamageApplySystem, DeathSystem, ImpactDamageSystem,
@@ -59,6 +59,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(MeleeAttackSystem, "melee_attack", &["brain"])
         .with(AlertTelegraphSystem, "alert_telegraph", &["brain"])
         .with(RollerLocomotionSystem, "roller_locomotion", &["brain"])
+        // Swimming creatures likewise, as thrust through the water.
+        .with(SwimmerLocomotionSystem, "swimmer_locomotion", &["brain"])
         .with(
             CharacterControlSystem,
             "character_control",
@@ -289,7 +291,7 @@ mod tests {
     use super::*;
     use crate::app::world_builder::WorldBuilder;
     use crate::character::CharacterIntent;
-    use crate::creature::{Brain, Perception, Roller};
+    use crate::creature::{Brain, Perception, Roller, Swimmer};
     use crate::damage::Health;
     use crate::projectile::GrenadeCooldown;
 
@@ -322,6 +324,7 @@ mod tests {
         // Spot-check the creature stack: these reach the world only via
         // `app::creatures`, so they are the ones most likely to be forgotten.
         world.write_storage::<Roller>();
+        world.write_storage::<Swimmer>();
         world.write_storage::<Brain>();
         world.write_storage::<Perception>();
         world.write_storage::<Health>();

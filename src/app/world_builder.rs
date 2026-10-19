@@ -16,7 +16,9 @@ use crate::components::{
     Renderable, RigidBodyComponent, Rotation, TerrainAnchored, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{AlertTelegraph, Brain, Collectable, MeleeAttack, Perception, Roller};
+use crate::creature::{
+    AlertTelegraph, Brain, Collectable, MeleeAttack, Perception, Roller, Swimmer,
+};
 use crate::damage::{DamageConfig, DamageQueue, Dead, Health, LastVelocity, Ragdoll};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::drive::{Actuator, BodyMotion, DriveIntent};
@@ -87,6 +89,7 @@ impl WorldBuilder {
         world.register::<Brain>();
         world.register::<Perception>();
         world.register::<Roller>();
+        world.register::<Swimmer>();
         world.register::<MeleeAttack>();
         // Only ever registered by `AlertTelegraphSystem`'s setup before now,
         // which meant a world built without a dispatcher panicked the moment a
