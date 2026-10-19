@@ -18,6 +18,7 @@
 #include "transparency.glsl"
 #include "aerial.glsl"
 #include "pile.glsl"
+#include "slope_zoning.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -49,6 +50,8 @@ void main() {
 
     // Degenerate normals occur on some generated meshes; fall back to straight up.
     vec3 normal = length(inNormal) > 0.001 ? normalize(inNormal) : vec3(0.0, 1.0, 0.0);
+    // The surface's own shape, before any detail perturbs it.
+    vec3 geometric_normal = normal;
 
     uint source = materialSource();
 
@@ -159,8 +162,18 @@ void main() {
         normal = -normal;
     }
 
+    // Terrain wears its material by its slope; nothing else carries the
+    // character this reads.
+    vec3 albedo = albedo_wash * inColor.rgb;
+    if (sourceHas(source, SOURCE_CHARACTER_IN_TEXCOORD)) {
+        float steepness = zoningSteepness(geometric_normal);
+        float patch_value = zoningPatch(albedo_wash.r);
+        albedo = zonedAlbedo(albedo, character, pile, steepness, patch_value);
+        pile = zonedPile(pile, steepness, patch_value);
+    }
+
     SurfaceSample surface;
-    surface.albedo = albedo_wash * inColor.rgb;
+    surface.albedo = albedo;
     surface.normal = normal;
     surface.view_dir = view_dir;
     surface.metallic = materialMetallic();

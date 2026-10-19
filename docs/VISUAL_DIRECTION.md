@@ -62,8 +62,8 @@ sun, fixed geometry — or before/after comparison is worthless.
 - **One shadow cascade**, so the map's resolution is spread across the whole
   frustum fit (lighting plan stage 7).
 - **Terrain's surface structure stops at the material level** — triplanar
-  projection, detail normals, a physics-derived finish and grass sheen have
-  landed (§4.1-4.3, §4.5); slope zoning and fresh-cut destruction have not.
+  projection, detail normals, a physics-derived finish, grass sheen and slope
+  zoning have landed (§4.1-4.5); fresh-cut destruction has not.
 
 ### How it looked before §1, and what fixed it
 
@@ -607,6 +607,27 @@ sub-voxel offset, the quantised regime that already mottles baked AO; the same
 quantisation mottles the normal, so slope blending will mottle on hand-built
 terrain and be clean on generated terrain.
 
+#### Landed
+
+`shader/slope_zoning.glsl`, for terrain only, from the geometric normal over a
+wide blend (`n.y` 0.9 to 0.55):
+
+- **Turf thins on steep ground**, in patches: each point goes bare past its own
+  steepness, set by the terrain field's albedo wash, and a bare patch takes 40%
+  of a dark loam and loses as much of its pile. The first cut thinned evenly
+  with steepness, and a smooth hand-built mound (Rubble Garden) went a uniform
+  muddy olive: an even cast reads as dirt, not as thin turf.
+- **Hard ground weathers paler where it faces the sky** (up to 18% towards a
+  warm dust grey, weighted by hardness so sand and dirt barely move).
+
+The teeth of turf down the island's cliffs, which looked like a job for this,
+were not a shading problem at all. A surface band picks a column's layers by
+the slope at its top, so the last column short of `steeper_than` laid its
+grass and dirt down the drop beside the first column past it, alternating
+along any lip that crossed the lattice. Generation now lays a column's side,
+below its top voxel, with the layers of a surface as steep as the drop that
+bares it (`Column::material_at` in `src/terrain/generation.rs`).
+
 ### 4.5 Grass sheen
 
 Not a roughness item at all, and separable from everything above. Fur reads as
@@ -690,7 +711,7 @@ merits and with its own perf budget, not attached to §4.1.
    was the core: by far the largest visible change in this section, and the
    thing that finally made 4.3's roughness legible.
 4. ~~**4.5 grass sheen**~~ — landed (`shader/pile.glsl`).
-5. **4.4 slope zoning** — on top of a surface system that already works.
+5. ~~**4.4 slope zoning**~~ — landed (`shader/slope_zoning.glsl`).
 6. **4.6 fresh destruction** — last, because it is a modulation of everything
    above.
 
