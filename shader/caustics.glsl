@@ -49,11 +49,15 @@ const float CAUSTIC_REACH = 3.0;
 
 /// Depth past which there is no net at all, m. Also what keeps the cost to
 /// the shallows: deep water skips the work.
-const float CAUSTIC_MAX_DEPTH = 9.0;
+const float CAUSTIC_MAX_DEPTH = 6.0;
 
 /// A pseudo-random point in the unit cell `cell`, drifting on a small orbit.
 vec2 causticSite(vec2 cell, float time) {
-    vec2 seed = fract(sin(vec2(dot(cell, vec2(127.1, 311.7)), dot(cell, vec2(269.5, 183.3)))) * 43758.5453);
+    // An arithmetic hash: no transcendental per cell, which nine cells per
+    // pixel would make the net's dearest part.
+    vec3 q = fract(vec3(cell.xyx) * vec3(0.1031, 0.1030, 0.0973));
+    q += dot(q, q.yzx + 33.33);
+    vec2 seed = fract((q.xx + q.yz) * q.zy);
     return 0.5 + 0.38 * sin(time + 6.2831853 * seed);
 }
 
@@ -77,14 +81,13 @@ float causticLayer(vec2 p, float time) {
     return 1.0 - smoothstep(0.0, CAUSTIC_LINE, second - nearest);
 }
 
-/// The net at `p` (in cells): two layers at different sizes and speeds, which
-/// is what keeps it shifting rather than sliding.
+/// The net at `p` (in cells). Bent by a drifting warp, so the cells' straight
+/// edges curve as light lines do and the net shifts rather than slides. A
+/// second, finer layer looked a little richer and cost as much again; the
+/// water pass is the frame's dearest already.
 float causticNet(vec2 p, float time) {
-    // Bent, so the cells' straight edges curve as light lines do.
     p += CAUSTIC_BEND * sin(p.yx * 1.9 + vec2(time * 0.7, -time * 0.6));
-    float coarse = causticLayer(p, time);
-    float fine = causticLayer(p * 1.7 + vec2(3.1, 7.4), time * 1.3);
-    return clamp(0.65 * coarse + 0.5 * fine * coarse + 0.25 * fine, 0.0, 1.0);
+    return causticLayer(p, time);
 }
 
 /// How much brighter the floor at `floor_pos`, `depth` metres under the
