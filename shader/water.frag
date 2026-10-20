@@ -14,12 +14,14 @@ const float SSS_INTENSITY = 1.9;
 // Extinction of light along a ray through the water body, per metre and per
 // channel. Red goes first, then green: what lies under the water turns from
 // its own colour through turquoise and teal to the water's own blue as the
-// ray through the water lengthens. Clearer than real coastal water, for a
-// tropical sea that shows its floor.
-const vec3  WATER_EXTINCTION = vec3(0.24, 0.06, 0.045);
+// ray through the water lengthens. Red goes at half the rate of real water's:
+// an eye adapts to the light around it and does not see the full shift, and
+// at the real rate a red fish a metre down reads green, a white floor reads as
+// a swimming pool's and a blast's flash on it turns cyan.
+const vec3  WATER_EXTINCTION = vec3(0.12, 0.06, 0.05);
 // Light the water body scatters back towards the eye, where the ray through it
 // is long enough that nothing behind shows: deep water's own colour.
-const vec3  WATER_SCATTER = vec3(0.015, 0.11, 0.21);
+const vec3  WATER_SCATTER = vec3(0.02, 0.08, 0.17);
 const vec3  SSS_COLOR = vec3(0.15, 0.5, 0.4);
 // How long the noise is carried by the flow before it starts over, s. Two
 // phases half a period apart cross-fade, each faded out as it starts over,
