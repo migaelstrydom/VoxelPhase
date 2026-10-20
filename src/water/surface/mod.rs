@@ -1,6 +1,8 @@
+mod exposure;
 mod ripple_tiles;
 mod swell;
 
+pub use exposure::{peak_wavelength, WindExposure, FETCH_CAP, TEXEL_SIZE};
 pub use ripple_tiles::{
     MaskSource, RippleConfig, RippleKey, RippleTile, RippleTiles, TileMask, CELLS_PER_TILE,
     PADDED_CELLS, PADDED_CELLS_PER_TILE, RIPPLE_CELL, TILE_CELLS, TILE_CORNERS,

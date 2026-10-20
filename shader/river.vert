@@ -4,6 +4,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "swell.glsl"
+#include "wind.glsl"
 #include "ripple.glsl"
 
 // A river surface: each vertex at the water's own height, carrying its depth
@@ -71,7 +72,7 @@ void main() {
     vec3 position = vec3(xz.x, surface + swell.x + ripple, xz.y);
     gl_Position = pc.proj * pc.view * vec4(position, 1.0);
     fragNormal = inSheet.y > 0.0 ? inNormal : vec3(0.0, 1.0, 0.0);
-    fragSwell = vec4(amplitude * swellShoreFade(depth), pc.body.z, pc.body.w, 0.0);
+    fragSwell = vec4(amplitude * swellShoreFade(depth), pc.body.z, pc.body.w, windPeakAt(xz));
     fragWorldPos = position;
     fragLayer = layer;
     fragTileOrigin = origin;

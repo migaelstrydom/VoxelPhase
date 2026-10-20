@@ -40,7 +40,10 @@ use crate::rendering::target::RefractionCopy;
 use crate::rendering::view_volume::ViewVolume;
 use crate::water::geometry::{CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE};
 use crate::water::ids::SurfaceId;
-use crate::water::surface::{RippleConfig, Swell, PADDED_CELLS_PER_TILE, TILE_CELLS, TILE_CORNERS};
+use crate::water::surface::{
+    peak_wavelength, RippleConfig, Swell, WindExposure, FETCH_CAP, PADDED_CELLS_PER_TILE,
+    TEXEL_SIZE, TILE_CELLS, TILE_CORNERS,
+};
 use crate::water::waves::SEA_BAND;
 
 /// Ripple tiles one frame can draw: the ripple budget.
@@ -57,11 +60,23 @@ pub const RIPPLE_TILE_STRIDE: usize =
 /// Vertices along each side of the fine grid: one per ripple cell corner.
 const FINE_SIDE: usize = TILE_CELLS + 1;
 
-/// One frame slot's ripple storage, and the descriptor set pointing at it.
+/// One frame slot's ripple storage and wind map, and the descriptor set
+/// pointing at them.
 struct RippleSlot {
     buffer: ManagedBuffer,
     set: vk::DescriptorSet,
+    wind: ManagedBuffer,
+    /// Bytes `wind` holds.
+    wind_capacity: vk::DeviceSize,
+    /// The wind map `wind` holds: its version, or none for the open sea's
+    /// everywhere; unset until it is first written.
+    wind_written: Option<Option<u32>>,
 }
+
+/// Floats ahead of the wind map's texels: origin x and z, texels per metre,
+/// width, depth, the peak wavelength past the map's edges, two unused.
+/// Mirrors `windHeader` in `wind.glsl`.
+const WIND_HEADER: usize = 8;
 
 /// How far above and below its level a tile's surface may be drawn, over its
 /// swell, for its ripples, m.
@@ -226,7 +241,21 @@ impl WaterRenderer {
                 host,
             )?;
             let set = pipeline.allocate_ripple_set(buffer.buffer, ripple_bytes)?;
-            Ok(RippleSlot { buffer, set })
+            let wind_capacity = wind_bytes(0);
+            let wind = ManagedBuffer::new(
+                Arc::clone(&device),
+                wind_capacity,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                host,
+            )?;
+            pipeline.point_wind(set, wind.buffer, wind_capacity);
+            Ok(RippleSlot {
+                buffer,
+                set,
+                wind,
+                wind_capacity,
+                wind_written: None,
+            })
         })?;
         let (grid_vertices, grid_indices) = fine_grid();
         let fine_grid = StreamedMesh::new(
@@ -368,6 +397,7 @@ impl WaterRenderer {
         }
         patches.extend(water.surface_patches());
         let layers = self.upload_ripples(water)?;
+        self.upload_wind(water.wind())?;
         let clock = water.clock();
         let body = |id: SurfaceId, level: f32, tile: [f32; 4]| {
             let swell = water.swell(id);
@@ -558,7 +588,7 @@ impl WaterRenderer {
             );
 
             // Set 0: the refraction copy's colour and depth; set 1: this
-            // slot's ripple tiles.
+            // slot's ripple tiles and wind map.
             device.cmd_bind_descriptor_sets(
                 cb,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -670,6 +700,68 @@ impl WaterRenderer {
         }
         Ok(layers)
     }
+}
+
+impl WaterRenderer {
+    /// Bring this frame slot's wind map up to date, growing its buffer if the
+    /// map has outgrown it. The slot's last frame has finished, so its buffer
+    /// and set may be replaced.
+    fn upload_wind(&mut self, wind: Option<&WindExposure>) -> EngineResult<()> {
+        let key = wind.map(|w| w.version);
+        let slot = &mut self.ripple_slots[self.slot];
+        if slot.wind_written == Some(key) {
+            return Ok(());
+        }
+        let texels = wind.map_or(0, |w| w.peak.len());
+        let bytes = wind_bytes(texels);
+        if bytes > slot.wind_capacity {
+            slot.wind = ManagedBuffer::new(
+                Arc::clone(&self.device),
+                bytes,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?;
+            slot.wind_capacity = bytes;
+            self.pipeline.point_wind(slot.set, slot.wind.buffer, bytes);
+        }
+        let header: [f32; WIND_HEADER] = match wind {
+            Some(w) => [
+                w.origin.0,
+                w.origin.1,
+                1.0 / TEXEL_SIZE,
+                w.width as f32,
+                w.depth as f32,
+                w.beyond,
+                0.0,
+                0.0,
+            ],
+            None => [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                peak_wavelength(FETCH_CAP),
+                0.0,
+                0.0,
+            ],
+        };
+        unsafe {
+            let ptr = slot.wind.map_memory(0, vk::MemoryMapFlags::empty())? as *mut f32;
+            std::ptr::copy_nonoverlapping(header.as_ptr(), ptr, WIND_HEADER);
+            if let Some(w) = wind {
+                std::ptr::copy_nonoverlapping(w.peak.as_ptr(), ptr.add(WIND_HEADER), texels);
+            }
+            slot.wind.unmap_memory();
+        }
+        slot.wind_written = Some(key);
+        Ok(())
+    }
+}
+
+/// Bytes a wind map of `texels` texels takes, with its header.
+fn wind_bytes(texels: usize) -> vk::DeviceSize {
+    ((WIND_HEADER + texels.max(1)) * std::mem::size_of::<f32>()) as vk::DeviceSize
 }
 
 /// Bring a frame slot's buffers up to a mesh version, growing them with

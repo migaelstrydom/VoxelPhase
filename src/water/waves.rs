@@ -22,7 +22,8 @@ use crate::water::geometry::{Column, SpanChunkCoord, CHUNK_COLUMNS, COLUMNS_PER_
 use crate::water::ids::WaterBodyId;
 use crate::water::query::FIELD_BODY;
 use crate::water::surface::{
-    corner_floor, MaskSource, RippleConfig, RippleTiles, Swell, TileMask, TILE_CORNERS,
+    corner_floor, MaskSource, RippleConfig, RippleTiles, Swell, TileMask, WindExposure,
+    TILE_CORNERS,
 };
 
 /// How far from sea level water still takes some of the swell, m: full at
@@ -46,16 +47,25 @@ pub struct Sea {
     pub swell: Swell,
 }
 
-/// Ripples and the sea's swell.
+/// Seconds between measurements of the water's wind exposure: the shape of
+/// the water changes slowly, and the chop fades with it.
+const EXPOSURE_PERIOD: f32 = 1.0;
+
+/// Ripples, the sea's swell, and how exposed the water is to the wind.
 pub struct SurfaceWaves {
     ripples: RippleTiles,
     sea: Option<Sea>,
+    exposure: WindExposure,
+    /// Seconds since the exposure was last measured.
+    exposure_age: f32,
 }
 
 impl SurfaceWaves {
-    pub fn new(config: &WaterConfig) -> Self {
+    pub fn new(config: &WaterConfig, field: &WaterField) -> Self {
         Self {
             ripples: RippleTiles::new(RippleConfig::default()),
+            exposure: WindExposure::of(field, config.ocean.is_some()),
+            exposure_age: 0.0,
             sea: config.ocean.as_ref().map(|ocean| Sea {
                 level: ocean.level,
                 swell: Swell {
@@ -71,6 +81,21 @@ impl SurfaceWaves {
         let masks = FieldMasks { field };
         self.ripples.refresh_masks(&masks);
         self.ripples.step(dt, &masks);
+        self.exposure_age += dt;
+        if self.exposure_age >= EXPOSURE_PERIOD {
+            self.measure_exposure(field);
+        }
+    }
+
+    /// Measure the water's wind exposure again, as it now stands.
+    pub fn measure_exposure(&mut self, field: &WaterField) {
+        self.exposure.refresh(field, self.sea.is_some());
+        self.exposure_age = 0.0;
+    }
+
+    /// How exposed the water is to the wind, for the chop.
+    pub fn exposure(&self) -> &WindExposure {
+        &self.exposure
     }
 
     /// Apply every disturbance the coupler collected this frame.

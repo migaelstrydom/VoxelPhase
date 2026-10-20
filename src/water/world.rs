@@ -67,7 +67,7 @@ impl WaterWorld {
         Self {
             versions: SurfaceVersions::new(field.cells()),
             falling: FallingWater::build(&field),
-            waves: SurfaceWaves::new(config),
+            waves: SurfaceWaves::new(config, &field),
             field,
             clock: 0.0,
             opened: (settled, started.elapsed()),
@@ -83,6 +83,7 @@ impl WaterWorld {
         let cells = self.field.cells();
         self.versions.update(cells, 0..cells.chunks.len());
         self.falling = FallingWater::build(&self.field);
+        self.waves.measure_exposure(&self.field);
     }
 
     /// Advance by one frame.

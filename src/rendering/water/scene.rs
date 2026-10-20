@@ -4,11 +4,12 @@
 //!   WaterScene ──▶ still surfaces (WaterMesh): level and swell pushed per draw
 //!              ──▶ river surfaces (RiverMesh) by id: built, then read again
 //!              ──▶ awake ripple tiles (RippleTileView), drawn fine
+//!              ──▶ wind exposure (WindExposure): how long the chop runs
 //! ```
 
 use crate::water::geometry::{SpanChunkCoord, COLUMNS_PER_CHUNK};
 use crate::water::ids::SurfaceId;
-use crate::water::surface::{RippleKey, RippleTiles, Swell, TILE_CORNERS};
+use crate::water::surface::{RippleKey, RippleTiles, Swell, WindExposure, TILE_CORNERS};
 use crate::water::waves::Sea;
 
 use super::divide::WaterPatch;
@@ -129,6 +130,11 @@ pub trait WaterScene {
     /// Every awake ripple tile.
     fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {
         Vec::new()
+    }
+    /// How exposed the water is to the wind, which sets how long its chop
+    /// runs. None draws the open sea's chop everywhere.
+    fn wind(&self) -> Option<&WindExposure> {
+        None
     }
 
     /// The water the river surfaces hold, for the renderer to divide

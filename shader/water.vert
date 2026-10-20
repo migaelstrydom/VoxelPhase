@@ -4,6 +4,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "swell.glsl"
+#include "wind.glsl"
 
 // The coarse surface: one quad per column, its plan position, the floor
 // beneath it and the share of the swell its geometry carries. The height is
@@ -39,7 +40,7 @@ void main() {
     vec3 position = vec3(inXz.x, level + swell.x * inSwellShare, inXz.y);
     gl_Position = pc.proj * pc.view * vec4(position, 1.0);
     fragNormal = vec3(0.0, 1.0, 0.0);
-    fragSwell = vec4(pc.body.y * swellShoreFade(depth), pc.body.z, pc.body.w, 0.0);
+    fragSwell = vec4(pc.body.y * swellShoreFade(depth), pc.body.z, pc.body.w, windPeakAt(inXz));
     fragWorldPos = position;
     fragLayer = -1;
     fragMasked = 0;

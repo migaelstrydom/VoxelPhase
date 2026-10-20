@@ -4,6 +4,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "swell.glsl"
+#include "wind.glsl"
 #include "ripple.glsl"
 
 // The fine surface of an awake ripple tile: a static 33 x 33 grid over the
@@ -96,7 +97,7 @@ void main() {
     vec3 position = vec3(xz.x, level + swell.x + ripple, xz.y);
     gl_Position = pc.proj * pc.view * vec4(position, 1.0);
     fragNormal = vec3(0.0, 1.0, 0.0);
-    fragSwell = vec4(pc.body.y * swellShoreFade(depth), pc.body.z, pc.body.w, 0.0);
+    fragSwell = vec4(pc.body.y * swellShoreFade(depth), pc.body.z, pc.body.w, windPeakAt(xz));
     fragWorldPos = position;
     fragLayer = layer;
     fragMasked = 1;

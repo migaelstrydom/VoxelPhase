@@ -106,7 +106,8 @@ layout(location = 4) in vec2 fragFlow;
 layout(location = 5) in float fragWetDepth;
 layout(location = 6) flat in vec2 fragWetRange;
 // The swell under this fragment: (amplitude with its shore fade, phase,
-// clock, unused); zero amplitude where there is none.
+// clock, the wind sea's peak wavelength from wind.glsl); zero amplitude where
+// there is none.
 layout(location = 7) in vec4 fragSwell;
 // Whether this is a tile's own fine grid, which covers the whole tile and is
 // masked to its body's columns.
@@ -403,7 +404,8 @@ void main() {
     // The chop's groups: patches a few metres across, drifting downwind.
     vec2 groupAt = worldXZ / CHOP_GROUP_SIZE - CHOP_GROUP_DRIFT * time;
     vec2 groups = vec2(valueNoise(groupAt), valueNoise(groupAt + vec2(17.3, 5.9))) - 1.0;
-    vec2 chopSlope = !sheet && !flowing ? chopSlopeAt(worldXZ, time, groups, roughness, footprint) : vec2(0.0);
+    float peak = chopPeak(fragSwell.w, speed);
+    vec2 chopSlope = !sheet && !flowing ? chopSlopeAt(worldXZ, time, groups, roughness, peak, footprint) : vec2(0.0);
     vec3 noiseN1 = vec3(0.0);
     float whiteNoise = 0.0;
     float lace = 0.0;
@@ -428,7 +430,7 @@ void main() {
             // to the next, and as the current dies away both phases must come
             // to the still water's chop, or a seam shows where it stops.
             vec2 drifted = worldXZ - fragFlow * phases[p] * FLOW_PERIOD;
-            chopSlope += weight * chopSlopeAt(drifted, time, groups, roughness, footprint);
+            chopSlope += weight * chopSlopeAt(drifted, time, groups, roughness, peak, footprint);
         }
         whiteNoise += weight * fbm(worldXZ * 2.0 + carried * 2.0);
         if (foamy) {

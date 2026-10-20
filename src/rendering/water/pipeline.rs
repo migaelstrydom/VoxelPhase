@@ -59,7 +59,7 @@ pub struct WaterPipeline {
     sheet_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
-    /// Set 1: the ripple storage buffer.
+    /// Set 1: the ripple storage buffer and the wind map.
     ripple_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
@@ -202,11 +202,18 @@ impl WaterPipeline {
     }
 
     fn create_ripple_set_layout(device: &ManagedDevice) -> EngineResult<vk::DescriptorSetLayout> {
-        let bindings = [vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)];
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX),
+        ];
         let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         unsafe {
             device
@@ -259,7 +266,7 @@ impl WaterPipeline {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: FRAMES_IN_FLIGHT as u32,
+                descriptor_count: 2 * FRAMES_IN_FLIGHT as u32,
             },
         ];
 
@@ -479,6 +486,23 @@ impl WaterPipeline {
             self.device.device.update_descriptor_sets(&[write], &[]);
         }
         Ok(set)
+    }
+
+    /// Point a slot's set 1 at a wind map storage buffer. Only for a slot
+    /// whose last frame has finished, like any rewrite of its set.
+    pub fn point_wind(&self, set: vk::DescriptorSet, buffer: vk::Buffer, size: vk::DeviceSize) {
+        let info = vk::DescriptorBufferInfo::default()
+            .buffer(buffer)
+            .offset(0)
+            .range(size);
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(std::slice::from_ref(&info));
+        unsafe {
+            self.device.device.update_descriptor_sets(&[write], &[]);
+        }
     }
 
     pub fn layout(&self) -> vk::PipelineLayout {

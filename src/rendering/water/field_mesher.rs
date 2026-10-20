@@ -43,7 +43,7 @@ use crate::water::falling::{falls, ledge_reach, off_map};
 use crate::water::field::{past_edge, DrawnDepths, Source, WaterField};
 use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::SurfaceId;
-use crate::water::surface::Swell;
+use crate::water::surface::{Swell, WindExposure};
 use crate::water::waves::{still_level, Sea, SurfaceWaves};
 use crate::water::{WaterWorld, FIELD_BODY};
 
@@ -886,6 +886,10 @@ impl WaterScene for FieldScene<'_> {
         self.ripple_views()
     }
 
+    fn wind(&self) -> Option<&WindExposure> {
+        self.waves.map(SurfaceWaves::exposure)
+    }
+
     /// Every chunk whose water stands still, at its level, and every drawn
     /// column of the chunks whose water runs, at its surface.
     fn surface_patches(&self) -> Vec<WaterPatch> {
@@ -1024,6 +1028,10 @@ impl WaterScene for WaterWorld {
 
     fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {
         FieldScene::of(self).ripple_views()
+    }
+
+    fn wind(&self) -> Option<&WindExposure> {
+        Some(self.waves().exposure())
     }
 
     fn surface_patches(&self) -> Vec<WaterPatch> {
