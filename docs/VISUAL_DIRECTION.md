@@ -826,7 +826,8 @@ the bay's shallows (`--eye -6,7,42 --look 0,0,18`).
 | Slope zoning (§4.4) | `302579f` | +0.04 (scene) | +0.37 total over baseline for all three |
 | Water extinction and sky reflection | `ea9c453` | +0.13 (water) | +0.11 (water) |
 | Caustics | `8815eb4` | +0.50 (water) | +0.81 (water) |
-| **All of it** | | **+1.1 ms (+10%)** | **+1.3 ms (+14%)** |
+| Chop as waves (`shader/chop.glsl`) in place of noise | | −2.3 (water) | −1.2 (water) |
+| **All of it** | | **−0.85 ms (−8%)** | **+0.2 ms (+2%)** |
 
 The close terrain view (`--eye 2,12,22 --look 8,9,0`) swung 0.7 ms between
 runs of the same build, more than any of the terrain features cost, so it is
@@ -837,6 +838,10 @@ not in the table. Two things worth knowing from it:
   goes. Caustics were 1.0 to 1.6 ms as first written (two Voronoi layers, a
   `sin` hash, to 9 m); one bent layer, an arithmetic hash and a 6 m cut-off
   halved that.
+- The chop was twelve two-octave noise lookups a pixel; sixteen sines from a
+  precomputed table, which stop at the first wave too short for the pixel,
+  cost a fraction of that, most of all over distant sea. Trigonometry on the
+  table's constants per pixel had first cost 2.2 ms more over the bay.
 - Aerial perspective is the dearest of the terrain-side features because it
   evaluates `skyRadiance` per fragment. A per-vertex haze colour would take
   most of that back if it is ever needed.

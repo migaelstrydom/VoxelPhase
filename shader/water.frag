@@ -5,6 +5,7 @@
 
 #include "ripple.glsl"
 #include "swell.glsl"
+#include "chop.glsl"
 #include "aerial.glsl"
 #include "caustics.glsl"
 
@@ -388,15 +389,22 @@ void main() {
         discard;
     }
 
-    // --- Animated normal mapping (dual-layer procedural noise) ---
-    // Running water carries its detail downstream: the noise scrolls with the
-    // flow, over a drift of its own.
+    // --- The chop, and the falls' noise ---
+    // Running water carries its detail downstream: the chop and foam are
+    // carried with the flow, in two phases that start over in turn.
     vec2 worldXZ = fragWorldPos.xz;
     float speed = length(fragFlow);
     float phases[2] = float[2](fract(time / FLOW_PERIOD), fract(time / FLOW_PERIOD + 0.5));
     float firstWeight = 1.0 - abs(1.0 - 2.0 * phases[0]);
+    // Faster water runs rougher, and the wind gusts and lulls in patches.
+    float gust = smoothstep(0.6, 1.4, valueNoise(worldXZ / CHOP_GUST_SIZE - CHOP_GROUP_DRIFT * time));
+    float roughness = (1.0 + 0.2 * min(speed, 2.0)) * mix(CHOP_GUST_RANGE.x, CHOP_GUST_RANGE.y, gust);
+    bool flowing = speed > 1.0e-3;
+    // The chop's groups: patches a few metres across, drifting downwind.
+    vec2 groupAt = worldXZ / CHOP_GROUP_SIZE - CHOP_GROUP_DRIFT * time;
+    vec2 groups = vec2(valueNoise(groupAt), valueNoise(groupAt + vec2(17.3, 5.9))) - 1.0;
+    vec2 chopSlope = !sheet && !flowing ? chopSlopeAt(worldXZ, time, groups, roughness, footprint) : vec2(0.0);
     vec3 noiseN1 = vec3(0.0);
-    vec3 noiseN2 = vec3(0.0);
     float whiteNoise = 0.0;
     float lace = 0.0;
     // Foam is drawn out along the current: its cells are laid in the flow's
@@ -413,8 +421,15 @@ void main() {
         // seen as the same pattern coming back.
         vec2 carried = -fragFlow * phases[p] * FLOW_PERIOD + vec2(0.5 * float(p), 0.37 * float(p));
         float weight = p == 0 ? firstWeight : 1.0 - firstWeight;
-        noiseN1 += weight * proceduralNormal(worldXZ + carried + vec2(time * 0.3, time * 0.2), 0.5, 0.07 + 0.015 * min(speed, 2.0));
-        noiseN2 += weight * proceduralNormal(worldXZ + carried * 1.3 + vec2(-time * 0.15, time * 0.25), 1.0, 0.04 + 0.015 * min(speed, 2.0));
+        if (sheet) {
+            noiseN1 += weight * proceduralNormal(worldXZ + carried + vec2(time * 0.3, time * 0.2), 0.5, 0.07 + 0.015 * min(speed, 2.0));
+        } else if (flowing) {
+            // No offset of its own: the waves already differ from one restart
+            // to the next, and as the current dies away both phases must come
+            // to the still water's chop, or a seam shows where it stops.
+            vec2 drifted = worldXZ - fragFlow * phases[p] * FLOW_PERIOD;
+            chopSlope += weight * chopSlopeAt(drifted, time, groups, roughness, footprint);
+        }
         whiteNoise += weight * fbm(worldXZ * 2.0 + carried * 2.0);
         if (foamy) {
             lace += weight * foamLace(alongFlow * (worldXZ + carried) * 2.2, time, 0.4);
@@ -439,11 +454,11 @@ void main() {
         rippleN.z / rippleN.y - swellSlope.y
     ));
 
-    // Blend noise normals with the vertex normal.
+    // The chop's slope on top of the vertex normal's.
     vec3 N = normalize(vec3(
-        vertexN.x + noiseN1.x + noiseN2.x,
-        vertexN.y,
-        vertexN.z + noiseN1.z + noiseN2.z
+        vertexN.x / vertexN.y - chopSlope.x,
+        1.0,
+        vertexN.z / vertexN.y - chopSlope.y
     ));
 
     vec3 V = normalize(fpc.cameraPos.xyz - fragWorldPos);
