@@ -1,3 +1,4 @@
+mod chop_tiles;
 mod divide;
 mod field_mesher;
 mod field_sources;

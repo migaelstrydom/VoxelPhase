@@ -13,7 +13,8 @@
 //! and recorded apart:
 //!
 //! ```text
-//!   prepare ──▶ meshes synced, ripples uploaded, draws planned ──▶ patches
+//!   prepare ──▶ meshes synced, ripples, wind map and chop tiles uploaded,
+//!               draws planned ──▶ patches
 //!   record  ──▶ the plan, after the refraction copy
 //! ```
 
@@ -23,6 +24,7 @@ use ash::vk;
 use nalgebra::{Matrix4, Vector2, Vector3};
 use rustc_hash::FxHashMap;
 
+use super::chop_tiles::{ChopTiles, CHOP_BANDS, CHOP_TILE_TEXELS};
 use super::divide::WaterPatch;
 use super::footprint::ScreenFootprint;
 use super::ocean_ring::RING_TILE;
@@ -60,8 +62,8 @@ pub const RIPPLE_TILE_STRIDE: usize =
 /// Vertices along each side of the fine grid: one per ripple cell corner.
 const FINE_SIDE: usize = TILE_CELLS + 1;
 
-/// One frame slot's ripple storage and wind map, and the descriptor set
-/// pointing at them.
+/// One frame slot's ripple storage, wind map and chop tiles, and the
+/// descriptor set pointing at them.
 struct RippleSlot {
     buffer: ManagedBuffer,
     set: vk::DescriptorSet,
@@ -71,12 +73,27 @@ struct RippleSlot {
     /// The wind map `wind` holds: its version, or none for the open sea's
     /// everywhere; unset until it is first written.
     wind_written: Option<Option<u32>>,
+    /// The chop's tiles at this slot's frame, after their header.
+    chop: ManagedBuffer,
 }
 
 /// Floats ahead of the wind map's texels: origin x and z, texels per metre,
 /// width, depth, the peak wavelength past the map's edges, two unused.
 /// Mirrors `windHeader` in `wind.glsl`.
 const WIND_HEADER: usize = 8;
+
+/// Set 1's bindings of the wind map and the chop's tiles.
+const WIND_BINDING: u32 = 1;
+const CHOP_BINDING: u32 = 2;
+
+/// Floats ahead of the chop's tiles: per band, its tile's texels per metre,
+/// its longest wavelength and two unused. Mirrors `chopBands` in `chop.glsl`.
+const CHOP_HEADER: usize = 4 * CHOP_BANDS;
+
+/// Bytes the chop's tiles take, with their header.
+const CHOP_BYTES: vk::DeviceSize = ((CHOP_HEADER
+    + 2 * CHOP_BANDS * CHOP_TILE_TEXELS * CHOP_TILE_TEXELS)
+    * std::mem::size_of::<f32>()) as vk::DeviceSize;
 
 /// How far above and below its level a tile's surface may be drawn, over its
 /// swell, for its ripples, m.
@@ -206,6 +223,8 @@ pub struct WaterRenderer {
     river_version: u64,
     river_slots: PerFrame<SlotMesh>,
     ripple_slots: PerFrame<RippleSlot>,
+    /// The chop's waves, summed each frame.
+    chop: ChopTiles,
     /// The fine grid every awake ripple tile is drawn with. Never changes.
     fine_grid: StreamedMesh,
     fine_indices: u32,
@@ -248,13 +267,21 @@ impl WaterRenderer {
                 vk::BufferUsageFlags::STORAGE_BUFFER,
                 host,
             )?;
-            pipeline.point_wind(set, wind.buffer, wind_capacity);
+            pipeline.point_storage(set, WIND_BINDING, wind.buffer, wind_capacity);
+            let chop = ManagedBuffer::new(
+                Arc::clone(&device),
+                CHOP_BYTES,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                host,
+            )?;
+            pipeline.point_storage(set, CHOP_BINDING, chop.buffer, CHOP_BYTES);
             Ok(RippleSlot {
                 buffer,
                 set,
                 wind,
                 wind_capacity,
                 wind_written: None,
+                chop,
             })
         })?;
         let (grid_vertices, grid_indices) = fine_grid();
@@ -268,6 +295,7 @@ impl WaterRenderer {
             device,
             pipeline,
             ripple_slots,
+            chop: ChopTiles::new(),
             fine_grid,
             fine_indices: grid_indices.len() as u32,
             mesh: WaterMesh::default(),
@@ -398,6 +426,7 @@ impl WaterRenderer {
         patches.extend(water.surface_patches());
         let layers = self.upload_ripples(water)?;
         self.upload_wind(water.wind())?;
+        self.upload_chop(view.time)?;
         let clock = water.clock();
         let body = |id: SurfaceId, level: f32, tile: [f32; 4]| {
             let swell = water.swell(id);
@@ -722,7 +751,8 @@ impl WaterRenderer {
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
             slot.wind_capacity = bytes;
-            self.pipeline.point_wind(slot.set, slot.wind.buffer, bytes);
+            self.pipeline
+                .point_storage(slot.set, WIND_BINDING, slot.wind.buffer, bytes);
         }
         let header: [f32; WIND_HEADER] = match wind {
             Some(w) => [
@@ -755,6 +785,33 @@ impl WaterRenderer {
             slot.wind.unmap_memory();
         }
         slot.wind_written = Some(key);
+        Ok(())
+    }
+}
+
+impl WaterRenderer {
+    /// Write the chop's tiles at `time` into this frame slot, whose last
+    /// frame has finished.
+    fn upload_chop(&mut self, time: f32) -> EngineResult<()> {
+        let spans = self.chop.spans();
+        let longest = self.chop.longest();
+        let mut header = [0.0f32; CHOP_HEADER];
+        for b in 0..CHOP_BANDS {
+            header[4 * b] = CHOP_TILE_TEXELS as f32 / spans[b];
+            header[4 * b + 1] = longest[b];
+        }
+        let slopes = self.chop.at(time);
+        let slot = &mut self.ripple_slots[self.slot];
+        unsafe {
+            let ptr = slot.chop.map_memory(0, vk::MemoryMapFlags::empty())? as *mut f32;
+            std::ptr::copy_nonoverlapping(header.as_ptr(), ptr, CHOP_HEADER);
+            std::ptr::copy_nonoverlapping(
+                slopes.as_ptr() as *const f32,
+                ptr.add(CHOP_HEADER),
+                2 * slopes.len(),
+            );
+            slot.chop.unmap_memory();
+        }
         Ok(())
     }
 }

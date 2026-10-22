@@ -826,8 +826,9 @@ the bay's shallows (`--eye -6,7,42 --look 0,0,18`).
 | Slope zoning (§4.4) | `302579f` | +0.04 (scene) | +0.37 total over baseline for all three |
 | Water extinction and sky reflection | `ea9c453` | +0.13 (water) | +0.11 (water) |
 | Caustics | `8815eb4` | +0.50 (water) | +0.81 (water) |
-| Chop as waves (`shader/chop.glsl`) in place of noise | | −2.3 (water) | −1.2 (water) |
-| **All of it** | | **−0.85 ms (−8%)** | **+0.2 ms (+2%)** |
+| Chop as waves (`shader/chop.glsl`) in place of noise | `807b733` | −2.3 (water) | −1.2 (water) |
+| Chop from FFT tiles (`water/chop_tiles.rs`) in place of sines | | −1.4 (water) | −1.4 (water) |
+| **All of it** | | **−2.3 ms (−22%)** | **−1.2 ms (−13%)** |
 
 The close terrain view (`--eye 2,12,22 --look 8,9,0`) swung 0.7 ms between
 runs of the same build, more than any of the terrain features cost, so it is
@@ -842,6 +843,15 @@ not in the table. Two things worth knowing from it:
   precomputed table, which stop at the first wave too short for the pixel,
   cost a fraction of that, most of all over distant sea. Trigonometry on the
   table's constants per pixel had first cost 2.2 ms more over the bay.
+- Sixteen sines still read as a lattice wherever the fetch and footprint
+  fades left two or three of them to dominate, whatever their wavelengths:
+  the eye judges regularity over the few metres it sees, not over the
+  pattern's period. The chop is now four octave bands of a few hundred
+  random waves each, summed by a CPU FFT every frame into wrapping 128² slope
+  tiles (`src/rendering/water/chop_tiles.rs`), and the shader reads four
+  bilinear taps a band. That moved about 0.35 ms to the CPU's water stage
+  (four FFTs in parallel and a 512 KB upload); a compute pass would take it
+  back if the CPU frame needs it.
 - Aerial perspective is the dearest of the terrain-side features because it
   evaluates `skyRadiance` per fragment. A per-vertex haze colour would take
   most of that back if it is ever needed.

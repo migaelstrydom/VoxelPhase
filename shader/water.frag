@@ -398,14 +398,11 @@ void main() {
     float phases[2] = float[2](fract(time / FLOW_PERIOD), fract(time / FLOW_PERIOD + 0.5));
     float firstWeight = 1.0 - abs(1.0 - 2.0 * phases[0]);
     // Faster water runs rougher, and the wind gusts and lulls in patches.
-    float gust = smoothstep(0.6, 1.4, valueNoise(worldXZ / CHOP_GUST_SIZE - CHOP_GROUP_DRIFT * time));
+    float gust = smoothstep(0.6, 1.4, valueNoise(worldXZ / CHOP_GUST_SIZE - CHOP_GUST_DRIFT * time));
     float roughness = (1.0 + 0.2 * min(speed, 2.0)) * mix(CHOP_GUST_RANGE.x, CHOP_GUST_RANGE.y, gust);
     bool flowing = speed > 1.0e-3;
-    // The chop's groups: patches a few metres across, drifting downwind.
-    vec2 groupAt = worldXZ / CHOP_GROUP_SIZE - CHOP_GROUP_DRIFT * time;
-    vec2 groups = vec2(valueNoise(groupAt), valueNoise(groupAt + vec2(17.3, 5.9))) - 1.0;
     float peak = chopPeak(fragSwell.w, speed);
-    vec2 chopSlope = !sheet && !flowing ? chopSlopeAt(worldXZ, time, groups, roughness, peak, footprint) : vec2(0.0);
+    vec2 chopSlope = !sheet && !flowing ? chopSlopeAt(worldXZ, roughness, peak, footprint) : vec2(0.0);
     vec3 noiseN1 = vec3(0.0);
     float whiteNoise = 0.0;
     float lace = 0.0;
@@ -430,7 +427,7 @@ void main() {
             // to the next, and as the current dies away both phases must come
             // to the still water's chop, or a seam shows where it stops.
             vec2 drifted = worldXZ - fragFlow * phases[p] * FLOW_PERIOD;
-            chopSlope += weight * chopSlopeAt(drifted, time, groups, roughness, peak, footprint);
+            chopSlope += weight * chopSlopeAt(drifted, roughness, peak, footprint);
         }
         whiteNoise += weight * fbm(worldXZ * 2.0 + carried * 2.0);
         if (foamy) {

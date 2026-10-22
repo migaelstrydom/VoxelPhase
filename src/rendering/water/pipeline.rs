@@ -213,6 +213,11 @@ impl WaterPipeline {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::VERTEX),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(2)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
         let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         unsafe {
@@ -266,7 +271,7 @@ impl WaterPipeline {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 2 * FRAMES_IN_FLIGHT as u32,
+                descriptor_count: 3 * FRAMES_IN_FLIGHT as u32,
             },
         ];
 
@@ -488,16 +493,23 @@ impl WaterPipeline {
         Ok(set)
     }
 
-    /// Point a slot's set 1 at a wind map storage buffer. Only for a slot
-    /// whose last frame has finished, like any rewrite of its set.
-    pub fn point_wind(&self, set: vk::DescriptorSet, buffer: vk::Buffer, size: vk::DeviceSize) {
+    /// Point a slot's set 1 at a storage buffer: binding 1 the wind map, 2
+    /// the chop's tiles. Only for a slot whose last frame has finished, like
+    /// any rewrite of its set.
+    pub fn point_storage(
+        &self,
+        set: vk::DescriptorSet,
+        binding: u32,
+        buffer: vk::Buffer,
+        size: vk::DeviceSize,
+    ) {
         let info = vk::DescriptorBufferInfo::default()
             .buffer(buffer)
             .offset(0)
             .range(size);
         let write = vk::WriteDescriptorSet::default()
             .dst_set(set)
-            .dst_binding(1)
+            .dst_binding(binding)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(std::slice::from_ref(&info));
         unsafe {
