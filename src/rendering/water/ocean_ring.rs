@@ -2,17 +2,22 @@
 //!
 //! ```text
 //!   the map's edge ──▶ nested rectangles around the map: 0.5 m apart, with
-//!                      a vertex every 0.5 m, out to 8 m; then twice as far
-//!                      out each time, their vertices spaced to match
+//!                      a vertex every 0.5 m, from 0.5 m inside it out to 8 m;
+//!                      then twice as far out each time, their vertices
+//!                      spaced to match
 //!   each pair of neighbouring rectangles ──▶ stitched side by side with
 //!                      triangles that share every vertex
 //! ```
 //!
-//! No vertex lies partway along another triangle's edge, so no join can
-//! crack, not even by a pixel. The innermost rectangle is the map's edge,
-//! with a vertex at every column corner, so the sea's own quads meet it
-//! vertex for vertex. Across the first 8 m the swell's height fades out;
-//! beyond, the sea is flat, and its normal is the fragment shader's.
+//! No vertex lies partway along another triangle's edge, so no join within
+//! the ring can crack, not even by a pixel. The map's edge is one of its
+//! rectangles, with a vertex at every column corner where the sea's own
+//! quads have theirs; but those are the field's, at its own surface and
+//! ripples, so the two edges never land on quite the same pixels. Inside
+//! the map the ring tucks under the field's water, sinking 5 mm, so
+//! a pixel left between the edges shows the sea rather than the sky. Across
+//! the first 8 m out the swell's height fades out; beyond, the sea is flat,
+//! and its normal is the fragment shader's.
 
 use nalgebra::Vector2;
 use rustc_hash::FxHashMap;
@@ -25,6 +30,12 @@ use super::vertex::BasinVertex;
 
 /// Width of the band whose swell height fades out, in columns (8 m).
 const FADE_BAND: i32 = 16;
+
+/// How far the ring reaches in under the map's own water, in columns, and
+/// how far below the sea's surface it lies there, m: enough to stay under
+/// the field's water, too little to show where a ripple's trough lays it bare.
+const TUCK: i32 = 1;
+const TUCK_SINK: f32 = 0.005;
 
 /// Distance of the farthest rectangle from the map's edge, in columns (1 km).
 const HORIZON: i32 = 2048;
@@ -49,8 +60,8 @@ pub struct MapRect {
     pub k1: i32,
 }
 
-/// One rectangle: its distance from the map's edge and the spacing of its
-/// vertices, both in columns.
+/// One rectangle: its distance out from the map's edge, negative inside it,
+/// and the spacing of its vertices, both in columns.
 #[derive(Debug, Clone, Copy)]
 struct Ring {
     distance: i32,
@@ -59,7 +70,7 @@ struct Ring {
 
 /// Every rectangle, inside out.
 fn rings() -> Vec<Ring> {
-    let mut out: Vec<Ring> = (0..=FADE_BAND)
+    let mut out: Vec<Ring> = (-TUCK..=FADE_BAND)
         .map(|distance| Ring {
             distance,
             spacing: 1,
@@ -133,22 +144,23 @@ impl Vertices<'_> {
         };
         let length = (to.0 - from.0) + (to.1 - from.1);
         let n = ((length as f32 / ring.spacing as f32).round() as i32).max(1);
-        let t = d as f32 / FADE_BAND as f32;
+        let t = d.max(0) as f32 / FADE_BAND as f32;
         let share = if t >= 1.0 {
             0.0
         } else {
             1.0 - t * t * (3.0 - 2.0 * t)
         };
+        let sink = TUCK_SINK * (-d).max(0) as f32 / TUCK as f32;
         (0..=n)
             .map(|j| {
                 // Exact at a column's spacing: the sea's own corners.
                 let along = |a: i32, b: i32| a as f64 + (b - a) as f64 * j as f64 / n as f64;
-                self.vertex(along(from.0, to.0), along(from.1, to.1), share)
+                self.vertex(along(from.0, to.0), along(from.1, to.1), share, sink)
             })
             .collect()
     }
 
-    fn vertex(&mut self, i: f64, k: f64, swell_share: f32) -> u32 {
+    fn vertex(&mut self, i: f64, k: f64, swell_share: f32, sink: f32) -> u32 {
         let key = ((i * 8.0).round() as i64, (k * 8.0).round() as i64);
         let mesh = &mut *self.mesh;
         let floor = self.floor;
@@ -160,6 +172,7 @@ impl Vertices<'_> {
                 ),
                 floor,
                 swell_share,
+                sink,
             });
             mesh.vertices.len() as u32 - 1
         })
@@ -281,7 +294,26 @@ mod tests {
             .map(|&v| mesh.vertices[v as usize].xz)
             .collect();
         assert!(!used.is_empty());
-        assert!(used.iter().all(|p| p.y <= -3.0 + 1e-3), "only the −z side");
+        let tucked = -3.0 + TUCK as f32 * COLUMN_SIZE;
+        assert!(
+            used.iter().all(|p| p.y <= tucked + 1e-3),
+            "only the −z side"
+        );
+    }
+
+    #[test]
+    fn it_tucks_under_the_map_and_meets_the_sea_at_its_edge() {
+        let mesh = ring([true; 4]);
+        let reach = TUCK as f32 * COLUMN_SIZE;
+        for v in &mesh.vertices {
+            let inside = (4.0 - v.xz.x.abs()).min(3.0 - v.xz.y.abs());
+            if inside > 1e-3 {
+                assert!(inside <= reach + 1e-3, "{:?} reaches too far in", v.xz);
+                assert!((v.sink - TUCK_SINK * inside / reach).abs() < 1e-6);
+            } else {
+                assert_eq!(v.sink, 0.0);
+            }
+        }
     }
 }
 

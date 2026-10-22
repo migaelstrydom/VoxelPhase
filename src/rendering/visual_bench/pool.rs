@@ -66,6 +66,7 @@ impl WaterScene for ScenePool {
                     ),
                     floor: self.floor,
                     swell_share: 1.0,
+                    sink: 0.0,
                 });
             }
         }

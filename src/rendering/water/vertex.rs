@@ -14,6 +14,9 @@ pub struct BasinVertex {
     /// the ring past the map's edge, whose quads are too coarse to follow
     /// it. Its normal is the fragment shader's, at full swell.
     pub swell_share: f32,
+    /// How far below the surface the vertex lies, m: only where the ring
+    /// tucks under the map's own water.
+    pub sink: f32,
 }
 
 impl BasinVertex {
@@ -25,7 +28,7 @@ impl BasinVertex {
         }
     }
 
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 4] {
         let float = std::mem::size_of::<f32>() as u32;
         [
             vk::VertexInputAttributeDescription {
@@ -45,6 +48,12 @@ impl BasinVertex {
                 binding: 0,
                 format: vk::Format::R32_SFLOAT,
                 offset: 3 * float,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 3,
+                binding: 0,
+                format: vk::Format::R32_SFLOAT,
+                offset: 4 * float,
             },
         ]
     }

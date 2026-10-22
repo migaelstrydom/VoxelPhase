@@ -7,12 +7,14 @@
 #include "wind.glsl"
 
 // The coarse surface: one quad per column, its plan position, the floor
-// beneath it and the share of the swell its geometry carries. The height is
+// beneath it, the share of the swell its geometry carries and how far below
+// the surface it lies. The height is
 // the body's level plus its swell, both pushed per draw, so a level change
 // needs no new mesh. The swell's normal is left to the fragment shader.
 layout(location = 0) in vec2 inXz;
 layout(location = 1) in float inFloor;
 layout(location = 2) in float inSwellShare;
+layout(location = 3) in float inSink;
 
 layout(push_constant) uniform PushConstants {
     mat4 view;
@@ -37,7 +39,7 @@ void main() {
     float level = pc.body.x;
     float depth = level - inFloor;
     vec3 swell = swellAt(inXz, pc.body.w, pc.body.y, pc.body.z, depth);
-    vec3 position = vec3(inXz.x, level + swell.x * inSwellShare, inXz.y);
+    vec3 position = vec3(inXz.x, level + swell.x * inSwellShare - inSink, inXz.y);
     gl_Position = pc.proj * pc.view * vec4(position, 1.0);
     fragNormal = vec3(0.0, 1.0, 0.0);
     fragSwell = vec4(pc.body.y * swellShoreFade(depth), pc.body.z, pc.body.w, windPeakAt(inXz));
