@@ -17,6 +17,7 @@ pub mod path;
 pub mod plan;
 pub mod scene;
 pub mod section;
+pub mod svg;
 
 pub use params::GaitParams;
 pub use path::PathVec;
