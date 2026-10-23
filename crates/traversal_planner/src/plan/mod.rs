@@ -1,0 +1,10 @@
+//! The plan: contact and flight phases from now to the horizon, the one thing
+//! the body's drive and the legs both read.
+
+mod body;
+mod phase;
+mod timeline;
+
+pub use body::BodyState;
+pub use phase::{Contact, Limb, Motion, Phase};
+pub use timeline::Plan;

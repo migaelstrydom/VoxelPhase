@@ -77,15 +77,20 @@ ground the body will actually cross.
 The section is a **strip** of lanes at fixed offsets `d` across the path. The
 first version has five lanes over ±0.3 m: the centre lane for the body, and
 all five for the feet, which land about ±0.1 m either side of the path and
-step wider or cross over to reach a stone. Each lane holds **surfaces**:
-polylines in `(s, z)` at that lane's `d`, each tagged with what holds it up:
+step wider or cross over to reach a stone. The body floor and the ceiling
+are one profile each along the path itself; each lane has a profile of
+footholds. A profile is a list of **surfaces**: runs of samples with one
+support, split where the support changes, where a cast finds nothing and (for
+footholds) where the ground is too steep to stand on, so a surface's ends are
+its edges.
 
 | Field | Meaning |
 |---|---|
-| `points` | the polyline along the lane |
-| `normal` per segment | the full 3D normal from the cast, in the path frame: classifies floor, wall or ceiling, and keeps cross-slope, so a rock tilted sideways reads as tilted |
-| `support` | `Static`, or `Body { handle, mass, asleep }` for rubble and spawnables |
-| `layer` | `BodyFloor`, `Foothold` or `Ceiling` (below) |
+| `support` | `Static`, or `Body { id, mass, asleep }` for rubble and spawnables |
+| `points` | samples in increasing `s`: the height of the cast sphere's centre at rest, and the full 3D contact normal in the path frame (it keeps cross-slope, so a rock tilted sideways reads as tilted) |
+
+Heights are the cast sphere's *centre*, so a layer is the space that centre
+can occupy, and clearance is a comparison of centre heights.
 
 Each lane holds surfaces, not a height per `s`, because ledges, walls and
 overhangs are not heightfields. Gait planning reads only floors and ceilings,
@@ -98,10 +103,11 @@ Transition models and the planner never read lanes directly. They ask a
 
 | Query | Answers |
 |---|---|
-| `floor(s, d)` | the body floor under a point, with its normal and support |
-| `best_foothold(s, d, window)` | the best place for a foot near a point, within a sideways and forward window, with its quality (flatness, support, margin to an edge) |
-| `clears(body_path)` | whether the capsule along a support path or flight arc stays above the body floor and under the ceiling |
-| `edges(s range)` | grabbable edges (climbing; empty until the wall pass exists) |
+| `floor(s)` | the body floor under the path, with its normal and support |
+| `footholds(window)` | every standable foothold in a window along and across the path, with its normal, support and margin to an edge; the planner judges which is best |
+| `clears(motion)` | whether the capsule along a grounded stretch or flight arc stays on or above the body floor and under the ceiling |
+
+Climbing adds `edges(s range)`, the grabbable edges, with the wall pass.
 
 The strip of lanes is the first implementation behind it. A real 3D height
 patch around the body can replace it later (see *Beyond one path*) without
@@ -197,7 +203,7 @@ trait TransitionModel {
 ```
 
 The first version has one model, `Stride`. It proposes the next footfall from
-`best_foothold`, within stride length, rise and drop limits and a sideways
+`footholds`, within stride length, rise and drop limits and a sideways
 window around the foot's natural offset (wide enough for a cross-step), with
 a flight if the gap or rise needs one.
 
@@ -293,7 +299,8 @@ One RON format, shared by every tool and test:
 ```text
 TraversalScene(
   section: Authored([...shapes...]) | Captured(Section),
-  body: (s, d, z, ṡ, ż, next_foot),
+  body: (s, z, speed, climb),        the body is on the path, so it has no d
+  lead: LeftFoot | RightFoot,        the foot that lands next
   intent: (speed, stop),
   params: GaitParams(...),
 )

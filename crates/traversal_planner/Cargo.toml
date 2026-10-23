@@ -1,0 +1,12 @@
+[package]
+name = "traversal_planner"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# Pure: no physics, ECS or GPU, so the same planner runs in the game, the
+# browser tool (wasm32), tests and the fuzzer. Design: docs/traversal/PLANNER_DESIGN.md.
+[dependencies]
+ron = "0.8"
+serde = { version = "1", features = ["derive"] }
+smallvec = { version = "1.13", features = ["serde"] }
