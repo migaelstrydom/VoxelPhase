@@ -1,5 +1,8 @@
 # Traversal — Plan
 
+> **Abandoned on 2026-10-19; kept for its history.** Superseded by
+> [`traversal/PLANNER_DESIGN.md`](traversal/PLANNER_DESIGN.md).
+
 How a character crosses arbitrary, mutable terrain: stepping up lips, running
 over gapped planks, scrambling steep ground, grabbing ledges and climbing. This
 document is the plan for the whole project and the design for its first
