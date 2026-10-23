@@ -46,7 +46,7 @@ This design keeps three rules:
                               ▼                                │
  PhysicsWorld ───► SectionSampler ── sphere casts down / up ──►│ Section: a strip of lanes
  (terrain, rubble,   (memoised per frame)  in every lane       │   surfaces in (s, d, z), each with
-  spawnables)                                                  │   its support (static / body)
+  spawnables)                                                  │   its footing (fixed / loose)
                                                                │      │
                                                                │      ▼ read only through SectionQuery
                                        previous Plan ─────────►│ Planner ◄── TransitionModels
@@ -79,14 +79,14 @@ first version has five lanes over ±0.3 m: the centre lane for the body, and
 all five for the feet, which land about ±0.1 m either side of the path and
 step wider or cross over to reach a stone. The body floor and the ceiling
 are one profile each along the path itself; each lane has a profile of
-footholds. A profile is a list of **surfaces**: runs of samples with one
-support, split where the support changes, where a cast finds nothing and (for
+footholds. A profile is a list of **surfaces**: runs of samples on one
+body, split where the body under them changes, where a cast finds nothing and (for
 footholds) where the ground is too steep to stand on, so a surface's ends are
 its edges.
 
 | Field | Meaning |
 |---|---|
-| `support` | `Static`, or `Body { id, mass, asleep }` for rubble and spawnables |
+| `footing` | `Fixed`, or `Loose { mass, resting }` for rubble and spawnables: physical facts, not the engine's identity for the body. The planner's cost weighs them; the game only reports them |
 | `points` | samples in increasing `s`: the height of the cast sphere's centre at rest, and the full 3D contact normal in the path frame (it keeps cross-slope, so a rock tilted sideways reads as tilted) |
 
 Heights are the cast sphere's *centre*, so a layer is the space that centre
@@ -103,8 +103,8 @@ Transition models and the planner never read lanes directly. They ask a
 
 | Query | Answers |
 |---|---|
-| `floor(s)` | the body floor under the path, with its normal and support |
-| `footholds(window)` | every standable foothold in a window along and across the path, with its normal, support and margin to an edge; the planner judges which is best |
+| `floor(s)` | the body floor under the path, with its normal and footing |
+| `footholds(window)` | every standable foothold in a window along and across the path, with its normal, footing and margin to an edge; the planner judges which is best |
 | `clears(motion)` | whether the capsule along a grounded stretch or flight arc stays on or above the body floor and under the ceiling |
 
 Climbing adds `edges(s range)`, the grabbable edges, with the wall pass.
@@ -147,15 +147,16 @@ Plan
   committed: usize       phases [0, committed) are not replanned
 
 Phase
-  kind: Support | Flight              (later: Hang, Climb)
   start, duration                     seconds from now
-  contacts: [Contact]                 who touches what during the phase
-  body: BodyPath                      Support: reference (s, z, ṡ) over the phase
-                                      Flight: takeoff state, then ballistic
+  contacts: [Contact]                 who touches what during the phase; empty in flight
+  motion: Motion                      its variant is the phase's kind:
+    Grounded { from, to, speeds }       rides the body floor from s = from to to
+    Flight { takeoff, gravity }         ballistic from the takeoff state
+                                        (later: Hang, Climb)
 
 Contact
   limb: LeftFoot | RightFoot          (later: LeftHand | RightHand)
-  at: (s, d, z) on a surface, with its normal and support
+  at: (s, d, z) on a surface, with its normal and footing
 ```
 
 A contact's `d` is where that foot actually lands, not its lane: the planner
@@ -321,7 +322,7 @@ draws two views sharing the `s` axis: the **side view** on top, and a
 **top-down strip** under it, showing each lane's footholds and where each
 footfall lands sideways. Without the top view, the tools would hide exactly
 the lateral cases a side view gets wrong. Both views draw:
-- the layers (body floor, footholds, ceiling), coloured by support;
+- the layers (body floor, footholds, ceiling), coloured by footing;
 - footfalls, coloured left or right, solid when committed and faded when
   tentative;
 - flight arcs, and the body path with the capsule drawn at each phase
@@ -340,7 +341,7 @@ The real planner in a browser page, published as a private artifact:
 - replan live;
 - **time scrub**: step the body along its plan as if tracking were perfect,
   replanning each frame, to see commitment and churn over time;
-- **perturb**: make a loose support drop or slide as a foot lands, to
+- **perturb**: make a loose stone drop or slide as a foot lands, to
   exercise the replanning that rubble giving way will force;
 - import and export the scene file, including the game's captures.
 
@@ -371,7 +372,7 @@ writing it out as a fixture. It lives in the planner crate.
 - **`PlanOverlay`**: the plan through `DebugOverlays`. Footfalls as discs
   (left and right coloured, committed solid, tentative faded), flight arcs,
   the body path fading out towards the horizon, section samples coloured by
-  support, the body's actual trail beside its planned one, and a flash when
+  footing, the body's actual trail beside its planned one, and a flash when
   the next footfall changes.
 - **Capture key**: writes the current section, body state, intent, params and
   plan to a scene file that the web tool and fixtures load.

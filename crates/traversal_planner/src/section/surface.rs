@@ -2,25 +2,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::path::PathVec;
 
-/// A body as the game knows it, opaque to the planner: only used to tell
-/// footholds on the same body apart and to hand them back to the game.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct BodyId(pub u64);
-
-/// What holds a surface up.
+/// What a surface is held up by, as far as a foot cares.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub enum Support {
-    /// Terrain or anything else that cannot move.
-    Static,
-    /// A dynamic body: rubble, a spawnable. It may shift or give way under a
-    /// foot.
-    Body {
-        /// Which body.
-        id: BodyId,
+pub enum Footing {
+    /// Ground that cannot move: terrain, anything fixed.
+    Fixed,
+    /// A loose body: rubble, a plank that may rock. It may shift or give way
+    /// under a foot.
+    Loose {
         /// Its mass, in kg: a heavy body shifts less under a footfall.
         mass: f32,
         /// Whether it was at rest when sampled.
-        asleep: bool,
+        resting: bool,
     },
 }
 
@@ -37,16 +30,17 @@ pub struct SurfacePoint {
     pub normal: PathVec,
 }
 
-/// A run of consecutive samples along one lane with one support: a plank, the
+/// A run of consecutive samples along one lane on one body: a plank, the
 /// ground between two planks, a stone.
 ///
-/// The sampler starts a new surface where the support changes, where a cast
-/// finds nothing, and (for footholds) where the ground is too steep to stand
-/// on, so a surface's ends are its edges.
+/// The sampler starts a new surface where the body under it changes (so the
+/// seam between two flush stones is an edge), where a cast finds nothing, and
+/// (for footholds) where the ground is too steep to stand on, so a surface's
+/// ends are its edges.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Surface {
     /// What holds every sample of this surface up.
-    pub support: Support,
+    pub footing: Footing,
     /// Samples in increasing `s`, at the lane's spacing.
     pub points: Vec<SurfacePoint>,
 }

@@ -4,11 +4,11 @@ TraversalScene(
     ground: Authored(AuthoredGround(
         base: None,
         shapes: [
-            Shape(form: Block(from: -1.0, to: 0.4, top: 0.0), support: Static),
-            Shape(form: Block(from: 0.8, to: 1.1, top: 0.0), across: Some((0.05, 0.3)), support: Static),
-            Shape(form: Block(from: 1.5, to: 1.8, top: 0.05), across: Some((-0.3, -0.05)), support: Static),
-            Shape(form: Block(from: 2.2, to: 2.5, top: 0.0, tilt: 0.4), across: Some((0.0, 0.25)), support: Loose(mass: 40.0, asleep: true)),
-            Shape(form: Block(from: 2.9, to: 4.0, top: 0.0), support: Static),
+            Shape(form: Block(from: -1.0, to: 0.4, top: 0.0), footing: Fixed),
+            Shape(form: Block(from: 0.8, to: 1.1, top: 0.0), across: Some((0.05, 0.3)), footing: Fixed),
+            Shape(form: Block(from: 1.5, to: 1.8, top: 0.05), across: Some((-0.3, -0.05)), footing: Fixed),
+            Shape(form: Block(from: 2.2, to: 2.5, top: 0.0, tilt: 0.4), across: Some((0.0, 0.25)), footing: Loose(mass: 40.0, resting: true)),
+            Shape(form: Block(from: 2.9, to: 4.0, top: 0.0), footing: Fixed),
         ],
     )),
     body: BodyState(s: 0.0, z: 0.25, speed: 3.0, climb: 0.0),

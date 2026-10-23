@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::path::PathVec;
-use crate::section::Support;
+use crate::section::Footing;
 
 use super::body::BodyState;
 
@@ -34,7 +34,7 @@ pub struct Contact {
     /// Unit ground normal there.
     pub normal: PathVec,
     /// What it holds on to.
-    pub support: Support,
+    pub footing: Footing,
 }
 
 /// How the body moves during a phase. Its variant is the phase's kind.

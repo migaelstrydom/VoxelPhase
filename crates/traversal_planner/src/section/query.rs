@@ -3,7 +3,7 @@ use std::ops::Range;
 use crate::path::PathVec;
 use crate::plan::Motion;
 
-use super::surface::Support;
+use super::surface::Footing;
 
 /// The body floor under a point of the path.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -13,7 +13,7 @@ pub struct FloorHit {
     /// Unit contact normal: how steep the floor is for the body there.
     pub normal: PathVec,
     /// What holds the floor up there.
-    pub support: Support,
+    pub footing: Footing,
 }
 
 /// A place a foot could land.
@@ -24,7 +24,7 @@ pub struct Foothold {
     /// Unit ground normal there.
     pub normal: PathVec,
     /// What holds it up.
-    pub support: Support,
+    pub footing: Footing,
     /// Distance along `s` to the nearer end of its surface: how far the foot
     /// is from falling off an edge ahead or behind.
     pub edge_margin: f32,

@@ -5,5 +5,5 @@
 mod authored;
 mod file;
 
-pub use authored::{AuthoredGround, Form, Shape, ShapeSupport};
+pub use authored::{AuthoredGround, Form, Shape};
 pub use file::{Ground, Intent, TraversalScene};

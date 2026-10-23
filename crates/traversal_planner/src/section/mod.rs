@@ -7,4 +7,4 @@ mod surface;
 
 pub use query::{FloorHit, Foothold, FootholdWindow, SectionQuery};
 pub use strip::{FootholdLane, Profile, Section, StripLayout};
-pub use surface::{BodyId, Support, Surface, SurfacePoint};
+pub use surface::{Footing, Surface, SurfacePoint};

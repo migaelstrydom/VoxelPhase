@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::section::Footing;
+
 /// The outline of a shape seen from the side, in path coordinates. Floors fill
 /// down to the ground's base; roofs fill up from their underside.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -26,17 +28,6 @@ pub enum Form {
     Roof { from: f32, to: f32, bottom: f32 },
 }
 
-/// What holds an authored shape up.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ShapeSupport {
-    Static,
-    /// A loose body: rubble, a plank that may rock.
-    Loose {
-        mass: f32,
-        asleep: bool,
-    },
-}
-
 /// One authored obstacle.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
@@ -45,7 +36,7 @@ pub struct Shape {
     /// the whole strip, so a plain gait scene is a pure side view.
     #[serde(default)]
     pub across: Option<(f32, f32)>,
-    pub support: ShapeSupport,
+    pub footing: Footing,
 }
 
 /// Ground built from shapes over a flat base.
