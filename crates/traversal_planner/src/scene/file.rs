@@ -2,9 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::params::GaitParams;
 use crate::plan::{BodyState, Limb};
-use crate::section::{Section, StripLayout};
+use crate::section::{sample_section, Section, StripLayout};
 
 use super::authored::AuthoredGround;
+use super::caster::ShapeCaster;
 
 /// Where a scene's section comes from.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,5 +44,19 @@ impl TraversalScene {
 
     pub fn to_ron(&self) -> Result<String, ron::Error> {
         ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+    }
+
+    /// The section the planner reads: an authored scene sampled by the same
+    /// rules as the game's, or a captured one as it was.
+    pub fn section(&self) -> Section {
+        match &self.ground {
+            Ground::Captured(section) => section.clone(),
+            Ground::Authored(ground) => sample_section(
+                &ShapeCaster::new(ground),
+                &self.layout,
+                &self.params,
+                self.body.s,
+            ),
+        }
     }
 }

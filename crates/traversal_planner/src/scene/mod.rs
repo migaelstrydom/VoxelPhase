@@ -3,7 +3,9 @@
 //! tool, the fixtures and the game's capture key.
 
 mod authored;
+mod caster;
 mod file;
 
 pub use authored::{AuthoredGround, Form, Shape};
+pub use caster::ShapeCaster;
 pub use file::{Ground, Intent, TraversalScene};

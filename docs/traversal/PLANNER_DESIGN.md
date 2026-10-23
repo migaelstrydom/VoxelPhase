@@ -44,7 +44,7 @@ This design keeps three rules:
  body state             (the arc the stick steers along)       │
                               │                                │
                               ▼                                │
- PhysicsWorld ───► SectionSampler ── sphere casts down / up ──►│ Section: a strip of lanes
+ PhysicsWorld ───► PhysicsCaster ─── sphere casts down / up ──►│ Section: a strip of lanes
  (terrain, rubble,   (memoised per frame)  in every lane       │   surfaces in (s, d, z), each with
   spawnables)                                                  │   its footing (fixed / loose)
                                                                │      │
@@ -115,7 +115,7 @@ touching the models, the plan types or the tracker.
 
 ### Layers, and why the cast radius matters
 
-`SectionSampler` builds the section from `PhysicsWorld::cast_sphere`, which
+The game's `PhysicsCaster` casts with `PhysicsWorld::cast_sphere`, which
 sees every collider, so rubble and spawnables are in the section the same way
 terrain is. There is no SDF requirement.
 
@@ -187,6 +187,32 @@ legs can hide it as a push-off. If it reads badly, the alternative is a
 vertical lift during support, with its reaction applied to the body under the
 planted foot so rubble is still pushed on. Judge this in milestone E
 (*Tracking through contacts*), by eye and from `traversal --summary`.
+
+### The body model is a contract with the drive
+
+The planner predicts what the physics will do with the body, and those
+predictions are engine behaviour written down as numbers:
+
+- a grounded phase has the capsule's bottom sphere ride the body floor the
+  cast found, which holds only while its contacts behave like the cast
+  sphere;
+- `max_ground_slope_degrees` claims how steep a floor the traction drive can
+  push the capsule up;
+- a flight is ballistic, with no air steering and no jump forgiveness
+  bending the arc.
+
+Nothing in the planner can check these, and if the drive changes, plans go
+quietly wrong and show up as tracking error that looks like a planner bug. So
+game-side bench tests measure the drive and assert it agrees with
+`GaitParams`:
+
+| Check | Measures |
+|---|---|
+| Slope | the steepest ramp the capsule is actually driven up at walk and run |
+| Takeoff | the takeoff velocity the body actually leaves with, against the one commanded, and the arc it flies against the ballistic one |
+| Ride | the capsule's height over plank gaps and lips, against the body floor the cast reported |
+
+When someone tunes the drive, these fail and name the number to update.
 
 ## The planner
 
@@ -277,9 +303,9 @@ takes its frame from the predicted path only.
 
 | Where | What |
 |---|---|
-| `crates/traversal_planner/` | pure: `Section`, `SectionQuery`, `Plan`, `Planner`, `TransitionModel`s, `GaitParams`, the scene format, a strip sampler for authored scenes, the SVG writer, `section_svg` bin |
+| `crates/traversal_planner/` | pure: `Section`, `SectionQuery`, `Plan`, `Planner`, `TransitionModel`s, `GaitParams`, the scene format, `sample_section` over a `SphereCaster`, `ShapeCaster` for authored scenes, the SVG writer, `section_svg` bin |
 | `crates/traversal_planner_web/` | the wasm front end (`wasm-bindgen`) and its HTML page |
-| `src/traversal/` | game side: `PathPredictor`, `SectionSampler` over `PhysicsWorld`, `PlanTracker`, `PlanOverlay`, the capture key |
+| `src/traversal/` | game side: `PathPredictor`, `PhysicsCaster` (a `SphereCaster` over `PhysicsWorld`), `PlanTracker`, `PlanOverlay`, the capture key |
 
 The repo becomes a Cargo workspace with the game crate at its root and the two
 crates under `crates/`. `default-members` stays the game, so `cargo test` and
@@ -311,9 +337,16 @@ Authored scenes are side-view shapes (boxes, ramps, polylines), each `Static`
 or `Loose(mass)`, with a sideways extent `d_min..d_max` that defaults to the
 whole strip. A plain gait scene is then a pure side view, and a stone off the
 line is one shape with a narrow extent. Shapes can be tilted across the path
-too. The crate's strip sampler casts spheres at the same two radii and the
-same lanes as the game, so an authored scene's section follows the same rules
-as a real one. Captured scenes carry the game's section verbatim.
+too. Captured scenes carry the game's section verbatim.
+
+One procedure samples every section, `sample_section`, over a `SphereCaster`:
+sphere casts down and up at a point of the path. The game implements it over
+`PhysicsWorld::cast_sphere`; authored scenes implement it with `ShapeCaster`,
+exact casts against their shapes (a sphere coming down first touches a
+shape's top face, one of its top edges or a corner). So where surfaces split,
+which samples count as footholds and what the layers mean are written once.
+The caster tells bodies apart by an opaque `BodyKey` that only the sampler
+compares, to split surfaces at a change of body.
 
 ### `section_svg` (CLI)
 
@@ -392,7 +425,7 @@ until E.
 | A | Workspace, planner crate: `Section` strip and `SectionQuery`, `Plan`, `Stride`, beam search, scene format, `section_svg` with both views | the plank bridge, lips of 3–40 cm, stepping stones in line and zigzagged off it, and a stone tilted across the path as authored scenes, read as SVGs |
 | B | Property tests, a breaking fixture for each, fuzzer | fuzz sweep clean; every property shown able to fail |
 | C | Web tool | published; you can author and tune the bridge in it |
-| D | `SectionSampler` and `PathPredictor` in game, `PlanOverlay`, capture key; plan drawn but not acted on | captures of every Traversal Garden station plan the same as their authored versions; section (five lanes) + plan under 0.5 ms per frame |
+| D | `PhysicsCaster` and `PathPredictor` in game, `PlanOverlay`, capture key, the drive contract checks; plan drawn but not acted on | captures of every Traversal Garden station plan the same as their authored versions; the drive contract checks pass, with `GaitParams` set from what they measured; section (five lanes) + plan under 0.5 ms per frame |
 | E | `PlanTracker`: drive and takeoffs through contacts | `traversal --summary` beats the baseline on every station, churn and divergence measured, rubble lane crossed |
 | F | `FootPlacer` reads footfalls and their timing from the plan | the legs alternate plank to plank; clipping and unplanted legs measured as in the baseline |
 
