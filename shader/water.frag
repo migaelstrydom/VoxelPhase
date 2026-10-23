@@ -7,7 +7,6 @@
 #include "swell.glsl"
 #include "chop.glsl"
 #include "aerial.glsl"
-#include "caustics.glsl"
 
 // --- Tuning constants ---
 const float REFRACTION_STRENGTH = 0.01;
@@ -495,11 +494,6 @@ void main() {
     }
 
     vec3 terrainColor = texture(colorSampler, refractedUV).rgb;
-    // The sun focused onto the floor by the waves. Read at the floor behind
-    // this pixel; the refraction moves the lookup by a few pixels only.
-    if (!sheet) {
-        terrainColor *= causticLight(behindPos, groundDepth, L, footprint, time);
-    }
 
     float refractedTerrainDist = linearizeDepth(refractedDepthRaw, near, far);
     float refractedOpticalDepth = max(refractedTerrainDist - waterDist, 0.0);
