@@ -1,0 +1,13 @@
+// A lip 60 cm up across the whole strip, a metre ahead: past the 0.46 m a 3 m/s takeoff can hop, and with no ledge grab yet, refused.
+TraversalScene(
+    ground: Authored(AuthoredGround(
+        base: Some(0.0),
+        shapes: [
+            Shape(form: Block(from: 1.0, to: 4.0, top: 0.6), footing: Fixed),
+        ],
+    )),
+    body: BodyState(s: 0.0, z: 0.25, speed: 3.0, climb: 0.0),
+    lead: LeftFoot,
+    intent: Intent(speed: 3.0),
+    expect: Some(Refuses),
+)

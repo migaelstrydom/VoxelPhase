@@ -1,0 +1,16 @@
+// One stone over a void between two banks, its top tilted across the path
+// by 0.4 m per metre (22°) and turned 0.2 rad: loose, 60 kg, at rest.
+TraversalScene(
+    ground: Authored(AuthoredGround(
+        base: None,
+        shapes: [
+            Shape(form: Block(from: -1.0, to: 0.4, top: 0.0), footing: Fixed),
+            Shape(form: Block(from: 0.9, to: 1.4, top: 0.05, tilt: 0.4), across: Some((-0.3, 0.3)), yaw: 0.2, footing: Loose(mass: 60.0, resting: true)),
+            Shape(form: Block(from: 1.9, to: 4.0, top: 0.0), footing: Fixed),
+        ],
+    )),
+    body: BodyState(s: 0.0, z: 0.25, speed: 3.0, climb: 0.0),
+    lead: LeftFoot,
+    intent: Intent(speed: 3.0),
+    expect: Some(Crosses),
+)

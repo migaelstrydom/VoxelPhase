@@ -77,7 +77,7 @@ impl Default for PlannerSettings {
             footfall_spacing: 0.06,
             horizon: 1.6,
             landing_leads: vec![0.5, 0.25, 0.0],
-            takeoff_setbacks: vec![0.0, 0.15, 0.3],
+            takeoff_setbacks: vec![0.0, 0.15, 0.3, 0.5, 0.8],
             min_flight: 0.1,
             step_rate: 2.5,
             commit_tolerance: 0.03,

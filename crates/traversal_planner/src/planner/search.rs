@@ -164,7 +164,7 @@ impl Planner {
                 }
                 continue;
             }
-            if node.state.body.s > nodes[furthest].state.body.s {
+            if self.further(node, &nodes[furthest]) {
                 furthest = index;
             }
 
@@ -257,6 +257,19 @@ impl Planner {
                 footing: Footing::Fixed,
             },
             footfalls: 0,
+        }
+    }
+
+    /// Whether `node` got further than `other`, or as far (within the
+    /// lattice's spacing) for less: what a refusal shows is the cheapest way
+    /// to where the way runs out.
+    fn further(&self, node: &Node, other: &Node) -> bool {
+        let spacing = self.settings.footfall_spacing;
+        let reach = |node: &Node| (node.state.body.s / spacing).floor() as i64;
+        match reach(node).cmp(&reach(other)) {
+            Ordering::Greater => true,
+            Ordering::Equal => node.cost < other.cost,
+            Ordering::Less => false,
         }
     }
 
