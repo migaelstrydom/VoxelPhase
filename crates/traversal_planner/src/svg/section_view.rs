@@ -1,8 +1,10 @@
+use crate::planner::{Planned, Refusal};
 use crate::scene::{AuthoredGround, Ground, Shape, TraversalScene};
-use crate::section::{Profile, Section, SurfacePoint};
+use crate::section::{Profile, Section, StripQuery, SurfacePoint};
 
 use super::canvas::{Canvas, Viewport};
 use super::palette;
+use super::plan_view::draw_plan;
 
 /// Pixels per metre, on both axes of both views.
 const SCALE: f32 = 300.0;
@@ -13,8 +15,14 @@ const PADDING: f32 = 0.15;
 /// Metres between grid lines.
 const GRID_STEP: f32 = 0.5;
 
-/// The scene's section in a side view over a top-down strip.
-pub fn render_scene(title: &str, scene: &TraversalScene, section: &Section) -> String {
+/// The scene's section in a side view over a top-down strip, with the
+/// planner's answer over it when there is one.
+pub fn render_scene(
+    title: &str,
+    scene: &TraversalScene,
+    section: &Section,
+    outcome: Option<&Result<Planned, Refusal>>,
+) -> String {
     let s_min = scene.body.s - section.layout.behind;
     let s_max = scene.body.s + section.layout.ahead;
     let (z_min, z_max) = height_range(scene, section);
@@ -89,6 +97,21 @@ pub fn render_scene(title: &str, scene: &TraversalScene, section: &Section) -> S
             palette::BODY
         ),
     );
+
+    if let Some(outcome) = outcome {
+        let (plan, refused) = match outcome {
+            Ok(planned) => (&planned.plan, false),
+            Err(refusal) => (&refusal.partial, true),
+        };
+        draw_plan(
+            &mut canvas,
+            &side,
+            &top,
+            &StripQuery::new(section),
+            plan,
+            refused,
+        );
+    }
 
     legend(&mut canvas, width, top_view_top - 10.0);
     canvas.finish()

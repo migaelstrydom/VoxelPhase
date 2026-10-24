@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::params::GaitParams;
 use crate::plan::{BodyState, Limb};
+use crate::planner::PlanRequest;
 use crate::section::{sample_section, Section, StripLayout};
 
 use super::authored::AuthoredGround;
@@ -58,6 +59,16 @@ impl TraversalScene {
 
     pub fn to_ron(&self) -> Result<String, ron::Error> {
         ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+    }
+
+    /// What the planner is asked for in this scene, with no plan before it.
+    pub fn request(&self) -> PlanRequest<'static> {
+        PlanRequest {
+            body: self.body,
+            lead: self.lead,
+            target_speed: self.intent.speed,
+            previous: None,
+        }
     }
 
     /// The section the planner reads: an authored scene sampled by the same

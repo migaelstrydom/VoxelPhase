@@ -8,6 +8,12 @@ pub const SHAPE_EDGE: &str = "#b0b0b0";
 pub const BODY_FLOOR: &str = "#2b6cb0";
 pub const CEILING: &str = "#805ad5";
 pub const BODY: &str = "#2b6cb0";
+/// The planned path of the bottom-sphere centre.
+pub const BODY_PATH: &str = "#1a202c";
+/// The partial plan of a refusal: where the way ran out.
+pub const REFUSED: &str = "#c53030";
+pub const LEFT_FOOT: &str = "#3182ce";
+pub const RIGHT_FOOT: &str = "#dd6b20";
 pub const GRID: &str = "#eeeeee";
 pub const LABEL: &str = "#555555";
 

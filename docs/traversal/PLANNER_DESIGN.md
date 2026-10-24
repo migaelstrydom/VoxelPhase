@@ -231,14 +231,23 @@ trait TransitionModel {
 
 The first version has one model, `Stride`. It proposes the next footfall from
 `footholds`, within stride length, rise and drop limits and a sideways
-window around the foot's natural offset (wide enough for a cross-step), with
-a flight if the gap or rise needs one.
+window around the foot's natural offset (wide enough for a cross-step). For
+each, the body lands with the foot, behind it by a fraction of the step
+(halfway when walking, over the foot when hopping), resting on a body floor it
+can stand on. It gets there by riding the floor all the way, or by riding to a
+takeoff and flying, with the foot pushing off once the body is over or past it.
+So the capsule is held up by the ground under it at every landing, a gap wider
+than the capsule is flown rather than straddled, and across stepping stones the
+body passes over each stone.
 
-- **Search.** Candidate footfalls are discretised every few cm along `s` and
-  by lane across it, and a beam search runs out to the horizon, about 3 m or
-  two to three strides. Ordering by `s` is what keeps the search small: the
-  next footfall is always further along than the last. The beam width and expansion count are bounded, which
-  bounds the cost per frame.
+- **Search.** Candidate footfalls lie on a lattice, every few cm along `s`
+  and by lane across it. Footfalls only move forward, so the lattice is
+  searched in order of `s`, keeping the cheapest way to each cell (a
+  footfall, its foot, and where the body landed with it): a dynamic programme
+  whose cost is bounded by the lattice's size. A plan is done when the body
+  passes the horizon, about 1.6 m ahead, so its last footfall stays inside the
+  3 m strip. When none does, the planner refuses and returns the cheapest
+  plan to the furthest point reached, which is where the way runs out.
 - **Cost.** Time to the horizon, deviation from the speed the stick asks
   for, uneven stride lengths, feet far from their natural offset (a
   cross-step costs more), flights (they cost a little), and footing:
@@ -303,9 +312,9 @@ takes its frame from the predicted path only.
 
 | Where | What |
 |---|---|
-| `crates/traversal_planner/` | pure: `Section`, `SectionQuery`, `Plan`, `Planner`, `TransitionModel`s, `GaitParams`, the scene format, `sample_section` over a `SphereCaster`, `ShapeCaster` for authored scenes, the SVG writer, `section_svg` bin |
+| `crates/traversal_planner/` | pure: `Section`, `SectionQuery` and `StripQuery` over a sampled strip, `Plan`, `Planner`, `TransitionModel`s, `GaitParams`, the scene format, `sample_section` over a `SphereCaster`, `ShapeCaster` for authored scenes, the SVG writer, `section_svg` bin |
 | `crates/traversal_planner_web/` | the wasm front end (`wasm-bindgen`) and its HTML page |
-| `src/traversal/` | game side: `PathPredictor`, `PhysicsCaster` (a `SphereCaster` over `PhysicsWorld`), `PlanTracker`, `PlanOverlay`, the capture key |
+| `src/traversal/` | game side: `PathPredictor`, `PhysicsCaster` (a `SphereCaster` over `PhysicsWorld`), `PlanTracker`, `PlanOverlay`, the capture key; `section_capture` bin |
 
 The repo becomes a Cargo workspace with the game crate at its root and the two
 crates under `crates/`. `default-members` stays the game, so `cargo test` and
@@ -442,7 +451,7 @@ until E.
 
 | | Milestone | Exit check |
 |---|---|---|
-| A | Workspace, planner crate: `Section` strip and `SectionQuery`, `Plan`, `Stride`, beam search, scene format, `section_svg` with both views; `PhysicsCaster` and `section_capture` | authored: the Traversal Garden plank bridge (yawed, loose planks), lips of 3–40 cm, stepping stones in line and zigzagged off it, a stone tilted across the path, a vertical wall (refused); captured: a crate pile in a crater and two or three other settled rubble scenes, each with its expected outcome; all read as SVGs |
+| A | Workspace, planner crate: `Section` strip and `SectionQuery`, `Plan`, `Stride`, the footfall search, scene format, `section_svg` with both views; `PhysicsCaster` and `section_capture` | authored: the Traversal Garden plank bridge (yawed, loose planks), lips of 3–40 cm, stepping stones in line and zigzagged off it, a stone tilted across the path, a vertical wall (refused); captured: a crate pile in a crater and two or three other settled rubble scenes, each with its expected outcome; all read as SVGs |
 | B | Property tests, a breaking fixture for each, fuzzer | fuzz sweep clean; every property shown able to fail |
 | C | Web tool | published; you can author and tune the bridge in it |
 | D | `PathPredictor` in game, `PlanOverlay`, capture key, the drive contract checks; plan drawn but not acted on | captures of every Traversal Garden station plan the same as their authored versions; the drive contract checks pass, with `GaitParams` set from what they measured; section (five lanes) + plan under 0.5 ms per frame |

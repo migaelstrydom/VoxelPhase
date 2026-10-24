@@ -74,3 +74,25 @@ pub struct Phase {
     pub contacts: SmallVec<[Contact; 2]>,
     pub motion: Motion,
 }
+
+impl Phase {
+    /// Where along the path the body is when the phase ends.
+    pub fn end_s(&self) -> f32 {
+        match self.motion {
+            Motion::Grounded { to, .. } => to,
+            Motion::Flight { takeoff, .. } => takeoff.s + takeoff.speed * self.duration,
+        }
+    }
+
+    /// Height of the bottom-sphere centre at `s` in a flight; `None` for a
+    /// grounded phase, whose height is the floor's.
+    pub fn flight_height(&self, s: f32) -> Option<f32> {
+        match self.motion {
+            Motion::Grounded { .. } => None,
+            Motion::Flight { takeoff, gravity } => {
+                let t = (s - takeoff.s) / takeoff.speed;
+                Some(takeoff.z + takeoff.climb * t - 0.5 * gravity * t * t)
+            }
+        }
+    }
+}

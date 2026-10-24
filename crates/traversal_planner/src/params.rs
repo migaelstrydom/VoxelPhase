@@ -1,6 +1,10 @@
 //! What the body and its legs can do: the limits every plan keeps within.
 
+use std::ops::Range;
+
 use serde::{Deserialize, Serialize};
+
+use crate::plan::Limb;
 
 /// The capsule that is the body.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -13,6 +17,9 @@ pub struct BodyDims {
     /// over on its contacts. Steeper, as on a step's rounded lip or out of a
     /// wide gap, it has to fly.
     pub max_ground_slope_degrees: f32,
+    /// Fastest change of speed along the path the drive gives on the ground,
+    /// in m/s².
+    pub max_acceleration: f32,
 }
 
 impl BodyDims {
@@ -29,11 +36,16 @@ impl Default for BodyDims {
             radius: 0.25,
             height: 1.0,
             max_ground_slope_degrees: 40.0,
+            max_acceleration: 8.0,
         }
     }
 }
 
 /// A foot, and how far it may land from where it naturally falls.
+///
+/// A foot's offset across the path: the left foot's natural offset is
+/// `+stance_half_width`, the right's `-stance_half_width`; outward is away
+/// from the path.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FootDims {
     /// Radius of the foothold casts, in metres: a sole's size.
@@ -47,6 +59,15 @@ pub struct FootDims {
     pub reach_in: f32,
     /// Steepest ground, in degrees from level, a foot can stand on.
     pub max_slope_degrees: f32,
+    /// Deepest a foot reaches below the capsule's bottom, in metres: down
+    /// into a dip the body rides over.
+    pub below_body: f32,
+    /// Highest a foot lands above the capsule's bottom, in metres: onto a lip
+    /// the capsule is still rounding.
+    pub above_body: f32,
+    /// Least distance from a foothold to its surface's edge, in metres: less,
+    /// and the sole hangs off.
+    pub min_edge_margin: f32,
 }
 
 impl Default for FootDims {
@@ -57,6 +78,28 @@ impl Default for FootDims {
             reach_out: 0.15,
             reach_in: 0.15,
             max_slope_degrees: 50.0,
+            below_body: 0.35,
+            above_body: 0.1,
+            min_edge_margin: 0.04,
+        }
+    }
+}
+
+impl FootDims {
+    /// Where `limb` lands across the path on open ground.
+    pub fn natural_offset(&self, limb: Limb) -> f32 {
+        match limb {
+            Limb::LeftFoot => self.stance_half_width,
+            Limb::RightFoot => -self.stance_half_width,
+        }
+    }
+
+    /// The offsets across the path `limb` may land at.
+    pub fn reach(&self, limb: Limb) -> Range<f32> {
+        let natural = self.natural_offset(limb);
+        match limb {
+            Limb::LeftFoot => natural - self.reach_in..natural + self.reach_out,
+            Limb::RightFoot => natural - self.reach_out..natural + self.reach_in,
         }
     }
 }

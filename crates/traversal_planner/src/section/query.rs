@@ -1,7 +1,8 @@
 use std::ops::Range;
 
+use crate::params::GaitParams;
 use crate::path::PathVec;
-use crate::plan::Motion;
+use crate::plan::Phase;
 
 use super::surface::Footing;
 
@@ -14,6 +15,17 @@ pub struct FloorHit {
     pub normal: PathVec,
     /// What holds the floor up there.
     pub footing: Footing,
+}
+
+/// How far the body can ride the floor on its contacts from one point.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ride {
+    /// The furthest `s` reached: the end asked for, or where the floor stops,
+    /// turns too steep for the drive, or leaves too little headroom.
+    pub end: f32,
+    /// Height gained and lost on the way, in metres: the dips and bumps the
+    /// capsule rides through, which it feels as snags and bounces.
+    pub vertical_travel: f32,
 }
 
 /// A place a foot could land.
@@ -37,6 +49,9 @@ pub struct FootholdWindow {
     pub s: Range<f32>,
     /// Across the path.
     pub d: Range<f32>,
+    /// Least distance along `s` between two footholds returned on one line
+    /// across the path: the resolution the planner searches at.
+    pub spacing: f32,
 }
 
 /// How the planner reads the ground. The strip of lanes is the first
@@ -46,12 +61,13 @@ pub trait SectionQuery {
     /// The body floor under the path at `s`; `None` over a drop with no floor
     /// in reach.
     fn floor(&self, s: f32) -> Option<FloorHit>;
-
-    /// Every standable foothold in `window`, appended to `out` at the
-    /// section's resolution. The planner judges which is best.
+    /// The body riding its floor from `from` toward `to` (`from <= to`).
+    fn ride(&self, from: f32, to: f32, params: &GaitParams) -> Ride;
+    /// Every standable foothold in `window`, appended to `out`. The planner
+    /// judges which is best.
     fn footholds(&self, window: &FootholdWindow, out: &mut Vec<Foothold>);
-
-    /// Whether the capsule, its bottom-sphere centre following `motion`, stays
-    /// on or above the body floor and keeps its top sphere under the ceiling.
-    fn clears(&self, motion: &Motion) -> bool;
+    /// Whether the body can move as `phase` says: riding a floor it can be
+    /// driven over, or flying with clearance over the floor and under the
+    /// ceiling.
+    fn clears(&self, phase: &Phase, params: &GaitParams) -> bool;
 }

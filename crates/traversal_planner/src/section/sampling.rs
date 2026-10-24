@@ -73,6 +73,7 @@ pub fn sample_section(
 
     Section {
         layout: layout.clone(),
+        origin,
         body_radius,
         foot_radius,
         body_floor,

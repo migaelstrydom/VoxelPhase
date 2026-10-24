@@ -1,5 +1,7 @@
-//! Draw a traversal scene's section as an SVG: a side view over a top-down
-//! strip of the lanes, sharing the `s` axis, at true aspect.
+//! Plan a traversal scene and draw it as an SVG: the section in a side view
+//! over a top-down strip of the lanes, sharing the `s` axis, at true aspect,
+//! with the plan over it (or, for a refusal, how far it got, in red). Prints
+//! each scene's outcome, and the outcome it expects.
 //!
 //! ```text
 //! cargo run --release -p traversal_planner --bin section_svg -- fixtures/zigzag_stones.ron -o out.svg
@@ -20,8 +22,9 @@
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
 
+use traversal_planner::section::StripQuery;
 use traversal_planner::svg::render_scene;
-use traversal_planner::TraversalScene;
+use traversal_planner::{Planner, PlannerSettings, TraversalScene};
 
 fn main() {
     let mut scenes = Vec::new();
@@ -61,8 +64,31 @@ fn main() {
 fn draw(scene_path: &Path, target: &Path) -> Result<(), String> {
     let text = fs::read_to_string(scene_path).map_err(|error| error.to_string())?;
     let scene = TraversalScene::from_ron(&text).map_err(|error| error.to_string())?;
-    let title = scene_path.file_stem().unwrap_or_default().to_string_lossy();
-    let svg = render_scene(&title, &scene, &scene.section());
+    let name = scene_path.file_stem().unwrap_or_default().to_string_lossy();
+    let section = scene.section();
+    let planner = Planner::new(scene.params.clone(), PlannerSettings::default());
+    let outcome = planner.plan(&StripQuery::new(&section), &scene.request());
+    let verdict = match &outcome {
+        Ok(planned) => format!("crosses, cost {:.2}", planned.cost),
+        Err(refusal) => format!(
+            "refuses, the way runs out at s = {:.2}",
+            refusal
+                .partial
+                .phases
+                .last()
+                .map_or(scene.body.s, |phase| phase.end_s())
+        ),
+    };
+    let expected = scene.expect.map_or(String::new(), |expected| {
+        format!(" (expected: {expected:?})")
+    });
+    eprintln!("{name}: {verdict}{expected}");
+    let svg = render_scene(
+        &format!("{name}: {verdict}"),
+        &scene,
+        &section,
+        Some(&outcome),
+    );
     if let Some(dir) = target.parent() {
         fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     }

@@ -3,6 +3,7 @@
 
 mod canvas;
 mod palette;
+mod plan_view;
 mod section_view;
 
 pub use section_view::render_scene;

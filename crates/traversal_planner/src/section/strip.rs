@@ -71,6 +71,9 @@ pub struct FootholdLane {
 pub struct Section {
     /// Where the strip sampled.
     pub layout: StripLayout,
+    /// The body's `s` when sampled: the stations of each line are
+    /// `origin - layout.behind + k * spacing`.
+    pub origin: f32,
     /// Radius of the body floor and ceiling casts: the capsule's.
     pub body_radius: f32,
     /// Radius of the foothold casts: a foot's.
