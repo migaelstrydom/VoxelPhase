@@ -42,13 +42,16 @@ pub struct SphereCast<'a> {
 }
 
 /// What a [`SphereCast`] can touch besides the static geometry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CastObstacles {
     /// Every body not excluded.
     Everything,
     /// Static bodies only: the level's fixed pieces, not what moves through
     /// it.
     Scenery,
+    /// Every body not excluded but dynamic ones whose surface moves faster
+    /// than `fastest` m/s: what stands, not what flies.
+    Settled { fastest: f32 },
 }
 
 impl SphereCast<'_> {

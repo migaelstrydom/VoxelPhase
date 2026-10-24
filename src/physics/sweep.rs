@@ -378,6 +378,9 @@ pub struct BodySweep<'a> {
     /// Whether only static bodies are obstacles, so anything that moves is
     /// passed through.
     scenery_only: bool,
+    /// Fastest a dynamic body's surface may move, in m/s, for it to be an
+    /// obstacle: faster, it is passed through.
+    fastest: f32,
 }
 
 impl<'a> BodySweep<'a> {
@@ -387,7 +390,15 @@ impl<'a> BodySweep<'a> {
             static_geometry: None,
             solid_bodies: false,
             scenery_only: false,
+            fastest: f32::INFINITY,
         }
+    }
+
+    /// Dynamic bodies whose surface moves faster than `fastest` m/s are
+    /// passed through: what flies, not what stands.
+    pub fn slower_than(mut self, fastest: f32) -> Self {
+        self.fastest = fastest;
+        self
     }
 
     /// Only static bodies are obstacles; dynamic and kinematic ones are
@@ -527,6 +538,9 @@ impl<'a> BodySweep<'a> {
         near.retain(|(body, _)| {
             !exclude.contains(body)
                 && (!self.scenery_only || world.body(*body).is_some_and(|b| b.is_static()))
+                && (self.fastest == f32::INFINITY
+                    || world.body(*body).is_some_and(|b| !b.is_dynamic())
+                    || world.surface_speed(*body) <= self.fastest)
         });
         near
     }
@@ -708,6 +722,32 @@ mod tests {
                 hit.distance
             );
         }
+    }
+
+    /// A sweep slower than a speed passes through a dynamic body moving
+    /// faster, sees one moving slower, and sees a static one whatever.
+    #[test]
+    fn slower_than_passes_through_what_flies() {
+        let sphere = ColliderShape::Sphere { radius: 0.1 };
+        let view = ShapeView {
+            center: Point3::new(0.0, 3.0, 0.0),
+            rotation: nalgebra::UnitQuaternion::identity(),
+            shape: &sphere,
+        };
+        let meets = |body: RigidBodyDesc| {
+            let mut world = world();
+            let handle = world.create_body(body.position(Point3::new(0.0, 0.5, 0.0)));
+            world.attach_collider(handle, ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5)));
+            BodySweep::new(&world)
+                .slower_than(2.0)
+                .cast_shape(&view, down(3.0), &[])
+                .is_some()
+        };
+        let moving = |speed: f32| RigidBodyDesc::dynamic().linear_velocity(Vector3::x() * speed);
+
+        assert!(meets(moving(1.0)), "moving slower than 2 m/s");
+        assert!(!meets(moving(3.0)), "in flight");
+        assert!(meets(RigidBodyDesc::static_body()), "static");
     }
 
     /// A sphere touching a ball from below passes out of it unseen moving

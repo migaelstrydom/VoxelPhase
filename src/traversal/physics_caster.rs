@@ -12,8 +12,14 @@ use super::path_frame::PathFrame;
 /// The key of the static geometry, which like a fixed authored shape is one
 /// body.
 const STATIC_GEOMETRY: BodyKey = BodyKey(0);
+/// How fast a dynamic body's surface may move, in m/s, for the strip to see
+/// it: faster, it is in flight, not ground, and gone from where it is before
+/// a step could land on it. A blast's pieces are passed through until they
+/// slow.
+pub const IN_FLIGHT_SPEED: f32 = 2.0;
+
 /// The planner's sphere casts in the physics world: the terrain and every
-/// body, rubble and spawnables included.
+/// body, rubble and spawnables included, but those in flight.
 ///
 /// Casts reach from `bottom` to `top`: one asked to start beyond either
 /// starts there.
@@ -46,7 +52,9 @@ impl PhysicsCaster<'_> {
             radius,
             exclude: self.exclude,
             solid_bodies: false,
-            obstacles: CastObstacles::Everything,
+            obstacles: CastObstacles::Settled {
+                fastest: IN_FLIGHT_SPEED,
+            },
         };
         let hit = self.world.cast_sphere(self.scenery, &cast)?;
         let (body, footing) = match hit.body {

@@ -8,6 +8,7 @@ use traversal_planner::GaitParams;
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
 
 use super::path_frame::PathFrame;
+use super::physics_caster::IN_FLIGHT_SPEED;
 
 /// How far a body moves before the casts around it are dropped, in metres.
 const MOVED: f32 = 0.01;
@@ -22,6 +23,8 @@ struct Pose {
     rotation: UnitQuaternion<f32>,
     /// Radius of a sphere round the body, in metres.
     reach: f32,
+    /// Whether the strip's casts see it: not in flight.
+    settled: bool,
 }
 
 impl Pose {
@@ -137,7 +140,10 @@ impl SectionCache {
     /// may have made stale. A body is forgotten around once it has moved or
     /// turned past [`MOVED`] or [`TURNED`] since it last was, both where it
     /// was then and where it is now; till then its casts are good to within
-    /// that. A body that went to sleep or was removed gets a last look.
+    /// that. A body in flight ([`IN_FLIGHT_SPEED`]) is not seen by the casts:
+    /// it is forgotten around where it took off and where it slows again,
+    /// not on the way. A body that went to sleep or was removed gets a last
+    /// look.
     pub fn forget_what_moved(
         &mut self,
         world: &PhysicsWorld,
@@ -160,12 +166,19 @@ impl SectionCache {
                 position: body.position(),
                 rotation: body.rotation(),
                 reach: world.reach(handle),
+                settled: !awake || world.surface_speed(handle) <= IN_FLIGHT_SPEED,
             };
             match self.poses.get(&handle) {
                 None => {
+                    // Woken this frame, where the casts saw it at rest.
+                    if !now.settled {
+                        stale.push((now.position, now.reach));
+                    }
                     self.poses.insert(handle, now);
                 }
-                Some(then) if then.moved_from(&now) => {
+                Some(then)
+                    if then.settled != now.settled || (now.settled && then.moved_from(&now)) =>
+                {
                     stale.push((then.position, then.reach));
                     stale.push((now.position, now.reach));
                     self.poses.insert(handle, now);

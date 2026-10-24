@@ -549,8 +549,10 @@ impl PhysicsWorld {
         if cast.solid_bodies {
             sweep = sweep.solid_bodies();
         }
-        if cast.obstacles == CastObstacles::Scenery {
-            sweep = sweep.scenery_only();
+        match cast.obstacles {
+            CastObstacles::Everything => {}
+            CastObstacles::Scenery => sweep = sweep.scenery_only(),
+            CastObstacles::Settled { fastest } => sweep = sweep.slower_than(fastest),
         }
         let hit = sweep.cast_shape(&view, cast.direction * cast.length, cast.exclude)?;
         Some(SphereCastHit {
@@ -573,6 +575,14 @@ impl PhysicsWorld {
             .get(handle.0)
             .into_iter()
             .flat_map(|body| body.envelope(&self.colliders))
+    }
+
+    /// The fastest any point of a body's envelope moves, m/s, at most: its
+    /// origin's speed and its spin at its reach.
+    pub fn surface_speed(&self, handle: RigidBodyHandle) -> f32 {
+        self.body(handle).map_or(0.0, |body| {
+            body.linear_velocity().norm() + body.angular_velocity().norm() * self.reach(handle)
+        })
     }
 
     /// How far a body's envelope reaches from its origin, m: the radius of

@@ -547,7 +547,11 @@ ground fails even when both refuse; the lips are authored as the voxels mesh
 them, sloped across the voxel at the face. The Stack Yard check
 (`stack_yard_places`) plans places that planned wrongly in play to the
 outcome they should have: the ball pit from its rim, and running along the
-pyramid's first step pressed into the next step's face. Planned:
+pyramid's first step pressed into the next step's face. The strip's casts
+pass through dynamic bodies whose surface moves faster than 2 m/s: a blast's
+pieces in flight are not ground, and are seen again where they slow, which
+keeps a blast's first second to 0.4 ms of sampling a frame (median; 1.6 ms
+at the 99th percentile) instead of 4. Planned:
 
 - **`PlanOverlay`**: the plan through `DebugOverlays`. Footfalls as discs
   (left and right coloured, committed solid, tentative faded), flight arcs,
