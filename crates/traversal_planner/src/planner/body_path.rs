@@ -23,6 +23,10 @@ pub enum BodySegment {
         landing_z: f32,
         /// Downward acceleration, in m/s².
         gravity: f32,
+        /// Whether a foot pushed it off: a hop, which a foot lands. A body
+        /// rolling off ground that falls away is not pushed and needs no
+        /// foot at either end, and no foot lands while it flies.
+        pushed: bool,
     },
 }
 
@@ -101,11 +105,25 @@ impl BodyPath {
         self.segments.last().map(BodySegment::to)
     }
 
-    /// The flights, in order.
-    pub fn flights(&self) -> impl Iterator<Item = &BodySegment> {
+    /// The hops, the flights feet push off for and land, in order.
+    pub fn hops(&self) -> impl Iterator<Item = &BodySegment> {
         self.segments
             .iter()
-            .filter(|segment| matches!(segment, BodySegment::Flight { .. }))
+            .filter(|segment| matches!(segment, BodySegment::Flight { pushed: true, .. }))
+    }
+
+    /// Where along the path the body rolls off ground and flies unpushed,
+    /// `(takeoff, landing)` in order: no foot lands within one.
+    pub fn roll_offs(&self) -> impl Iterator<Item = (f32, f32)> + '_ {
+        self.segments.iter().filter_map(|segment| match *segment {
+            BodySegment::Flight {
+                takeoff,
+                landing,
+                pushed: false,
+                ..
+            } => Some((takeoff.s, landing)),
+            _ => None,
+        })
     }
 
     /// The segment the body is in at `s`, a flight's landing counting as the
@@ -153,14 +171,18 @@ impl BodyPath {
     }
 
     /// The path as far as feet that last landed with the body at `landed`
-    /// carry it: up to the takeoff of the first flight landing past there.
+    /// carry it: up to the takeoff of the first hop landing past there.
     pub fn until_unlanded(&self, landed: f32) -> BodyPath {
         let segments = self
             .segments
             .iter()
             .take_while(|segment| match segment {
-                BodySegment::Flight { landing, .. } => *landing <= landed + LANDED_TOLERANCE,
-                BodySegment::Ride { .. } => true,
+                BodySegment::Flight {
+                    landing,
+                    pushed: true,
+                    ..
+                } => *landing <= landed + LANDED_TOLERANCE,
+                _ => true,
             })
             .copied()
             .collect();

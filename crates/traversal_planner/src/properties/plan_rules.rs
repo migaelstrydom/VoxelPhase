@@ -34,8 +34,9 @@ pub fn check_plan(plan: &Plan, query: &dyn SectionQuery, params: &GaitParams) ->
             );
         }
         if let Motion::Flight { takeoff, .. } = phase.motion {
-            if !(-TOLERANCE..=params.flight.max_takeoff_climb + TOLERANCE).contains(&takeoff.climb)
-            {
+            // No floor on the climb: a body rolling off ground that falls
+            // away leaves it moving down.
+            if takeoff.climb > params.flight.max_takeoff_climb + TOLERANCE {
                 broke(
                     Rule::ClimbWithinLimits,
                     phase.start,

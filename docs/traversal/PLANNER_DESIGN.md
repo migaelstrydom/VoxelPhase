@@ -195,9 +195,10 @@ predictions are engine behaviour written down as numbers:
 
 - a grounded phase has the capsule's bottom sphere ride the body floor the
   cast found, which holds only while its contacts behave like the cast
-  sphere;
-- `max_ground_slope_degrees` claims how steep a floor the traction drive can
-  push the capsule up;
+  sphere, and only where the floor falls no faster than gravity follows;
+- up a slope the drive keeps the asked speed times cos²θ across the ground
+  (`BodyDims::ground_speed`), and `max_ground_slope_degrees` claims how steep
+  a floor it is ridden up;
 - a flight is ballistic, with no air steering and no jump forgiveness
   bending the arc.
 
@@ -208,11 +209,28 @@ game-side bench tests measure the drive and assert it agrees with
 
 | Check | Measures |
 |---|---|
-| Slope | the steepest ramp the capsule is actually driven up at walk and run |
-| Takeoff | the takeoff velocity the body actually leaves with, against the one commanded, and the arc it flies against the ballistic one |
-| Ride | the capsule's height over plank gaps and lips, against the body floor the cast reported |
+| Slope | ramps of 30–58° at walk and run: whether the capsule gets up, and its speed across the ground against `ground_speed` |
+| Takeoff | the takeoff velocity the body actually leaves with, against the one commanded, and the arc it flies against the ballistic one; a jump in the coyote window against one on flat ground |
+| Ride | the capsule's height over plank gaps and lips, against the body floor the cast reported, where a plan rides |
 
-When someone tunes the drive, these fail and name the number to update.
+When someone tunes the drive, these fail and name the number to update. They
+are `character_viewer contract` (`src/character_viewer/contract.rs`, on
+`levels/drive_contract.level.ron`): the real game, so the Vulkan environment.
+
+Measured on 2026-10-24:
+
+- **Slope:** the cos²θ law holds to 0.1 m/s from 30° to 58°, and the capsule
+  gets up 54°. The limit stays 40°: a slope met at speed is a collision the
+  rides do not model (the capsule stalls a frame and pops up), and a voxel
+  lip's face is a 45° bevel, which must stay a hop.
+- **Takeoff:** a jump leaves at 7.00 m/s and flies ballistic at 9.81 m/s² to
+  under a millimetre; one pressed 33 ms after running off an edge climbs the
+  same.
+- **Ride:** fails, by collisions the plan avoids or does not model. Driven
+  straight at a 25 or 40 cm lip (which a plan hops) the capsule stalls and
+  pops 6–13 cm; carried up a gap's far brow after rolling off (which a plan
+  does), it pops 5–8 cm. The first needs the body tracking the plan (E); the
+  second is either modelled as a small hop or damped by the drive in E.
 
 ## The planner
 
@@ -500,6 +518,14 @@ file, and a capture is deterministic: the same command writes the same file.
 
 ### In game
 
+Built so far (`src/traversal/`): `TraversalPlanSystem` plans the player's way
+every frame, drawn on **F6**; **F7** writes the strip, body and plan to
+`scratch/captures/`; the costs go to `DebugLog` under `Traversal/Plan`. The
+garden check (`cargo test --release --lib --features traversal_scenarios
+garden_station`) captures every station at walk and sprint and plans each
+against its authored twin; the lips are authored as the voxels mesh them,
+sloped across the voxel at the face. Planned:
+
 - **`PlanOverlay`**: the plan through `DebugOverlays`. Footfalls as discs
   (left and right coloured, committed solid, tentative faded), flight arcs,
   the body path fading out towards the horizon, section samples coloured by
@@ -548,10 +574,9 @@ until E.
   E: either a refusal plans a stop at the edge and a held push (about 0.3 s)
   allows a drop move (a flight off the edge with no `max_drop`, at a high
   cost), or drops are always allowed at a high cost. To decide with play.
-- **Small gaps:** at the default costs the body rides the 2–3 cm dip over a
-  gap narrower than the capsule (`ride_travel` 4 per metre against a hop's
-  `flight` 0.3), which is the snag the project set out to remove; hops win
-  once `ride_travel` is about 10–15. To set from the bench.
+- **Small gaps:** settled by roll-offs. A gap the body's arc crosses at its
+  speed is rolled over flat (or hopped, at the same cost), never dipped into;
+  a wide one is hopped.
 - **Coyote time:** a planned hop (0.15–0.25 s) falls inside the 0.16 s the
   locomotion state machine still treats as ground (`ground_forgiveness_window`
   then `CoyoteTime`), whose `clamp_up` cancels the takeoff climb, whose

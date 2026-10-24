@@ -18,6 +18,13 @@ const SPEED_BAND: f32 = 0.25;
 /// Spacing of the footholds looked for to tell whether a station is within a
 /// foot's reach of any, in metres.
 const SUPPORT_SPACING: f32 = 0.1;
+/// How far below the arc of a body flying free the floor may fall and still
+/// be ridden, in metres: a capsule's contacts absorb a sample's rounding,
+/// not a dip.
+const FALL_AWAY_SLACK: f32 = 0.005;
+/// How far past where a rolling body's arc meets the floor it may be carried
+/// up onto ground it can ride on, in metres: up a gap's far brow.
+const MOUNT_REACH: f32 = 0.1;
 /// Slack on reaching a station, in metres.
 const STATION_TOLERANCE: f32 = 1.0e-4;
 
@@ -263,6 +270,7 @@ impl BodySearch<'_> {
             let mut edges: SmallVec<[(usize, f32, f32, f32, BodySegment); 16]> = SmallVec::new();
             self.ride(start.s, station, speed, &mut known, &mut edges);
             self.ride_again(start.s, station, speed, &mut known, &mut edges);
+            self.roll_off(start.s, station, speed, &mut known, &mut edges);
             // A flight is checked for clearance only if it could be the
             // cheapest way yet to its landing: it lands just landed.
             let worth = |landing: usize, landing_speed: f32, edge_cost: f32| {
@@ -285,8 +293,12 @@ impl BodySearch<'_> {
                 let next_s = self.station_s(start.s, next);
                 let remaining = goal - (next_s - start.s);
                 let (landed, flown) = match arrival {
-                    BodySegment::Flight { landing, .. } => (landing, true),
-                    BodySegment::Ride { .. } => (landed, flown),
+                    BodySegment::Flight {
+                        landing,
+                        pushed: true,
+                        ..
+                    } => (landing, true),
+                    _ => (landed, flown),
                 };
                 frontier.relax(
                     Node {
@@ -360,13 +372,14 @@ impl BodySearch<'_> {
                 self.station_s(origin, next),
             );
             let ride = self.query.ride(from, to);
-            if ride.end < to - STATION_TOLERANCE {
+            if ride.end < to - STATION_TOLERANCE || self.falls_away(from, to, speed) {
                 continue;
             }
             let Some(floor) = self.query.floor(to) else {
                 continue;
             };
-            let end_speed = pace.speed_after(speed, to - from, self.target_speed, self.params);
+            let pressed_toward = self.ground_target(from, to);
+            let end_speed = pace.speed_after(speed, to - from, pressed_toward, self.params);
             if pace == Pace::Brake && end_speed >= speed {
                 continue;
             }
@@ -426,6 +439,7 @@ impl BodySearch<'_> {
                 .query
                 .floor(to)
                 .filter(|_| ridden.end >= to - STATION_TOLERANCE)
+                .filter(|_| !self.falls_away(from, to, speed))
             else {
                 continue;
             };
@@ -455,6 +469,158 @@ impl BodySearch<'_> {
                 },
             ));
         }
+    }
+
+    /// The speed across the ground the drive presses toward riding from
+    /// `from` to `to`: the asked-for speed, less what the floor's grade
+    /// between them costs.
+    fn ground_target(&self, from: f32, to: f32) -> f32 {
+        match (self.query.floor(from), self.query.floor(to)) {
+            (Some(low), Some(high)) => self
+                .params
+                .body
+                .ground_speed(self.target_speed, (high.z - low.z) / (to - from)),
+            _ => self.target_speed,
+        }
+    }
+
+    /// The grade the body leaves the floor at `s` with: the floor's over the
+    /// station before, where that falls, and level where it rises or there
+    /// is none, since the drive holds the body down off a brow rather than
+    /// launch it as off a ramp.
+    fn leaving_grade(&self, s: f32) -> f32 {
+        let step = self.settings.body_step;
+        match (self.query.floor(s - step), self.query.floor(s)) {
+            (Some(before), Some(at)) => ((at.z - before.z) / step).min(0.0),
+            _ => 0.0,
+        }
+    }
+
+    /// Where a body leaving the floor at `from` at `speed`, climbing as the
+    /// floor did, is `along` metres on: free of it, gravity pulls it down no
+    /// faster than this.
+    fn free_height(&self, from: f32, z: f32, speed: f32, along: f32) -> f32 {
+        let time = along / speed.max(MIN_PLANNING_SPEED);
+        z + self.leaving_grade(from) * along - 0.5 * self.params.gravity * time * time
+    }
+
+    /// Whether the floor between `from` and `to` drops away from the body
+    /// riding it at `speed` faster than gravity can follow: past `from` the
+    /// body flies, over a gap or off a step down, rather than dipping.
+    fn falls_away(&self, from: f32, to: f32, speed: f32) -> bool {
+        let Some(start) = self.query.floor(from) else {
+            return false;
+        };
+        let step = self.settings.body_step;
+        let stations = ((to - from) / step).round().max(1.0) as usize;
+        (1..=stations).any(|index| {
+            let along = index as f32 * step;
+            self.query.floor(from + along).is_some_and(|floor| {
+                floor.z < self.free_height(from, start.z, speed, along) - FALL_AWAY_SLACK
+            })
+        })
+    }
+
+    /// Rolling off where the floor falls away: no push, the body flies on
+    /// the speed and climb it rode with until its arc meets the floor again,
+    /// within a step for the feet to span. Meeting the far side of a gap
+    /// below its brow, it is carried up onto it, as a capsule rides up a
+    /// rounded corner, where it meets it at a slope the drive rides: it
+    /// lands on the first station near there that it can ride on from, its
+    /// climb set to reach it.
+    fn roll_off(
+        &self,
+        origin: f32,
+        station: usize,
+        speed: f32,
+        known: &mut FootReach,
+        out: &mut SmallVec<[(usize, f32, f32, f32, BodySegment); 16]>,
+    ) {
+        let (params, settings) = (self.params, self.settings);
+        let step = settings.body_step;
+        let from = self.station_s(origin, station);
+        if !self.falls_away(from, from + step, speed) {
+            return;
+        }
+        let Some(start) = self.query.floor(from) else {
+            return;
+        };
+        let longest = params.stride.max_length - 2.0 * FOOT_SLACK;
+        let last = (station + ((longest + STATION_TOLERANCE) / step).floor() as usize)
+            .min(known.len() - 1);
+        let Some(meets) = (station + 1..=last).find(|&next| {
+            let along = self.station_s(origin, next) - from;
+            self.query
+                .floor(from + along)
+                .is_some_and(|floor| floor.z >= self.free_height(from, start.z, speed, along))
+        }) else {
+            return;
+        };
+        let steepest = params.body.max_ground_slope_degrees.to_radians().cos();
+        // Where the arc meets the floor the cast's normal is the contact's:
+        // too steep, and the body strikes the far side rather than mounts it.
+        if self
+            .query
+            .floor(self.station_s(origin, meets))
+            .is_none_or(|floor| floor.normal.z < steepest)
+        {
+            return;
+        }
+        let carried = (MOUNT_REACH / step).round() as usize;
+        let Some(landing_station) = (meets..=(meets + carried).min(last)).find(|&next| {
+            let landing = self.station_s(origin, next);
+            self.query.floor(landing).is_some_and(|floor| {
+                floor.normal.z >= steepest
+                    && self.query.ride(landing, landing + step).end
+                        >= landing + step - STATION_TOLERANCE
+            }) && self.feet_can(origin, next, FootNeed::TouchDown, known)
+        }) else {
+            return;
+        };
+        let landing = self.station_s(origin, landing_station);
+        let Some(floor) = self.query.floor(landing) else {
+            return;
+        };
+        let (duration, gravity) = ((landing - from) / speed, params.gravity);
+        let takeoff = BodyState {
+            s: from,
+            z: start.z,
+            speed,
+            climb: (floor.z - start.z + 0.5 * gravity * duration * duration) / duration,
+        };
+        let phase = Phase {
+            start: 0.0,
+            duration,
+            contacts: SmallVec::new(),
+            motion: Motion::Flight { takeoff, gravity },
+        };
+        if !self.query.clears(&phase) {
+            return;
+        }
+        // Unheld as in any flight, though nothing pushed it.
+        let cost = settings.costs.flight
+            + settings.costs.ride_travel * (start.z - floor.z).abs()
+            + self.flight_churn(from, landing)
+            + slowdown_cost(
+                speed,
+                self.target_speed,
+                landing - from,
+                self.natural_step(),
+                settings,
+            );
+        out.push((
+            landing_station,
+            speed,
+            floor.z,
+            cost,
+            BodySegment::Flight {
+                takeoff,
+                landing,
+                landing_z: floor.z,
+                gravity,
+                pushed: false,
+            },
+        ));
     }
 
     /// Flying from this station to a landing up to a step ahead, where the
@@ -558,6 +724,7 @@ impl BodySearch<'_> {
                     landing,
                     landing_z: floor.z,
                     gravity,
+                    pushed: true,
                 },
             ));
         }

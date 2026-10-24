@@ -35,8 +35,11 @@ pub fn build_plan(body: &BodyPath, planted: &Contact, footfalls: &[Footfall]) ->
                 end_speed,
             } => builder.ride(segment, from, to, start_speed, end_speed),
             BodySegment::Flight {
-                takeoff, gravity, ..
-            } => builder.flight(segment, takeoff, gravity),
+                takeoff,
+                gravity,
+                pushed,
+                ..
+            } => builder.flight(segment, takeoff, gravity, pushed),
         }
     }
     builder.land_through(f32::MAX);
@@ -101,14 +104,21 @@ impl Builder<'_> {
     }
 
     /// A flight; a foot landing at its takeoff shows as a zero-long stance.
-    fn flight(&mut self, segment: &BodySegment, takeoff: BodyState, gravity: f32) {
+    /// A hop leaves the ground with both feet; rolling off it, the stance
+    /// foot stays planted behind the body.
+    fn flight(&mut self, segment: &BodySegment, takeoff: BodyState, gravity: f32, pushed: bool) {
         if self.land_through(takeoff.s) {
             self.ground(takeoff.s, takeoff.s, takeoff.speed, takeoff.speed);
         }
+        let contacts = if pushed {
+            SmallVec::new()
+        } else {
+            SmallVec::from_slice(&[self.stance])
+        };
         self.phases.push(Phase {
             start: self.body.time_at(takeoff.s),
             duration: segment.time_to(segment.to()),
-            contacts: SmallVec::new(),
+            contacts,
             motion: Motion::Flight { takeoff, gravity },
         });
     }

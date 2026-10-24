@@ -15,7 +15,10 @@ pub struct BodyDims {
     pub height: f32,
     /// Steepest body floor, in degrees from level, the capsule can be driven
     /// over on its contacts. Steeper, as on a step's rounded lip or out of a
-    /// wide gap, it has to fly.
+    /// wide gap, it has to fly. The drive climbs a long ramp far steeper
+    /// (`character_viewer contract`), but meeting a slope's foot at speed is
+    /// a collision, which stalls the capsule and pops it up, and rides do not
+    /// model it: the limit keeps a voxel lip's 45° bevel a hop.
     pub max_ground_slope_degrees: f32,
     /// Fastest change of speed along the path the drive gives on the ground,
     /// in m/s².
@@ -23,6 +26,15 @@ pub struct BodyDims {
 }
 
 impl BodyDims {
+    /// Speed across the ground the drive keeps on a floor rising `grade`
+    /// metres per metre (falling, if negative), asked for `speed` on the
+    /// level: it presses the asked speed along the floor's face, which the
+    /// contact turns into `speed·cos θ` along the slope, `speed·cos²θ` across
+    /// the ground. Measured by `character_viewer contract`.
+    pub fn ground_speed(&self, speed: f32, grade: f32) -> f32 {
+        speed / (1.0 + grade * grade)
+    }
+
     /// Height of the top sphere's centre above the bottom sphere's.
     pub fn spine(&self) -> f32 {
         self.height - 2.0 * self.radius

@@ -2,8 +2,8 @@
 //! traction drive does, measured in the real game.
 //!
 //! ```text
-//!   slope    ramps of 30..58° climbed at walk and run ─▶ steepest climbed
-//!                                                        ≥ max_ground_slope_degrees
+//!   slope    ramps of 30..58° climbed at walk and run ─▶ climbed up to max_ground_slope_degrees,
+//!                                                        at BodyDims::ground_speed
 //!   takeoff  a jump on flat ground at walk and run    ─▶ the arc it flies: gravity,
 //!            and one in the coyote window off a deck     takeoff climb ≥ max_takeoff_climb,
 //!                                                        no bend, no lost climb
@@ -46,9 +46,11 @@ const SLOPES: [(f32, f32); 8] = [
 /// The x span of a slope's middle, where the body's speed up it is judged:
 /// clear of the foot and the brow.
 const SLOPE_MIDDLE: std::ops::Range<f32> = 8.0..12.0;
-/// Least share of the asked speed the body keeps across the ground up a
-/// slope a plan rides.
-const SLOPE_SPEED_SHARE: f32 = 0.9;
+/// Past this x the body is on a slope's shelf: it got up.
+const SHELF_X: f32 = 14.0;
+/// Largest share by which the speed across the ground up a slope may differ
+/// from the plan's.
+const SLOPE_SPEED_TOLERANCE: f32 = 0.1;
 /// How long a slope run lasts, in seconds.
 const SLOPE_RUN: f32 = 7.0;
 const FLAT_Z: f32 = 40.0;
@@ -81,6 +83,10 @@ const GRAVITY_TOLERANCE: f32 = 0.02;
 const AIR_SPEED_TOLERANCE: f32 = 0.05;
 /// Largest share of a flat jump's climb a coyote jump may lose.
 const COYOTE_TOLERANCE: f32 = 0.05;
+/// How far the floor may fall below a free body's path over the second cast's
+/// run before the body counts as rolling off it, in metres: the planner's
+/// own slack.
+const FALL_AWAY_SLACK: f32 = 0.005;
 /// Furthest the grounded capsule may be from the cast floor, in metres.
 const RIDE_TOLERANCE: f32 = 0.03;
 
@@ -181,15 +187,15 @@ fn lane(name: &'static str, lane_z: f32, script: Script) -> Scenario {
     }
 }
 
-/// Every slope lane at walk and run: the speed across the ground the body
-/// keeps up its middle. A plan rides a slope no steeper than the claim at the
-/// asked speed; a steeper one it never rides. The drive presses the asked
-/// speed along the slope's face, and keeps about `asked·cos²θ` across the
-/// ground, which the row shows beside it.
+/// Every slope lane at walk and run: whether the body gets up it, and the
+/// speed across the ground it keeps up its middle. A plan rides a slope no
+/// steeper than the claim at the speed `BodyDims::ground_speed` gives it; a
+/// steeper one it never rides.
 fn slope(config: &RunConfig, params: &GaitParams) -> EngineResult<Vec<ContractCheck>> {
     let claim = params.body.max_ground_slope_degrees;
     let mut checks = Vec::new();
     for (angle, lane_z) in SLOPES {
+        let grade = angle.to_radians().tan();
         let mut held = Vec::new();
         for gait in Gait::BOTH {
             let script = Script::new()
@@ -203,32 +209,37 @@ fn slope(config: &RunConfig, params: &GaitParams) -> EngineResult<Vec<ContractCh
                 .map(|frame| frame.velocity.x)
                 .collect();
             let mean = across.iter().sum::<f32>() / across.len().max(1) as f32;
-            held.push((gait, mean, gait.speed()));
+            let climbed = take.frames.iter().any(|frame| frame.body.x > SHELF_X);
+            let planned = params.body.ground_speed(gait.speed(), grade);
+            held.push((gait, mean, planned, climbed));
         }
         let rideable = angle <= claim;
-        let keeps = held
-            .iter()
-            .all(|&(_, mean, asked)| mean >= SLOPE_SPEED_SHARE * asked);
-        let projected = angle.to_radians().cos().powi(2);
+        let agrees = held.iter().all(|&(_, mean, planned, climbed)| {
+            climbed && (mean / planned - 1.0).abs() <= SLOPE_SPEED_TOLERANCE
+        });
         checks.push(ContractCheck {
             name: format!("slope {angle}°"),
             measured: held
                 .iter()
-                .map(|(gait, mean, asked)| {
-                    format!("{} {mean:.1} ({:.1})", gait.name(), asked * projected)
+                .map(|(gait, mean, planned, climbed)| {
+                    format!(
+                        "{} {mean:.1}{} (plan {planned:.1})",
+                        gait.name(),
+                        if *climbed { "" } else { " stuck" }
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
-                + " m/s (asked·cos²)",
+                + " m/s",
             claim: if rideable {
                 format!(
-                    "≤ max_ground_slope_degrees {claim}: ridden at {:.0}% of the asked",
-                    SLOPE_SPEED_SHARE * 100.0
+                    "≤ max_ground_slope_degrees {claim}: climbed, within {:.0}% of the plan",
+                    SLOPE_SPEED_TOLERANCE * 100.0
                 )
             } else {
                 format!("> max_ground_slope_degrees {claim}: never ridden")
             },
-            holds: !rideable || keeps,
+            holds: !rideable || agrees,
         });
     }
     Ok(checks)
@@ -416,9 +427,11 @@ fn coyote(config: &RunConfig) -> EngineResult<ContractCheck> {
 }
 
 /// The garden scenario `name`: how far its grounded capsule rides above or
-/// sinks below the floor a cast finds under it, across the station. Where
-/// the floor under it rises steeper than a plan rides, as up a lip's face,
-/// the plan flies and the frame is not judged.
+/// sinks below the floor a cast finds under it, across the station, where a
+/// plan says it rides. Where the floor under it rises steeper than a plan
+/// rides, as up a lip's face, the plan flies; where it falls away faster
+/// than gravity follows, as into a gap, the plan rolls off it until the body
+/// is back on the floor. Neither is judged.
 fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<ContractCheck> {
     let scenario = find(name).ok_or_else(|| EngineError::InvalidState(format!("no {name}")))?;
     let station = scenario
@@ -427,15 +440,25 @@ fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<Con
     let take = run(&scenario, config)?;
     let greatest_rise = params.body.max_ground_slope_degrees.to_radians().tan() * RIDE_SLOPE_RUN;
     let (mut above, mut below) = (0.0f32, 0.0f32);
+    let mut rolling = false;
     for frame in &take.frames {
         let along = frame.body.coords.dot(&station.axis);
-        if !frame.grounded || along < station.enter - 1.0 || along > station.leave + 1.0 {
+        if along < station.enter - 1.0 || along > station.leave + 1.0 {
             continue;
         }
         let (Some(floor), Some(behind)) = (frame.ride_floor, frame.ride_floor_behind) else {
             continue;
         };
-        if floor - behind > greatest_rise {
+        let speed = frame.velocity.x.hypot(frame.velocity.z).max(0.1);
+        let fall = 0.5 * params.gravity * (RIDE_SLOPE_RUN / speed).powi(2);
+        if behind - floor > fall + FALL_AWAY_SLACK {
+            rolling = true;
+        }
+        if rolling && (frame.bottom - floor).abs() > RIDE_TOLERANCE {
+            continue;
+        }
+        rolling = false;
+        if !frame.grounded || floor - behind > greatest_rise {
             continue;
         }
         above = above.max(frame.bottom - floor);

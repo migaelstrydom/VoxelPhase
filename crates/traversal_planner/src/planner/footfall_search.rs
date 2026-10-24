@@ -44,8 +44,8 @@ pub struct FootfallsRefused {
 /// The cheapest footfalls along a body path already chosen.
 ///
 /// Each footfall is a foot landing on a foothold as the body passes a point
-/// of its path. Every flight ends with one, pushed off from a stance foot at
-/// or behind the takeoff; on ridden stretches the body is behind the landing
+/// of its path. Every hop ends with one, pushed off from a stance foot at
+/// or behind the takeoff; none lands while the body rolls off ground; on ridden stretches the body is behind the landing
 /// foot by one of the `landing_leads`. The body's height is the path's, so
 /// a candidate costs no physics: only reach, rise and drop, edge margins,
 /// footing, whether the body rests on ground a foot is on, and churn.
@@ -95,7 +95,7 @@ impl FootfallSearch<'_> {
     pub fn search(&self, planted: Footfall) -> Result<FootfallPlan, FootfallsRefused> {
         let flights: Vec<Flight> = self
             .body
-            .flights()
+            .hops()
             .filter_map(|segment| match *segment {
                 BodySegment::Flight {
                     takeoff,
@@ -223,7 +223,10 @@ impl FootfallSearch<'_> {
             // Landing as the body rides on, before any flight.
             for lead in &self.settings.landing_leads {
                 let body_s = foothold.at.s - lead * step;
-                if body_s <= node.footfall.body_s + TOLERANCE || body_s > ridden_until + TOLERANCE {
+                if body_s <= node.footfall.body_s + TOLERANCE
+                    || body_s > ridden_until + TOLERANCE
+                    || self.rolling_at(body_s)
+                {
                     continue;
                 }
                 let footfall = Footfall { contact, body_s };
@@ -281,6 +284,13 @@ impl FootfallSearch<'_> {
                 }
             }
         }
+    }
+
+    /// Whether the body is rolling off ground at `body_s`, so no foot lands.
+    fn rolling_at(&self, body_s: f32) -> bool {
+        self.body
+            .roll_offs()
+            .any(|(takeoff, landing)| body_s > takeoff + TOLERANCE && body_s < landing - TOLERANCE)
     }
 
     /// What a footfall on `foothold` costs after `node`, whatever the body

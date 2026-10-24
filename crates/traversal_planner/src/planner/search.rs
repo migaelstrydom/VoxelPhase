@@ -335,7 +335,7 @@ impl Planner {
                         .footfalls
                         .last()
                         .map_or(body.s, |footfall| footfall.body_s);
-                    let unfollowed = path.flights().find_map(|flight| match *flight {
+                    let unfollowed = path.hops().find_map(|flight| match *flight {
                         BodySegment::Flight {
                             takeoff, landing, ..
                         } if landing > reached => Some(FlightSpan {
