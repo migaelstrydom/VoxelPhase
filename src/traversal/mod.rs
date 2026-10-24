@@ -6,6 +6,7 @@ mod gait;
 mod marker;
 mod path_frame;
 mod physics_caster;
+mod plan_capture;
 mod planning;
 mod section_cache;
 mod strip_scenery;

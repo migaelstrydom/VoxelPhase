@@ -1,11 +1,8 @@
-use std::fs;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::path::Path;
 
 use nalgebra::{Point3, Vector3};
 use specs::{Join, Read, ReadStorage, System, Write};
 use traversal_planner::plan::{Limb, Motion};
-use traversal_planner::scene::{Ground, Intent, TraversalScene};
 use traversal_planner::section::{SectionQuery, StripLayout, StripQuery};
 use traversal_planner::{GaitParams, PathVec, PlannerSettings};
 use winit::keyboard::KeyCode;
@@ -21,6 +18,7 @@ use crate::time::Time;
 
 use super::gait::player_gait;
 use super::marker::PlansTraversal;
+use super::plan_capture::{scene_of, write_capture};
 use super::planning::{PlanFrame, PlanningInput, TraversalPlanning};
 
 /// Key that shows and hides the plan in the world.
@@ -166,7 +164,9 @@ impl<'a> System<'a> for TraversalPlanSystem {
                 draw(frame, planning.params(), &mut overlays);
             }
             if input.is_key_just_pressed(CAPTURE_KEY) {
-                match capture(frame, planning.params(), target_speed) {
+                let scene = scene_of(frame, planning.params(), target_speed);
+                let note = format!("Captured in game with {CAPTURE_KEY:?}.");
+                match write_capture(&scene, Path::new(CAPTURE_DIR), &note) {
                     Ok(path) => log::info!("traversal capture written to {}", path.display()),
                     Err(error) => log::warn!("traversal capture failed: {error}"),
                 }
@@ -224,36 +224,4 @@ fn draw(frame: &PlanFrame, params: &GaitParams, overlays: &mut DebugOverlays) {
             fade(time, colour),
         );
     }
-}
-
-/// Writes the frame's strip, body and intent as a scene file; where.
-fn capture(frame: &PlanFrame, params: &GaitParams, target_speed: f32) -> Result<PathBuf, String> {
-    let plan = frame.plan();
-    let lead = plan
-        .footfalls()
-        .next()
-        .map_or(Limb::LeftFoot, |(_, contact)| contact.limb);
-    let scene = TraversalScene {
-        ground: Ground::Captured(frame.section.clone()),
-        body: frame.body,
-        lead,
-        intent: Intent {
-            speed: target_speed,
-        },
-        params: params.clone(),
-        layout: frame.section.layout.clone(),
-        expect: None,
-    };
-    let ron = scene.to_ron().map_err(|error| error.to_string())?;
-    fs::create_dir_all(CAPTURE_DIR).map_err(|error| error.to_string())?;
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis());
-    let path = PathBuf::from(CAPTURE_DIR).join(format!("traversal_{stamp}.ron"));
-    fs::write(
-        &path,
-        format!("// Captured in game with {CAPTURE_KEY:?}.\n{ron}"),
-    )
-    .map_err(|error| error.to_string())?;
-    Ok(path)
 }
