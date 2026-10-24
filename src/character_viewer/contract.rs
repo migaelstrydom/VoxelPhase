@@ -426,18 +426,23 @@ fn coyote(config: &RunConfig) -> EngineResult<ContractCheck> {
     })
 }
 
-/// The garden scenario `name`: how far its grounded capsule rides above or
-/// sinks below the floor a cast finds under it, across the station, where a
-/// plan says it rides. Where the floor under it rises steeper than a plan
-/// rides, as up a lip's face, the plan flies; where it falls away faster
-/// than gravity follows, as into a gap, the plan rolls off it until the body
-/// is back on the floor. Neither is judged.
+/// The garden scenario `name`, the plan driving the body: how far its
+/// grounded capsule rides above or sinks below the floor a cast finds under
+/// it, across the station, where the plan says it rides. Where the floor
+/// under it rises steeper than a plan rides, as up a lip's face, the plan
+/// flies; where it falls away faster than gravity follows, as into a gap,
+/// the plan rolls off it until the body is back on the floor. Neither is
+/// judged, nor a frame leaving on a planned takeoff.
 fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<ContractCheck> {
     let scenario = find(name).ok_or_else(|| EngineError::InvalidState(format!("no {name}")))?;
     let station = scenario
         .station
         .ok_or_else(|| EngineError::InvalidState(format!("{name} crosses no station")))?;
-    let take = run(&scenario, config)?;
+    let tracked = RunConfig {
+        track: true,
+        ..*config
+    };
+    let take = run(&scenario, &tracked)?;
     let greatest_rise = params.body.max_ground_slope_degrees.to_radians().tan() * RIDE_SLOPE_RUN;
     let (mut above, mut below) = (0.0f32, 0.0f32);
     let mut rolling = false;
@@ -458,7 +463,7 @@ fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<Con
             continue;
         }
         rolling = false;
-        if !frame.grounded || floor - behind > greatest_rise {
+        if !frame.grounded || frame.locomotion != "grounded" || floor - behind > greatest_rise {
             continue;
         }
         above = above.max(frame.bottom - floor);
