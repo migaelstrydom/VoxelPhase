@@ -231,19 +231,36 @@ pub struct StripQuery<'a> {
     params: &'a GaitParams,
     foothold_lanes: Vec<LaneFootholds>,
     floor: Line,
-    ceiling: Line,
     rideway: Rideway,
+    /// At each body station, the lowest and highest the bottom-sphere centre
+    /// may be: on the floor, if any, and the spine below the ceiling, if any.
+    /// Flights are checked against these by plain arithmetic.
+    bounds: Vec<(f32, f32)>,
 }
 
 impl<'a> StripQuery<'a> {
     pub fn new(section: &'a Section, params: &'a GaitParams) -> Self {
         let layout = &section.layout;
-        let start = section.origin - layout.behind;
-        let end = section.origin + layout.ahead;
+        let (first, count) = layout.stations(section.origin, layout.body_spacing);
+        let start = first as f32 * layout.body_spacing;
+        let end = start + count.saturating_sub(1) as f32 * layout.body_spacing;
         let floor = Line::new(&section.body_floor, start, layout.body_spacing, end);
         let ceiling = Line::new(&section.ceiling, start, layout.body_spacing, end);
         let rideway = Rideway::new(&floor, &ceiling, params);
+        let bounds = (0..floor.samples.len())
+            .map(|station| {
+                let low = floor.samples[station].map_or(f32::NEG_INFINITY, |hit| hit.z);
+                let high = ceiling
+                    .samples
+                    .get(station)
+                    .copied()
+                    .flatten()
+                    .map_or(f32::INFINITY, |hit| hit.z - params.body.spine());
+                (low, high)
+            })
+            .collect();
         Self {
+            bounds,
             params,
             foothold_lanes: section
                 .foothold_lanes
@@ -251,31 +268,29 @@ impl<'a> StripQuery<'a> {
                 .map(|lane| LaneFootholds::new(lane, section.foot_radius))
                 .collect(),
             floor,
-            ceiling,
             rideway,
         }
     }
 
     fn clears_flight(&self, phase: &Phase) -> bool {
-        let (from, to, speed) = match phase.motion {
-            Motion::Flight { takeoff, .. } => (takeoff.s, phase.end_s(), takeoff.speed),
-            Motion::Grounded { .. } => unreachable!("a flight"),
+        let Motion::Flight { takeoff, gravity } = phase.motion else {
+            unreachable!("a flight");
         };
-        let end_zone = FLIGHT_END_ZONE.max(FLIGHT_END_TIME * speed);
+        let (from, to) = (takeoff.s, phase.end_s());
+        let end_zone = FLIGHT_END_ZONE.max(FLIGHT_END_TIME * takeoff.speed);
+        let clearance = self.params.flight.clearance;
         self.floor.stations_between(from, to).all(|station| {
+            let (floor, roof) = self.bounds[station];
             let s = self.floor.station_s(station);
-            let z = phase.flight_height(s).expect("a flight");
+            let t = (s - from) / takeoff.speed;
+            let z = takeoff.z + takeoff.climb * t - 0.5 * gravity * t * t;
             let near_end = s - from < end_zone || to - s < end_zone;
             let margin = if near_end {
                 -FLIGHT_END_TOLERANCE
             } else {
-                self.params.flight.clearance
+                clearance
             };
-            let above_floor = self
-                .floor
-                .sample(station as isize)
-                .map_or(true, |floor| z >= floor.z + margin);
-            above_floor && has_headroom(&self.ceiling, s, z, self.params)
+            z >= floor + margin && z <= roof
         })
     }
 }

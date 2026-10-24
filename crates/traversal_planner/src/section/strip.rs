@@ -37,6 +37,16 @@ impl Default for StripLayout {
     }
 }
 
+impl StripLayout {
+    /// The stations of a line `spacing` apart around `origin`: the index of
+    /// the first (its `s` is the index times `spacing`) and how many.
+    pub fn stations(&self, origin: f32, spacing: f32) -> (i64, usize) {
+        let first = ((origin - self.behind) / spacing).ceil() as i64;
+        let last = ((origin + self.ahead) / spacing).floor() as i64;
+        (first, (last - first + 1).max(0) as usize)
+    }
+}
+
 /// The surfaces along one line of the strip, in increasing `s`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
@@ -72,8 +82,10 @@ pub struct FootholdLane {
 pub struct Section {
     /// Where the strip sampled.
     pub layout: StripLayout,
-    /// The body's `s` when sampled: the stations of each line are
-    /// `origin - layout.behind + k * spacing`.
+    /// The body's `s` when sampled. The stations of each line are the
+    /// multiples of its spacing from `origin - layout.behind` to `origin +
+    /// layout.ahead` ([`StripLayout::stations`]): fixed along the path, so a
+    /// station sampled one frame is the same station the next.
     pub origin: f32,
     /// Radius of the body floor and ceiling casts: the capsule's.
     pub body_radius: f32,

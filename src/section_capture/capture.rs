@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use nalgebra::Point3;
 use traversal_planner::plan::{BodyState, Limb};
@@ -22,6 +23,8 @@ const REACH_BELOW: f32 = 6.0;
 /// thrown across a crater roll and topple for far longer than a level's
 /// objects settle.
 const SETTLE_SECONDS: f32 = 30.0;
+/// How many times the strip is sampled to time it.
+const TIMED_SAMPLES: usize = 10;
 /// Upward share of a blast's shove, as a grenade gives.
 const BLAST_UPWARD_BOOST: f32 = 0.5;
 
@@ -59,6 +62,9 @@ pub struct Captured {
     pub settled_after: Option<f32>,
     /// Where the bodies still moving at the end are.
     pub restless: Vec<Point3<f32>>,
+    /// Seconds one sampling of the strip took, the mean of several: what the
+    /// game will pay for a section each frame.
+    pub sample_seconds: f64,
 }
 
 /// Spawns, blasts and settles the level, then samples the strip.
@@ -110,7 +116,12 @@ pub fn capture(spec: &Capture) -> Result<Captured, String> {
         .ok_or("no floor under the start")?;
     caster.top = floor.z + REACH_ABOVE;
     caster.bottom = floor.z - REACH_BELOW;
+    let started = Instant::now();
+    for _ in 0..TIMED_SAMPLES - 1 {
+        std::hint::black_box(sample_section(&caster, &layout, &params, 0.0));
+    }
     let section = sample_section(&caster, &layout, &params, 0.0);
+    let sample_seconds = started.elapsed().as_secs_f64() / TIMED_SAMPLES as f64;
 
     Ok(Captured {
         scene: TraversalScene {
@@ -129,5 +140,6 @@ pub fn capture(spec: &Capture) -> Result<Captured, String> {
         },
         settled_after,
         restless,
+        sample_seconds,
     })
 }

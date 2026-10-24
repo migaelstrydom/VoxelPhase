@@ -94,6 +94,7 @@ fn replanning_against_its_own_plan_keeps_it() {
             &query,
             &traversal_planner::PlanRequest {
                 previous: Some(&first.plan),
+                reach_limit: None,
                 ..scene.request()
             },
         )
@@ -135,6 +136,7 @@ fn a_committed_footfall_that_has_gone_is_dropped() {
         &query,
         &traversal_planner::PlanRequest {
             previous: Some(&previous),
+            reach_limit: None,
             ..scene.request()
         },
     );

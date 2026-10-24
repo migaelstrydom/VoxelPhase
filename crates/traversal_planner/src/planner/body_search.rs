@@ -150,6 +150,11 @@ impl FootReach {
     }
 }
 
+/// The speed band `speed` falls in.
+fn speed_band(speed: f32) -> i32 {
+    (speed / SPEED_BAND).round() as i32
+}
+
 /// What the search keeps between expansions.
 struct Frontier {
     nodes: Vec<Node>,
@@ -159,11 +164,14 @@ struct Frontier {
 
 impl Frontier {
     fn key(node: &Node) -> (usize, i32, bool) {
-        (
-            node.station,
-            (node.speed / SPEED_BAND).round() as i32,
-            node.just_landed,
-        )
+        (node.station, speed_band(node.speed), node.just_landed)
+    }
+
+    /// Whether a state with `key` reached at `cost` would be the cheapest yet.
+    fn could_improve(&self, key: &(usize, i32, bool), cost: f32) -> bool {
+        self.cheapest
+            .get(key)
+            .map_or(true, |&other| self.nodes[other].cost > cost)
     }
 
     /// Adds `node` if it is the cheapest way yet to its station and speed,
@@ -255,12 +263,21 @@ impl BodySearch<'_> {
             let mut edges: SmallVec<[(usize, f32, f32, f32, BodySegment); 16]> = SmallVec::new();
             self.ride(start.s, station, speed, &mut known, &mut edges);
             self.ride_again(start.s, station, speed, &mut known, &mut edges);
+            // A flight is checked for clearance only if it could be the
+            // cheapest way yet to its landing: it lands just landed.
+            let worth = |landing: usize, landing_speed: f32, edge_cost: f32| {
+                frontier.could_improve(
+                    &(landing, speed_band(landing_speed), true),
+                    cost + edge_cost,
+                )
+            };
             self.fly(
                 start.s,
                 station,
                 speed,
                 z,
                 (landed, flown),
+                &worth,
                 &mut known,
                 &mut edges,
             );
@@ -449,6 +466,7 @@ impl BodySearch<'_> {
         speed: f32,
         z: f32,
         (landed, flown): (f32, bool),
+        worth: &dyn Fn(usize, f32, f32) -> bool,
         known: &mut FootReach,
         out: &mut SmallVec<[(usize, f32, f32, f32, BodySegment); 16]>,
     ) {
@@ -517,9 +535,6 @@ impl BodySearch<'_> {
                 contacts: SmallVec::new(),
                 motion: Motion::Flight { takeoff, gravity },
             };
-            if !self.query.clears(&phase) {
-                continue;
-            }
             let cost = settings.costs.flight
                 + settings.costs.takeoff_climb * climb * climb
                 + self.flight_churn(from, landing)
@@ -530,6 +545,9 @@ impl BodySearch<'_> {
                     self.natural_step(),
                     settings,
                 );
+            if !worth(landing_station, speed, cost) || !self.query.clears(&phase) {
+                continue;
+            }
             out.push((
                 landing_station,
                 speed,

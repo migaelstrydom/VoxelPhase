@@ -31,6 +31,7 @@ pub fn check_replan(
         lead: stance.limb.other(),
         planted: Some(*stance),
         previous: Some(&previous),
+        reach_limit: None,
         ..*request
     };
     let mut violations = Vec::new();

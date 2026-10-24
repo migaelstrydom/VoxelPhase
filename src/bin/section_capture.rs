@@ -146,6 +146,10 @@ fn main() -> ExitCode {
         eprintln!("{}: {error}", out.display());
         return ExitCode::FAILURE;
     }
-    println!("{} ({settled})", out.display());
+    println!(
+        "{} ({settled}; sampling the strip took {:.2} ms)",
+        out.display(),
+        captured.sample_seconds * 1.0e3
+    );
     ExitCode::SUCCESS
 }

@@ -77,6 +77,7 @@ impl TraversalScene {
             target_speed: self.intent.speed,
             planted: None,
             previous: None,
+            reach_limit: None,
         }
     }
 

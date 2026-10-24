@@ -543,6 +543,15 @@ until E.
   candidates: keep the last plan's tail whole while it still holds and the
   request has not changed, planning only past its end; or search the tail on
   the last search's own lattice.
+- **Past a refusal:** a refusal means no plan within the rules, but with the
+  stick still pushed the body would ride off an edge and fall, unplanned. In
+  E: either a refusal plans a stop at the edge and a held push (about 0.3 s)
+  allows a drop move (a flight off the edge with no `max_drop`, at a high
+  cost), or drops are always allowed at a high cost. To decide with play.
+- **Small gaps:** at the default costs the body rides the 2–3 cm dip over a
+  gap narrower than the capsule (`ride_travel` 4 per metre against a hop's
+  `flight` 0.3), which is the snag the project set out to remove; hops win
+  once `ride_travel` is about 10–15. To set from the bench.
 - **Coyote time:** a planned hop (0.15–0.25 s) falls inside the 0.16 s the
   locomotion state machine still treats as ground (`ground_forgiveness_window`
   then `CoyoteTime`), whose `clamp_up` cancels the takeoff climb, whose

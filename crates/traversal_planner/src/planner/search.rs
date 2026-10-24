@@ -12,6 +12,9 @@ use super::settings::PlannerSettings;
 /// How far the body may be from where the last plan has it now, in metres,
 /// before its commitment is dropped.
 const STRAY_DISTANCE: f32 = 0.05;
+/// How near the asked-for speed must be to the last plan's for it to be
+/// kept, in m/s.
+const SAME_SPEED: f32 = 1.0e-3;
 /// Slack on the committed footfall's time, in seconds.
 const STRAY_TIME: f32 = 1.0e-3;
 /// How near a foothold the committed footfall must still be, in metres.
@@ -32,6 +35,10 @@ pub struct PlanRequest<'a> {
     /// footfalls dropped: its committed footfall is kept if it still can be,
     /// and moving its tentative ones costs churn.
     pub previous: Option<&'a Plan>,
+    /// How far along the path a plan need carry the body at most, short of
+    /// its usual goal: the strip is not yet sampled further. `None` for the
+    /// usual goal.
+    pub reach_limit: Option<f32>,
 }
 
 /// A plan that carries the body to the goal: as far as the asked-for speed
@@ -86,15 +93,50 @@ impl Planner {
         query: &dyn SectionQuery,
         request: &PlanRequest,
     ) -> Result<Planned, Refusal> {
+        let mut outcome = self.plan_unstamped(query, request);
+        let plan = match &mut outcome {
+            Ok(planned) => &mut planned.plan,
+            Err(refusal) => &mut refusal.partial,
+        };
+        plan.target_speed = request.target_speed;
+        outcome
+    }
+
+    fn plan_unstamped(
+        &self,
+        query: &dyn SectionQuery,
+        request: &PlanRequest,
+    ) -> Result<Planned, Refusal> {
+        // The last plan whole, while it holds and the player asks for the
+        // same: only what lies past its end is planned.
+        if let Some(extended) = self.extend_last_plan(query, request) {
+            return Ok(extended);
+        }
+
         let previous: Vec<Contact> = request
             .previous
             .map(|plan| plan.footfalls().map(|(_, contact)| *contact).collect())
             .unwrap_or_default();
         let wanted_commitment = request.previous.is_some_and(|plan| plan.committed > 0);
 
-        // Only what follows the committed footfall is planned again.
+        // Failing that, the last plan through its next tentative footfall,
+        // which then stays where it was: what follows is planned again.
+        if let Some(kept) = self.kept_through(query, request, 1) {
+            let later = previous.get(2..).unwrap_or_default();
+            if let Ok((tail, cost)) =
+                self.plan_from(query, request, &kept.body, kept.planted, later)
+            {
+                return Ok(Planned {
+                    plan: kept.followed_by(tail),
+                    cost,
+                    diverged: false,
+                });
+            }
+        }
+
+        // Failing that, only what follows the committed footfall.
         let mut kept_refusal = None;
-        if let Some(kept) = self.committed_prefix(query, request) {
+        if let Some(kept) = self.kept_through(query, request, 0) {
             match self.plan_from(query, request, &kept.body, kept.planted, &previous[1..]) {
                 Ok((tail, cost)) => {
                     return Ok(Planned {
@@ -135,32 +177,95 @@ impl Planner {
         }
     }
 
-    /// The last plan's phases up to its committed footfall, if the body is
-    /// still on them and they still hold: they clear the ground and the
-    /// footfall is on a foothold that will hold it.
-    fn committed_prefix(&self, query: &dyn SectionQuery, request: &PlanRequest) -> Option<Kept> {
-        let previous = request.previous.filter(|plan| plan.committed > 0)?;
-        let first = previous.phases.get(previous.committed)?;
-        let landing = *first.contacts.first()?;
-        let (time, footfall) = previous.footfalls().next()?;
-        if *footfall != landing || (time - first.start).abs() > STRAY_TIME {
+    /// The last plan kept whole and carried on to the goal, if the body is
+    /// still on it, every phase of it still clears, every footfall still
+    /// stands on a foothold that holds, and the player asks for the speed it
+    /// was made for. `None` sends the planner to search again.
+    fn extend_last_plan(&self, query: &dyn SectionQuery, request: &PlanRequest) -> Option<Planned> {
+        let previous = request.previous?;
+        if (previous.target_speed - request.target_speed).abs() > SAME_SPEED {
             return None;
         }
+        let kept = self.kept_through(query, request, 0)?;
+        let holds = previous.phases[previous.committed..]
+            .iter()
+            .all(|phase| query.clears(phase))
+            && previous.footfalls().all(|(_, contact)| {
+                query
+                    .foothold_at(&contact.at, FOOTHOLD_TOLERANCE)
+                    .is_some_and(|foothold| {
+                        !matches!(foothold.footing, Footing::Loose { resting: false, .. })
+                    })
+            });
+        if !holds {
+            return None;
+        }
+        let last = *previous
+            .footfalls()
+            .last()
+            .map(|(_, contact)| contact)
+            .unwrap_or(&kept.planted);
+        let end = previous.duration();
+        let body = previous.body_at(end, query)?;
+        let goal = self.goal(request);
+        if body.s >= goal - STRAY_DISTANCE {
+            return Some(Planned {
+                plan: previous.clone(),
+                cost: 0.0,
+                diverged: false,
+            });
+        }
+        let (tail, cost) = self.plan_from(query, request, &body, last, &[]).ok()?;
+        let mut phases = previous.phases.clone();
+        phases.extend(tail.phases.into_iter().map(|phase| Phase {
+            start: phase.start + end,
+            ..phase
+        }));
+        Some(Planned {
+            plan: Plan {
+                phases,
+                committed: previous.committed,
+                target_speed: request.target_speed,
+            },
+            cost,
+            diverged: false,
+        })
+    }
+
+    /// The last plan's phases up to its `footfall`th footfall (the first is
+    /// the committed one), if the body is still on them and they still hold:
+    /// they clear the ground, and that footfall and every one before it are
+    /// on footholds that will hold them.
+    fn kept_through(
+        &self,
+        query: &dyn SectionQuery,
+        request: &PlanRequest,
+        footfall: usize,
+    ) -> Option<Kept> {
+        let previous = request.previous.filter(|plan| plan.committed > 0)?;
+        let (time, landing) = previous.footfalls().nth(footfall)?;
+        let landing = *landing;
+        let phase = previous.phases.iter().position(|phase| {
+            (phase.start - time).abs() <= STRAY_TIME && phase.contacts.contains(&landing)
+        })?;
         let now = previous.body_at(0.0, query)?;
         let strayed = (now.s - request.body.s).abs() > STRAY_DISTANCE
             || (now.z - request.body.z).abs() > STRAY_DISTANCE;
-        let phases = &previous.phases[..previous.committed];
+        let phases = &previous.phases[..phase];
         let holds = phases.iter().all(|phase| query.clears(phase))
-            && query
-                .foothold_at(&landing.at, FOOTHOLD_TOLERANCE)
-                .is_some_and(|foothold| {
-                    !matches!(foothold.footing, Footing::Loose { resting: false, .. })
-                });
+            && previous.footfalls().take(footfall + 1).all(|(_, contact)| {
+                query
+                    .foothold_at(&contact.at, FOOTHOLD_TOLERANCE)
+                    .is_some_and(|foothold| {
+                        !matches!(foothold.footing, Footing::Loose { resting: false, .. })
+                    })
+            });
         if strayed || !holds {
             return None;
         }
         Some(Kept {
             phases: phases.to_vec(),
+            committed: previous.committed,
             time,
             body: previous.body_at(time, query)?,
             planted: landing,
@@ -190,7 +295,7 @@ impl Planner {
                 settings: &self.settings,
                 target_speed: request.target_speed,
                 vetoed: &vetoed,
-                goal: request.body.s + self.settings.body_goal(request.target_speed, &self.params),
+                goal: self.goal(request),
                 planted: planted.at.s,
                 previous: previous_path.as_ref(),
             }
@@ -254,6 +359,12 @@ impl Planner {
         }
     }
 
+    /// Where along the path a plan for `request` must carry the body.
+    fn goal(&self, request: &PlanRequest) -> f32 {
+        let goal = request.body.s + self.settings.body_goal(request.target_speed, &self.params);
+        request.reach_limit.map_or(goal, |limit| goal.min(limit))
+    }
+
     /// The foot planted when the plan starts: the request's, or the other
     /// one from the lead, under the body at its natural offset, on fixed
     /// ground.
@@ -275,28 +386,35 @@ impl Planner {
     }
 }
 
-/// The last plan's committed phases, kept, and where they leave the body.
+/// The last plan's phases up to one of its footfalls, kept, and where they
+/// leave the body.
 struct Kept {
-    /// From now to the committed footfall.
+    /// From now to the footfall.
     phases: Vec<Phase>,
-    /// Seconds from now until the committed footfall lands.
+    /// How many of them are committed.
+    committed: usize,
+    /// Seconds from now until the footfall lands.
     time: f32,
     /// The body as it lands.
     body: BodyState,
-    /// The committed footfall, which holds the body from then.
+    /// The footfall, which holds the body from then.
     planted: Contact,
 }
 
 impl Kept {
-    /// The kept phases, then `tail` from the committed footfall on.
+    /// The kept phases, then `tail` from the footfall on.
     fn followed_by(self, tail: Plan) -> Plan {
-        let committed = self.phases.len();
+        let committed = self.committed;
         let mut phases = self.phases;
         phases.extend(tail.phases.into_iter().map(|phase| Phase {
             start: phase.start + self.time,
             ..phase
         }));
-        Plan { phases, committed }
+        Plan {
+            phases,
+            committed,
+            target_speed: 0.0,
+        }
     }
 }
 

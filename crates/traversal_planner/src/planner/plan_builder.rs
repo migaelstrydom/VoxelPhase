@@ -60,6 +60,7 @@ pub fn build_plan(body: &BodyPath, planted: &Contact, footfalls: &[Footfall]) ->
     Plan {
         phases: builder.phases,
         committed,
+        target_speed: 0.0,
     }
 }
 

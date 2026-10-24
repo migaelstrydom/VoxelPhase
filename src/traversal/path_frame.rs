@@ -26,6 +26,23 @@ impl PathFrame {
         }
     }
 
+    /// A path from `origin` along the horizontal part of `heading`.
+    pub fn along(origin: Point3<f32>, heading: Vector3<f32>) -> Self {
+        let forward = Vector3::new(heading.x, 0.0, heading.z)
+            .try_normalize(f32::EPSILON)
+            .unwrap_or_else(Vector3::z);
+        Self {
+            origin: Point3::new(origin.x, 0.0, origin.z),
+            forward,
+            left: Vector3::y().cross(&forward),
+        }
+    }
+
+    /// Horizontal unit vector along the path.
+    pub fn forward(&self) -> Vector3<f32> {
+        self.forward
+    }
+
     pub fn world_point(&self, at: PathVec) -> Point3<f32> {
         self.origin + self.forward * at.s + self.left * at.d + Vector3::y() * at.z
     }

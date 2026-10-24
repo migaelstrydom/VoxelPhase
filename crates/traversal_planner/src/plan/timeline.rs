@@ -17,6 +17,10 @@ pub struct Plan {
     pub phases: Vec<Phase>,
     /// How many leading phases are committed.
     pub committed: usize,
+    /// The speed along the path the plan was made for, in m/s: a plan is
+    /// kept frame to frame only while the player asks for the same.
+    #[serde(default)]
+    pub target_speed: f32,
 }
 
 impl Plan {
@@ -47,6 +51,13 @@ impl Plan {
                 })
             })
             .map(|before| before + 1)
+    }
+
+    /// Seconds from now until the plan's last phase ends.
+    pub fn duration(&self) -> f32 {
+        self.phases
+            .last()
+            .map_or(0.0, |phase| phase.start + phase.duration)
     }
 
     /// The phase under way at `t` seconds, the last one past the end.
@@ -100,6 +111,7 @@ impl Plan {
         let mut later = Plan {
             phases,
             committed: self.committed.saturating_sub(first),
+            target_speed: self.target_speed,
         };
         // Once the committed footfall has landed, the commitment rolls on to
         // the next one.

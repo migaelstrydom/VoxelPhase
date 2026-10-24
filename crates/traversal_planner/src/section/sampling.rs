@@ -82,11 +82,13 @@ pub fn sample_section(
     }
 }
 
-/// The `s` of every sample from `behind` the origin to `ahead` of it.
+/// The `s` of every sample from `behind` the origin to `ahead` of it, on the
+/// grid of `spacing` fixed along the path.
 fn stations(origin: f32, layout: &StripLayout, spacing: f32) -> Vec<f32> {
-    let start = origin - layout.behind;
-    let count = ((layout.behind + layout.ahead) / spacing).round() as usize + 1;
-    (0..count).map(|i| start + i as f32 * spacing).collect()
+    let (first, count) = layout.stations(origin, spacing);
+    (first..first + count as i64)
+        .map(|index| index as f32 * spacing)
+        .collect()
 }
 
 /// Casts at every station and groups the hits `keep` accepts into surfaces,

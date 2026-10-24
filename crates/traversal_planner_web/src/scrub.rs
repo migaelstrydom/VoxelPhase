@@ -52,6 +52,7 @@ pub fn scrub(scene: &TraversalScene, planner: &Planner, time: f32, perturb: bool
             target_speed: scene.intent.speed,
             planted,
             previous: previous.as_ref(),
+            reach_limit: None,
         };
         let outcome = planner.plan(&query, &request);
         let (plan, diverged) = match &outcome {
