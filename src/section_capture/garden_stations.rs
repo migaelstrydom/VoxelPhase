@@ -1,13 +1,14 @@
 //! Every Traversal Garden station, captured from the settled level and
 //! planned: every plan keeps the planner's rules, and where the station has
-//! an authored twin, the two plan alike.
+//! an authored twin, the two strips read the same ground and plan alike.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use traversal_planner::plan::{BodyState, Limb, Motion, Plan};
 use traversal_planner::properties::check_plan;
 use traversal_planner::scene::{AuthoredGround, Form, Ground, Intent, Shape};
-use traversal_planner::section::{Footing, StripQuery};
+use traversal_planner::section::{Footing, Profile, Section, StripQuery};
 use traversal_planner::{Planned, Planner, PlannerSettings, Refusal, TraversalScene};
 
 use super::capture::CaptureWorld;
@@ -28,6 +29,12 @@ const FOOTFALL_TOLERANCE: f32 = 0.3;
 const VOXEL: f32 = 0.25;
 /// Far enough along the path to outlast any strip.
 const FAR: f32 = 40.0;
+/// How far a capture's body floor may read from its twin's, in metres, at
+/// the median station both have: voxel meshing, not different ground.
+const FLOOR_TOLERANCE: f32 = 0.05;
+/// The share of stations with a ceiling in either strip that may have one in
+/// only one: edges the voxels round off.
+const CEILING_DISAGREEMENT: f32 = 0.1;
 
 /// A station: its lane, where the run up to it starts, and the ground it
 /// was authored as, where it has a twin.
@@ -127,10 +134,11 @@ fn stations() -> Vec<Station> {
         station(
             "cave_lip",
             66.0,
-            vec![Form::Roof {
+            vec![Form::Slab {
                 from: RUN_UP,
                 to: RUN_UP + 12.0,
                 bottom: 0.9,
+                top: 2.5,
             }],
         ),
     ]
@@ -197,6 +205,47 @@ fn summarise(scene: &TraversalScene) -> Summary {
     }
 }
 
+/// Each station's height along a profile, by its `s`: the same stations in
+/// a capture and its twin, which sample the same grid.
+fn heights(profile: &Profile) -> BTreeMap<u32, f32> {
+    profile
+        .surfaces
+        .iter()
+        .flat_map(|surface| &surface.points)
+        .map(|point| (point.s.to_bits(), point.z))
+        .collect()
+}
+
+/// Where a capture's strip reads its station's ground unlike the twin's: a
+/// body floor at another height, or a ceiling where the twin has none or
+/// none where it has one.
+fn strip_mismatch(captured: &Section, authored: &Section) -> Option<String> {
+    let (floor, twin_floor) = (heights(&captured.body_floor), heights(&authored.body_floor));
+    let mut apart: Vec<f32> = floor
+        .iter()
+        .filter_map(|(s, z)| twin_floor.get(s).map(|twin| (z - twin).abs()))
+        .collect();
+    apart.sort_by(f32::total_cmp);
+    let median = apart.get(apart.len() / 2).copied().unwrap_or(0.0);
+    let (ceiling, twin_ceiling) = (heights(&captured.ceiling), heights(&authored.ceiling));
+    let either = ceiling
+        .keys()
+        .chain(twin_ceiling.keys())
+        .collect::<BTreeSet<_>>();
+    let one_only = either
+        .iter()
+        .filter(|s| ceiling.contains_key(s) != twin_ceiling.contains_key(s))
+        .count();
+    let disagreement = one_only as f32 / either.len().max(1) as f32;
+    (median > FLOOR_TOLERANCE || disagreement > CEILING_DISAGREEMENT).then(|| {
+        format!(
+            "reads other ground: body floor {median:.3} m from the twin's at the median, \
+             ceiling in one strip only at {one_only} of {} stations",
+            either.len()
+        )
+    })
+}
+
 /// Where a capture's plan breaks the planner's rules or plans unlike its
 /// twin. A refusal is compared by its outcome alone: how far its partial
 /// plan got depends on the order the search went in.
@@ -234,13 +283,15 @@ fn garden_station_captures_plan_like_their_authored_twins() {
                 intent: Intent { speed },
                 ..captured
             };
-            let authored = station
-                .twin
-                .as_ref()
-                .map(|forms| summarise(&twin(&captured, forms)));
+            let twin = station.twin.as_ref().map(|forms| twin(&captured, forms));
+            let authored = twin.as_ref().map(summarise);
             let summary = summarise(&captured);
             println!("{} at {speed}: {summary:?} / {authored:?}", station.name);
-            if let Some(why) = disagreement(&summary, authored.as_ref()) {
+            let misread = twin
+                .as_ref()
+                .and_then(|twin| strip_mismatch(&captured.section(), &twin.section()));
+            let why = misread.or_else(|| disagreement(&summary, authored.as_ref()));
+            if let Some(why) = why {
                 broken.push(format!("{} at {speed} m/s: {why}", station.name));
             }
         }

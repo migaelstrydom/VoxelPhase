@@ -60,7 +60,7 @@ impl StripDifference {
     fn between(a: &Section, b: &Section) -> Self {
         let mut difference = Self::default();
         fn lines(section: &Section) -> Vec<&Profile> {
-            let mut lines = vec![&section.body_floor, &section.ceiling];
+            let mut lines = vec![&section.body_floor, &section.ceiling, &section.upper_floor];
             lines.extend(section.foothold_lanes.iter().map(|lane| &lane.profile));
             lines
         }
@@ -134,7 +134,7 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             bottom: -SKY,
         };
         let floor = ground
-            .cast_down(0.0, 0.0, params.body.radius)
+            .cast_down(0.0, 0.0, params.body.radius, f32::INFINITY)
             .ok_or("no floor under the start")?;
         Point3::new(spec.at.0, floor.z, spec.at.1)
     };
@@ -165,7 +165,13 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             let caster = planning.caster(&physics.world, &*terrain, &[]);
             StripDifference::between(
                 &planned.section,
-                &sample_section(&caster, &planned.section.layout, &params, planned.body.s),
+                &sample_section(
+                    &caster,
+                    &planned.section.layout,
+                    &params,
+                    planned.body.s,
+                    planned.body.z,
+                ),
             )
         });
         let diverged = match &planned.outcome {

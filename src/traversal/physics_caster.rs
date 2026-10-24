@@ -12,24 +12,22 @@ use super::path_frame::PathFrame;
 /// The key of the static geometry, which like a fixed authored shape is one
 /// body.
 const STATIC_GEOMETRY: BodyKey = BodyKey(0);
-/// How far an upward cast starts above the floor it rises from, in metres,
-/// so it does not begin touching it.
-const CEILING_START_GAP: f32 = 0.01;
-
 /// The planner's sphere casts in the physics world: the terrain and every
 /// body, rubble and spawnables included.
 ///
-/// Casts down start at `top`, so an overhang below it reads as floor; casts
-/// up rise from the floor under the same point.
+/// Casts reach from `bottom` to `top`: one asked to start beyond either
+/// starts there.
 pub struct PhysicsCaster<'a> {
     pub world: &'a PhysicsWorld,
     pub scenery: &'a dyn StaticGeometry,
     pub frame: PathFrame,
     /// Bodies the casts pass through: the player's own.
     pub exclude: &'a [RigidBodyHandle],
-    /// World height casts down start from, in metres.
+    /// World height casts up give up at, in metres, and casts down start
+    /// from at most.
     pub top: f32,
-    /// World height casts down give up at, in metres.
+    /// World height casts down give up at, in metres, and casts up start
+    /// from at least.
     pub bottom: f32,
 }
 
@@ -82,18 +80,24 @@ fn body_key(handle: RigidBodyHandle) -> BodyKey {
 }
 
 impl SphereCaster for PhysicsCaster<'_> {
-    fn cast_down(&self, s: f32, d: f32, radius: f32) -> Option<CastHit> {
+    fn cast_down(&self, s: f32, d: f32, radius: f32, from: f32) -> Option<CastHit> {
+        let from = from.min(self.top);
+        if from <= self.bottom {
+            return None;
+        }
         self.cast(
-            PathVec::new(s, d, self.top),
+            PathVec::new(s, d, from),
             -Vector3::y(),
-            self.top - self.bottom,
+            from - self.bottom,
             radius,
         )
     }
 
-    fn cast_up(&self, s: f32, d: f32, radius: f32) -> Option<CastHit> {
-        let floor = self.cast_down(s, d, radius)?;
-        let from = floor.z + CEILING_START_GAP;
+    fn cast_up(&self, s: f32, d: f32, radius: f32, from: f32) -> Option<CastHit> {
+        let from = from.max(self.bottom);
+        if from >= self.top {
+            return None;
+        }
         self.cast(
             PathVec::new(s, d, from),
             Vector3::y(),

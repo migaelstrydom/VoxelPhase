@@ -145,15 +145,15 @@ impl CaptureWorld {
             bottom: -SKY,
         };
         let floor = caster
-            .cast_down(0.0, 0.0, params.body.radius)
+            .cast_down(0.0, 0.0, params.body.radius, f32::INFINITY)
             .ok_or("no floor under the start")?;
         caster.top = floor.z + REACH_ABOVE;
         caster.bottom = floor.z - REACH_BELOW;
         let started = Instant::now();
         for _ in 0..TIMED_SAMPLES - 1 {
-            std::hint::black_box(sample_section(&caster, &layout, &params, 0.0));
+            std::hint::black_box(sample_section(&caster, &layout, &params, 0.0, floor.z));
         }
-        let section = sample_section(&caster, &layout, &params, 0.0);
+        let section = sample_section(&caster, &layout, &params, 0.0, floor.z);
         let sample_seconds = started.elapsed().as_secs_f64() / TIMED_SAMPLES as f64;
         let scene = TraversalScene {
             ground: Ground::Captured(section),

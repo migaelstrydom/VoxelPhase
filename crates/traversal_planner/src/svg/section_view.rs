@@ -1,5 +1,5 @@
 use crate::planner::{Planned, Refusal};
-use crate::scene::{AuthoredGround, Ground, Shape, TraversalScene};
+use crate::scene::{AuthoredGround, Ground, Plane, Shape, TraversalScene};
 use crate::section::{Profile, Section, StripQuery, SurfacePoint};
 
 use serde::Serialize;
@@ -103,6 +103,14 @@ pub fn render_scene_with_layout(
     );
     canvas.polyline(
         &side,
+        centres(&section.upper_floor),
+        &format!(
+            r#"stroke="{}" stroke-width="1" stroke-dasharray="2 3""#,
+            palette::BODY_FLOOR
+        ),
+    );
+    canvas.polyline(
+        &side,
         centres(&section.ceiling),
         &format!(
             r#"stroke="{}" stroke-width="1.5" stroke-dasharray="6 3""#,
@@ -147,7 +155,7 @@ fn height_range(scene: &TraversalScene, section: &Section) -> (f32, f32) {
     let mut low = scene.body.z - scene.params.body.radius;
     let mut high = scene.body.z + scene.params.body.spine() + scene.params.body.radius;
     let lanes = section.foothold_lanes.iter().map(|lane| &lane.profile);
-    for profile in lanes.chain([&section.body_floor, &section.ceiling]) {
+    for profile in lanes.chain([&section.body_floor, &section.ceiling, &section.upper_floor]) {
         for point in profile.surfaces.iter().flat_map(|surface| &surface.points) {
             low = low.min(point.z - section.body_radius);
             high = high.max(point.z + section.body_radius);
@@ -260,12 +268,17 @@ fn side_shapes(
         };
         let style = format!(r#"fill="{fill}" {edge} data-shape="{index}" data-view="side""#);
         let (from, to) = cut.unwrap_or_else(|| extent_along(shape));
-        let face = shape.face();
-        let (start, end) = (face.at(from, 0.0), face.at(to, 0.0));
-        let solid = if shape.is_roof() { z.1 } else { z.0 };
+        // Solid from the top down to the view's floor, or from the
+        // underside up to its top, or between the two.
+        let height = |plane: Option<Plane>, edge: f32| {
+            plane.map_or((edge, edge), |plane| {
+                (plane.at(from, 0.0), plane.at(to, 0.0))
+            })
+        };
+        let (top, bottom) = (height(shape.top(), z.1), height(shape.underside(), z.0));
         canvas.polygon(
             view,
-            [(from, start), (to, end), (to, solid), (from, solid)],
+            [(from, top.0), (to, top.1), (to, bottom.1), (from, bottom.0)],
             &style,
         );
     }
@@ -282,7 +295,7 @@ fn top_shapes(
 ) {
     canvas.begin_clip("strip", view.at(s.0, d_half), view.at(s.1, -d_half));
     for (index, shape) in ground.shapes.iter().enumerate() {
-        if shape.is_roof() {
+        if shape.top().is_none() {
             continue;
         }
         let style = format!(

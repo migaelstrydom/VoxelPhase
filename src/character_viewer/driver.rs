@@ -385,7 +385,9 @@ fn ride_floor_at(
         top: bottom.y + RIDE_CAST_ABOVE,
         bottom: bottom.y - RIDE_CAST_BELOW,
     };
-    caster.cast_down(0.0, 0.0, radius).map(|hit| hit.z)
+    caster
+        .cast_down(0.0, 0.0, radius, f32::INFINITY)
+        .map(|hit| hit.z)
 }
 
 /// One foot as the placer holds it and the rig drew it at `drawn`.

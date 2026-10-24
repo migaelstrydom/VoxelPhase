@@ -168,6 +168,7 @@ dialog .row { justify-content: flex-end; margin-top: 8px; }
         <button id="add-plank" type="button">Plank</button>
         <button id="add-ramp" type="button">Ramp</button>
         <button id="add-roof" type="button">Roof</button>
+        <button id="add-slab" type="button">Slab</button>
       </div>
     </header>
     <div id="shape-editor" class="field"></div>
@@ -426,12 +427,13 @@ dialog .row { justify-content: flex-end; margin-top: 8px; }
       plank: { form: { Block: { from: at, to: at + 0.6, top: floor + 0.1, tilt: 0 } }, across: [-1.2, 1.2], yaw: 0.1, footing: { Loose: { mass: 2700, resting: true } } },
       ramp: { form: { Ramp: { from: at, to: at + 2, start_top: floor, end_top: floor + 0.4 } }, across: null, yaw: 0, footing: "Fixed" },
       roof: { form: { Roof: { from: at, to: at + 1.5, bottom: floor + 1.4 } }, across: null, yaw: 0, footing: "Fixed" },
+      slab: { form: { Slab: { from: at, to: at + 2, bottom: floor + 1.4, top: floor + 1.6 } }, across: null, yaw: 0, footing: "Fixed" },
     }[kind];
     list.push(made);
     state.selected = list.length - 1;
     buildShapeEditor(); queueRender();
   }
-  ["block", "stone", "plank", "ramp", "roof"].forEach((kind) => $("add-" + kind).addEventListener("click", () => addShape(kind)));
+  ["block", "stone", "plank", "ramp", "roof", "slab"].forEach((kind) => $("add-" + kind).addEventListener("click", () => addShape(kind)));
 
   function buildShapeEditor() {
     const editor = $("shape-editor");
@@ -450,6 +452,7 @@ dialog .row { justify-content: flex-end; margin-top: 8px; }
     if (kind === "Block") { num("top, m", () => form.top, (v) => form.top = v); num("tilt across, m/m", () => form.tilt ?? 0, (v) => form.tilt = v); }
     if (kind === "Ramp") { num("start top, m", () => form.start_top, (v) => form.start_top = v); num("end top, m", () => form.end_top, (v) => form.end_top = v); }
     if (kind === "Roof") { num("underside, m", () => form.bottom, (v) => form.bottom = v); }
+    if (kind === "Slab") { num("underside, m", () => form.bottom, (v) => form.bottom = v); num("top, m", () => form.top, (v) => form.top = v); }
     num("yaw, °", () => (shape.yaw ?? 0) * 180 / Math.PI, (v) => shape.yaw = v * Math.PI / 180, 1);
     if (shape.across) {
       num("across from, m", () => shape.across[0], (v) => shape.across[0] = v);
@@ -525,7 +528,7 @@ dialog .row { justify-content: flex-end; margin-top: 8px; }
     const near = GRAB_PX / layout.scale;
     let mode = "move";
     if (view === "side") {
-      const top = kind === "Roof" ? form.bottom : kind === "Ramp" ? form.start_top + (form.end_top - form.start_top) * (s - form.from) / (form.to - form.from) : form.top + 0;
+      const top = kind === "Roof" ? form.bottom : kind === "Slab" ? form.top : kind === "Ramp" ? form.start_top + (form.end_top - form.start_top) * (s - form.from) / (form.to - form.from) : form.top + 0;
       if (Math.abs(s - form.from) < near) mode = "from";
       else if (Math.abs(s - form.to) < near) mode = "to";
       else if (Math.abs(up - top) < near) mode = "top";
@@ -557,6 +560,7 @@ dialog .row { justify-content: flex-end; margin-top: 8px; }
       if (drag.kind === "Block") f.top = round(of.top + dz);
       if (drag.kind === "Ramp") { f.start_top = round(of.start_top + dz); f.end_top = round(of.end_top + dz); }
       if (drag.kind === "Roof") f.bottom = round(of.bottom + dz);
+      if (drag.kind === "Slab") { f.bottom = round(of.bottom + dz); f.top = round(of.top + dz); }
     };
     switch (drag.mode) {
       case "from": f.from = round(Math.min(of.from + ds, of.to - 0.05)); break;

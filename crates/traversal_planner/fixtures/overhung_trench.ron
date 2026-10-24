@@ -1,0 +1,17 @@
+// A trench 1.2 m wide and a metre deep, its far lip a slab overhanging it by
+// 40 cm: hopped from the near edge over the lip, which roofs the trench but
+// not the arc above it.
+TraversalScene(
+    ground: Authored(AuthoredGround(
+        base: Some(0.0),
+        shapes: [
+            Shape(form: Block(from: -1.0, to: 2.0, top: 1.0), footing: Fixed),
+            Shape(form: Slab(from: 2.8, to: 3.2, bottom: 0.6, top: 1.0), footing: Fixed),
+            Shape(form: Block(from: 3.2, to: 12.0, top: 1.0), footing: Fixed),
+        ],
+    )),
+    body: BodyState(s: 0.0, z: 1.25, speed: 5.0, climb: 0.0),
+    lead: LeftFoot,
+    intent: Intent(speed: 5.0),
+    expect: Some(Crosses),
+)

@@ -23,12 +23,31 @@ fn block(from: f32, to: f32, top: f32) -> Shape {
     }
 }
 
+fn slab(from: f32, to: f32, bottom: f32, top: f32) -> Shape {
+    Shape {
+        form: Form::Slab {
+            from,
+            to,
+            bottom,
+            top,
+        },
+        across: None,
+        yaw: 0.0,
+        footing: Footing::Fixed,
+    }
+}
+
 fn section_of(base: Option<f32>, shapes: Vec<Shape>) -> Section {
+    section_with_body_at(0.0, base, shapes)
+}
+
+/// The section sampled for a body whose bottom-sphere centre is at `body_z`.
+fn section_with_body_at(body_z: f32, base: Option<f32>, shapes: Vec<Shape>) -> Section {
     TraversalScene {
         ground: Ground::Authored(AuthoredGround { base, shapes }),
         body: BodyState {
             s: 0.0,
-            z: 0.0,
+            z: body_z,
             speed: 0.0,
             climb: 0.0,
         },
@@ -372,4 +391,43 @@ fn a_tilt_turns_with_its_stone() {
             );
         }
     }
+}
+
+#[test]
+fn under_a_slab_the_floor_is_the_ground_and_its_top_only_an_upper_floor() {
+    let (bottom, top) = (1.2, 1.6);
+    let section = section_with_body_at(BODY_RADIUS, Some(0.0), vec![slab(1.0, 3.0, bottom, top)]);
+    let span = (1.3, 2.7);
+    let expect = |profile: &Profile, z: f32, what: &str| {
+        let under = samples(profile, span);
+        assert!(!under.is_empty(), "{what}: no samples");
+        for (s, sample_z, _) in under {
+            assert!(
+                (sample_z - z).abs() < 1e-4,
+                "{what} at s = {s}: {sample_z}, expected {z}"
+            );
+        }
+    };
+    expect(&section.body_floor, BODY_RADIUS, "floor");
+    expect(&section.ceiling, bottom - BODY_RADIUS, "ceiling");
+    expect(&section.upper_floor, top + BODY_RADIUS, "upper floor");
+    let foot_radius = GaitParams::default().foot.radius;
+    expect(lane(&section, 0.3), foot_radius, "footholds");
+}
+
+#[test]
+fn on_a_slab_the_floor_is_its_top() {
+    let top = 1.6;
+    let section = section_with_body_at(
+        top + BODY_RADIUS,
+        Some(0.0),
+        vec![slab(-1.0, 3.0, 1.2, top)],
+    );
+    for (s, z, _) in samples(&section.body_floor, (-0.5, 2.7)) {
+        assert!((z - (top + BODY_RADIUS)).abs() < 1e-4, "s = {s}: {z}");
+    }
+    assert!(
+        samples(&section.ceiling, (-0.5, 2.7)).is_empty(),
+        "open sky over the slab"
+    );
 }

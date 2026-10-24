@@ -174,6 +174,12 @@ fn cast_against_collider(
     let end = start + travel;
     match obstacle.shape {
         ColliderShape::Sphere { radius: other } => {
+            // Touching it already and moving away, the sphere passes out
+            // unseen, as it does from a box's or a hull's faces.
+            let apart = start - obstacle.center;
+            if apart.norm() <= *radius + *other && apart.dot(&travel) >= 0.0 {
+                return None;
+            }
             let t = swept_sphere_sphere(
                 start,
                 end,
@@ -702,6 +708,32 @@ mod tests {
                 hit.distance
             );
         }
+    }
+
+    /// A sphere touching a ball from below passes out of it unseen moving
+    /// down, as from a box's face, and is stopped at once moving up.
+    #[test]
+    fn a_sphere_touching_a_ball_is_stopped_only_moving_into_it() {
+        let mut world = world();
+        let ball = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, 3.0, 0.0)));
+        world.attach_collider(ball, ColliderDesc::sphere(0.5));
+        let sphere = ColliderShape::Sphere { radius: 0.25 };
+        let view = ShapeView {
+            center: Point3::new(0.3, 2.5, 0.0),
+            rotation: nalgebra::UnitQuaternion::identity(),
+            shape: &sphere,
+        };
+
+        assert!(
+            BodySweep::new(&world)
+                .cast_shape(&view, down(3.0), &[])
+                .is_none(),
+            "moving away from the ball"
+        );
+        let hit = BodySweep::new(&world)
+            .cast_shape(&view, -down(3.0), &[])
+            .expect("moving into the ball");
+        assert_eq!(hit.fraction, 0.0);
     }
 
     /// A sphere cast onto a box's face, across the diagonal that splits it

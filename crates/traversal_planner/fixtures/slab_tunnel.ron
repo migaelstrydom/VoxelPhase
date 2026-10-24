@@ -1,0 +1,14 @@
+// A slab 2.2 m up over the path from 1.5 m ahead, 20 cm thick: a tunnel the
+// body runs through, not a wall.
+TraversalScene(
+    ground: Authored(AuthoredGround(
+        base: Some(0.0),
+        shapes: [
+            Shape(form: Slab(from: 1.5, to: 13.5, bottom: 2.2, top: 2.4), footing: Fixed),
+        ],
+    )),
+    body: BodyState(s: 0.0, z: 0.25, speed: 5.0, climb: 0.0),
+    lead: LeftFoot,
+    intent: Intent(speed: 5.0),
+    expect: Some(Crosses),
+)

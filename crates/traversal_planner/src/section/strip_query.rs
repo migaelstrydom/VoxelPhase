@@ -236,6 +236,9 @@ pub struct StripQuery<'a> {
     /// may be: on the floor, if any, and the spine below the ceiling, if any.
     /// Flights are checked against these by plain arithmetic.
     bounds: Vec<(f32, f32)>,
+    /// At each body station, the lowest the bottom-sphere centre may be over
+    /// what roofs the layer, if anything does and the body could pass over.
+    over: Vec<Option<f32>>,
 }
 
 impl<'a> StripQuery<'a> {
@@ -247,6 +250,11 @@ impl<'a> StripQuery<'a> {
         let floor = Line::new(&section.body_floor, start, layout.body_spacing, end);
         let ceiling = Line::new(&section.ceiling, start, layout.body_spacing, end);
         let rideway = Rideway::new(&floor, &ceiling, params);
+        let over = Line::new(&section.upper_floor, start, layout.body_spacing, end)
+            .samples
+            .iter()
+            .map(|hit| hit.map(|hit| hit.z))
+            .collect();
         let bounds = (0..floor.samples.len())
             .map(|station| {
                 let low = floor.samples[station].map_or(f32::NEG_INFINITY, |hit| hit.z);
@@ -261,6 +269,7 @@ impl<'a> StripQuery<'a> {
             .collect();
         Self {
             bounds,
+            over,
             params,
             foothold_lanes: section
                 .foothold_lanes
@@ -290,7 +299,8 @@ impl<'a> StripQuery<'a> {
             } else {
                 clearance
             };
-            z >= floor + margin && z <= roof
+            (z >= floor + margin && z <= roof)
+                || self.over[station].is_some_and(|over| z >= over + margin)
         })
     }
 }

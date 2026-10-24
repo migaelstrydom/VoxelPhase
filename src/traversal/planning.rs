@@ -188,9 +188,9 @@ impl TraversalPlanning {
             ahead: self.sampled_ahead,
             ..self.layout.clone()
         };
-        let (section, casts) = self
-            .cache
-            .sample(&caster, &layout, &self.planner.params, body.s);
+        let (section, casts) =
+            self.cache
+                .sample(&caster, &layout, &self.planner.params, body.s, body.z);
         let sampled = Instant::now();
 
         let query = StripQuery::new(&section, &self.planner.params);

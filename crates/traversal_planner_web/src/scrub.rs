@@ -122,7 +122,9 @@ fn give_way(scene: &mut TraversalScene, contact: &Contact) -> Option<String> {
     let (index, shape) = ground.shapes.iter_mut().enumerate().find(|(_, shape)| {
         matches!(shape.footing, Footing::Loose { .. })
             && covers(shape, contact.at.s, contact.at.d)
-            && (shape.face().at(contact.at.s, contact.at.d) - contact.at.z).abs() < ON_SHAPE
+            && shape.top().is_some_and(|top| {
+                (top.at(contact.at.s, contact.at.d) - contact.at.z).abs() < ON_SHAPE
+            })
     })?;
     match &mut shape.form {
         Form::Block { from, to, top, .. } => {
@@ -138,6 +140,17 @@ fn give_way(scene: &mut TraversalScene, contact: &Contact) -> Option<String> {
         } => {
             *start_top -= GIVE_DROP;
             *end_top -= GIVE_DROP;
+            *from += GIVE_SLIDE;
+            *to += GIVE_SLIDE;
+        }
+        Form::Slab {
+            top,
+            bottom,
+            from,
+            to,
+        } => {
+            *top -= GIVE_DROP;
+            *bottom -= GIVE_DROP;
             *from += GIVE_SLIDE;
             *to += GIVE_SLIDE;
         }

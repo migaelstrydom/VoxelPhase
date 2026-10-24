@@ -96,6 +96,23 @@ Each lane holds surfaces, not a height per `s`, because ledges, walls and
 overhangs are not heightfields. Gait planning reads only floors and ceilings,
 but the type does not have to change when climbing arrives.
 
+**One layer: the body's.** The strip samples the open space the body is in,
+followed out from it station by station: each station's sphere rises from the
+floor before it, and the floor is cast down from under whatever it meets. So
+under a slab the floor is the ground and the slab's underside the ceiling (a
+tunnel, or the garden's cave lip refused for its headroom), not the slab's top
+as a wall. Only a face that leans down is a ceiling; a wall corner grazed on
+the way up bounds the layer but hangs over nothing. Where the sphere has no
+room to start (a crack between two balls), the layer has closed and the
+station is read from the top. What roofs the layer over, where something does,
+is kept as the **upper floor**: a flight may pass over it (the bulge of a
+ball over the trench at its foot) but the body does not ride or land on it.
+Moving between layers (onto a slab from under it) is climbing's, later.
+
+Casts that start inside something pass out of it unseen, the game's sweeps
+and the authored prisms alike; an authored `Slab` is a floor prism and a roof
+prism over one footprint, which the start-height rule reads as a slab.
+
 ### Reading the section: `SectionQuery`
 
 Transition models and the planner never read lanes directly. They ask a
@@ -511,10 +528,11 @@ pile, lets physics settle it, samples the strip from a given start and heading
 through `PhysicsCaster`, and writes a `Captured` scene. It is how real rubble
 reaches the fixtures before the game runs the planner, and the first measure
 of what the game's casts cost. It reuses `level_check`'s `RestTrial` to spawn
-and settle, and blasts as a grenade shoves bodies (a radial impulse). Casts
-down start a few metres above the body, so an overhang below that reads as
-floor until the wall pass exists. The command that made a capture heads its
-file, and a capture is deterministic: the same command writes the same file.
+and settle, and blasts as a grenade shoves bodies (a radial impulse). The layer is
+followed from the floor under the start, found from above, so a capture
+started under an overhang reads the overhang's top. The command that made a
+capture heads its file, and a capture is deterministic: the same command
+writes the same file.
 
 ### In game
 
@@ -523,8 +541,12 @@ every frame, drawn on **F6**; **F7** writes the strip, body and plan to
 `scratch/captures/`; the costs go to `DebugLog` under `Traversal/Plan`. The
 garden check (`cargo test --release --lib --features traversal_scenarios
 garden_station`) captures every station at walk and sprint and plans each
-against its authored twin; the lips are authored as the voxels mesh them,
-sloped across the voxel at the face. Planned:
+against its authored twin, first comparing the two strips (the body floor's
+median height, and where only one has a ceiling) so a station read as other
+ground fails even when both refuse; the lips are authored as the voxels mesh
+them, sloped across the voxel at the face. The Stack Yard check
+(`stack_yard_places`) plans places that planned wrongly in play to the
+outcome they should have: the ball pit from its rim. Planned:
 
 - **`PlanOverlay`**: the plan through `DebugOverlays`. Footfalls as discs
   (left and right coloured, committed solid, tentative faded), flight arcs,

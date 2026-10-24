@@ -91,6 +91,7 @@ impl TraversalScene {
                 &self.layout,
                 &self.params,
                 self.body.s,
+                self.body.z,
             ),
         }
     }

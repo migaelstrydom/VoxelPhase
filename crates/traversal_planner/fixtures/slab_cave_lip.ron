@@ -1,0 +1,15 @@
+// The Traversal Garden's cave lip: a slab whose underside is 0.9 m up, a
+// tenth below the top of the capsule, and whose top is 2.5 m up. Refused for
+// its ceiling; its top is out of reach.
+TraversalScene(
+    ground: Authored(AuthoredGround(
+        base: Some(0.0),
+        shapes: [
+            Shape(form: Slab(from: 1.5, to: 13.5, bottom: 0.9, top: 2.5), footing: Fixed),
+        ],
+    )),
+    body: BodyState(s: 0.0, z: 0.25, speed: 5.0, climb: 0.0),
+    lead: LeftFoot,
+    intent: Intent(speed: 5.0),
+    expect: Some(Refuses),
+)

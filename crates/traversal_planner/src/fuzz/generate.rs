@@ -83,10 +83,12 @@ impl Course {
     fn lowest(&self) -> f32 {
         self.shapes
             .iter()
-            .filter(|shape| !shape.is_roof())
             .flat_map(|shape| {
-                let face = shape.face();
-                shape.footprint().map(|(s, _)| face.at(s, 0.0))
+                let top = shape.top();
+                shape
+                    .footprint()
+                    .into_iter()
+                    .filter_map(move |(s, _)| top.map(|top| top.at(s, 0.0)))
             })
             .fold(0.0, f32::min)
     }

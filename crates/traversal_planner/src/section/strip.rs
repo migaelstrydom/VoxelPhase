@@ -78,6 +78,11 @@ pub struct FootholdLane {
 /// path itself, which covers the capsule's width; footholds are cast with a
 /// foot's radius along every lane. The wide cast bridges a gap narrower than
 /// the capsule, so the body floor dips over it where the footholds break.
+///
+/// One layer is sampled: the open space the body is in, followed out from
+/// it. Under a slab the floor is the ground beneath and the slab's underside
+/// the ceiling; the slab's top is only the upper floor, which a flight may
+/// pass over.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Section {
     /// Where the strip sampled.
@@ -95,6 +100,10 @@ pub struct Section {
     pub body_floor: Profile,
     /// What the capsule's top sphere, cast up along the path, meets.
     pub ceiling: Profile,
+    /// The top of whatever roofs the body's layer over, where the body could
+    /// fly over it: the bulge of a boulder over a trench at its foot.
+    #[serde(default)]
+    pub upper_floor: Profile,
     /// One per lane of the layout, in the same order.
     pub foothold_lanes: Vec<FootholdLane>,
 }

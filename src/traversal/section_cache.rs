@@ -34,24 +34,27 @@ impl Pose {
 /// How far behind the strip's back end kept casts are dropped, in metres.
 const STALE_BEHIND: f32 = 0.5;
 
-/// A cast the strip makes: which way, where on the path, how wide. The strip's
-/// stations lie on a grid fixed along the path, so the same station casts
-/// with bit-identical numbers every frame.
+/// A cast the strip makes: which way, where on the path and from what
+/// height, how wide. The strip's stations lie on a grid fixed along the path,
+/// and each starts from the floor sampled before it, so the same station
+/// casts with bit-identical numbers every frame while nothing near it moves.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct CastKey {
     up: bool,
     s: u32,
     d: u32,
     radius: u32,
+    from: u32,
 }
 
 impl CastKey {
-    fn new(up: bool, s: f32, d: f32, radius: f32) -> Self {
+    fn new(up: bool, s: f32, d: f32, radius: f32, from: f32) -> Self {
         Self {
             up,
             s: s.to_bits(),
             d: d.to_bits(),
             radius: radius.to_bits(),
+            from: from.to_bits(),
         }
     }
 }
@@ -105,15 +108,15 @@ impl<C: SphereCaster> Remembering<'_, C> {
 }
 
 impl<C: SphereCaster> SphereCaster for Remembering<'_, C> {
-    fn cast_down(&self, s: f32, d: f32, radius: f32) -> Option<CastHit> {
-        self.cast(CastKey::new(false, s, d, radius), || {
-            self.caster.cast_down(s, d, radius)
+    fn cast_down(&self, s: f32, d: f32, radius: f32, from: f32) -> Option<CastHit> {
+        self.cast(CastKey::new(false, s, d, radius, from), || {
+            self.caster.cast_down(s, d, radius, from)
         })
     }
 
-    fn cast_up(&self, s: f32, d: f32, radius: f32) -> Option<CastHit> {
-        self.cast(CastKey::new(true, s, d, radius), || {
-            self.caster.cast_up(s, d, radius)
+    fn cast_up(&self, s: f32, d: f32, radius: f32, from: f32) -> Option<CastHit> {
+        self.cast(CastKey::new(true, s, d, radius, from), || {
+            self.caster.cast_up(s, d, radius, from)
         })
     }
 }
@@ -222,14 +225,16 @@ impl SectionCache {
         });
     }
 
-    /// The strip around `origin` along the laid path, casting only what is
-    /// not kept. Returns it and how many casts it made.
+    /// The strip around `origin` along the laid path, in the layer of a body
+    /// whose bottom-sphere centre is at `body_z`, casting only what is not
+    /// kept. Returns it and how many casts it made.
     pub fn sample(
         &mut self,
         caster: &impl SphereCaster,
         layout: &StripLayout,
         params: &GaitParams,
         origin: f32,
+        body_z: f32,
     ) -> (Section, usize) {
         // Stations the body has left behind are not coming back.
         let behind = origin - layout.behind - STALE_BEHIND;
@@ -242,7 +247,7 @@ impl SectionCache {
             hits: &hits,
             casts: &casts,
         };
-        let section = sample_section(&remembering, layout, params, origin);
+        let section = sample_section(&remembering, layout, params, origin, body_z);
         self.hits = hits.into_inner();
         (section, casts.get())
     }

@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::section::Footing;
 
 /// The outline of a shape seen from the side, in path coordinates. Floors fill
-/// down to the ground's base; roofs fill up from their underside.
+/// down to the ground's base; roofs fill up from their underside; a slab is
+/// solid only between its underside and its top.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Form {
     /// A flat-topped block from `s = from` to `s = to`: a plank, a step, a
@@ -26,6 +27,14 @@ pub enum Form {
     },
     /// A ceiling from `from` to `to` with its underside at `bottom`.
     Roof { from: f32, to: f32, bottom: f32 },
+    /// A flat slab from `from` to `to`, its underside at `bottom` and its top
+    /// at `top`: a roof a body can stand on, or a floor it can pass under.
+    Slab {
+        from: f32,
+        to: f32,
+        bottom: f32,
+        top: f32,
+    },
 }
 
 /// How far a shape with no `across` extends to either side: past any strip.
@@ -62,11 +71,6 @@ impl Plane {
 }
 
 impl Shape {
-    /// Whether the shape is a ceiling, solid above its face.
-    pub fn is_roof(&self) -> bool {
-        matches!(self.form, Form::Roof { .. })
-    }
-
     /// The corners of the shape's footprint in `(s, d)`, counterclockwise
     /// seen from above, after the turn.
     pub fn footprint(&self) -> [(f32, f32); 4] {
@@ -75,9 +79,9 @@ impl Shape {
         [(from, left), (to, left), (to, right), (from, right)].map(|corner| self.turned(corner))
     }
 
-    /// The plane of the shape's face (a floor's top, a roof's underside),
-    /// after the turn.
-    pub fn face(&self) -> Plane {
+    /// The plane of the shape's top, after the turn: solid below it. A roof
+    /// has none.
+    pub fn top(&self) -> Option<Plane> {
         let (z0, slope_s, slope_d) = match self.form {
             Form::Block { top, tilt, .. } => (top, 0.0, tilt),
             Form::Ramp {
@@ -89,8 +93,26 @@ impl Shape {
                 let slope = (end_top - start_top) / (to - from);
                 (start_top - slope * from, slope, 0.0)
             }
-            Form::Roof { bottom, .. } => (bottom, 0.0, 0.0),
+            Form::Slab { top, .. } => (top, 0.0, 0.0),
+            Form::Roof { .. } => return None,
         };
+        Some(self.turned_plane(z0, slope_s, slope_d))
+    }
+
+    /// The plane of the shape's underside, after the turn: solid above it.
+    /// Only roofs and slabs have one.
+    pub fn underside(&self) -> Option<Plane> {
+        match self.form {
+            Form::Roof { bottom, .. } | Form::Slab { bottom, .. } => {
+                Some(self.turned_plane(bottom, 0.0, 0.0))
+            }
+            Form::Block { .. } | Form::Ramp { .. } => None,
+        }
+    }
+
+    /// The plane `z = z0 + slope_s * s + slope_d * d` of the unturned shape,
+    /// turned with it.
+    fn turned_plane(&self, z0: f32, slope_s: f32, slope_d: f32) -> Plane {
         // The unturned plane read at the point that the turn carries onto
         // each world point: its slopes turn with the shape, and its height
         // at the world origin comes from the origin's unturned position.
@@ -107,7 +129,8 @@ impl Shape {
         match self.form {
             Form::Block { from, to, .. }
             | Form::Ramp { from, to, .. }
-            | Form::Roof { from, to, .. } => (from, to),
+            | Form::Roof { from, to, .. }
+            | Form::Slab { from, to, .. } => (from, to),
         }
     }
 

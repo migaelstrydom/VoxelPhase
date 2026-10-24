@@ -21,18 +21,23 @@ struct Prism {
 }
 
 impl Prism {
-    fn from_shape(shape: &Shape, number: usize) -> Self {
+    /// A prism for each face of `shape`: its top, solid below, and its
+    /// underside, solid above.
+    fn of_shape(shape: &Shape, number: usize) -> impl Iterator<Item = Self> + '_ {
         let body = match shape.footing {
             Footing::Fixed => FIXED_BODY,
             Footing::Loose { .. } => BodyKey(number as u64 + 1),
         };
-        Self {
-            footprint: shape.footprint(),
-            face: shape.face(),
-            side: if shape.is_roof() { -1.0 } else { 1.0 },
-            body,
-            footing: shape.footing,
-        }
+        let faces = [(shape.top(), 1.0), (shape.underside(), -1.0)];
+        faces.into_iter().filter_map(move |(face, side)| {
+            Some(Self {
+                footprint: shape.footprint(),
+                face: face?,
+                side,
+                body,
+                footing: shape.footing,
+            })
+        })
     }
 
     /// The face's point over `(s, d)`.
@@ -148,7 +153,10 @@ fn edge_touch(
 }
 
 /// Exact sphere casts against an authored scene's shapes: the authored
-/// counterpart of the game's casts in its physics world.
+/// counterpart of the game's casts in its physics world. A sphere that starts
+/// inside a prism passes out of it unseen, as a sweep in the game does: a
+/// slab is a floor prism and a roof prism, and a cast from under it sees only
+/// its underside.
 pub struct ShapeCaster {
     base: Option<f32>,
     floors: Vec<Prism>,
@@ -161,7 +169,7 @@ impl ShapeCaster {
             .shapes
             .iter()
             .enumerate()
-            .map(|(number, shape)| Prism::from_shape(shape, number))
+            .flat_map(|(number, shape)| Prism::of_shape(shape, number))
             .partition(|prism| prism.side < 0.0);
         Self {
             base: ground.base,
@@ -187,16 +195,19 @@ impl ShapeCaster {
 }
 
 impl SphereCaster for ShapeCaster {
-    fn cast_down(&self, s: f32, d: f32, radius: f32) -> Option<CastHit> {
-        let mut best = self.base.map(|z| CastHit {
-            z: z + radius,
-            normal: PathVec::UP,
-            body: FIXED_BODY,
-            footing: Footing::Fixed,
-        });
+    fn cast_down(&self, s: f32, d: f32, radius: f32, from: f32) -> Option<CastHit> {
+        let mut best = self
+            .base
+            .map(|z| CastHit {
+                z: z + radius,
+                normal: PathVec::UP,
+                body: FIXED_BODY,
+                footing: Footing::Fixed,
+            })
+            .filter(|hit| hit.z <= from);
         for prism in &self.floors {
             if let Some((z, touched)) = prism.first_touch(s, d, radius) {
-                if best.map_or(true, |hit| z > hit.z) {
+                if z <= from && best.map_or(true, |hit| z > hit.z) {
                     best = Some(Self::hit(
                         PathVec::new(s, d, z),
                         touched,
@@ -210,11 +221,11 @@ impl SphereCaster for ShapeCaster {
         best
     }
 
-    fn cast_up(&self, s: f32, d: f32, radius: f32) -> Option<CastHit> {
+    fn cast_up(&self, s: f32, d: f32, radius: f32, from: f32) -> Option<CastHit> {
         let mut best: Option<CastHit> = None;
         for prism in &self.roofs {
             if let Some((z, touched)) = prism.first_touch(s, d, radius) {
-                if best.map_or(true, |hit| z < hit.z) {
+                if z >= from && best.map_or(true, |hit| z < hit.z) {
                     best = Some(Self::hit(
                         PathVec::new(s, d, z),
                         touched,
