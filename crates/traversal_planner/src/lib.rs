@@ -6,10 +6,10 @@
 //! [`TraversalScene`]s. Design: `docs/traversal/PLANNER_DESIGN.md`.
 //!
 //! ```text
-//!   TraversalScene ──► strip sampler ─┐
-//!                                     ├─► Section ── SectionQuery ──► Planner ──► Plan
-//!   game world ──► SectionSampler ────┘                                 ▲
-//!                                                    GaitParams ────────┘
+//!   TraversalScene ──► ShapeCaster ───┐
+//!                                     ├─ sample_section ─► Section ── StripQuery ──► Planner ──► Plan
+//!   PhysicsWorld ──► PhysicsCaster ───┘    (SphereCaster)              (SectionQuery)   ▲
+//!                    (game side)                                         GaitParams ────┘
 //! ```
 
 pub mod params;

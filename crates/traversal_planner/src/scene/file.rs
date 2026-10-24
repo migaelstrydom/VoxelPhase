@@ -8,6 +8,11 @@ use crate::section::{sample_section, Section, StripLayout};
 use super::authored::AuthoredGround;
 use super::caster::ShapeCaster;
 
+/// How deep a scene's RON nests before the rest of a value goes on one line:
+/// a captured section's body floor samples and its foothold lanes' surfaces
+/// sit at depth 7, so each is a line.
+const RON_DEPTH: usize = 6;
+
 /// Where a scene's section comes from.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Ground {
@@ -57,8 +62,11 @@ impl TraversalScene {
         ron::from_str(text)
     }
 
+    /// The scene as RON, each of a captured section's samples on a line of
+    /// its own.
     pub fn to_ron(&self) -> Result<String, ron::Error> {
-        ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+        let config = ron::ser::PrettyConfig::default().depth_limit(RON_DEPTH);
+        ron::ser::to_string_pretty(self, config)
     }
 
     /// What the planner is asked for in this scene, with no plan before it.

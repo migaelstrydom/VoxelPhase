@@ -104,10 +104,7 @@ impl Stride {
         if landing_floor.normal.z < steepest.cos() {
             return;
         }
-        let bottom = landing_floor.z - params.body.radius;
-        let reachable =
-            |z: f32| z >= bottom - params.foot.below_body && z <= bottom + params.foot.above_body;
-        if !reachable(contact.at.z) || !reachable(stance.z) {
+        if !reaches(landing_floor.z, contact.at.z, context) {
             return;
         }
 
@@ -117,7 +114,8 @@ impl Stride {
         };
         let ride = query.ride(start.s, landing_s, params);
 
-        if ride.end >= landing_s {
+        // Riding all the way, the stance foot holds the body until it lands.
+        if ride.end >= landing_s && reaches(landing_floor.z, stance.z, context) {
             let (phase, end_speed) = self.grounded(from, start, landing_s, context);
             out.push(Candidate {
                 landing: self.landing(from, contact, landing_s, landing_floor.z, end_speed, &phase),
@@ -194,6 +192,10 @@ impl Stride {
         } else {
             start.z
         };
+        // Flying, it lets go at takeoff.
+        if !reaches(takeoff_z, from.stance.at.z, context) {
+            return None;
+        }
         let ride = query.ride(start.s, takeoff, params);
         let cost = step_cost
             + context.settings.costs.flight
@@ -273,4 +275,12 @@ impl Stride {
             + costs.sideways * sideways_off * sideways_off
             + costs.edge * near_edge * near_edge
     }
+}
+
+/// Whether a foot at height `foot_z` is within reach of the body with its
+/// bottom-sphere centre at `body_z`.
+fn reaches(body_z: f32, foot_z: f32, context: &ExpandContext) -> bool {
+    let foot = &context.params.foot;
+    let bottom = body_z - context.params.body.radius;
+    foot_z >= bottom - foot.below_body && foot_z <= bottom + foot.above_body
 }

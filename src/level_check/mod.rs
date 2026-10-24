@@ -21,7 +21,7 @@ pub use baseline::{BaselineVerdict, Baselines};
 pub use disturb::check_disturbance;
 pub use reach::{JumpArc, JumpEnvelope, Stance};
 pub use report::{Finding, Report, Section, Severity};
-pub use rest::{check_rest, RestTrial};
+pub use rest::{check_rest, is_at_rest, RestTrial};
 pub use routes::RouteMap;
 pub use runner::{build_terrain, check_level};
 pub use segments::Crossing;

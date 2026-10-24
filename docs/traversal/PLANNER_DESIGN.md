@@ -427,7 +427,11 @@ writing it out as a fixture. It lives in the planner crate.
 pile, lets physics settle it, samples the strip from a given start and heading
 through `PhysicsCaster`, and writes a `Captured` scene. It is how real rubble
 reaches the fixtures before the game runs the planner, and the first measure
-of what the game's casts cost.
+of what the game's casts cost. It reuses `level_check`'s `RestTrial` to spawn
+and settle, and blasts as a grenade shoves bodies (a radial impulse). Casts
+down start a few metres above the body, so an overhang below that reads as
+floor until the wall pass exists. The command that made a capture heads its
+file, and a capture is deterministic: the same command writes the same file.
 
 ### In game
 

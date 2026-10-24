@@ -272,20 +272,7 @@ impl RestTrial {
             }
         }
 
-        let mut settled_after = None;
-        let mut frames_at_rest = 0;
-        self.simulate(TRIAL_SECONDS, |world, _, elapsed| {
-            if handles.iter().all(|&h| is_at_rest(world, h)) {
-                frames_at_rest += 1;
-            } else {
-                frames_at_rest = 0;
-            }
-            if frames_at_rest >= SETTLE_FRAMES {
-                settled_after = Some(elapsed);
-                return ControlFlow::Break(());
-            }
-            ControlFlow::Continue(())
-        });
+        let settled_after = self.settle(TRIAL_SECONDS);
 
         let water = self.world.try_fetch::<WaterWorld>();
         let query = water.as_deref().map(WaterWorld::query);
@@ -311,21 +298,47 @@ impl RestTrial {
         }
     }
 
+    /// Step until every body is at rest, or until `seconds` have passed,
+    /// without waking anything. Returns when it came to rest, if it did.
+    pub fn settle(&mut self, seconds: f32) -> Option<f32> {
+        let handles = self.handles();
+        let mut settled_after = None;
+        let mut frames_at_rest = 0;
+        self.simulate(seconds, |world, _, elapsed| {
+            if handles.iter().all(|&h| is_at_rest(world, h)) {
+                frames_at_rest += 1;
+            } else {
+                frames_at_rest = 0;
+            }
+            if frames_at_rest >= SETTLE_FRAMES {
+                settled_after = Some(elapsed);
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
+        });
+        settled_after
+    }
+
     /// The objects being judged, with their bodies.
     pub(super) fn objects(&self) -> &[TrialObject] {
         &self.objects
     }
 
     /// Every body being judged.
-    pub(super) fn handles(&self) -> Vec<RigidBodyHandle> {
+    pub fn handles(&self) -> Vec<RigidBodyHandle> {
         self.objects
             .iter()
             .flat_map(|o| o.bodies.iter().map(|(h, _, _)| *h))
             .collect()
     }
 
+    /// The trial's physics, to read where everything came to rest.
+    pub fn physics(&self) -> Fetch<'_, PhysicsResource> {
+        self.world.read_resource::<PhysicsResource>()
+    }
+
     /// The trial's physics, to change bodies between runs.
-    pub(super) fn physics_mut(&self) -> specs::shred::FetchMut<'_, PhysicsResource> {
+    pub fn physics_mut(&self) -> specs::shred::FetchMut<'_, PhysicsResource> {
         self.world.write_resource::<PhysicsResource>()
     }
 
@@ -414,7 +427,7 @@ impl TrialObject {
 
 /// Whether a body is asleep, or slow enough that the sleep system would put it
 /// to sleep were it free to.
-pub(super) fn is_at_rest(world: &PhysicsWorld, handle: RigidBodyHandle) -> bool {
+pub fn is_at_rest(world: &PhysicsWorld, handle: RigidBodyHandle) -> bool {
     if world.is_sleeping(handle) {
         return true;
     }

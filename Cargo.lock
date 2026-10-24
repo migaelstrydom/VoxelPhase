@@ -1964,6 +1964,7 @@ dependencies = [
  "smallvec",
  "specs",
  "tracing-subscriber",
+ "traversal_planner",
  "winit",
 ]
 
