@@ -565,14 +565,31 @@ steering, no cutoff. A roll-off asks for nothing (the body runs off the edge).
 A refused plan is followed to where it ran out, braked to stop there: the
 refusal-drop choice taken as "stop at the edge" until play says otherwise. A
 jump the player presses still jumps. `character_viewer traversal --summary
---track` runs the garden stations with it. Against the untracked runs on
-2026-10-25: the lips are crossed at speed instead of stalled (25 cm at a
-walk: lowest speed 4.9 m/s against 1.1; 40 cm at a run: 4.5 against 0.1),
-the planks, rough ground and 40° slope crossed, the slope as fast to within
-5%; the 50° slope, scree, ledge and cave refused and stopped at, where the
-untracked capsule barges up the first two. The scree's rocks stand 0.6 m
-above its slope: a planned hop is capped at 3 m/s of climb (0.45 m), and
-even uncapped the feet find no landing on the rocks' tops.
+--track` runs the garden stations with it. A hop is taken off on the frame
+nearest its planned start, half a frame early at most.
+
+Against the untracked runs on 2026-10-25:
+- **better:** the 25 and 40 cm lips, crossed at speed instead of stalled
+  (25 cm at a walk: lowest speed 4.8 m/s against 1.1; 40 cm at a run: 4.6
+  against 0.1), and all four plank runs (narrow at a run: 7.4 m/s lowest, no
+  snags, against 5.9);
+- **level:** the 3 and 8 cm lips, the 15 cm lip at a run, the 40° slope (time
+  within 5%);
+- **worse:** the 15 cm lip at a walk (0.57 s against 0.43), the rough lane
+  (3.2 s against 2.6 walking, 2.4 against 1.9 running), and the 50° slope and
+  scree, refused and stopped at where the untracked capsule barges up. The
+  scree's rocks stand 0.6 m above its slope: a planned hop is capped at 3 m/s
+  of climb (0.45 m), and even uncapped the feet find no landing on their
+  tops. Ledge and cave are refused either way.
+
+The drive contract's ride rows run tracked: none sinks below the floor any
+more, five of eight hold, and the rest ride 3-6 cm high. The 40 cm lip at a
+walk shows why: the plan hops the bevel's 45° face and lands on its 30°
+part, which is ridable; landing on a rising floor at speed turns the body's
+forward speed into climb, and at the lip's top it is thrown. A cap on the
+body's rise while it rides did not help (the throw comes from the landing,
+in flight) and was taken out. What would: landings only where the floor
+rises no faster than the arc arrives, or the landing's kick modelled.
 
 Riding a slope at the limit needed three planner fixes: a ride is charged
 for running slower than the slope lets it (`ground_speed`), not the asked

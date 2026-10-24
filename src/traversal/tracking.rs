@@ -18,9 +18,9 @@ pub struct Tracking {
 ///
 /// The speed is the plan's at the frame's end. A refused plan stops where it
 /// ran out: no faster than braking at `braking` m/s² stops the body there.
-/// A hop starting within the frame is taken off as planned; a roll-off,
-/// which keeps its stance foot, is the body running off the edge and needs
-/// nothing asked.
+/// A hop is taken off on the frame whose start is nearest its own, half a
+/// frame early at most; a roll-off, which keeps its stance foot, is the body
+/// running off the edge and needs nothing asked.
 pub fn track(plan: &Plan, forward: Vector3<f32>, dt: f32, refused: bool, braking: f32) -> Tracking {
     let mut speed = speed_at(plan, dt);
     if refused {
@@ -33,7 +33,7 @@ pub fn track(plan: &Plan, forward: Vector3<f32>, dt: f32, refused: bool, braking
     let takeoff = plan
         .phases
         .iter()
-        .take_while(|phase| phase.start < dt)
+        .take_while(|phase| phase.start < 0.5 * dt)
         .find_map(|phase| match phase.motion {
             // A hop's phase holds no contact; a roll-off's keeps the stance.
             Motion::Flight { takeoff, .. } if phase.contacts.is_empty() => Some(PlannedTakeoff {
@@ -176,10 +176,10 @@ mod tests {
     }
 
     #[test]
-    fn a_hop_starting_within_the_frame_is_taken_off_and_a_roll_off_is_not() {
+    fn a_hop_is_taken_off_on_the_nearest_frame_and_a_roll_off_is_not() {
         let hop = plan(vec![
-            ride(0.0, 0.01, 0.0, (4.0, 4.0)),
-            flight(0.01, 0.04, false),
+            ride(0.0, 0.005, 0.0, (4.0, 4.0)),
+            flight(0.005, 0.02, false),
         ]);
         let tracked = track(&hop, Vector3::z(), DT, false, 8.0);
         assert_eq!(
@@ -191,14 +191,15 @@ mod tests {
         );
 
         let roll_off = plan(vec![
-            ride(0.0, 0.01, 0.0, (4.0, 4.0)),
-            flight(0.01, 0.04, true),
+            ride(0.0, 0.005, 0.0, (4.0, 4.0)),
+            flight(0.005, 0.02, true),
         ]);
         assert_eq!(track(&roll_off, Vector3::z(), DT, false, 8.0).takeoff, None);
 
+        // Nearer the next frame's start than this one's: taken off then.
         let later = plan(vec![
-            ride(0.0, 0.5, 0.0, (4.0, 4.0)),
-            flight(0.5, 2.0, false),
+            ride(0.0, 0.012, 0.0, (4.0, 4.0)),
+            flight(0.012, 0.05, false),
         ]);
         assert_eq!(track(&later, Vector3::z(), DT, false, 8.0).takeoff, None);
     }
