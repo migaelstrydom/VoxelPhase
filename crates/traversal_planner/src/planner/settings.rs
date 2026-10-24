@@ -27,6 +27,9 @@ pub struct CostWeights {
     pub edge: f32,
     /// In metres.
     pub comfortable_edge_margin: f32,
+    /// A body landing on ground neither foot is on, as on a stepping stone
+    /// between the two it steps on.
+    pub unheld_body: f32,
     /// A tentative footfall moved from where the last plan had it, per metre.
     pub churn: f32,
 }
@@ -43,6 +46,7 @@ impl Default for CostWeights {
             loose_reference_mass: 100.0,
             edge: 1.0,
             comfortable_edge_margin: 0.1,
+            unheld_body: 1.0,
             churn: 2.0,
         }
     }

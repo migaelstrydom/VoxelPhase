@@ -1,11 +1,20 @@
 use smallvec::{smallvec, SmallVec};
 
+use crate::path::PathVec;
 use crate::plan::{BodyState, Contact, Limb, Motion, Phase};
-use crate::section::{Foothold, FootholdWindow};
+use crate::section::{Foothold, FootholdWindow, SectionQuery};
 
 use super::state::PlanState;
 use super::transition::{Candidate, ExpandContext, TransitionModel};
 
+/// Spacing at which the ground along a foot's line is followed, in metres.
+const GROUND_SPACING: f32 = 0.04;
+/// Half the width of a foot's line across the path, in metres: less than half
+/// the spacing of the lanes, so only the foot's own lane is followed.
+const GROUND_LINE_HALF_WIDTH: f32 = 0.05;
+/// Largest rise between neighbouring samples that is still one piece of
+/// ground, in metres.
+const GROUND_STEP: f32 = 0.05;
 /// Slowest speed a stride is planned at, in m/s: below it a stride would take
 /// unboundedly long.
 const MIN_PLANNING_SPEED: f32 = 0.3;
@@ -107,6 +116,16 @@ impl Stride {
         if !reaches(landing_floor.z, contact.at.z, context) {
             return;
         }
+        // Where the capsule rests as it lands, along the path.
+        let support = landing_s - params.body.radius * landing_floor.normal.s;
+        let held = [contact.at, stance]
+            .iter()
+            .any(|foot| on_ground_reaching(query, foot, support));
+        let step_cost = if held {
+            step_cost
+        } else {
+            step_cost + context.settings.costs.unheld_body
+        };
 
         let start = BodyState {
             speed: from.body.speed.max(MIN_PLANNING_SPEED),
@@ -283,4 +302,29 @@ fn reaches(body_z: f32, foot_z: f32, context: &ExpandContext) -> bool {
     let foot = &context.params.foot;
     let bottom = body_z - context.params.body.radius;
     foot_z >= bottom - foot.below_body && foot_z <= bottom + foot.above_body
+}
+
+/// Whether the ground under `foot` runs unbroken along its line to `support`:
+/// the capsule resting there is on what that foot stands on, not on a stone
+/// between the feet that neither touches.
+fn on_ground_reaching(query: &dyn SectionQuery, foot: &PathVec, support: f32) -> bool {
+    let (from, to) = (foot.s.min(support), foot.s.max(support));
+    let window = FootholdWindow {
+        s: from - GROUND_SPACING..to + GROUND_SPACING,
+        d: foot.d - GROUND_LINE_HALF_WIDTH..foot.d + GROUND_LINE_HALF_WIDTH,
+        spacing: GROUND_SPACING,
+    };
+    let mut ground = Vec::new();
+    query.footholds(&window, &mut ground);
+    ground.sort_by(|a, b| a.at.s.total_cmp(&b.at.s));
+    let (Some(first), Some(last)) = (ground.first(), ground.last()) else {
+        return false;
+    };
+    let reach = 2.0 * GROUND_SPACING;
+    first.at.s <= from + reach
+        && last.at.s >= to - reach
+        && ground.windows(2).all(|pair| {
+            pair[1].at.s - pair[0].at.s <= reach
+                && (pair[1].at.z - pair[0].at.z).abs() <= GROUND_STEP
+        })
 }

@@ -464,6 +464,20 @@ until E.
 
 ## Open questions
 
+- **Horizon:** a fixed 1.6 m is 0.2 s at a sprint (8 m/s) and less than one
+  natural step. Set it in footfalls and time instead (at least three
+  footfalls and about 0.6 s), with the strip reaching one natural step past
+  it: about 2 m crouching, 3–4.5 m walking, 5 m sprinting. Costs are per
+  step, so a horizon one leap long also rewards fewer, longer leaps.
+- **Coyote time:** a planned hop (0.15–0.25 s) falls inside the 0.16 s the
+  locomotion state machine still treats as ground (`ground_forgiveness_window`
+  then `CoyoteTime`), whose `clamp_up` cancels the takeoff climb, whose
+  steering bends the arc, and whose jump press fires a full jump mid-hop. In
+  E, a planned takeoff becomes a locomotion state of its own (no clamp, no
+  steering, a jump press replaces the hop with a jump); coyote time stays for
+  walk-offs the plan did not plan. D's drive checks add a commanded takeoff
+  that must leave unclamped.
+
 - **Rises:** flights (first version) or a lift with its reaction applied
   through the planted foot. Settled in E.
 - **Path prediction:** how far to trust the stick's curvature for the section
