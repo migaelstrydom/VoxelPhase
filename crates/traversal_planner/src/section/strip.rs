@@ -18,20 +18,21 @@ pub struct StripLayout {
     /// Distance sampled behind the body, in metres, so the planted foot's
     /// ground is in the section.
     pub behind: f32,
-    /// Distance sampled ahead of the body, in metres: the planning horizon.
+    /// Distance sampled ahead of the body, in metres: at least how far a plan
+    /// reaches at the body's speed (`PlannerSettings::reach`).
     pub ahead: f32,
 }
 
 impl Default for StripLayout {
     /// Five lanes over ±0.3 m, the body floor every 5 cm and footholds every
-    /// 2 cm, from 0.5 m behind to 3 m ahead.
+    /// 2 cm, from 0.5 m behind to 10 m ahead: a sprint's plan.
     fn default() -> Self {
         Self {
             lanes: vec![-0.3, -0.15, 0.0, 0.15, 0.3],
             body_spacing: 0.05,
             foot_spacing: 0.02,
             behind: 0.5,
-            ahead: 3.0,
+            ahead: 10.0,
         }
     }
 }

@@ -68,7 +68,7 @@ fn plank_gap(width: f32) -> Section {
         Some(0.0),
         vec![
             block(-1.0, 0.5, PLANK_TOP),
-            block(0.5 + width, 3.5, PLANK_TOP),
+            block(0.5 + width, 11.0, PLANK_TOP),
         ],
     )
 }
@@ -180,7 +180,7 @@ fn a_stone_tilted_across_the_path_keeps_its_tilt_in_the_normal() {
     let stone = Shape {
         form: Form::Block {
             from: -1.0,
-            to: 3.5,
+            to: 11.0,
             top: 0.0,
             tilt,
         },

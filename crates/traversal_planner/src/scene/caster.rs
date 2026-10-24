@@ -102,8 +102,9 @@ impl Prism {
 /// height and the point touched.
 ///
 /// The centre `C = (s, d, z)` is `radius` from the segment's line where
-/// `|w|² - (w·u)² = r²`, with `w = C - start` and `u` the unit direction.
-/// Splitting `w = w0 + z' ẑ` gives a quadratic in `z' = z - start.z`.
+/// `|w|² - (w·u)² = r²`, with `w = C - base` for a point `base` on the line
+/// and `u` the unit direction. Splitting `w = w0 + z' ẑ` gives a quadratic in
+/// `z' = z - base.z`.
 fn edge_touch(
     start: PathVec,
     end: PathVec,
@@ -118,10 +119,17 @@ fn edge_touch(
         return None;
     }
     let u = along * (1.0 / length);
-    let w0 = PathVec::new(s - start.s, d - start.d, 0.0);
+    let horizontal = u.s * u.s + u.d * u.d;
+    if horizontal < f32::EPSILON {
+        return None;
+    }
+    // Measured from the edge's point horizontally nearest the centre, every
+    // term stays small: from an end, on a shape that spans the strip, they
+    // are each near 10⁵ and cancel to nothing in f32.
+    let nearest = ((s - start.s) * u.s + (d - start.d) * u.d) / horizontal;
+    let base = start + u * nearest;
+    let w0 = PathVec::new(s - base.s, d - base.d, 0.0);
     let a = w0.dot(u);
-    // |w0|² - a², taken as the square of w0's part across the line: on a
-    // shape that spans the strip the two terms are each near 10⁶.
     let w0_across = w0 - u * a;
     let quadratic = 1.0 - u.z * u.z;
     let linear = -2.0 * a * u.z;
@@ -132,11 +140,11 @@ fn edge_touch(
     }
     let root = discriminant.sqrt();
     let rise = (-linear + side * root) / (2.0 * quadratic);
-    let t = a + rise * u.z;
+    let t = nearest + a + rise * u.z;
     if !(0.0..=length).contains(&t) {
         return None;
     }
-    Some((start.z + rise, start + u * t))
+    Some((base.z + rise, base + u * (a + rise * u.z)))
 }
 
 /// Exact sphere casts against an authored scene's shapes: the authored

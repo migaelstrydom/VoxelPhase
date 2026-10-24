@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::BinaryHeap;
 
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::params::GaitParams;
@@ -14,6 +15,11 @@ use super::state::PlanState;
 use super::stride::Stride;
 use super::transition::{Candidate, ExpandContext, TransitionModel};
 
+/// Width of the speed bands footfall cells are split by, in m/s.
+const SPEED_CELL: f32 = 1.0;
+/// Length along the path of the bands the body's landing is merged in, in
+/// metres.
+const BODY_CELL: f32 = 0.25;
 /// Width across the path of the cells footfalls are merged in, in metres.
 const FOOTFALL_CELL_WIDTH: f32 = 0.05;
 
@@ -32,7 +38,7 @@ pub struct PlanRequest<'a> {
     pub previous: Option<&'a Plan>,
 }
 
-/// A plan that carries the body to the horizon.
+/// A plan long enough to finish: enough footfalls, enough time.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Planned {
     pub plan: Plan,
@@ -42,7 +48,7 @@ pub struct Planned {
     pub diverged: bool,
 }
 
-/// No plan reaches the horizon on this heading.
+/// No plan on this heading is long enough to finish.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Refusal {
     /// The cheapest plan to the furthest point any plan reached: where the
@@ -51,9 +57,9 @@ pub struct Refusal {
     pub diverged: bool,
 }
 
-/// Searches for the cheapest plan to the horizon.
+/// Searches for the cheapest plan long enough to finish.
 ///
-/// Footfalls are candidates on a lattice: every `footfall_spacing` along the
+/// Footfalls are candidates on a lattice: every few cm along the
 /// path, on each lane. The search keeps the cheapest way to each cell (a
 /// footfall, its foot and where the body landed with it) and expands the
 /// cheapest first, so it stops at the first plan to reach the goal and never
@@ -65,13 +71,14 @@ pub struct Planner {
 }
 
 /// A footfall cell: where along and across the path, which foot, and where
-/// the body landed with it, which decides where it can go next.
+/// and how fast the body landed with it, which decide where it can go next.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct CellKey {
     along: i64,
     across: i32,
     limb: Limb,
     body: i64,
+    speed: i32,
 }
 
 struct Node {
@@ -125,6 +132,9 @@ impl Planner {
         query: &dyn SectionQuery,
         request: &PlanRequest,
     ) -> Result<Planned, Refusal> {
+        let spacing = self
+            .settings
+            .footfall_spacing(request.target_speed, &self.params);
         let costs = FootfallCosts {
             weights: &self.settings.costs,
         };
@@ -143,34 +153,36 @@ impl Planner {
             parent: None,
             phases: SmallVec::new(),
         }];
-        let mut cheapest: HashMap<CellKey, usize> = HashMap::new();
+        let mut cheapest: FxHashMap<CellKey, usize> = FxHashMap::default();
         let mut pending = BinaryHeap::from([Pending { cost: 0.0, node: 0 }]);
-        let goal = request.body.s + self.settings.horizon;
         let (mut finished, mut furthest) = (None::<usize>, 0);
         let mut diverged = false;
         let mut candidates = Vec::new();
 
         while let Some(Pending { node: index, .. }) = pending.pop() {
             let node = &nodes[index];
-            if index != 0 && cheapest.get(&self.cell(&node.state)) != Some(&index) {
+            if index != 0 && cheapest.get(&self.cell(&node.state, spacing)) != Some(&index) {
                 continue;
             }
             // Costs only grow along a plan, so the first plan to reach the
             // goal off the heap is the cheapest.
-            if node.state.body.s >= goal {
+            if self
+                .settings
+                .is_finished(request.body.s, &node.state, request.target_speed)
+            {
                 finished = Some(index);
                 break;
             }
-            if self.further(node, &nodes[furthest]) {
+            if self.further(node, &nodes[furthest], spacing) {
                 furthest = index;
             }
 
             // A candidate is worth checking only if it could still be the
             // cheapest way to its cell: the model asks before its physics.
-            let promising = |landing: &Contact, body_s: f32, cost: f32| {
+            let promising = |landing: &Contact, body_s: f32, speed: f32, cost: f32| {
                 let total = node.cost + cost + costs.of(landing);
                 cheapest
-                    .get(&self.cell_of(landing, body_s))
+                    .get(&self.cell_of(landing, body_s, speed, spacing))
                     .map_or(true, |&other| nodes[other].cost > total)
             };
             let context = ExpandContext {
@@ -178,6 +190,7 @@ impl Planner {
                 params: &self.params,
                 settings: &self.settings,
                 target_speed: request.target_speed,
+                footfall_spacing: spacing,
                 promising: &promising,
             };
             candidates.clear();
@@ -211,7 +224,7 @@ impl Planner {
                     .filter(|_| !(number == 0 && committed.is_some() && !diverged))
                     .map_or(0.0, |before| costs.churn(&landed, before));
                 let cost = base + candidate.cost + costs.of(&landed) + churn;
-                let key = self.cell(&candidate.landing);
+                let key = self.cell(&candidate.landing, spacing);
                 if cheapest
                     .get(&key)
                     .is_some_and(|&other| nodes[other].cost <= cost)
@@ -270,8 +283,7 @@ impl Planner {
     /// Whether `node` got further than `other`, or as far (within the
     /// lattice's spacing) for less: what a refusal shows is the cheapest way
     /// to where the way runs out.
-    fn further(&self, node: &Node, other: &Node) -> bool {
-        let spacing = self.settings.footfall_spacing;
+    fn further(&self, node: &Node, other: &Node, spacing: f32) -> bool {
         let reach = |node: &Node| (node.state.body.s / spacing).floor() as i64;
         match reach(node).cmp(&reach(other)) {
             Ordering::Greater => true,
@@ -280,17 +292,19 @@ impl Planner {
         }
     }
 
-    fn cell(&self, state: &PlanState) -> CellKey {
-        self.cell_of(&state.stance, state.body.s)
+    fn cell(&self, state: &PlanState, spacing: f32) -> CellKey {
+        self.cell_of(&state.stance, state.body.s, state.body.speed, spacing)
     }
 
-    /// The cell of a footfall landing on `stance` with the body at `body_s`.
-    fn cell_of(&self, stance: &Contact, body_s: f32) -> CellKey {
+    /// The cell of a footfall landing on `stance` with the body at `body_s`
+    /// moving at `speed`.
+    fn cell_of(&self, stance: &Contact, body_s: f32, speed: f32, spacing: f32) -> CellKey {
         CellKey {
-            along: (stance.at.s / self.settings.footfall_spacing).floor() as i64,
+            along: (stance.at.s / spacing).floor() as i64,
             across: (stance.at.d / FOOTFALL_CELL_WIDTH).round() as i32,
             limb: stance.limb,
-            body: (body_s / self.settings.footfall_spacing).floor() as i64,
+            body: (body_s / BODY_CELL).floor() as i64,
+            speed: (speed / SPEED_CELL).round() as i32,
         }
     }
 

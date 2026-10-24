@@ -10,7 +10,9 @@
 //!
 //! With `--out-dir`, each scene is written to `<dir>/<scene name>.svg`. With
 //! `--time`, each scene is planned repeatedly and its mean plan time printed
-//! (build with `--release`).
+//! (build with `--release`). With `--speed v`, each scene is planned at `v`
+//! m/s instead of its own speed (the player crouches at 2, walks at 5 and
+//! sprints at 8).
 //!
 //! To look at one as a PNG at its own size (Quick Look crops to a square):
 //!
@@ -38,12 +40,14 @@ fn main() {
     let mut out: Option<PathBuf> = None;
     let mut out_dir: Option<PathBuf> = None;
     let mut time = false;
+    let mut speed: Option<f32> = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-o" => out = args.next().map(PathBuf::from),
             "--out-dir" => out_dir = args.next().map(PathBuf::from),
             "--time" => time = true,
+            "--speed" => speed = args.next().and_then(|v| v.parse().ok()),
             _ => scenes.push(PathBuf::from(arg)),
         }
     }
@@ -51,7 +55,7 @@ fn main() {
         || (out.is_some() && scenes.len() > 1)
         || (out.is_none() && out_dir.is_none())
     {
-        eprintln!("usage: section_svg <scene.ron> -o <out.svg> | section_svg <scene.ron>... --out-dir <dir> [--time]");
+        eprintln!("usage: section_svg <scene.ron> -o <out.svg> | section_svg <scene.ron>... --out-dir <dir> [--time] [--speed v]");
         process::exit(2);
     }
     for scene_path in &scenes {
@@ -62,7 +66,7 @@ fn main() {
                 .with_extension("svg"),
             (None, None) => unreachable!(),
         };
-        if let Err(error) = draw(scene_path, &target, time) {
+        if let Err(error) = draw(scene_path, &target, time, speed) {
             eprintln!("{}: {error}", scene_path.display());
             process::exit(1);
         }
@@ -70,9 +74,13 @@ fn main() {
     }
 }
 
-fn draw(scene_path: &Path, target: &Path, time: bool) -> Result<(), String> {
+fn draw(scene_path: &Path, target: &Path, time: bool, speed: Option<f32>) -> Result<(), String> {
     let text = fs::read_to_string(scene_path).map_err(|error| error.to_string())?;
-    let scene = TraversalScene::from_ron(&text).map_err(|error| error.to_string())?;
+    let mut scene = TraversalScene::from_ron(&text).map_err(|error| error.to_string())?;
+    if let Some(speed) = speed {
+        scene.body.speed = speed;
+        scene.intent.speed = speed;
+    }
     let name = scene_path.file_stem().unwrap_or_default().to_string_lossy();
     let section = scene.section();
     let planner = Planner::new(scene.params.clone(), PlannerSettings::default());

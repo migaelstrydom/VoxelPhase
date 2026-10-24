@@ -1,0 +1,15 @@
+// lip_40cm at a sprint: a metre short of the lip is too close to brake or to
+// fly far enough, since clearing 40 cm at 8 m/s takes a longer flight than a step.
+// A lip 40 cm up across the whole strip, a metre ahead: within a hop.
+TraversalScene(
+    ground: Authored(AuthoredGround(
+        base: Some(0.0),
+        shapes: [
+            Shape(form: Block(from: 1.0, to: 12.0, top: 0.4), footing: Fixed),
+        ],
+    )),
+    body: BodyState(s: 0.0, z: 0.25, speed: 8.0, climb: 0.0),
+    lead: LeftFoot,
+    intent: Intent(speed: 8.0),
+    expect: Some(Refuses),
+)

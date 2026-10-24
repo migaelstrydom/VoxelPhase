@@ -18,8 +18,8 @@ TraversalScene(
             Shape(form: Block(from: 9.748, to: 10.380, top: 0.56), across: Some((-1.261, 1.199)), yaw: 0.050, footing: Loose(mass: 2700.0, resting: true)),
         ],
     )),
-    body: BodyState(s: 4.176, z: 0.81, speed: 3.0, climb: 0.0),
+    body: BodyState(s: 4.176, z: 0.81, speed: 5.0, climb: 0.0),
     lead: LeftFoot,
-    intent: Intent(speed: 3.0),
+    intent: Intent(speed: 5.0),
     expect: Some(Crosses),
 )

@@ -1,3 +1,5 @@
+use std::cell::OnceCell;
+
 use smallvec::{smallvec, SmallVec};
 
 use crate::path::PathVec;
@@ -18,6 +20,33 @@ const GROUND_STEP: f32 = 0.05;
 /// Slowest speed a stride is planned at, in m/s: below it a stride would take
 /// unboundedly long.
 const MIN_PLANNING_SPEED: f32 = 0.3;
+
+/// How a stride's speed changes while the body is on the ground.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pace {
+    /// Toward the speed the player asks for, as fast as the drive allows.
+    Press,
+    /// Down, as fast as the drive allows: to meet stepping stones or a hop at
+    /// a speed the asked-for one would overshoot.
+    Brake,
+}
+
+/// The speed after riding `distance` from `start` at `pace`.
+fn end_speed(start: BodyState, distance: f32, pace: Pace, context: &ExpandContext) -> f32 {
+    let change = context.params.body.max_acceleration * distance / start.speed;
+    let speed = match pace {
+        Pace::Press => start.speed + (context.target_speed - start.speed).clamp(-change, change),
+        Pace::Brake => start.speed - change,
+    };
+    speed.max(MIN_PLANNING_SPEED)
+}
+
+/// What landing below the asked-for speed costs.
+fn slowdown_cost(speed: f32, context: &ExpandContext) -> f32 {
+    let target = context.target_speed.max(MIN_PLANNING_SPEED);
+    let short = ((target - speed) / target).max(0.0);
+    context.settings.costs.slowdown * short * short
+}
 
 /// One step to the other foot: the body rides the floor, or rides to a
 /// takeoff and flies, and the other foot lands on a foothold ahead.
@@ -47,7 +76,7 @@ impl TransitionModel for Stride {
         let window = FootholdWindow {
             s: stance.s + params.stride.min_length..stance.s + params.stride.max_length,
             d: params.foot.reach(limb),
-            spacing: context.settings.footfall_spacing,
+            spacing: context.footfall_spacing,
         };
         let mut footholds = Vec::new();
         context.query.footholds(&window, &mut footholds);
@@ -104,9 +133,6 @@ impl Stride {
         context: &ExpandContext,
         out: &mut Vec<Candidate>,
     ) {
-        if !(context.promising)(&contact, landing_s, step_cost) {
-            return;
-        }
         let (params, query) = (context.params, context.query);
         let stance = from.stance.at;
         let Some(landing_floor) = query.floor(landing_s) else {
@@ -119,15 +145,21 @@ impl Stride {
         if !reaches(landing_floor.z, contact.at.z, context) {
             return;
         }
-        // Where the capsule rests as it lands, along the path.
-        let support = landing_s - params.body.radius * landing_floor.normal.s;
-        let held = [contact.at, stance]
-            .iter()
-            .any(|foot| on_ground_reaching(query, foot, support));
-        let step_cost = if held {
-            step_cost
-        } else {
-            step_cost + context.settings.costs.unheld_body
+        // Whether the capsule rests on ground a foot is on costs a footholds
+        // query, so it is asked only of candidates still worth pricing.
+        let unheld = OnceCell::new();
+        let unheld_cost = || {
+            *unheld.get_or_init(|| {
+                let support = landing_s - params.body.radius * landing_floor.normal.s;
+                let held = [contact.at, stance]
+                    .iter()
+                    .any(|foot| on_ground_reaching(query, foot, support));
+                if held {
+                    0.0
+                } else {
+                    context.settings.costs.unheld_body
+                }
+            })
         };
 
         let start = BodyState {
@@ -136,52 +168,81 @@ impl Stride {
         };
         let ride = query.ride(start.s, landing_s);
 
-        // Riding all the way, the stance foot holds the body until it lands.
-        if ride.end >= landing_s && reaches(landing_floor.z, stance.z, context) {
-            let (phase, end_speed) = self.grounded(from, start, landing_s, context);
-            out.push(Candidate {
-                landing: self.landing(from, contact, landing_s, landing_floor.z, end_speed, &phase),
-                cost: step_cost + context.settings.costs.ride_travel * ride.vertical_travel,
-                phases: smallvec![phase],
-            });
-        }
-
-        // The foot pushes off with the body over or past it.
-        let earliest_takeoff = start.s.max(stance.s);
-        let latest_takeoff = ride.end.min(landing_s - context.settings.min_flight);
-        let mut last_takeoff = None;
-        for setback in &context.settings.takeoff_setbacks {
-            let takeoff = (latest_takeoff - setback).max(earliest_takeoff);
-            if takeoff > latest_takeoff || last_takeoff == Some(takeoff) {
-                continue;
+        for pace in [Pace::Press, Pace::Brake] {
+            // Riding all the way, the stance foot holds the body until it lands.
+            if ride.end >= landing_s && reaches(landing_floor.z, stance.z, context) {
+                let speed = end_speed(start, landing_s - start.s, pace, context);
+                let cost = step_cost
+                    + context.settings.costs.ride_travel * ride.vertical_travel
+                    + slowdown_cost(speed, context);
+                if (context.promising)(&contact, landing_s, speed, cost) {
+                    let cost = cost + unheld_cost();
+                    if (context.promising)(&contact, landing_s, speed, cost) {
+                        let (phase, end_speed) =
+                            self.grounded(from, start, landing_s, pace, context);
+                        out.push(Candidate {
+                            landing: self.landing(
+                                from,
+                                contact,
+                                landing_s,
+                                landing_floor.z,
+                                end_speed,
+                                &phase,
+                            ),
+                            cost,
+                            phases: smallvec![phase],
+                        });
+                    }
+                }
             }
-            last_takeoff = Some(takeoff);
-            if let Some(candidate) = self.flight(
-                from,
-                start,
-                takeoff,
-                (contact, landing_s, landing_floor.z),
-                step_cost,
-                context,
-            ) {
-                out.push(candidate);
+
+            // The foot pushes off with the body over or past it. Takeoffs are
+            // tried latest first: an earlier one flies longer and higher, which
+            // only costs more, so the first whose arc clears is the one.
+            let earliest_takeoff = start.s.max(stance.s);
+            let latest_takeoff = ride.end.min(landing_s - context.settings.min_flight);
+            let mut last_takeoff = None;
+            for lead_time in &context.settings.takeoff_lead_times {
+                let takeoff = (latest_takeoff - lead_time * start.speed).max(earliest_takeoff);
+                if takeoff > latest_takeoff || last_takeoff == Some(takeoff) {
+                    continue;
+                }
+                last_takeoff = Some(takeoff);
+                if let Some(candidate) = self.flight(
+                    from,
+                    start,
+                    takeoff,
+                    (contact, landing_s, landing_floor.z),
+                    step_cost,
+                    pace,
+                    &unheld_cost,
+                    context,
+                ) {
+                    let clears = candidate
+                        .phases
+                        .iter()
+                        .all(|phase| context.query.clears(phase));
+                    out.push(candidate);
+                    if clears {
+                        break;
+                    }
+                }
             }
         }
     }
 
-    /// Riding the floor from `start` to `to`, the speed moving toward the
-    /// target as fast as the drive allows. Returns the phase and its end speed.
+    /// Riding the floor from `start` to `to`, the speed changing at `pace`.
+    /// Returns the phase and its end speed.
     fn grounded(
         &self,
         from: &PlanState,
         start: BodyState,
         to: f32,
+        pace: Pace,
         context: &ExpandContext,
     ) -> (Phase, f32) {
         let distance = to - start.s;
-        let change = context.params.body.max_acceleration * distance / start.speed;
-        let end_speed = (start.speed + (context.target_speed - start.speed).clamp(-change, change))
-            .max(MIN_PLANNING_SPEED);
+        let end_speed = end_speed(start, distance, pace, context);
         let phase = Phase {
             start: from.time,
             duration: 2.0 * distance / (start.speed + end_speed),
@@ -204,11 +265,22 @@ impl Stride {
         takeoff: f32,
         (contact, landing_s, landing_z): (Contact, f32, f32),
         step_cost: f32,
+        pace: Pace,
+        unheld_cost: &dyn Fn() -> f32,
         context: &ExpandContext,
     ) -> Option<Candidate> {
         let (params, query) = (context.params, context.query);
+        let speed = end_speed(start, takeoff - start.s, pace, context);
+        let ride = query.ride(start.s, takeoff);
+        let cost = step_cost
+            + context.settings.costs.flight
+            + context.settings.costs.ride_travel * ride.vertical_travel
+            + slowdown_cost(speed, context);
+        if !(context.promising)(&contact, landing_s, speed, cost) {
+            return None;
+        }
         // The stance, however short, is where the stance foot holds the body.
-        let (stance, speed) = self.grounded(from, start, takeoff, context);
+        let (stance, speed) = self.grounded(from, start, takeoff, pace, context);
         let takeoff_z = if takeoff > start.s {
             query.floor(takeoff)?.z
         } else {
@@ -218,10 +290,6 @@ impl Stride {
         if !reaches(takeoff_z, from.stance.at.z, context) {
             return None;
         }
-        let ride = query.ride(start.s, takeoff);
-        let cost = step_cost
-            + context.settings.costs.flight
-            + context.settings.costs.ride_travel * ride.vertical_travel;
         let time = stance.start + stance.duration;
 
         let duration = (landing_s - takeoff) / speed;
@@ -230,7 +298,10 @@ impl Stride {
         if !(0.0..=params.flight.max_takeoff_climb).contains(&climb) {
             return None;
         }
-        let cost = cost + context.settings.costs.takeoff_climb * climb * climb;
+        let cost = cost + context.settings.costs.takeoff_climb * climb * climb + unheld_cost();
+        if !(context.promising)(&contact, landing_s, speed, cost) {
+            return None;
+        }
         let flight = Phase {
             start: time,
             duration,
@@ -285,8 +356,7 @@ impl Stride {
     ) -> f32 {
         let (params, costs) = (context.params, &context.settings.costs);
         let speed = context.target_speed.max(MIN_PLANNING_SPEED);
-        let natural_length = (speed / context.settings.step_rate)
-            .clamp(params.stride.min_length, params.stride.max_length);
+        let natural_length = context.settings.natural_step(speed, params);
         let length = foothold.at.s - from.stance.at.s;
         let length_off = (length - natural_length) / natural_length;
         let reach = params.foot.reach_in.max(params.foot.reach_out);

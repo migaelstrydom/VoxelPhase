@@ -241,15 +241,24 @@ than the capsule is flown rather than straddled, and across stepping stones the
 body passes over each stone.
 
 - **Search.** Candidate footfalls lie on a lattice, every few cm along `s`
-  and by lane across it. Footfalls only move forward, so the lattice is
-  searched cheapest first, keeping the cheapest way to each cell (a
-  footfall, its foot, and where the body landed with it), and stops at the
-  first plan to reach the goal: Dijkstra over the lattice, so cells dearer
-  than the answer are never expanded. A model asks whether a candidate could
-  still be the cheapest way to its cell before doing its physics. A plan is done when the body
-  passes the horizon, about 1.6 m ahead, so its last footfall stays inside the
-  3 m strip. When none does, the planner refuses and returns the cheapest
-  plan to the furthest point reached, which is where the way runs out.
+  (3.5 % of the natural step, 4 to 10 cm: fine for a crouch, coarse for a
+  sprint) and by lane across it. The search keeps the cheapest way to each
+  cell (a footfall, its foot, and the band the body landed in and its speed),
+  expands the cheapest first, and stops at the first plan to finish: Dijkstra
+  over the lattice, so cells dearer than the answer are never expanded. A
+  model asks whether a candidate could still be the cheapest way to its cell
+  before doing its physics.
+- **Horizon.** A plan finishes once it has three footfalls and has carried
+  the body as far as the asked-for speed would in 0.6 s: the legs need the
+  next two or three footfalls, and the body time to see an obstacle and set
+  up a hop or stop. A plan that only slows to a stop before an obstacle covers
+  less, so it is a refusal. The strip samples one step past that: 10 m by
+  default, a sprint's reach (`PlannerSettings::reach`). When no plan finishes,
+  the planner refuses and returns the cheapest plan to the furthest point
+  reached, which is where the way runs out.
+- **Pace.** Each stride either presses toward the asked-for speed or brakes as
+  hard as the drive allows; braking costs `slowdown`. That is how a sprint
+  meets stepping stones.
 - **Cost.** Time to the horizon, deviation from the speed the stick asks
   for, uneven stride lengths, feet far from their natural offset (a
   cross-step costs more), flights (they cost a little), and footing:
@@ -466,11 +475,14 @@ until E.
 
 ## Open questions
 
-- **Horizon:** a fixed 1.6 m is 0.2 s at a sprint (8 m/s) and less than one
-  natural step. Set it in footfalls and time instead (at least three
-  footfalls and about 0.6 s), with the strip reaching one natural step past
-  it: about 2 m crouching, 3–4.5 m walking, 5 m sprinting. Costs are per
-  step, so a horizon one leap long also rewards fewer, longer leaps.
+- **Planning cost:** after the search changes, a cold plan takes 0.3 to
+  38 ms on the fixtures (median about 8 ms) against D's 0.5 ms. Each
+  expansion proposes a few hundred candidates (footholds in reach × lanes ×
+  landing leads × paces × takeoffs), and with costs near zero on good ground
+  most of them open new cells. The remaining levers, none tried yet: plan the
+  body's path first (a 1D search over where to ride and where to fly) and
+  place footfalls along it; warm-start from last frame's plan, whose cost
+  bounds the search; and spread one plan over several frames.
 - **Coyote time:** a planned hop (0.15–0.25 s) falls inside the 0.16 s the
   locomotion state machine still treats as ground (`ground_forgiveness_window`
   then `CoyoteTime`), whose `clamp_up` cancels the takeoff climb, whose

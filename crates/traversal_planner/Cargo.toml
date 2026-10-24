@@ -8,5 +8,6 @@ license = "MIT OR Apache-2.0"
 # browser tool (wasm32), tests and the fuzzer. Design: docs/traversal/PLANNER_DESIGN.md.
 [dependencies]
 ron = "0.8"
+rustc-hash = "2.1.1"
 serde = { version = "1", features = ["derive"] }
 smallvec = { version = "1.13", features = ["serde"] }

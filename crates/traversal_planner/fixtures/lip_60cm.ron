@@ -3,11 +3,11 @@ TraversalScene(
     ground: Authored(AuthoredGround(
         base: Some(0.0),
         shapes: [
-            Shape(form: Block(from: 1.0, to: 4.0, top: 0.6), footing: Fixed),
+            Shape(form: Block(from: 1.0, to: 12.0, top: 0.6), footing: Fixed),
         ],
     )),
-    body: BodyState(s: 0.0, z: 0.25, speed: 3.0, climb: 0.0),
+    body: BodyState(s: 0.0, z: 0.25, speed: 5.0, climb: 0.0),
     lead: LeftFoot,
-    intent: Intent(speed: 3.0),
+    intent: Intent(speed: 5.0),
     expect: Some(Refuses),
 )

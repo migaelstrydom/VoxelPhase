@@ -109,7 +109,7 @@ impl FootDims {
 pub struct StrideLimits {
     /// Shortest step along the path, in metres.
     pub min_length: f32,
-    /// Longest step along the path, in metres: a running stride.
+    /// Longest step along the path, in metres: a sprinter's.
     pub max_length: f32,
     /// Highest a footfall may be above the last, in metres.
     pub max_rise: f32,
@@ -121,7 +121,7 @@ impl Default for StrideLimits {
     fn default() -> Self {
         Self {
             min_length: 0.2,
-            max_length: 1.8,
+            max_length: 2.5,
             max_rise: 0.45,
             max_drop: 1.0,
         }

@@ -3,7 +3,8 @@ use crate::path::PathVec;
 use crate::plan::{Motion, Phase};
 
 use super::query::{FloorHit, Foothold, FootholdWindow, Ride, SectionQuery};
-use super::strip::{Profile, Section};
+use super::strip::{FootholdLane, Profile, Section};
+use super::surface::SurfacePoint;
 
 /// How far from either end of a flight its arc may run along the floor
 /// instead of clearing it, in metres: an arc leaves and meets the floor at
@@ -145,6 +146,41 @@ impl Rideway {
     }
 }
 
+/// One lane's footholds where a foot would touch them, in increasing `s`, so
+/// a window is found by search rather than scanned for.
+struct LaneFootholds {
+    d: f32,
+    footholds: Vec<Foothold>,
+}
+
+impl LaneFootholds {
+    fn new(lane: &FootholdLane, radius: f32) -> Self {
+        let contact =
+            |point: &SurfacePoint| PathVec::new(point.s, lane.d, point.z) - point.normal * radius;
+        let mut footholds = Vec::new();
+        for surface in &lane.profile.surfaces {
+            let (Some(first), Some(last)) = (surface.points.first(), surface.points.last()) else {
+                continue;
+            };
+            let (first_s, last_s) = (contact(first).s, contact(last).s);
+            footholds.extend(surface.points.iter().map(|point| {
+                let at = contact(point);
+                Foothold {
+                    at,
+                    normal: point.normal,
+                    footing: surface.footing,
+                    edge_margin: (at.s - first_s).min(last_s - at.s),
+                }
+            }));
+        }
+        footholds.sort_by(|a, b| a.at.s.total_cmp(&b.at.s));
+        Self {
+            d: lane.d,
+            footholds,
+        }
+    }
+}
+
 /// Whether the top sphere, its bottom sphere's centre at `(s, z)`, is under
 /// the ceiling.
 fn has_headroom(ceiling: &Line, s: f32, z: f32, params: &GaitParams) -> bool {
@@ -157,8 +193,8 @@ fn has_headroom(ceiling: &Line, s: f32, z: f32, params: &GaitParams) -> bool {
 /// ceiling along the path, the footholds along each lane, and where the body
 /// can ride within the gait's limits.
 pub struct StripQuery<'a> {
-    section: &'a Section,
     params: &'a GaitParams,
+    foothold_lanes: Vec<LaneFootholds>,
     floor: Line,
     ceiling: Line,
     rideway: Rideway,
@@ -173,8 +209,12 @@ impl<'a> StripQuery<'a> {
         let ceiling = Line::new(&section.ceiling, start, layout.body_spacing, end);
         let rideway = Rideway::new(&floor, &ceiling, params);
         Self {
-            section,
             params,
+            foothold_lanes: section
+                .foothold_lanes
+                .iter()
+                .map(|lane| LaneFootholds::new(lane, section.foot_radius))
+                .collect(),
             floor,
             ceiling,
             rideway,
@@ -240,37 +280,22 @@ impl SectionQuery for StripQuery<'_> {
     }
 
     fn footholds(&self, window: &FootholdWindow, out: &mut Vec<Foothold>) {
-        let radius = self.section.foot_radius;
-        let contact =
-            |s: f32, z: f32, normal: PathVec, d: f32| PathVec::new(s, d, z) - normal * radius;
-        for lane in &self.section.foothold_lanes {
+        for lane in &self.foothold_lanes {
             if !window.d.contains(&lane.d) {
                 continue;
             }
+            let first = lane
+                .footholds
+                .partition_point(|foothold| foothold.at.s < window.s.start);
             let mut last_bucket = None;
-            for surface in &lane.profile.surfaces {
-                let (Some(first), Some(last)) = (surface.points.first(), surface.points.last())
-                else {
-                    continue;
-                };
-                let first_s = contact(first.s, first.z, first.normal, lane.d).s;
-                let last_s = contact(last.s, last.z, last.normal, lane.d).s;
-                for point in &surface.points {
-                    let at = contact(point.s, point.z, point.normal, lane.d);
-                    if !window.s.contains(&at.s) {
-                        continue;
-                    }
-                    let bucket = (at.s / window.spacing).floor() as i64;
-                    if last_bucket == Some(bucket) {
-                        continue;
-                    }
+            for foothold in lane.footholds[first..]
+                .iter()
+                .take_while(|foothold| foothold.at.s < window.s.end)
+            {
+                let bucket = (foothold.at.s / window.spacing).floor() as i64;
+                if last_bucket != Some(bucket) {
                     last_bucket = Some(bucket);
-                    out.push(Foothold {
-                        at,
-                        normal: point.normal,
-                        footing: surface.footing,
-                        edge_margin: (at.s - first_s).min(last_s - at.s),
-                    });
+                    out.push(*foothold);
                 }
             }
         }
