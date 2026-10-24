@@ -157,6 +157,7 @@ impl<'a> System<'a> for CharacterControlSystem {
                 horizontal_speed,
                 move_dir,
                 long_jump_armed: state.crouch_buffer.active(),
+                takeoff: target.takeoff.take(),
                 immersion,
                 body_y: pos.0.y,
                 config,

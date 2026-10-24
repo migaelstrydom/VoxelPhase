@@ -385,13 +385,7 @@ impl BodySearch<'_> {
             }
             let cost = self.settings.costs.ride_travel * ride.vertical_travel
                 + self.ride_churn(from, to)
-                + slowdown_cost(
-                    end_speed,
-                    self.target_speed,
-                    to - from,
-                    natural,
-                    self.settings,
-                );
+                + slowdown_cost(end_speed, pressed_toward, to - from, natural, self.settings);
             out.push((
                 next,
                 end_speed,
@@ -451,7 +445,7 @@ impl BodySearch<'_> {
             let cost = self.settings.costs.ride_travel * ridden.vertical_travel
                 + slowdown_cost(
                     end_speed,
-                    self.target_speed,
+                    self.ground_target(from, to),
                     to - from,
                     self.natural_step(),
                     self.settings,
@@ -556,7 +550,7 @@ impl BodySearch<'_> {
         }) else {
             return;
         };
-        let steepest = params.body.max_ground_slope_degrees.to_radians().cos();
+        let steepest = params.body.steepest_ride().cos();
         // Where the arc meets the floor the cast's normal is the contact's:
         // too steep, and the body strikes the far side rather than mounts it.
         if self
@@ -655,7 +649,7 @@ impl BodySearch<'_> {
         if !can_push_off {
             return;
         }
-        let steepest = params.body.max_ground_slope_degrees.to_radians().cos();
+        let steepest = params.body.steepest_ride().cos();
         let stride = (settings.flight_step / settings.body_step).round().max(1.0) as usize;
         if (self.grid_index(origin) + station as i64) % stride as i64 != 0 {
             return;

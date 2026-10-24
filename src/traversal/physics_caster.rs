@@ -2,8 +2,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use nalgebra::Vector3;
-use traversal_planner::section::{BodyKey, CastHit, Footing, SphereCaster};
-use traversal_planner::PathVec;
+use traversal_planner::section::{BodyKey, CastHit, Footing, SphereCaster, StripLayout};
+use traversal_planner::{GaitParams, PathVec};
 
 use crate::physics::{CastObstacles, PhysicsWorld, RigidBodyHandle, SphereCast, StaticGeometry};
 
@@ -12,6 +12,20 @@ use super::path_frame::PathFrame;
 /// The key of the static geometry, which like a fixed authored shape is one
 /// body.
 const STATIC_GEOMETRY: BodyKey = BodyKey(0);
+/// How far above the steepest rise the strip could ride its casts reach, and
+/// how far below where the path was laid, in metres.
+const REACH_ABOVE_RISE: f32 = 3.0;
+const REACH_BELOW: f32 = 6.0;
+
+/// How far above and below where a path is laid its strip's casts reach, in
+/// metres: up, past the steepest slope the body rides climbing the strip's
+/// whole length; down, a drop of a few metres. The strip follows the body's
+/// layer, so reaching high reads nothing overhead as floor.
+pub fn strip_reach(layout: &StripLayout, params: &GaitParams) -> (f32, f32) {
+    let steepest = params.body.max_ground_slope_degrees.to_radians().tan();
+    (REACH_ABOVE_RISE + layout.ahead * steepest, REACH_BELOW)
+}
+
 /// How fast a dynamic body's surface may move, in m/s, for the strip to see
 /// it: faster, it is in flight, not ground, and gone from where it is before
 /// a step could land on it. A blast's pieces are passed through until they

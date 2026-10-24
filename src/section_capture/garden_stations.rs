@@ -45,28 +45,36 @@ struct Station {
     twin: Option<Vec<Form>>,
 }
 
-/// A lip as the garden's quarter-metre voxels mesh it: no upright face,
-/// but a slope across the voxels either side of where the face was
-/// authored.
+/// A lip as the garden's quarter-metre voxels mesh it: no upright face, but
+/// a slope rising a voxel's height per voxel at most. One a voxel high or
+/// more rises 45° across the voxel before where the face was authored, the
+/// rest across the voxel after; a lower one rises across the voxel after.
 fn lip(name: &'static str, lane_z: f32, height: f32) -> Station {
-    station(
-        name,
-        lane_z,
-        vec![
-            Form::Ramp {
-                from: RUN_UP - VOXEL,
-                to: RUN_UP + VOXEL,
-                start_top: 0.0,
-                end_top: height,
-            },
-            Form::Block {
-                from: RUN_UP + VOXEL,
-                to: FAR,
-                top: height,
-                tilt: 0.0,
-            },
-        ],
-    )
+    let mut forms = Vec::new();
+    let mut at = if height >= VOXEL {
+        RUN_UP - VOXEL
+    } else {
+        RUN_UP
+    };
+    let mut top = 0.0;
+    while top < height {
+        let rise = (height - top).min(VOXEL);
+        forms.push(Form::Ramp {
+            from: at,
+            to: at + VOXEL,
+            start_top: top,
+            end_top: top + rise,
+        });
+        at += VOXEL;
+        top += rise;
+    }
+    forms.push(Form::Block {
+        from: at,
+        to: FAR,
+        top: height,
+        tilt: 0.0,
+    });
+    station(name, lane_z, forms)
 }
 
 fn slope(name: &'static str, lane_z: f32, length: f32, height: f32) -> Station {

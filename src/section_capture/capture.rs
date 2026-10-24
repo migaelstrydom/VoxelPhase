@@ -10,15 +10,12 @@ use traversal_planner::{GaitParams, TraversalScene};
 use crate::level::load_level;
 use crate::level_check::{build_terrain, is_at_rest, RestTrial};
 use crate::physics::PhysicsImpulse;
-use crate::traversal::{PathFrame, PhysicsCaster, WallSlide};
+use crate::traversal::{strip_reach, PathFrame, PhysicsCaster, WallSlide};
 
 /// How high above and below zero anything could stand, in metres: the search
 /// for the body's floor spans it. The terrain refuses a query longer than
 /// 256 m, so a cast across all of it would find nothing.
 const SKY: f32 = 100.0;
-/// How far above and below the body the strip's casts reach, in metres.
-const REACH_ABOVE: f32 = 3.0;
-const REACH_BELOW: f32 = 6.0;
 /// How long a blasted scene may take to come to rest, in seconds: crates
 /// thrown across a crater roll and topple for far longer than a level's
 /// objects settle.
@@ -168,8 +165,9 @@ impl CaptureWorld {
         let floor = caster
             .cast_down(0.0, 0.0, params.body.radius, f32::INFINITY)
             .ok_or("no floor under the start")?;
-        caster.top = floor.z + REACH_ABOVE;
-        caster.bottom = floor.z - REACH_BELOW;
+        let (above, below) = strip_reach(&layout, &params);
+        caster.top = floor.z + above;
+        caster.bottom = floor.z - below;
         let started = Instant::now();
         for _ in 0..TIMED_SAMPLES - 1 {
             std::hint::black_box(sample_section(&caster, &layout, &params, 0.0, floor.z));

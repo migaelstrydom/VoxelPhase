@@ -68,6 +68,8 @@ pub struct RunConfig {
     pub to: f32,
     /// Whether the traversal plan is drawn in the frames filmed.
     pub plan: bool,
+    /// Whether the traversal plan drives the character.
+    pub track: bool,
 }
 
 impl Default for RunConfig {
@@ -80,6 +82,7 @@ impl Default for RunConfig {
             from: 0.0,
             to: 1.0,
             plan: false,
+            track: false,
         }
     }
 }
@@ -92,10 +95,11 @@ pub fn run(scenario: &Scenario, config: &RunConfig) -> EngineResult<Take> {
     let mut harness = GameHarness::open(&level, config.width, config.height, dt)?;
 
     let character = take_character(&mut harness)?;
-    harness
-        .world_mut()
-        .write_resource::<TraversalPlanState>()
-        .overlay = config.plan;
+    {
+        let mut planning = harness.world_mut().write_resource::<TraversalPlanState>();
+        planning.overlay = config.plan;
+        planning.tracking = config.track;
+    }
     place_character(&mut harness, character, scenario)?;
 
     let duration = scenario.script.duration();

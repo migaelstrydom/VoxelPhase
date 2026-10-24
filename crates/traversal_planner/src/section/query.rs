@@ -26,8 +26,9 @@ pub struct Ride {
     /// The furthest `s` reached: the end asked for, or where the floor stops,
     /// turns too steep for the drive, or leaves too little headroom.
     pub end: f32,
-    /// Height gained and lost on the way, in metres: the dips and bumps the
-    /// capsule rides through, which it feels as snags and bounces.
+    /// Height gained and lost on the way beyond the ride's net climb, in
+    /// metres: the dips and bumps the capsule rides through, which it feels
+    /// as snags and bounces. A steady slope has none.
     pub vertical_travel: f32,
 }
 

@@ -16,7 +16,8 @@
 //!
 //! `--plan` draws the traversal planner's plan in the frames filmed: the
 //! body's path, flights dashed, and the footfalls, left blue and right
-//! orange, faded where tentative.
+//! orange, faded where tentative. `--track` has the plan drive the character
+//! (as F8 does in game): along its path at its speed, hopping where it hops.
 //!
 //! `traversal` runs every scenario that crosses a station of the Traversal
 //! Garden; `--summary` prints only each one's traversal summary as a table
@@ -41,7 +42,7 @@ use voxel_phase::character_viewer::{
 use voxel_phase::rendering::visual_bench::contact_sheet;
 
 const USAGE: &str =
-    "usage: character_viewer <scenario|all|traversal|contract> [--list] [--summary] [--tiles N]
+    "usage: character_viewer <scenario|all|traversal|contract> [--list] [--summary] [--plan] [--track] [--tiles N]
                         [--from F] [--to F]
                         [--fps HZ] [--width W] [--height H] [--columns C]
                         [--every N] [--out <sheet.png>]
@@ -144,6 +145,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
             }
             "--summary" => summary = true,
             "--plan" => config.plan = true,
+            "--track" => config.track = true,
             "--tiles" => config.tiles = parse(&value("--tiles")?)?,
             "--from" => config.from = parse(&value("--from")?)?,
             "--to" => config.to = parse(&value("--to")?)?,

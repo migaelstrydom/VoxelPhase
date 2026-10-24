@@ -1,0 +1,14 @@
+// A steady 39.9° slope from a metre ahead, just inside the steepest the body
+// rides: ridden up, not hopped.
+TraversalScene(
+    ground: Authored(AuthoredGround(
+        base: Some(0.0),
+        shapes: [
+            Shape(form: Ramp(from: 1.0, to: 12.0, start_top: 0.0, end_top: 9.2), footing: Fixed),
+        ],
+    )),
+    body: BodyState(s: 0.0, z: 0.25, speed: 5.0, climb: 0.0),
+    lead: LeftFoot,
+    intent: Intent(speed: 5.0),
+    expect: Some(Crosses),
+)

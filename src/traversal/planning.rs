@@ -12,7 +12,7 @@ use crate::collision::AABB;
 use crate::physics::{PhysicsWorld, RigidBodyHandle, StaticGeometry};
 
 use super::path_frame::PathFrame;
-use super::physics_caster::PhysicsCaster;
+use super::physics_caster::{strip_reach, PhysicsCaster};
 use super::section_cache::SectionCache;
 use super::strip_scenery::{SceneryView, StripScenery};
 use super::wall_slide::WallSlide;
@@ -29,10 +29,6 @@ const OFF_LINE_LIMIT: f32 = 0.2;
 /// How far the body may climb or drop from where the path was laid before
 /// it is laid afresh, in metres: the casts start and end relative to there.
 const HEIGHT_LIMIT: f32 = 1.5;
-/// How far above and below the body where the path is laid the casts reach,
-/// in metres.
-const REACH_ABOVE: f32 = 3.0;
-const REACH_BELOW: f32 = 6.0;
 /// How far ahead the strip is sampled on the frame a path is laid, in
 /// metres: the next footfall or two.
 const LAID_REACH: f32 = 2.0;
@@ -111,6 +107,8 @@ pub struct TraversalPlanning {
     scenery_until: f32,
     /// The height the path was laid at, which the casts reach around.
     laid_at: f32,
+    /// How far above and below there they reach ([`strip_reach`]).
+    reach: (f32, f32),
     /// How far ahead of the body the strip is sampled: short when a path is
     /// laid, growing frame by frame to the layout's reach, so laying a path
     /// costs a few frames a little each rather than one frame a lot.
@@ -122,6 +120,7 @@ pub struct TraversalPlanning {
 
 impl TraversalPlanning {
     pub fn new(params: GaitParams, settings: PlannerSettings, layout: StripLayout) -> Self {
+        let reach = strip_reach(&layout, &params);
         Self {
             planner: Planner::new(params, settings),
             layout,
@@ -129,6 +128,7 @@ impl TraversalPlanning {
             scenery: None,
             scenery_until: f32::MIN,
             laid_at: 0.0,
+            reach,
             previous: None,
             sampled_ahead: 0.0,
             planted: None,
@@ -140,8 +140,8 @@ impl TraversalPlanning {
         &self.planner.params
     }
 
-    /// The caster the strip is sampled with along the laid path: from
-    /// `REACH_ABOVE` above where it was laid to `REACH_BELOW` below.
+    /// The caster the strip is sampled with along the laid path, reaching
+    /// [`strip_reach`] above and below where it was laid.
     pub fn caster<'a>(
         &self,
         world: &'a PhysicsWorld,
@@ -153,8 +153,8 @@ impl TraversalPlanning {
             scenery,
             frame: *self.cache.frame().expect("a laid path"),
             exclude,
-            top: self.laid_at + REACH_ABOVE,
-            bottom: self.laid_at - REACH_BELOW,
+            top: self.laid_at + self.reach.0,
+            bottom: self.laid_at - self.reach.1,
         }
     }
 
@@ -259,8 +259,8 @@ impl TraversalPlanning {
             + self.params().body.radius
             + SCENERY_MARGIN;
         let (low, high) = (
-            self.laid_at - REACH_BELOW - SCENERY_MARGIN,
-            self.laid_at + REACH_ABOVE + SCENERY_MARGIN,
+            self.laid_at - self.reach.1 - SCENERY_MARGIN,
+            self.laid_at + self.reach.0 + SCENERY_MARGIN,
         );
         let corners = [
             (from, -half_width),

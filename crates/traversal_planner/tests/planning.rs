@@ -146,3 +146,29 @@ fn a_committed_footfall_that_has_gone_is_dropped() {
     };
     assert!(diverged, "the committed footfall at {gone:?} is gone");
 }
+
+/// A steady slope the body can ride is ridden: hopping up it would look
+/// cheaper only if the ride were charged for the speed the slope takes, or
+/// for its climb as if it were bumps.
+#[test]
+fn a_steady_slope_at_the_limit_is_ridden_not_hopped() {
+    let scene = fixture("slope_40deg");
+    let section = scene.section();
+    let query = StripQuery::new(&section, &scene.params);
+    for speed in [3.0, 5.0, 8.0] {
+        let request = traversal_planner::PlanRequest {
+            target_speed: speed,
+            ..scene.request()
+        };
+        let planned = planner(&scene)
+            .plan(&query, &request)
+            .unwrap_or_else(|_| panic!("refused at {speed} m/s"));
+        let hops = planned
+            .plan
+            .phases
+            .iter()
+            .filter(|phase| matches!(phase.motion, traversal_planner::Motion::Flight { .. }))
+            .count();
+        assert_eq!(hops, 0, "at {speed} m/s");
+    }
+}

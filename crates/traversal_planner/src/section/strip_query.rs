@@ -102,7 +102,7 @@ struct Rideway {
 
 impl Rideway {
     fn new(floor: &Line, ceiling: &Line, params: &GaitParams) -> Self {
-        let steepest = params.body.max_ground_slope_degrees.to_radians();
+        let steepest = params.body.steepest_ride();
         let (least_normal_z, greatest_rise) = (steepest.cos(), floor.spacing * steepest.tan());
         let count = floor.samples.len();
         let standable: Vec<bool> = (0..count)
@@ -333,10 +333,16 @@ impl SectionQuery for StripQuery<'_> {
         if end <= from {
             return stuck;
         }
+        let climb = match (self.floor.at(from), self.floor.at(end)) {
+            (Some(start), Some(finish)) => (finish.z - start.z).abs(),
+            _ => 0.0,
+        };
         Ride {
             end,
-            vertical_travel: self.rideway.travel_to(&self.floor, end)
-                - self.rideway.travel_to(&self.floor, from),
+            vertical_travel: (self.rideway.travel_to(&self.floor, end)
+                - self.rideway.travel_to(&self.floor, from)
+                - climb)
+                .max(0.0),
         }
     }
 

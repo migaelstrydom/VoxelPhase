@@ -145,6 +145,7 @@ impl Body {
             horizontal_speed,
             move_dir,
             long_jump_armed: self.state.crouch_buffer.active(),
+            takeoff: None,
             immersion: Immersion::dry(),
             body_y: self.position.y,
             config: &self.config,

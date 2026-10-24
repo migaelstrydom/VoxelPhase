@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use nalgebra::{Point3, Vector3};
-use specs::{Join, Read, ReadStorage, System, Write};
+use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 use traversal_planner::plan::{Limb, Motion};
 use traversal_planner::section::{SectionQuery, StripLayout, StripQuery};
 use traversal_planner::{GaitParams, PathVec, PlannerSettings};
@@ -20,11 +20,14 @@ use super::gait::player_gait;
 use super::marker::PlansTraversal;
 use super::plan_capture::{scene_of, write_capture};
 use super::planning::{PlanFrame, PlanningInput, TraversalPlanning};
+use super::tracking::{floor_grade, track};
 
 /// Key that shows and hides the plan in the world.
 const OVERLAY_KEY: KeyCode = KeyCode::F6;
 /// Key that writes the current strip, body and plan to a scene file.
 const CAPTURE_KEY: KeyCode = KeyCode::F7;
+/// Key that turns the plan driving the body on and off.
+const TRACK_KEY: KeyCode = KeyCode::F8;
 /// Where captures are written, relative to the working directory.
 const CAPTURE_DIR: &str = "scratch/captures";
 /// Spacing along the path at which the body's planned path is drawn, in
@@ -47,19 +50,27 @@ pub struct TraversalPlanState {
     pub last: Option<PlanFrame>,
     /// Whether the plan is drawn in the world.
     pub overlay: bool,
+    /// Whether the plan drives the body: off, the plan is only drawn.
+    pub tracking: bool,
 }
 
 /// Plans the way across the ground ahead of the character marked
 /// [`PlansTraversal`] every frame and, on
 /// [`OVERLAY_KEY`], draws it; on [`CAPTURE_KEY`], writes it to a scene file
-/// the planner's tools load. Drawn only: nothing acts on the plan yet.
+/// the planner's tools load.
+///
+/// With tracking on ([`TRACK_KEY`]) the plan drives the body: it runs between
+/// the player's input and `CharacterControlSystem`, plans from the player's
+/// intent, and rewrites that intent to follow the plan ([`track`]): along
+/// the path at the plan's speed, and taking off where it hops. A jump the
+/// player presses still jumps.
 pub struct TraversalPlanSystem;
 
 impl<'a> System<'a> for TraversalPlanSystem {
     type SystemData = (
         ReadStorage<'a, PlansTraversal>,
         ReadStorage<'a, RigidBodyComponent>,
-        ReadStorage<'a, CharacterIntent>,
+        WriteStorage<'a, CharacterIntent>,
         ReadStorage<'a, CharacterState>,
         ReadStorage<'a, LocomotionConfig>,
         Read<'a, PhysicsResource>,
@@ -76,7 +87,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
         (
             planned,
             bodies,
-            intents,
+            mut intents,
             states,
             configs,
             physics,
@@ -91,12 +102,19 @@ impl<'a> System<'a> for TraversalPlanSystem {
         if input.is_key_just_pressed(OVERLAY_KEY) {
             state.overlay = !state.overlay;
         }
-        let overlay = state.overlay;
+        if input.is_key_just_pressed(TRACK_KEY) {
+            state.tracking = !state.tracking;
+            log::info!(
+                "traversal tracking {}",
+                if state.tracking { "on" } else { "off" }
+            );
+        }
+        let (overlay, tracking) = (state.overlay, state.tracking);
         let Some(terrain) = terrain else {
             return;
         };
         let Some((body, intent, character, config)) =
-            (&planned, &bodies, &intents, &states, &configs)
+            (&planned, &bodies, &mut intents, &states, &configs)
                 .join()
                 .next()
                 .map(|(_, body, intent, character, config)| (body.0, intent, character, config))
@@ -162,6 +180,23 @@ impl<'a> System<'a> for TraversalPlanSystem {
             );
             if overlay {
                 draw(frame, planning.params(), &mut overlays);
+            }
+            if tracking && target_speed > 0.0 {
+                // The drive keeps only `ground_speed` of what it is asked
+                // for up or down a grade: ask for that much more.
+                let body_dims = &planning.params().body;
+                let grade = floor_grade(&frame.section.body_floor, frame.body.s);
+                let gait_speed = resolve_ground_speed(intent, config, &character.crouch_lockout)
+                    * body_dims.ground_speed(1.0, grade);
+                let tracked = track(
+                    frame.plan(),
+                    frame.frame.forward(),
+                    time.delta_seconds().max(1.0e-3),
+                    frame.outcome.is_err(),
+                    planning.params().body.max_acceleration,
+                );
+                intent.direction = frame.frame.forward() * (tracked.speed / gait_speed).min(1.0);
+                intent.takeoff = tracked.takeoff;
             }
             if input.is_key_just_pressed(CAPTURE_KEY) {
                 let scene = scene_of(frame, planning.params(), target_speed);

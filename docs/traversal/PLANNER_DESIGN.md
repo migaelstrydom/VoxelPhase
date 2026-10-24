@@ -551,7 +551,38 @@ pyramid's first step pressed into the next step's face. The strip's casts
 pass through dynamic bodies whose surface moves faster than 2 m/s: a blast's
 pieces in flight are not ground, and are seen again where they slow, which
 keeps a blast's first second to 0.4 ms of sampling a frame (median; 1.6 ms
-at the 99th percentile) instead of 4. Planned:
+at the 99th percentile) instead of 4.
+
+**Tracking (E, first version), F8, off by default.** The plan system runs
+between the player's input and `CharacterControlSystem`: it plans from the
+player's intent, then rewrites that intent (`tracking.rs`). On the ground the
+intent points along the path at the plan's speed one frame ahead, asked for
+more up or down a grade by the drive contract's `ground_speed` so the drive
+delivers the plan's speed. A hop starting in the frame becomes a
+`PlannedTakeoff` on the intent, which the locomotion state machine launches
+locked: the plan's climb, its planar velocity held for the flight, no
+steering, no cutoff. A roll-off asks for nothing (the body runs off the edge).
+A refused plan is followed to where it ran out, braked to stop there: the
+refusal-drop choice taken as "stop at the edge" until play says otherwise. A
+jump the player presses still jumps. `character_viewer traversal --summary
+--track` runs the garden stations with it. Against the untracked runs on
+2026-10-25: the lips are crossed at speed instead of stalled (25 cm at a
+walk: lowest speed 4.9 m/s against 1.1; 40 cm at a run: 4.5 against 0.1),
+the planks, rough ground and 40° slope crossed, the slope as fast to within
+5%; the 50° slope, scree, ledge and cave refused and stopped at, where the
+untracked capsule barges up the first two. The scree's rocks stand 0.6 m
+above its slope: a planned hop is capped at 3 m/s of climb (0.45 m), and
+even uncapped the feet find no landing on the rocks' tops.
+
+Riding a slope at the limit needed three planner fixes: a ride is charged
+for running slower than the slope lets it (`ground_speed`), not the asked
+speed; its `vertical_travel` is the height gained and lost beyond its net
+climb, so a steady slope is not priced as bumps; and a floor may read a
+degree steeper than `max_ground_slope_degrees` (`BodyDims::steepest_ride`),
+since a mesh facets a slope built at the limit either side of it. The
+strip's casts reach above where the path was laid by the steepest rise the
+body rides along the strip's length (`strip_reach`), so a long slope is not
+cut off where it passes 3 m. Planned:
 
 - **`PlanOverlay`**: the plan through `DebugOverlays`. Footfalls as discs
   (left and right coloured, committed solid, tentative faded), flight arcs,

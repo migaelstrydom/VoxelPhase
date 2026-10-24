@@ -119,6 +119,9 @@ pub struct LocomotionInput<'a> {
     /// True when sprint is held and crouch was pressed within the buffer
     /// window — the precondition for a long jump on this frame's jump press.
     pub long_jump_armed: bool,
+    /// A takeoff a plan asks for this frame, taken from the ground or in
+    /// coyote time unless a jump is pressed.
+    pub takeoff: Option<PlannedTakeoff>,
     /// The water at the body this frame.
     pub immersion: Immersion,
     /// Height of the body's centre, to measure against the water.
@@ -229,6 +232,8 @@ impl LocomotionState {
                     out.set_vy = Some(cfg.jump_speed);
                     out.set_air_speed = Some(input.horizontal_speed.max(cfg.walk_speed));
                     out.consumed_jump = true;
+                } else if let Some(takeoff) = input.takeoff {
+                    out = takeoff.launch(cfg.launch_window);
                 } else if !input.is_grounded {
                     out.next_state = LocomotionState::CoyoteTime(cfg.ground_grace_period);
                     out.set_air_speed = Some(input.horizontal_speed.max(cfg.walk_speed));
@@ -266,6 +271,8 @@ impl LocomotionState {
                     };
                     out.set_vy = Some(cfg.jump_speed);
                     out.consumed_jump = true;
+                } else if let Some(takeoff) = input.takeoff {
+                    out = takeoff.launch(cfg.launch_window);
                 } else if input.is_grounded {
                     out.next_state = LocomotionState::Grounded;
                 } else {
@@ -400,6 +407,27 @@ impl LocomotionState {
     }
 }
 
+impl PlannedTakeoff {
+    /// Leaves the ground as planned: the climb set, and the planar velocity
+    /// locked for the flight, so nothing steers the arc off the plan's.
+    fn launch(self, launch_window: f32) -> LocomotionOutcome {
+        let planar = Vector3::new(self.velocity.x, 0.0, self.velocity.z);
+        LocomotionOutcome {
+            next_state: LocomotionState::Launching {
+                steering: AirSteering::Locked {
+                    velocity: planar,
+                    remaining: self.flight,
+                },
+                allow_cutoff: false,
+                remaining: launch_window,
+            },
+            set_vy: Some(self.velocity.y),
+            set_air_speed: Some(planar.norm()),
+            consumed_jump: false,
+        }
+    }
+}
+
 /// Arm/action layer — what the character's hands are doing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ArmState {
@@ -517,6 +545,20 @@ pub struct CharacterIntent {
     /// other than where it walks. `None` leaves the aim to the camera when
     /// it follows this character, and to the facing otherwise.
     pub aim: Option<Vector3<f32>>,
+    /// A takeoff planned for this frame: a traversal plan's hop. Consumed by
+    /// `CharacterControlSystem`; a jump pressed the same frame wins.
+    pub takeoff: Option<PlannedTakeoff>,
+}
+
+/// A takeoff a plan chose: the velocity to leave the ground with and how
+/// long the flight lasts. It is flown ballistic, with no steering, as the
+/// plan predicts it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlannedTakeoff {
+    /// Planar velocity and climb, in m/s.
+    pub velocity: Vector3<f32>,
+    /// Seconds the plan has it in the air.
+    pub flight: f32,
 }
 
 impl Default for CharacterIntent {
@@ -535,6 +577,7 @@ impl Default for CharacterIntent {
             throw: false,
             throw_grenade: false,
             aim: None,
+            takeoff: None,
         }
     }
 }
@@ -557,6 +600,7 @@ mod tests {
             horizontal_speed: 0.0,
             move_dir,
             long_jump_armed: false,
+            takeoff: None,
             immersion: Immersion::dry(),
             body_y: 0.0,
             config,
@@ -571,6 +615,53 @@ mod tests {
         let out = LocomotionState::Grounded.tick(&start);
         assert!(matches!(out.next_state, LocomotionState::Launching { .. }));
         out.next_state
+    }
+
+    const HOP: PlannedTakeoff = PlannedTakeoff {
+        velocity: Vector3::new(4.0, 1.5, 0.0),
+        flight: 0.3,
+    };
+
+    /// A planned hop leaves with the plan's climb, its planar velocity locked
+    /// for the flight so the arc is the plan's, and no jump cutoff; from the
+    /// ground and from coyote time alike.
+    #[test]
+    fn a_planned_takeoff_launches_locked_with_its_climb() {
+        let config = LocomotionConfig::player();
+        for from in [LocomotionState::Grounded, LocomotionState::CoyoteTime(0.1)] {
+            let mut asked = input(&config, true, Vector3::x());
+            asked.takeoff = Some(HOP);
+            let out = from.tick(&asked);
+            assert_eq!(out.set_vy, Some(1.5), "from {from:?}");
+            assert!(!out.consumed_jump);
+            match out.next_state {
+                LocomotionState::Launching {
+                    steering:
+                        AirSteering::Locked {
+                            velocity,
+                            remaining,
+                        },
+                    allow_cutoff: false,
+                    ..
+                } => {
+                    assert_eq!(velocity, Vector3::new(4.0, 0.0, 0.0));
+                    assert_eq!(remaining, 0.3);
+                }
+                other => panic!("from {from:?}: {other:?}"),
+            }
+        }
+    }
+
+    /// A jump pressed the frame a hop is planned replaces the hop.
+    #[test]
+    fn a_jump_pressed_wins_over_a_planned_takeoff() {
+        let config = LocomotionConfig::player();
+        let mut asked = input(&config, true, Vector3::x());
+        asked.takeoff = Some(HOP);
+        asked.jump_pressed = true;
+        let out = LocomotionState::Grounded.tick(&asked);
+        assert_eq!(out.set_vy, Some(config.jump_speed));
+        assert!(out.consumed_jump);
     }
 
     /// A long jump that never reports leaving the ground used to be an

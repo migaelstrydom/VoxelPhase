@@ -11,12 +11,13 @@ mod planning;
 mod section_cache;
 mod strip_scenery;
 mod system;
+mod tracking;
 mod wall_slide;
 
 pub use gait::player_gait;
 pub use marker::PlansTraversal;
 pub use path_frame::PathFrame;
-pub use physics_caster::PhysicsCaster;
+pub use physics_caster::{strip_reach, PhysicsCaster};
 pub use planning::{PlanFrame, PlanningCost, PlanningInput, TraversalPlanning};
 pub use section_cache::SectionCache;
 pub use strip_scenery::{SceneryView, StripScenery};

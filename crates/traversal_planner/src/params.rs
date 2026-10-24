@@ -25,7 +25,18 @@ pub struct BodyDims {
     pub max_acceleration: f32,
 }
 
+/// How much steeper than `max_ground_slope_degrees` a floor may read and
+/// still be ridden, in degrees: a voxel mesh facets a slope built at the limit
+/// a little either side of it.
+const SLOPE_FACETING_DEGREES: f32 = 1.0;
+
 impl BodyDims {
+    /// The steepest floor ridden as sampled, in radians: the limit, and the
+    /// faceting a mesh gives a slope built at it.
+    pub fn steepest_ride(&self) -> f32 {
+        (self.max_ground_slope_degrees + SLOPE_FACETING_DEGREES).to_radians()
+    }
+
     /// Speed across the ground the drive keeps on a floor rising `grade`
     /// metres per metre (falling, if negative), asked for `speed` on the
     /// level: it presses the asked speed along the floor's face, which the

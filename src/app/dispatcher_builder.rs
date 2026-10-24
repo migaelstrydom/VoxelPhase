@@ -62,10 +62,14 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(RollerLocomotionSystem, "roller_locomotion", &["brain"])
         // Swimming creatures likewise, as thrust through the water.
         .with(SwimmerLocomotionSystem, "swimmer_locomotion", &["brain"])
+        // The player's way across the ground ahead, planned on the world as
+        // last stepped and from the player's intent; drawn on F6, captured on
+        // F7, and with tracking on (F8) rewriting that intent to follow it.
+        .with(TraversalPlanSystem, "traversal_plan", &["player_input"])
         .with(
             CharacterControlSystem,
             "character_control",
-            &["player_input", "brain"],
+            &["player_input", "brain", "traversal_plan"],
         )
         // Platform motors state their intent as a velocity, exactly as the
         // character systems do, and must land before physics_sync turns it
@@ -252,13 +256,6 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["rubble_spawn"],
         )
         .with(TerrainAnchorSystem, "terrain_anchor", &["terrain_update"])
-        // The player's way across the ground ahead, planned on this frame's
-        // physics and terrain; drawn on F6, captured on F7, not yet acted on.
-        .with(
-            TraversalPlanSystem,
-            "traversal_plan",
-            &["physics_sync", "terrain_update"],
-        )
         // Water simulation (after terrain update so dirty_regions are visible)
         .with(WaterSystem::default(), "water", &["terrain_update"])
         // Particles
