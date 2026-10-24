@@ -1875,6 +1875,7 @@ name = "traversal_planner"
 version = "0.1.0"
 dependencies = [
  "ron",
+ "rustc-hash",
  "serde",
  "smallvec",
 ]
