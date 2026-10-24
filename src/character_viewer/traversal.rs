@@ -319,6 +319,9 @@ mod tests {
             floor: None,
             pelvis: Point3::origin(),
             head: Point3::origin(),
+            bottom: 0.25,
+            ride_floor: Some(0.25),
+            ride_floor_behind: Some(0.25),
             asked_speed: asked,
             feet: [foot, foot],
         }

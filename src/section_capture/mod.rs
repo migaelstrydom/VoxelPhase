@@ -13,4 +13,6 @@
 
 mod capture;
 
-pub use capture::{capture, Blast, Capture, Captured};
+pub use capture::{capture, Blast, Capture, CaptureWorld, Captured};
+#[cfg(all(test, feature = "traversal_scenarios"))]
+mod garden_stations;

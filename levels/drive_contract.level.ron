@@ -1,0 +1,60 @@
+// Drive Contract: the ground the character_viewer's drive checks
+// (`src/character_viewer/contract.rs`) measure the traction drive on, so the
+// traversal planner's `GaitParams` claim only what the drive does.
+//
+// Every lane runs along +x from x = -5:
+//
+//   z  0  8 16 24 32   slopes of 30, 34, 38, 42 and 46 degrees, and at
+//   z -8 -16 -24       50, 54 and 58: 6 m long from x = 7, up to a shelf
+//   z 40               flat: a jump at speed, against a ballistic arc
+//   z 48               a deck 1 m high ending at x = 7: a jump in the coyote
+//                      window after running off it
+Level(
+    name: "Drive Contract",
+
+    segments: [
+        (
+            name: "contract",
+
+            terrain: Terrain(
+                voxel_size: 0.25,
+                bounds: (min: (-16.0, -8.0, -32.0), max: (40.0, 16.0, 56.0)),
+                base_height: 0.0,
+                material_layers: [
+                    (depth: 1.0,  material: Grass),
+                    (depth: 4.0,  material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+                features: [
+                    Ramp(from: (7.0, 0.0), to: (13.0, 0.0), start_height: 0.0, end_height: 3.46, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (13.0, -2.5), max: (30.0, 2.5), height: 3.46),
+                    Ramp(from: (7.0, 8.0), to: (13.0, 8.0), start_height: 0.0, end_height: 4.05, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (13.0, 5.5), max: (30.0, 10.5), height: 4.05),
+                    Ramp(from: (7.0, 16.0), to: (13.0, 16.0), start_height: 0.0, end_height: 4.69, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (13.0, 13.5), max: (30.0, 18.5), height: 4.69),
+                    Ramp(from: (7.0, 24.0), to: (13.0, 24.0), start_height: 0.0, end_height: 5.40, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (13.0, 21.5), max: (30.0, 26.5), height: 5.40),
+                    Ramp(from: (7.0, 32.0), to: (13.0, 32.0), start_height: 0.0, end_height: 6.21, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (13.0, 29.5), max: (30.0, 34.5), height: 6.21),
+                    Ramp(from: (7.0, -8.0), to: (13.0, -8.0), start_height: 0.0, end_height: 7.15, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (13.0, -10.5), max: (30.0, -5.5), height: 7.15),
+                    Ramp(from: (7.0, -16.0), to: (13.0, -16.0), start_height: 0.0, end_height: 8.26, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (13.0, -18.5), max: (30.0, -13.5), height: 8.26),
+                    Ramp(from: (7.0, -24.0), to: (13.0, -24.0), start_height: 0.0, end_height: 9.60, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (13.0, -26.5), max: (30.0, -21.5), height: 9.60),
+                ],
+                volumes: [
+                    Platform(center: (-1.0, 1.0, 48.0), half_extents: (8.0, 2.0), thickness: 2.0),
+                ],
+            ),
+
+            objects: [],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "contract"),
+    ],
+
+    player_spawn: (-5.0, 1.0, 40.0),
+)

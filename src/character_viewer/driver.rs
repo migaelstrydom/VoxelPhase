@@ -21,7 +21,8 @@
 use std::path::Path;
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
-use specs::{Entity, Join, WorldExt};
+use specs::{Entity, Join, World, WorldExt};
+use traversal_planner::section::SphereCaster;
 
 use crate::animation::{CharacterAnimator, CharacterRigConfig, FootSide};
 use crate::character::{
@@ -30,14 +31,26 @@ use crate::character::{
 use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::core::error::{EngineError, EngineResult};
 use crate::level::load_level;
+use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::player::Player;
 use crate::render_perf::GameHarness;
 use crate::systems::{resolve_ground_speed, PhysicsResource};
+use crate::terrain::TerrainWorld;
+use crate::traversal::{PathFrame, PhysicsCaster, TraversalPlanState};
 use crate::water::WaterWorld;
 
 use super::pilot::Pilot;
 use super::record::{tilt_degrees, FootRecord, FrameRecord, Take, Tile};
 use super::scenario::Scenario;
+
+/// How far above the bottom sphere the floor cast under it starts, in
+/// metres: over any lip the body is still rounding.
+const RIDE_CAST_ABOVE: f32 = 0.5;
+/// How far below it the cast gives up, in metres.
+const RIDE_CAST_BELOW: f32 = 3.0;
+/// How far behind the body the second floor cast is, in metres: the
+/// traversal planner's body station spacing.
+pub const RIDE_SLOPE_RUN: f32 = 0.05;
 
 /// How a run is played and filmed.
 #[derive(Clone, Copy, Debug)]
@@ -53,6 +66,8 @@ pub struct RunConfig {
     /// Fraction of the script where filming starts and stops.
     pub from: f32,
     pub to: f32,
+    /// Whether the traversal plan is drawn in the frames filmed.
+    pub plan: bool,
 }
 
 impl Default for RunConfig {
@@ -64,6 +79,7 @@ impl Default for RunConfig {
             tiles: 12,
             from: 0.0,
             to: 1.0,
+            plan: false,
         }
     }
 }
@@ -76,6 +92,10 @@ pub fn run(scenario: &Scenario, config: &RunConfig) -> EngineResult<Take> {
     let mut harness = GameHarness::open(&level, config.width, config.height, dt)?;
 
     let character = take_character(&mut harness)?;
+    harness
+        .world_mut()
+        .write_resource::<TraversalPlanState>()
+        .overlay = config.plan;
     place_character(&mut harness, character, scenario)?;
 
     let duration = scenario.script.duration();
@@ -288,6 +308,29 @@ fn record(
         .body(handle)
         .ok_or_else(|| missing("live body"))?;
     let position = body.position();
+    let configs = world.read_storage::<LocomotionConfig>();
+    let config = configs
+        .get(character)
+        .ok_or_else(|| missing("locomotion"))?;
+    let bottom = body.position()
+        - body.rotation() * Vector3::y() * (config.collider_half_height - config.collider_radius);
+    let ride_floor = ride_floor_at(
+        world,
+        &physics.world,
+        handle,
+        bottom,
+        config.collider_radius,
+    );
+    let travel = Vector3::new(body.linear_velocity().x, 0.0, body.linear_velocity().z)
+        .try_normalize(1.0e-3)
+        .unwrap_or_else(Vector3::zeros);
+    let ride_floor_behind = ride_floor_at(
+        world,
+        &physics.world,
+        handle,
+        bottom - travel * RIDE_SLOPE_RUN,
+        config.collider_radius,
+    );
 
     let water = world
         .read_storage::<Immersion>()
@@ -311,12 +354,38 @@ fn record(
         floor: water.map(|w| w.floor),
         pelvis: animator.skeleton.pelvis,
         head: animator.skeleton.head,
+        bottom: bottom.y,
+        ride_floor,
+        ride_floor_behind,
         asked_speed,
         feet: [
             foot_record(animator, FootSide::Left, animator.skeleton.left_foot),
             foot_record(animator, FootSide::Right, animator.skeleton.right_foot),
         ],
     })
+}
+
+/// Height the bottom sphere would rest at on the floor under `bottom`, cast
+/// as the traversal planner's strip casts its body floor: from a little above
+/// the sphere, past the character's own body.
+fn ride_floor_at(
+    world: &World,
+    physics: &PhysicsWorld,
+    character: RigidBodyHandle,
+    bottom: Point3<f32>,
+    radius: f32,
+) -> Option<f32> {
+    let terrain = world.try_fetch::<TerrainWorld>()?;
+    let exclude = [character];
+    let caster = PhysicsCaster {
+        world: physics,
+        scenery: &*terrain,
+        frame: PathFrame::new(bottom, 0.0),
+        exclude: &exclude,
+        top: bottom.y + RIDE_CAST_ABOVE,
+        bottom: bottom.y - RIDE_CAST_BELOW,
+    };
+    caster.cast_down(0.0, 0.0, radius).map(|hit| hit.z)
 }
 
 /// One foot as the placer holds it and the rig drew it at `drawn`.

@@ -69,20 +69,18 @@ impl CastKey {
 /// where the terrain changed, and all at once when the path is laid afresh.
 pub struct SectionCache {
     frame: Option<PathFrame>,
-    hits: RefCell<FxHashMap<CastKey, Option<CastHit>>>,
+    hits: FxHashMap<CastKey, Option<CastHit>>,
     /// Where each body awake in the world was when the casts around it were
     /// last dropped.
     poses: FxHashMap<RigidBodyHandle, Pose>,
-    casts: Cell<usize>,
 }
 
 impl Default for SectionCache {
     fn default() -> Self {
         Self {
             frame: None,
-            hits: RefCell::new(FxHashMap::default()),
+            hits: FxHashMap::default(),
             poses: FxHashMap::default(),
-            casts: Cell::new(0),
         }
     }
 }
@@ -129,7 +127,7 @@ impl SectionCache {
     /// Starts afresh along `frame`, dropping every kept cast.
     pub fn lay_path(&mut self, frame: PathFrame) {
         self.frame = Some(frame);
-        self.hits.borrow_mut().clear();
+        self.hits.clear();
     }
 
     /// Drops what moving bodies (other than `ignore`) and changed terrain
@@ -213,7 +211,7 @@ impl SectionCache {
             s = (s.0.min(at.s), s.1.max(at.s));
             d = (d.0.min(at.d), d.1.max(at.d));
         }
-        self.hits.borrow_mut().retain(|key, _| {
+        self.hits.retain(|key, _| {
             // A sphere cast at a station reaches its radius around it.
             let radius = f32::from_bits(key.radius);
             let (cast_s, cast_d) = (f32::from_bits(key.s), f32::from_bits(key.d));
@@ -227,24 +225,25 @@ impl SectionCache {
     /// The strip around `origin` along the laid path, casting only what is
     /// not kept. Returns it and how many casts it made.
     pub fn sample(
-        &self,
+        &mut self,
         caster: &impl SphereCaster,
         layout: &StripLayout,
         params: &GaitParams,
         origin: f32,
     ) -> (Section, usize) {
-        self.casts.set(0);
         // Stations the body has left behind are not coming back.
         let behind = origin - layout.behind - STALE_BEHIND;
-        self.hits
-            .borrow_mut()
-            .retain(|key, _| f32::from_bits(key.s) >= behind);
+        self.hits.retain(|key, _| f32::from_bits(key.s) >= behind);
+        // Moved into a cell for the sampling, which casts through `&self`.
+        let hits = RefCell::new(std::mem::take(&mut self.hits));
+        let casts = Cell::new(0);
         let remembering = Remembering {
             caster,
-            hits: &self.hits,
-            casts: &self.casts,
+            hits: &hits,
+            casts: &casts,
         };
         let section = sample_section(&remembering, layout, params, origin);
-        (section, self.casts.get())
+        self.hits = hits.into_inner();
+        (section, casts.get())
     }
 }

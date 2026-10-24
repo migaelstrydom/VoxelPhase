@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use nalgebra::Point3;
@@ -67,79 +67,126 @@ pub struct Captured {
     pub sample_seconds: f64,
 }
 
-/// Spawns, blasts and settles the level, then samples the strip.
-pub fn capture(spec: &Capture) -> Result<Captured, String> {
-    let level = load_level(&spec.level).map_err(|error| error.to_string())?;
-    let mut trial = RestTrial::spawn(&level, build_terrain(&level));
-    {
-        let handles = trial.handles();
-        let mut physics = trial.physics_mut();
-        for blast in &spec.blasts {
-            let impulse =
-                PhysicsImpulse::radial(blast.at, blast.radius, blast.strength, BLAST_UPWARD_BOOST);
-            for &handle in &handles {
-                let Some(position) = physics.world.body(handle).map(|body| body.position()) else {
-                    continue;
-                };
-                if let Some(shove) = impulse.impulse_at(position) {
-                    physics.world.apply_impulse(handle, shove);
+/// A level spawned headless, blasted and come to rest: strips are captured
+/// from it, as many as wanted.
+pub struct CaptureWorld {
+    trial: RestTrial,
+    /// Simulated seconds until every body was at rest, if it ever was.
+    pub settled_after: Option<f32>,
+    /// Where the bodies still moving at the end are.
+    pub restless: Vec<Point3<f32>>,
+}
+
+impl CaptureWorld {
+    /// Spawns `level`, applies `blasts` and lets it come to rest.
+    pub fn open(level: &Path, blasts: &[Blast]) -> Result<Self, String> {
+        let level = load_level(level).map_err(|error| error.to_string())?;
+        let mut trial = RestTrial::spawn(&level, build_terrain(&level));
+        {
+            let handles = trial.handles();
+            let mut physics = trial.physics_mut();
+            for blast in blasts {
+                let impulse = PhysicsImpulse::radial(
+                    blast.at,
+                    blast.radius,
+                    blast.strength,
+                    BLAST_UPWARD_BOOST,
+                );
+                for &handle in &handles {
+                    let Some(position) = physics.world.body(handle).map(|body| body.position())
+                    else {
+                        continue;
+                    };
+                    if let Some(shove) = impulse.impulse_at(position) {
+                        physics.world.apply_impulse(handle, shove);
+                    }
                 }
             }
         }
+        let settled_after = trial.settle(SETTLE_SECONDS);
+        let restless = {
+            let physics = trial.physics();
+            trial
+                .handles()
+                .into_iter()
+                .filter(|&handle| !is_at_rest(&physics.world, handle))
+                .filter_map(|handle| physics.world.body(handle).map(|body| body.position()))
+                .collect()
+        };
+        Ok(Self {
+            trial,
+            settled_after,
+            restless,
+        })
     }
-    let settled_after = trial.settle(SETTLE_SECONDS);
-    let restless = {
-        let physics = trial.physics();
-        trial
-            .handles()
-            .into_iter()
-            .filter(|&handle| !is_at_rest(&physics.world, handle))
-            .filter_map(|handle| physics.world.body(handle).map(|body| body.position()))
-            .collect()
-    };
 
-    let params = GaitParams::default();
-    let layout = StripLayout::default();
-    let terrain = trial.terrain();
-    let physics = trial.physics();
-    let frame = PathFrame::new(Point3::new(spec.at.0, 0.0, spec.at.1), spec.heading_degrees);
-    let mut caster = PhysicsCaster {
-        world: &physics.world,
-        scenery: &*terrain,
-        frame,
-        exclude: &[],
-        top: SKY,
-        bottom: -SKY,
-    };
-    let floor = caster
-        .cast_down(0.0, 0.0, params.body.radius)
-        .ok_or("no floor under the start")?;
-    caster.top = floor.z + REACH_ABOVE;
-    caster.bottom = floor.z - REACH_BELOW;
-    let started = Instant::now();
-    for _ in 0..TIMED_SAMPLES - 1 {
-        std::hint::black_box(sample_section(&caster, &layout, &params, 0.0));
-    }
-    let section = sample_section(&caster, &layout, &params, 0.0);
-    let sample_seconds = started.elapsed().as_secs_f64() / TIMED_SAMPLES as f64;
-
-    Ok(Captured {
-        scene: TraversalScene {
+    /// The strip from world `(x, z)` along `heading_degrees` (turned about
+    /// `+Y` from `+Z`), as a scene with the body standing on its floor there;
+    /// and the seconds one sampling of it took.
+    pub fn capture(
+        &self,
+        at: (f32, f32),
+        heading_degrees: f32,
+        speed: f32,
+        lead: Limb,
+        expect: Option<Outcome>,
+    ) -> Result<(TraversalScene, f64), String> {
+        let params = GaitParams::default();
+        let layout = StripLayout::default();
+        let terrain = self.trial.terrain();
+        let physics = self.trial.physics();
+        let frame = PathFrame::new(Point3::new(at.0, 0.0, at.1), heading_degrees);
+        let mut caster = PhysicsCaster {
+            world: &physics.world,
+            scenery: &*terrain,
+            frame,
+            exclude: &[],
+            top: SKY,
+            bottom: -SKY,
+        };
+        let floor = caster
+            .cast_down(0.0, 0.0, params.body.radius)
+            .ok_or("no floor under the start")?;
+        caster.top = floor.z + REACH_ABOVE;
+        caster.bottom = floor.z - REACH_BELOW;
+        let started = Instant::now();
+        for _ in 0..TIMED_SAMPLES - 1 {
+            std::hint::black_box(sample_section(&caster, &layout, &params, 0.0));
+        }
+        let section = sample_section(&caster, &layout, &params, 0.0);
+        let sample_seconds = started.elapsed().as_secs_f64() / TIMED_SAMPLES as f64;
+        let scene = TraversalScene {
             ground: Ground::Captured(section),
             body: BodyState {
                 s: 0.0,
                 z: floor.z,
-                speed: spec.speed,
+                speed,
                 climb: 0.0,
             },
-            lead: spec.lead,
-            intent: Intent { speed: spec.speed },
+            lead,
+            intent: Intent { speed },
             params,
             layout,
-            expect: spec.expect,
-        },
-        settled_after,
-        restless,
+            expect,
+        };
+        Ok((scene, sample_seconds))
+    }
+}
+
+/// Spawns, blasts and settles the level, then samples the strip.
+pub fn capture(spec: &Capture) -> Result<Captured, String> {
+    let world = CaptureWorld::open(&spec.level, &spec.blasts)?;
+    let (scene, sample_seconds) = world.capture(
+        spec.at,
+        spec.heading_degrees,
+        spec.speed,
+        spec.lead,
+        spec.expect,
+    )?;
+    Ok(Captured {
+        scene,
+        settled_after: world.settled_after,
+        restless: world.restless,
         sample_seconds,
     })
 }

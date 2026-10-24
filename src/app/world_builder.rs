@@ -50,6 +50,7 @@ use crate::systems::{FrameStart, PhysicsResource};
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
 use crate::trampoline::Trampoline;
+use crate::traversal::PlansTraversal;
 
 /// Builds and configures the ECS World with all components and resources
 pub struct WorldBuilder {
@@ -75,6 +76,7 @@ impl WorldBuilder {
         world.register::<Renderable>();
         world.register::<CameraComponent>();
         world.register::<Player>();
+        world.register::<PlansTraversal>();
         world.register::<CharacterIntent>();
         world.register::<CharacterState>();
         world.register::<Throws>();

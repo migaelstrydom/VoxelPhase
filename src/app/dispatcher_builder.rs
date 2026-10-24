@@ -36,6 +36,7 @@ use crate::systems::{
     RenderSystem, TerrainAnchorSystem, TerrainUpdateSystem, WaterSystem,
 };
 use crate::trampoline::TrampolineBedSystem;
+use crate::traversal::TraversalPlanSystem;
 
 use super::system_timing::TimedDispatcherBuilder;
 
@@ -251,6 +252,13 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["rubble_spawn"],
         )
         .with(TerrainAnchorSystem, "terrain_anchor", &["terrain_update"])
+        // The player's way across the ground ahead, planned on this frame's
+        // physics and terrain; drawn on F6, captured on F7, not yet acted on.
+        .with(
+            TraversalPlanSystem,
+            "traversal_plan",
+            &["physics_sync", "terrain_update"],
+        )
         // Water simulation (after terrain update so dirty_regions are visible)
         .with(WaterSystem::default(), "water", &["terrain_update"])
         // Particles

@@ -1,5 +1,6 @@
 //! The real game run headlessly with a scripted pilot in place of the keyboard, reporting the character's motion and animation against the water and how it crossed traversal stations, rendered as a filmstrip.
 
+mod contract;
 mod driver;
 mod pilot;
 mod record;
@@ -9,6 +10,7 @@ mod scenarios;
 mod traversal;
 mod traversal_scenarios;
 
+pub use contract::{check_contract, ContractCheck};
 pub use driver::{run, RunConfig};
 pub use pilot::Pilot;
 pub use record::{FootRecord, FrameRecord, Take, Tile};

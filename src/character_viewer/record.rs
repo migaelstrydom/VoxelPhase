@@ -36,6 +36,14 @@ pub struct FrameRecord {
     /// The pelvis the rig drew, and its head.
     pub pelvis: Point3<f32>,
     pub head: Point3<f32>,
+    /// Height of the capsule's bottom-sphere centre.
+    pub bottom: f32,
+    /// Height that sphere would rest at on the floor under it, as the
+    /// traversal planner's strip casts it; `None` over nothing.
+    pub ride_floor: Option<f32>,
+    /// The same, cast `RIDE_SLOPE_RUN` behind the body along its horizontal
+    /// travel: with `ride_floor`, the floor's slope under it.
+    pub ride_floor_behind: Option<f32>,
     /// Planar speed the intent asked for this frame, in m/s; zero standing.
     pub asked_speed: f32,
     /// The left foot and the right, as the rig drew them.

@@ -18,6 +18,7 @@ use crate::physics::{
 use crate::player::Player;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::PhysicsResource;
+use crate::traversal::PlansTraversal;
 
 /// The figure inside the capsule, as the world weighs it and the water
 /// floats it.
@@ -158,6 +159,7 @@ pub fn spawn_player(world: &mut World, initial_pos: Point3<f32>) -> Entity {
     world
         .create_entity()
         .with(Player)
+        .with(PlansTraversal)
         .with(CharacterIntent::default())
         .with(CharacterState::default())
         .with(Throws::default())

@@ -11,11 +11,21 @@
 //! cargo run --release --bin character_viewer -- swim --tiles 16 --from 0.2 --to 0.6
 //! cargo run --release --bin character_viewer -- all --tiles 0      # reports only
 //! cargo run --release --bin character_viewer -- traversal --tiles 0 --summary
+//! cargo run --release --bin character_viewer -- contract --tiles 0
 //! ```
+//!
+//! `--plan` draws the traversal planner's plan in the frames filmed: the
+//! body's path, flights dashed, and the footfalls, left blue and right
+//! orange, faded where tentative.
 //!
 //! `traversal` runs every scenario that crosses a station of the Traversal
 //! Garden; `--summary` prints only each one's traversal summary as a table
 //! (speed lost, snags, bounce, foot slip, whether it got across).
+//!
+//! `contract` measures the traction drive against what the traversal
+//! planner's `GaitParams` claim it does (slope, takeoff, ride; see
+//! `character_viewer/contract.rs`), prints a row per check and fails if any
+//! does not hold.
 //!
 //! The anim_viewer is the fast, GPU-free tool for gait on analytic ground;
 //! this one is for anything the physics body itself does — floating, pitching
@@ -25,12 +35,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use voxel_phase::character_viewer::{
-    catalogue, find, report, run, traversal, RunConfig, Scenario, TraversalSummary,
+    catalogue, check_contract, find, report, run, traversal, ContractCheck, RunConfig, Scenario,
+    TraversalSummary,
 };
 use voxel_phase::rendering::visual_bench::contact_sheet;
 
 const USAGE: &str =
-    "usage: character_viewer <scenario|all|traversal> [--list] [--summary] [--tiles N]
+    "usage: character_viewer <scenario|all|traversal|contract> [--list] [--summary] [--tiles N]
                         [--from F] [--to F]
                         [--fps HZ] [--width W] [--height H] [--columns C]
                         [--every N] [--out <sheet.png>]
@@ -52,6 +63,8 @@ struct Args {
     every: usize,
     /// Print only the traversal summary table, not the frame-by-frame report.
     summary: bool,
+    /// Run the drive contract checks instead of scenarios.
+    contract: bool,
     out: Option<PathBuf>,
 }
 
@@ -66,6 +79,9 @@ fn main() -> ExitCode {
         }
     };
 
+    if args.contract {
+        return contract(&args.config);
+    }
     if args.summary {
         println!("{}", TraversalSummary::header());
     }
@@ -127,6 +143,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
                 return Ok(None);
             }
             "--summary" => summary = true,
+            "--plan" => config.plan = true,
             "--tiles" => config.tiles = parse(&value("--tiles")?)?,
             "--from" => config.from = parse(&value("--from")?)?,
             "--to" => config.to = parse(&value("--to")?)?,
@@ -145,7 +162,10 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
     }
 
     let which = which.ok_or("name a scenario, or 'all'")?;
-    let mut scenarios = if which == "all" {
+    let contract = which == "contract";
+    let mut scenarios = if contract {
+        Vec::new()
+    } else if which == "all" {
         catalogue()
     } else if which == "traversal" {
         catalogue()
@@ -167,8 +187,30 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
         columns,
         every,
         summary,
+        contract,
         out,
     }))
+}
+
+/// Runs the drive contract checks, a row each; fails if any does not hold.
+fn contract(config: &RunConfig) -> ExitCode {
+    match check_contract(config) {
+        Ok(checks) => {
+            println!("{}", ContractCheck::header());
+            for check in &checks {
+                println!("{}", check.row());
+            }
+            if checks.iter().all(|check| check.holds) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Err(error) => {
+            eprintln!("contract: {error:?}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn parse<T: std::str::FromStr>(text: &str) -> Result<T, String> {

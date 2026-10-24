@@ -41,6 +41,7 @@ physics_scenarios = []
 water_scenarios = []
 rubble_scenarios = []
 level_scenarios = []
+traversal_scenarios = []
 
 
 [dev-dependencies]
