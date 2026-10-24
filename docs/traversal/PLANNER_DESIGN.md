@@ -242,9 +242,11 @@ body passes over each stone.
 
 - **Search.** Candidate footfalls lie on a lattice, every few cm along `s`
   and by lane across it. Footfalls only move forward, so the lattice is
-  searched in order of `s`, keeping the cheapest way to each cell (a
-  footfall, its foot, and where the body landed with it): a dynamic programme
-  whose cost is bounded by the lattice's size. A plan is done when the body
+  searched cheapest first, keeping the cheapest way to each cell (a
+  footfall, its foot, and where the body landed with it), and stops at the
+  first plan to reach the goal: Dijkstra over the lattice, so cells dearer
+  than the answer are never expanded. A model asks whether a candidate could
+  still be the cheapest way to its cell before doing its physics. A plan is done when the body
   passes the horizon, about 1.6 m ahead, so its last footfall stays inside the
   3 m strip. When none does, the planner refuses and returns the cheapest
   plan to the furthest point reached, which is where the way runs out.

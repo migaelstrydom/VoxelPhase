@@ -104,6 +104,9 @@ impl Stride {
         context: &ExpandContext,
         out: &mut Vec<Candidate>,
     ) {
+        if !(context.promising)(&contact, landing_s, step_cost) {
+            return;
+        }
         let (params, query) = (context.params, context.query);
         let stance = from.stance.at;
         let Some(landing_floor) = query.floor(landing_s) else {
@@ -131,7 +134,7 @@ impl Stride {
             speed: from.body.speed.max(MIN_PLANNING_SPEED),
             ..from.body
         };
-        let ride = query.ride(start.s, landing_s, params);
+        let ride = query.ride(start.s, landing_s);
 
         // Riding all the way, the stance foot holds the body until it lands.
         if ride.end >= landing_s && reaches(landing_floor.z, stance.z, context) {
@@ -215,7 +218,7 @@ impl Stride {
         if !reaches(takeoff_z, from.stance.at.z, context) {
             return None;
         }
-        let ride = query.ride(start.s, takeoff, params);
+        let ride = query.ride(start.s, takeoff);
         let cost = step_cost
             + context.settings.costs.flight
             + context.settings.costs.ride_travel * ride.vertical_travel;

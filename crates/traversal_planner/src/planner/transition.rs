@@ -1,7 +1,7 @@
 use smallvec::SmallVec;
 
 use crate::params::GaitParams;
-use crate::plan::Phase;
+use crate::plan::{Contact, Phase};
 use crate::section::SectionQuery;
 
 use super::settings::PlannerSettings;
@@ -26,6 +26,11 @@ pub struct ExpandContext<'a> {
     pub settings: &'a PlannerSettings,
     /// The speed along the path the player asks for, in m/s.
     pub target_speed: f32,
+    /// Whether a footfall on a contact, with the body landing at an `s`, at
+    /// a model cost of at least this much, could still be in the cheapest
+    /// plan. A model asks before the costly checks, and drops the candidate
+    /// when not.
+    pub promising: &'a dyn Fn(&Contact, f32, f32) -> bool,
 }
 
 /// Proposes the ways on from a plan state. The planner validates every

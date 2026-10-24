@@ -52,7 +52,7 @@ fn check_rules(name: &str, plan: &Plan, query: &dyn SectionQuery, scene: &Traver
     }
     for phase in &plan.phases {
         assert!(
-            query.clears(phase, params),
+            query.clears(phase),
             "{name}: phase at t = {} clears",
             phase.start
         );
@@ -68,7 +68,7 @@ fn every_fixture_plans_as_it_expects_and_keeps_the_rules() {
     for name in fixture_names() {
         let scene = fixture(&name);
         let section = scene.section();
-        let query = StripQuery::new(&section);
+        let query = StripQuery::new(&section, &scene.params);
         let outcome = planner(&scene).plan(&query, &scene.request());
         let plan = match (&outcome, scene.expect.expect("fixtures state an outcome")) {
             (Ok(planned), Outcome::Crosses) => &planned.plan,
@@ -90,7 +90,7 @@ fn every_fixture_plans_as_it_expects_and_keeps_the_rules() {
 fn replanning_against_its_own_plan_keeps_it() {
     let scene = fixture("zigzag_stones");
     let section = scene.section();
-    let query = StripQuery::new(&section);
+    let query = StripQuery::new(&section, &scene.params);
     let planner = planner(&scene);
     let first = planner.plan(&query, &scene.request()).expect("crosses");
     let again = planner
@@ -117,7 +117,7 @@ fn a_committed_footfall_that_has_gone_is_dropped() {
     let section = scene.section();
     let planner = planner(&scene);
     let first = planner
-        .plan(&StripQuery::new(&section), &scene.request())
+        .plan(&StripQuery::new(&section, &scene.params), &scene.request())
         .expect("crosses");
 
     // The first stone, which the committed footfall is on, falls away.
@@ -135,7 +135,7 @@ fn a_committed_footfall_that_has_gone_is_dropped() {
     });
     let fallen_section = fallen.section();
     let outcome = planner.plan(
-        &StripQuery::new(&fallen_section),
+        &StripQuery::new(&fallen_section, &fallen.params),
         &traversal_planner::PlanRequest {
             previous: Some(&first.plan),
             ..fallen.request()

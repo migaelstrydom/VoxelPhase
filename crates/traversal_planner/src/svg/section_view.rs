@@ -107,7 +107,7 @@ pub fn render_scene(
             &mut canvas,
             &side,
             &top,
-            &StripQuery::new(section),
+            &StripQuery::new(section, &scene.params),
             plan,
             refused,
         );

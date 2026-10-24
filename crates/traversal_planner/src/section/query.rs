@@ -1,6 +1,5 @@
 use std::ops::Range;
 
-use crate::params::GaitParams;
 use crate::path::PathVec;
 use crate::plan::Phase;
 
@@ -54,20 +53,21 @@ pub struct FootholdWindow {
     pub spacing: f32,
 }
 
-/// How the planner reads the ground. The strip of lanes is the first
-/// implementation; a 3D height patch around the body can replace it without
-/// the planner changing.
+/// How the planner reads the ground, for one gait: what the body can ride
+/// and fly over depends on its limits, which the query is built with. The
+/// strip of lanes is the first implementation; a 3D height patch around the
+/// body can replace it without the planner changing.
 pub trait SectionQuery {
     /// The body floor under the path at `s`; `None` over a drop with no floor
     /// in reach.
     fn floor(&self, s: f32) -> Option<FloorHit>;
     /// The body riding its floor from `from` toward `to` (`from <= to`).
-    fn ride(&self, from: f32, to: f32, params: &GaitParams) -> Ride;
+    fn ride(&self, from: f32, to: f32) -> Ride;
     /// Every standable foothold in `window`, appended to `out`. The planner
     /// judges which is best.
     fn footholds(&self, window: &FootholdWindow, out: &mut Vec<Foothold>);
     /// Whether the body can move as `phase` says: riding a floor it can be
     /// driven over, or flying with clearance over the floor and under the
     /// ceiling.
-    fn clears(&self, phase: &Phase, params: &GaitParams) -> bool;
+    fn clears(&self, phase: &Phase) -> bool;
 }

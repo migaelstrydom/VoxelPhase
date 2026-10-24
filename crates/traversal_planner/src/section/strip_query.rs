@@ -84,35 +84,104 @@ impl Line {
     }
 }
 
-/// [`SectionQuery`] over a sampled strip: the body floor and ceiling along
-/// the path, the footholds along each lane.
-pub struct StripQuery<'a> {
-    section: &'a Section,
-    floor: Line,
-    ceiling: Line,
+/// Where the body can ride along the floor line, worked out once per station
+/// so a ride is two lookups.
+struct Rideway {
+    /// Whether the body can stand at each station: floor there, not too
+    /// steep for the drive, headroom over it.
+    standable: Vec<bool>,
+    /// The furthest station each one rides to without a break.
+    reach: Vec<usize>,
+    /// Height gained and lost riding from the first station to each one.
+    travel: Vec<f32>,
 }
 
-impl<'a> StripQuery<'a> {
-    pub fn new(section: &'a Section) -> Self {
-        let layout = &section.layout;
-        let start = section.origin - layout.behind;
-        let end = section.origin + layout.ahead;
+impl Rideway {
+    fn new(floor: &Line, ceiling: &Line, params: &GaitParams) -> Self {
+        let steepest = params.body.max_ground_slope_degrees.to_radians();
+        let (least_normal_z, greatest_rise) = (steepest.cos(), floor.spacing * steepest.tan());
+        let count = floor.samples.len();
+        let standable: Vec<bool> = (0..count)
+            .map(|station| {
+                floor.samples[station].is_some_and(|hit| {
+                    hit.normal.z >= least_normal_z
+                        && has_headroom(ceiling, floor.station_s(station), hit.z, params)
+                })
+            })
+            .collect();
+        let mut travel = vec![0.0; count];
+        let mut linked = vec![false; count];
+        for station in 1..count {
+            let rise = match (floor.samples[station - 1], floor.samples[station]) {
+                (Some(low), Some(high)) => high.z - low.z,
+                _ => 0.0,
+            };
+            travel[station] = travel[station - 1] + rise.abs();
+            linked[station - 1] = standable[station - 1]
+                && standable[station]
+                && rise.abs() <= greatest_rise + RIDE_TOLERANCE;
+        }
+        let mut reach: Vec<usize> = (0..count).collect();
+        for station in (0..count.saturating_sub(1)).rev() {
+            if linked[station] {
+                reach[station] = reach[station + 1];
+            }
+        }
         Self {
-            section,
-            floor: Line::new(&section.body_floor, start, layout.body_spacing, end),
-            ceiling: Line::new(&section.ceiling, start, layout.body_spacing, end),
+            standable,
+            reach,
+            travel,
         }
     }
 
-    /// Whether the top sphere, its bottom sphere's centre at `(s, z)`, is
-    /// under the ceiling.
-    fn has_headroom(&self, s: f32, z: f32, params: &GaitParams) -> bool {
-        self.ceiling
-            .at(s)
-            .map_or(true, |ceiling| z + params.body.spine() <= ceiling.z)
+    /// Height gained and lost riding from the first station to `s`, with `s`
+    /// between stations taken in proportion.
+    fn travel_to(&self, floor: &Line, s: f32) -> f32 {
+        let position = ((s - floor.start) / floor.spacing).max(0.0);
+        let below = (position.floor() as usize).min(self.travel.len() - 1);
+        let above = (below + 1).min(self.travel.len() - 1);
+        let fraction = position - below as f32;
+        self.travel[below] + fraction.min(1.0) * (self.travel[above] - self.travel[below])
+    }
+}
+
+/// Whether the top sphere, its bottom sphere's centre at `(s, z)`, is under
+/// the ceiling.
+fn has_headroom(ceiling: &Line, s: f32, z: f32, params: &GaitParams) -> bool {
+    ceiling
+        .at(s)
+        .map_or(true, |ceiling| z + params.body.spine() <= ceiling.z)
+}
+
+/// [`SectionQuery`] over a sampled strip for one gait: the body floor and
+/// ceiling along the path, the footholds along each lane, and where the body
+/// can ride within the gait's limits.
+pub struct StripQuery<'a> {
+    section: &'a Section,
+    params: &'a GaitParams,
+    floor: Line,
+    ceiling: Line,
+    rideway: Rideway,
+}
+
+impl<'a> StripQuery<'a> {
+    pub fn new(section: &'a Section, params: &'a GaitParams) -> Self {
+        let layout = &section.layout;
+        let start = section.origin - layout.behind;
+        let end = section.origin + layout.ahead;
+        let floor = Line::new(&section.body_floor, start, layout.body_spacing, end);
+        let ceiling = Line::new(&section.ceiling, start, layout.body_spacing, end);
+        let rideway = Rideway::new(&floor, &ceiling, params);
+        Self {
+            section,
+            params,
+            floor,
+            ceiling,
+            rideway,
+        }
     }
 
-    fn clears_flight(&self, phase: &Phase, params: &GaitParams) -> bool {
+    fn clears_flight(&self, phase: &Phase) -> bool {
         let (from, to) = match phase.motion {
             Motion::Flight { takeoff, .. } => (takeoff.s, phase.end_s()),
             Motion::Grounded { .. } => unreachable!("a flight"),
@@ -124,13 +193,13 @@ impl<'a> StripQuery<'a> {
             let margin = if near_end {
                 -FLIGHT_END_TOLERANCE
             } else {
-                params.flight.clearance
+                self.params.flight.clearance
             };
             let above_floor = self
                 .floor
                 .sample(station as isize)
                 .map_or(true, |floor| z >= floor.z + margin);
-            above_floor && self.has_headroom(s, z, params)
+            above_floor && has_headroom(&self.ceiling, s, z, self.params)
         })
     }
 }
@@ -140,41 +209,34 @@ impl SectionQuery for StripQuery<'_> {
         self.floor.at(s)
     }
 
-    fn ride(&self, from: f32, to: f32, params: &GaitParams) -> Ride {
+    fn ride(&self, from: f32, to: f32) -> Ride {
         let stuck = Ride {
             end: from,
             vertical_travel: 0.0,
         };
-        let Some(start) = self.floor.at(from) else {
+        let position = (from - self.floor.start) / self.floor.spacing;
+        let Ok(station) = usize::try_from(position.floor() as isize) else {
             return stuck;
         };
-        if !self.has_headroom(from, start.z, params) {
+        if !self
+            .rideway
+            .standable
+            .get(station)
+            .copied()
+            .unwrap_or(false)
+        {
             return stuck;
         }
-        let steepest = params.body.max_ground_slope_degrees.to_radians();
-        let (least_normal_z, greatest_grade) = (steepest.cos(), steepest.tan());
-        let mut ride = stuck;
-        let mut last = (from, start.z);
-        let stations = self
-            .floor
-            .stations_between(from, to)
-            .map(|station| self.floor.station_s(station));
-        for s in stations.chain(std::iter::once(to)) {
-            let Some(floor) = self.floor.at(s) else {
-                return ride;
-            };
-            let rise = floor.z - last.1;
-            let rideable = rise.abs() <= (s - last.0) * greatest_grade + RIDE_TOLERANCE
-                && floor.normal.z >= least_normal_z
-                && self.has_headroom(s, floor.z, params);
-            if !rideable {
-                return ride;
-            }
-            ride.end = s;
-            ride.vertical_travel += rise.abs();
-            last = (s, floor.z);
+        let reach_s = self.floor.station_s(self.rideway.reach[station]);
+        let end = to.min(reach_s);
+        if end <= from {
+            return stuck;
         }
-        ride
+        Ride {
+            end,
+            vertical_travel: self.rideway.travel_to(&self.floor, end)
+                - self.rideway.travel_to(&self.floor, from),
+        }
     }
 
     fn footholds(&self, window: &FootholdWindow, out: &mut Vec<Foothold>) {
@@ -214,10 +276,12 @@ impl SectionQuery for StripQuery<'_> {
         }
     }
 
-    fn clears(&self, phase: &Phase, params: &GaitParams) -> bool {
+    fn clears(&self, phase: &Phase) -> bool {
         match phase.motion {
-            Motion::Grounded { from, to, .. } => self.ride(from, to, params).end >= to,
-            Motion::Flight { .. } => self.clears_flight(phase, params),
+            Motion::Grounded { from, to, .. } => {
+                from == to || self.ride(from, to).end >= to - RIDE_TOLERANCE
+            }
+            Motion::Flight { .. } => self.clears_flight(phase),
         }
     }
 }

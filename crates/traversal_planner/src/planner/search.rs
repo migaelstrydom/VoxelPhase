@@ -54,10 +54,10 @@ pub struct Refusal {
 /// Searches for the cheapest plan to the horizon.
 ///
 /// Footfalls are candidates on a lattice: every `footfall_spacing` along the
-/// path, on each lane. Footfalls only move forward, so the lattice is
-/// searched in order of `s`, keeping the cheapest way to each cell (a
-/// footfall, its foot and where the body landed with it): a dynamic programme
-/// whose cost is bounded by the lattice's size.
+/// path, on each lane. The search keeps the cheapest way to each cell (a
+/// footfall, its foot and where the body landed with it) and expands the
+/// cheapest first, so it stops at the first plan to reach the goal and never
+/// looks at cells dearer than that plan: on open ground, a handful.
 pub struct Planner {
     pub params: GaitParams,
     pub settings: PlannerSettings,
@@ -82,9 +82,9 @@ struct Node {
     phases: SmallVec<[Phase; 2]>,
 }
 
-/// A node waiting to be expanded, nearest the body first.
+/// A node waiting to be expanded, cheapest first.
 struct Pending {
-    s: f32,
+    cost: f32,
     node: usize,
 }
 
@@ -104,7 +104,10 @@ impl PartialOrd for Pending {
 
 impl Ord for Pending {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.s.total_cmp(&self.s).then(other.node.cmp(&self.node))
+        other
+            .cost
+            .total_cmp(&self.cost)
+            .then(other.node.cmp(&self.node))
     }
 }
 
@@ -122,12 +125,6 @@ impl Planner {
         query: &dyn SectionQuery,
         request: &PlanRequest,
     ) -> Result<Planned, Refusal> {
-        let context = ExpandContext {
-            query,
-            params: &self.params,
-            settings: &self.settings,
-            target_speed: request.target_speed,
-        };
         let costs = FootfallCosts {
             weights: &self.settings.costs,
         };
@@ -147,7 +144,7 @@ impl Planner {
             phases: SmallVec::new(),
         }];
         let mut cheapest: HashMap<CellKey, usize> = HashMap::new();
-        let mut pending = BinaryHeap::from([Pending { s: 0.0, node: 0 }]);
+        let mut pending = BinaryHeap::from([Pending { cost: 0.0, node: 0 }]);
         let goal = request.body.s + self.settings.horizon;
         let (mut finished, mut furthest) = (None::<usize>, 0);
         let mut diverged = false;
@@ -158,16 +155,31 @@ impl Planner {
             if index != 0 && cheapest.get(&self.cell(&node.state)) != Some(&index) {
                 continue;
             }
+            // Costs only grow along a plan, so the first plan to reach the
+            // goal off the heap is the cheapest.
             if node.state.body.s >= goal {
-                if finished.map_or(true, |best| node.cost < nodes[best].cost) {
-                    finished = Some(index);
-                }
-                continue;
+                finished = Some(index);
+                break;
             }
             if self.further(node, &nodes[furthest]) {
                 furthest = index;
             }
 
+            // A candidate is worth checking only if it could still be the
+            // cheapest way to its cell: the model asks before its physics.
+            let promising = |landing: &Contact, body_s: f32, cost: f32| {
+                let total = node.cost + cost + costs.of(landing);
+                cheapest
+                    .get(&self.cell_of(landing, body_s))
+                    .map_or(true, |&other| nodes[other].cost > total)
+            };
+            let context = ExpandContext {
+                query,
+                params: &self.params,
+                settings: &self.settings,
+                target_speed: request.target_speed,
+                promising: &promising,
+            };
             candidates.clear();
             for model in &self.models {
                 model.expand(&node.state, &context, &mut candidates);
@@ -206,14 +218,9 @@ impl Planner {
                 {
                     continue;
                 }
-                if !candidate
-                    .phases
-                    .iter()
-                    .all(|phase| query.clears(phase, &self.params))
-                {
+                if !candidate.phases.iter().all(|phase| query.clears(phase)) {
                     continue;
                 }
-                let s = candidate.landing.stance.at.s;
                 nodes.push(Node {
                     state: candidate.landing,
                     cost,
@@ -222,7 +229,7 @@ impl Planner {
                 });
                 let added = nodes.len() - 1;
                 cheapest.insert(key, added);
-                pending.push(Pending { s, node: added });
+                pending.push(Pending { cost, node: added });
             }
         }
 
@@ -274,11 +281,16 @@ impl Planner {
     }
 
     fn cell(&self, state: &PlanState) -> CellKey {
+        self.cell_of(&state.stance, state.body.s)
+    }
+
+    /// The cell of a footfall landing on `stance` with the body at `body_s`.
+    fn cell_of(&self, stance: &Contact, body_s: f32) -> CellKey {
         CellKey {
-            along: (state.stance.at.s / self.settings.footfall_spacing).floor() as i64,
-            across: (state.stance.at.d / FOOTFALL_CELL_WIDTH).round() as i32,
-            limb: state.stance.limb,
-            body: (state.body.s / self.settings.footfall_spacing).floor() as i64,
+            along: (stance.at.s / self.settings.footfall_spacing).floor() as i64,
+            across: (stance.at.d / FOOTFALL_CELL_WIDTH).round() as i32,
+            limb: stance.limb,
+            body: (body_s / self.settings.footfall_spacing).floor() as i64,
         }
     }
 
