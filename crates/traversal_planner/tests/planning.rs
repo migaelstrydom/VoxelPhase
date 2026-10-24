@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 
 use traversal_planner::plan::{Limb, Plan};
-use traversal_planner::scene::{Ground, Outcome};
+use traversal_planner::scene::Outcome;
 use traversal_planner::section::{Footing, SectionQuery, StripQuery};
 use traversal_planner::{PathVec, Planner, PlannerSettings, TraversalScene};
 
@@ -40,7 +40,6 @@ fn planner(scene: &TraversalScene) -> Planner {
 
 /// The rules every plan keeps, whatever its scene.
 fn check_rules(name: &str, plan: &Plan, query: &dyn SectionQuery, scene: &TraversalScene) {
-    let params = &scene.params;
     let mut last = scene.lead.other();
     for (time, contact) in plan.footfalls() {
         assert_ne!(contact.limb, last, "{name}: feet alternate (t = {time})");
@@ -115,35 +114,36 @@ fn replanning_against_its_own_plan_keeps_it() {
 fn a_committed_footfall_that_has_gone_is_dropped() {
     let scene = fixture("zigzag_stones");
     let section = scene.section();
+    let query = StripQuery::new(&section, &scene.params);
     let planner = planner(&scene);
-    let first = planner
-        .plan(&StripQuery::new(&section, &scene.params), &scene.request())
-        .expect("crosses");
+    let mut previous = planner
+        .plan(&query, &scene.request())
+        .expect("crosses")
+        .plan;
 
-    // The first stone, which the committed footfall is on, falls away.
-    let mut fallen = scene.clone();
-    let Ground::Authored(ground) = &mut fallen.ground else {
-        panic!("authored");
-    };
-    let committed = first.plan.footfalls().next().expect("a footfall").1.at;
-    ground.shapes.retain(|shape| {
-        let footprint = shape.footprint();
-        let (from, to) = footprint
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(a, b), &(s, _)| (a.min(s), b.max(s)));
-        !(from <= committed.s && committed.s <= to && from > 0.5)
-    });
-    let fallen_section = fallen.section();
+    // The committed footfall's ground fell away: it now hangs over the void
+    // between the first two stones.
+    let gone = PathVec::new(0.6, 0.15, -1.0);
+    let landing = previous
+        .phases
+        .iter_mut()
+        .skip(1)
+        .flat_map(|phase| phase.contacts.iter_mut())
+        .find(|contact| contact.limb == scene.lead)
+        .expect("the first footfall");
+    landing.at = gone;
+    assert_eq!(previous.footfalls().next().expect("a footfall").1.at, gone);
+
     let outcome = planner.plan(
-        &StripQuery::new(&fallen_section, &fallen.params),
+        &query,
         &traversal_planner::PlanRequest {
-            previous: Some(&first.plan),
-            ..fallen.request()
+            previous: Some(&previous),
+            ..scene.request()
         },
     );
     let diverged = match outcome {
         Ok(planned) => planned.diverged,
         Err(refusal) => refusal.diverged,
     };
-    assert!(diverged, "the committed footfall at {committed:?} is gone");
+    assert!(diverged, "the committed footfall at {gone:?} is gone");
 }

@@ -1,5 +1,6 @@
-// stack_yard_crate_pile_east crouching: three short steps along the crate tops
-// finish before the tall crate that refuses a walk; the next plans refuse.
+// stack_yard_crate_pile_east crouching: a plan carries the body three
+// natural steps, 2 m at a crouch, which reaches the tall crate at 1.6 m that
+// refuses a walk too.
 // Captured by section_capture levels/stack_yard.level.ron --at 104,100 --heading 90 --blast 108,2,100,350,4 --expect refuses -o crates/traversal_planner/fixtures/stack_yard_crate_pile_east.ron
 // The scene was at rest after 5.4 s.
 (
@@ -496,5 +497,5 @@
         behind: 0.5,
         ahead: 10.0,
     ),
-    expect: Some(Crosses),
+    expect: Some(Refuses),
 )

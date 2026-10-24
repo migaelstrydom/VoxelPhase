@@ -49,9 +49,9 @@ This design keeps three rules:
   spawnables)                                                  │   its footing (fixed / loose)
                                                                │      │
                                                                │      ▼ read only through SectionQuery
-                                       previous Plan ─────────►│ Planner ◄── TransitionModels
-                                                               │      │       (Stride; later Grab,
-                                                               │      │        PullUp, Drop, Climb)
+                                       previous Plan ─────────►│ Planner: body path, then footfalls
+                                                               │      │   (body moves: ride, fly;
+                                                               │      │    later grab, pull up, climb)
                                                                │      ▼
                               ┌─────────────────────────────── │ Plan: [Phase]  (committed prefix
                               │                     │          │        + tentative rest)
@@ -216,49 +216,61 @@ When someone tunes the drive, these fail and name the number to update.
 
 ## The planner
 
-The planner searches over **plan states**: the contacts at a phase boundary,
-which foot is next, and the body's `(s, z, ṡ, ż)`. Successors come from
-`TransitionModel`s:
+The planner works in two stages: the body's path first, then the footfalls
+along it.
 
-```rust
-trait TransitionModel {
-    /// Candidate next phases from `from`, each with its cost. Geometry checks
-    /// common to every model (body path clears BodyFloor and Ceiling, contacts
-    /// lie on a surface of the right layer) are done by the planner, not here.
-    fn expand(&self, from: &PlanState, section: &Section, out: &mut Vec<Candidate>);
-}
+```text
+  section ──► BodySearch ──► BodyPath ──► FootfallSearch ──► footfalls
+                                 └───────────────┬───────────────┘
+                                             build_plan ──► Plan
 ```
 
-The first version has one model, `Stride`. It proposes the next footfall from
-`footholds`, within stride length, rise and drop limits and a sideways
-window around the foot's natural offset (wide enough for a cross-step). For
-each, the body lands with the foot, behind it by a fraction of the step
-(halfway when walking, over the foot when hopping), resting on a body floor it
-can stand on. It gets there by riding the floor all the way, or by riding to a
-takeoff and flying, with the foot pushing off once the body is over or past it.
-So the capsule is held up by the ground under it at every landing, a gap wider
-than the capsule is flown rather than straddled, and across stepping stones the
-body passes over each stone.
+**The body's path** is searched over stations every 5 cm along the path,
+each with the body's speed (merged in 0.5 m/s bands). From a station the
+body either rides to the next, pressing toward the asked-for speed, or brakes
+for as many stations as it takes to slow by a band; or it flies to a landing
+up to a step ahead, landings every 10 cm, its takeoff climb set by the
+landing and its arc required to clear the floor and ceiling. Braking and
+flights are tried only where the ride within a step ahead breaks or gets
+rough, so open ground is walked at speed. The feet are asked only what they
+can do near a station, worked out once per station: a station is ridden
+through only with a foothold within half a step (so the capsule is never
+carried over a void propped on the corners of stones either side), and a
+flight needs a foothold just behind its takeoff and just past its landing,
+and is short enough for one step to span them. New ways for the body to move
+(grabbing a ledge, pulling up, climbing) are new kinds of edge out of a
+station.
 
-- **Search.** Candidate footfalls lie on a lattice, every few cm along `s`
-  (3.5 % of the natural step, 4 to 10 cm: fine for a crouch, coarse for a
-  sprint) and by lane across it. The search keeps the cheapest way to each
-  cell (a footfall, its foot, and the band the body landed in and its speed),
-  expands the cheapest first, and stops at the first plan to finish: Dijkstra
-  over the lattice, so cells dearer than the answer are never expanded. A
-  model asks whether a candidate could still be the cheapest way to its cell
-  before doing its physics.
-- **Horizon.** A plan finishes once it has three footfalls and has carried
-  the body as far as the asked-for speed would in 0.6 s: the legs need the
-  next two or three footfalls, and the body time to see an obstacle and set
-  up a hop or stop. A plan that only slows to a stop before an obstacle covers
+**The footfalls** are searched along that path. Each is a foot landing on a
+foothold as the body passes a point of its path: every flight ends with one,
+pushed off from a stance foot at or behind the takeoff, and on ridden
+stretches the body is behind the landing foot by half the step, a quarter, or
+none. The body's height is the path's, so a candidate costs no physics: only
+reach, rise and drop, edge margins, footing, whether the body rests on ground
+a foot is on, and churn. Where the feet cannot land a flight, that flight is
+vetoed and the body's path searched again, up to four times, before the
+planner refuses. So the capsule is held up by the ground under it at every
+landing, a gap wider than the capsule is flown rather than straddled, and
+each flight is one a foot pushes off and lands.
+
+- **Search.** Both stages keep the cheapest way to each cell and expand the
+  cheapest first, stopping at the first that reaches the goal: Dijkstra. The
+  body search adds an A* bound, the slowdown a slow body must still pay to
+  regain speed. Footfall cells are a foothold every few cm along `s` (3.5 %
+  of the natural step, 4 to 10 cm), its lane, its foot, and the band the
+  body landed in. A cold plan takes 0.05 to 1.3 ms on the fixtures at every
+  speed (median about 0.4 ms).
+- **Horizon.** A plan carries the body at least three natural steps, and at
+  least as far as the asked-for speed would in 0.6 s: the legs need the next
+  two or three footfalls, and the body time to see an obstacle and set up a
+  hop or stop. A plan that only slows to a stop before an obstacle covers
   less, so it is a refusal. The strip samples one step past that: 10 m by
-  default, a sprint's reach (`PlannerSettings::reach`). When no plan finishes,
-  the planner refuses and returns the cheapest plan to the furthest point
-  reached, which is where the way runs out.
-- **Pace.** Each stride either presses toward the asked-for speed or brakes as
-  hard as the drive allows; braking costs `slowdown`. That is how a sprint
-  meets stepping stones.
+  default, a sprint's reach (`PlannerSettings::reach`). When no plan
+  finishes, the planner refuses and returns the cheapest plan to the furthest
+  point reached, which is where the way runs out.
+- **Pace.** Pressing or braking as above; running below the asked-for speed,
+  on the ground or in the air, costs `slowdown`. That is how a sprint meets
+  stepping stones.
 - **Cost.** Time to the horizon, deviation from the speed the stick asks
   for, uneven stride lengths, feet far from their natural offset (a
   cross-step costs more), flights (they cost a little), and footing:
@@ -273,14 +285,14 @@ body passes over each stone.
   actual state. Each such event is counted, because they are where the edge
   cases will be.
 
-### Why transition models are not the old move state machine
+### Why body moves are not the old move state machine
 
 A move state machine has states with entry and exit rules and a handover for
-every pair, so cases grow with the square of the move count. Here a model only
-*proposes* phases, and the planner validates every proposal by the same rules.
-Adding a model adds candidates and touches nothing else. What the drive and the
-legs consume is `Phase` data, and its set of kinds grows slowly: Support,
-Flight, then Hang and Climb.
+every pair, so cases grow with the square of the move count. Here a body move
+only *proposes* edges out of a station, and the searches validate every
+proposal by the same rules. Adding a move adds edges and touches nothing else.
+What the drive and the legs consume is `Phase` data, and its set of kinds
+grows slowly: Support, Flight, then Hang and Climb.
 
 ## Beyond one path
 
@@ -323,7 +335,7 @@ takes its frame from the predicted path only.
 
 | Where | What |
 |---|---|
-| `crates/traversal_planner/` | pure: `Section`, `SectionQuery` and `StripQuery` over a sampled strip, `Plan`, `Planner`, `TransitionModel`s, `GaitParams`, the scene format, `sample_section` over a `SphereCaster`, `ShapeCaster` for authored scenes, the SVG writer, `section_svg` bin |
+| `crates/traversal_planner/` | pure: `Section`, `SectionQuery` and `StripQuery` over a sampled strip, `Plan`, `Planner` (`BodySearch`, `FootfallSearch`), `GaitParams`, the scene format, `sample_section` over a `SphereCaster`, `ShapeCaster` for authored scenes, the SVG writer, `section_svg` bin |
 | `crates/traversal_planner_web/` | the wasm front end (`wasm-bindgen`) and its HTML page |
 | `src/traversal/` | game side: `PathPredictor`, `PhysicsCaster` (a `SphereCaster` over `PhysicsWorld`), `PlanTracker`, `PlanOverlay`, the capture key; `section_capture` bin |
 
@@ -466,7 +478,7 @@ until E.
 
 | | Milestone | Exit check |
 |---|---|---|
-| A | Workspace, planner crate: `Section` strip and `SectionQuery`, `Plan`, `Stride`, the footfall search, scene format, `section_svg` with both views; `PhysicsCaster` and `section_capture` | authored: the Traversal Garden plank bridge (yawed, loose planks), lips of 3–40 cm, stepping stones in line and zigzagged off it, a stone tilted across the path, a vertical wall (refused); captured: a crate pile in a crater and two or three other settled rubble scenes, each with its expected outcome; all read as SVGs |
+| A | Workspace, planner crate: `Section` strip and `SectionQuery`, `Plan`, the planner, scene format, `section_svg` with both views; `PhysicsCaster` and `section_capture` | authored: the Traversal Garden plank bridge (yawed, loose planks), lips of 3–40 cm, stepping stones in line and zigzagged off it, a stone tilted across the path, a vertical wall (refused); captured: a crate pile in a crater and two or three other settled rubble scenes, each with its expected outcome; all read as SVGs |
 | B | Property tests, a breaking fixture for each, fuzzer | fuzz sweep clean; every property shown able to fail |
 | C | Web tool | published; you can author and tune the bridge in it |
 | D | `PathPredictor` in game, `PlanOverlay`, capture key, the drive contract checks; plan drawn but not acted on | captures of every Traversal Garden station plan the same as their authored versions; the drive contract checks pass, with `GaitParams` set from what they measured; section (five lanes) + plan under 0.5 ms per frame |
@@ -475,14 +487,14 @@ until E.
 
 ## Open questions
 
-- **Planning cost:** after the search changes, a cold plan takes 0.3 to
-  38 ms on the fixtures (median about 8 ms) against D's 0.5 ms. Each
-  expansion proposes a few hundred candidates (footholds in reach × lanes ×
-  landing leads × paces × takeoffs), and with costs near zero on good ground
-  most of them open new cells. The remaining levers, none tried yet: plan the
-  body's path first (a 1D search over where to ride and where to fly) and
-  place footfalls along it; warm-start from last frame's plan, whose cost
-  bounds the search; and spread one plan over several frames.
+- **Planning cost:** a cold plan takes up to 1.3 ms on the fixtures against
+  D's 0.5 ms for section and plan together. In game, last frame's plan bounds
+  the search (warm start), which is still to be built and measured there.
+- **Coupling of the two stages:** the body search asks the feet only coarse
+  questions (a foothold near a station, behind a takeoff, past a landing).
+  Where those pass but no footfalls follow, a veto and a fresh body search
+  fix it, up to four times. If captures show refusals the joint search would
+  have crossed, the body search needs a finer question, not more vetoes.
 - **Coyote time:** a planned hop (0.15–0.25 s) falls inside the 0.16 s the
   locomotion state machine still treats as ground (`ground_forgiveness_window`
   then `CoyoteTime`), whose `clamp_up` cancels the takeoff climb, whose

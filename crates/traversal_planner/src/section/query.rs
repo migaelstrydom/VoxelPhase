@@ -66,6 +66,9 @@ pub trait SectionQuery {
     /// Every standable foothold in `window`, appended to `out`. The planner
     /// judges which is best.
     fn footholds(&self, window: &FootholdWindow, out: &mut Vec<Foothold>);
+    /// Whether the ground under a foot at `foot` runs unbroken along its line
+    /// to `s`: the same plank or stone, not one across a gap or a step.
+    fn ground_reaches(&self, foot: &PathVec, s: f32) -> bool;
     /// Whether the body can move as `phase` says: riding a floor it can be
     /// driven over, or flying with clearance over the floor and under the
     /// ceiling.

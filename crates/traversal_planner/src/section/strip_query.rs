@@ -10,6 +10,9 @@ use super::surface::SurfacePoint;
 /// instead of clearing it, in metres: an arc leaves and meets the floor at
 /// its ends.
 const FLIGHT_END_ZONE: f32 = 0.1;
+/// The same in seconds of flight, for a fast, flat arc, which meets a rising
+/// lip well before its landing.
+const FLIGHT_END_TIME: f32 = 0.04;
 /// How far an arc may dip under the floor near its ends, in metres:
 /// rounding, not a collision.
 const FLIGHT_END_TOLERANCE: f32 = 0.005;
@@ -146,11 +149,21 @@ impl Rideway {
     }
 }
 
+/// Farthest apart two footholds of a lane can be and still be one piece of
+/// ground, in metres: a few samples, so a missed cast does not split it.
+const GROUND_GAP: f32 = 0.08;
+/// Largest rise between neighbouring footholds of one piece of ground, in
+/// metres.
+const GROUND_STEP: f32 = 0.05;
+
 /// One lane's footholds where a foot would touch them, in increasing `s`, so
-/// a window is found by search rather than scanned for.
+/// a window is found by search rather than scanned for; and the unbroken
+/// runs of ground they make.
 struct LaneFootholds {
     d: f32,
     footholds: Vec<Foothold>,
+    /// `(from, to)` along the path, in increasing `s`.
+    runs: Vec<(f32, f32)>,
 }
 
 impl LaneFootholds {
@@ -174,10 +187,32 @@ impl LaneFootholds {
             }));
         }
         footholds.sort_by(|a, b| a.at.s.total_cmp(&b.at.s));
+        let mut runs: Vec<(f32, f32)> = Vec::new();
+        for (index, foothold) in footholds.iter().enumerate() {
+            let joins = index > 0 && {
+                let before = &footholds[index - 1];
+                foothold.at.s - before.at.s <= GROUND_GAP
+                    && (foothold.at.z - before.at.z).abs() <= GROUND_STEP
+            };
+            match runs.last_mut() {
+                Some(run) if joins => run.1 = foothold.at.s,
+                _ => runs.push((foothold.at.s, foothold.at.s)),
+            }
+        }
         Self {
             d: lane.d,
             footholds,
+            runs,
         }
+    }
+
+    /// The run of ground holding `s`, if any.
+    fn run_at(&self, s: f32) -> Option<(f32, f32)> {
+        let after = self.runs.partition_point(|run| run.0 <= s);
+        after
+            .checked_sub(1)
+            .map(|index| self.runs[index])
+            .filter(|run| s <= run.1)
     }
 }
 
@@ -222,14 +257,15 @@ impl<'a> StripQuery<'a> {
     }
 
     fn clears_flight(&self, phase: &Phase) -> bool {
-        let (from, to) = match phase.motion {
-            Motion::Flight { takeoff, .. } => (takeoff.s, phase.end_s()),
+        let (from, to, speed) = match phase.motion {
+            Motion::Flight { takeoff, .. } => (takeoff.s, phase.end_s(), takeoff.speed),
             Motion::Grounded { .. } => unreachable!("a flight"),
         };
+        let end_zone = FLIGHT_END_ZONE.max(FLIGHT_END_TIME * speed);
         self.floor.stations_between(from, to).all(|station| {
             let s = self.floor.station_s(station);
             let z = phase.flight_height(s).expect("a flight");
-            let near_end = s - from < FLIGHT_END_ZONE || to - s < FLIGHT_END_ZONE;
+            let near_end = s - from < end_zone || to - s < end_zone;
             let margin = if near_end {
                 -FLIGHT_END_TOLERANCE
             } else {
@@ -299,6 +335,18 @@ impl SectionQuery for StripQuery<'_> {
                 }
             }
         }
+    }
+
+    fn ground_reaches(&self, foot: &PathVec, s: f32) -> bool {
+        let Some(lane) = self
+            .foothold_lanes
+            .iter()
+            .min_by(|a, b| (a.d - foot.d).abs().total_cmp(&(b.d - foot.d).abs()))
+        else {
+            return false;
+        };
+        lane.run_at(foot.s)
+            .is_some_and(|(from, to)| s >= from - GROUND_GAP && s <= to + GROUND_GAP)
     }
 
     fn clears(&self, phase: &Phase) -> bool {

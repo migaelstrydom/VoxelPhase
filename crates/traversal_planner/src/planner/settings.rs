@@ -2,8 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::params::GaitParams;
 
-use super::state::PlanState;
-
 /// What the planner weighs. Every cost is unitless, so the weights say how
 /// much one kind of awkwardness is worth against another.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -68,22 +66,30 @@ pub struct PlannerSettings {
     pub footfall_spacing_per_step: f32,
     /// Bounds on that spacing, in metres.
     pub footfall_spacing_range: (f32, f32),
-    /// Fewest footfalls a finished plan holds: the legs need the one the
-    /// swinging foot aims at and the one after, and commitment needs a
-    /// tentative tail chosen knowing what lies past it.
+    /// A finished plan carries the body at least this many natural steps:
+    /// the legs need the footfall the swinging foot aims at and the one
+    /// after, and commitment needs a tentative tail chosen knowing what lies
+    /// past it.
     pub min_footfalls: usize,
-    /// A finished plan carries the body as far as the asked-for speed would
-    /// in this long, in seconds: at speed, time to see an obstacle, set up a
-    /// hop or stop. A plan that only slows to a stop before an obstacle
-    /// covers less, so it is a refusal, not a plan.
+    /// A finished plan carries the body at least as far as the asked-for
+    /// speed would in this long, in seconds: at speed, time to see an
+    /// obstacle, set up a hop or stop. A plan that only slows to a stop
+    /// before an obstacle covers less, so it is a refusal, not a plan.
     pub min_duration: f32,
+    /// Spacing of the stations the body's path is searched over, in metres.
+    pub body_step: f32,
+    /// Spacing of the takeoffs and landings tried for flights, in metres.
+    pub flight_step: f32,
+    /// Height the body would gain and lose riding the next step that makes a
+    /// flight worth trying instead, in metres; where the ride breaks, one
+    /// always is.
+    pub rough_ride: f32,
     /// How far behind a landing foot the body lands, as fractions of the step:
     /// `0.5` halfway between the feet, `0` over the landing foot.
     pub landing_leads: Vec<f32>,
-    /// Takeoff points tried for a flight, in seconds at the body's speed
-    /// before the furthest point it can ride to: further back flies higher
-    /// over a lip, and the faster the body, the further back that is.
-    pub takeoff_lead_times: Vec<f32>,
+    /// How many flights the feet could not follow the body's path may be
+    /// searched again without, before the planner refuses.
+    pub max_vetoes: usize,
     /// Shortest flight, in metres along the path.
     pub min_flight: f32,
     /// Natural steps per second: the natural step length is speed over this.
@@ -101,8 +107,11 @@ impl Default for PlannerSettings {
             footfall_spacing_range: (0.04, 0.1),
             min_footfalls: 3,
             min_duration: 0.6,
+            body_step: 0.05,
+            flight_step: 0.1,
+            rough_ride: 0.02,
             landing_leads: vec![0.5, 0.25, 0.0],
-            takeoff_lead_times: vec![0.0, 0.05, 0.1, 0.17, 0.27],
+            max_vetoes: 4,
             min_flight: 0.1,
             step_rate: 3.0,
             commit_tolerance: 0.03,
@@ -112,11 +121,10 @@ impl Default for PlannerSettings {
 }
 
 impl PlannerSettings {
-    /// Whether a plan from `start` that has reached `state`, asked for
-    /// `target_speed`, is long enough to finish.
-    pub fn is_finished(&self, start: f32, state: &PlanState, target_speed: f32) -> bool {
-        state.footfalls >= self.min_footfalls
-            && state.body.s - start >= target_speed * self.min_duration
+    /// How far a finished plan carries the body at `speed`, in metres.
+    pub fn body_goal(&self, speed: f32, params: &GaitParams) -> f32 {
+        let footfalls = self.min_footfalls as f32 * self.natural_step(speed, params);
+        footfalls.max(speed * self.min_duration)
     }
 
     /// The natural step at `speed`, from footfall to footfall, in metres.
@@ -133,7 +141,6 @@ impl PlannerSettings {
     /// How far ahead of the body a plan at `speed` reaches, in metres: the
     /// least the strip must sample for the plan to finish inside it.
     pub fn reach(&self, speed: f32, params: &GaitParams) -> f32 {
-        let footfalls = self.min_footfalls as f32 * self.natural_step(speed, params);
-        footfalls.max(speed * self.min_duration) + params.stride.max_length
+        self.body_goal(speed, params) + params.stride.max_length
     }
 }

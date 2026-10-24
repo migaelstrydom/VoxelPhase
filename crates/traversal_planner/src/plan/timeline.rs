@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use super::phase::{Contact, Phase};
 
-/// The body's phases from now to the planning horizon. The last phase is the
-/// last footfall landing, zero long.
+/// The body's phases from now to the planning horizon. A footfall that lands
+/// as a flight takes off, or at the very end, shows as a stance zero long.
 ///
 /// Phases `[0, committed)` are settled: the next replan keeps them unless the
 /// body strays from them, so the drive and the legs can act on them without
