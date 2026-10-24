@@ -6,4 +6,5 @@ mod palette;
 mod plan_view;
 mod section_view;
 
-pub use section_view::render_scene;
+pub use canvas::Viewport;
+pub use section_view::{render_scene, render_scene_with_layout, SceneLayout};

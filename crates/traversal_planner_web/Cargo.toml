@@ -1,0 +1,13 @@
+[package]
+name = "traversal_planner_web"
+version = "0.1.0"
+edition = "2021"
+description = "The traversal planner compiled to wasm for the web tool: scenes in and plans out as JSON."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+traversal_planner = { path = "../traversal_planner" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

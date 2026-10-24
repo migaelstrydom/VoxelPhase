@@ -1,0 +1,662 @@
+<title>Traversal Planner Bench</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a drafting bench. Toolbar on top, the section sheet across the
+   width, the bench's instruments in a grid of panels below. */
+:root {
+  --bg: #eef0f2;
+  --panel: #ffffff;
+  --ink: #1d2730;
+  --muted: #5d6b78;
+  --line: #d3d9df;
+  --accent: #1f5f8b;
+  --accent-soft: #dceaf4;
+  --good: #2f7d4f;
+  --good-soft: #dff1e6;
+  --bad: #b23a2e;
+  --bad-soft: #f6e0dd;
+  --warn: #9a6a12;
+  --sheet-edge: #c9d1d8;
+  --font-ui: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151b21; --panel: #1d252d; --ink: #e3e9ee; --muted: #93a2af;
+    --line: #2e3a45; --accent: #6fb1dc; --accent-soft: #1f3445;
+    --good: #6cc48f; --good-soft: #1d3527; --bad: #ec7b6e; --bad-soft: #3e2220;
+    --warn: #d9a64a; --sheet-edge: #33414d; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151b21; --panel: #1d252d; --ink: #e3e9ee; --muted: #93a2af;
+  --line: #2e3a45; --accent: #6fb1dc; --accent-soft: #1f3445;
+  --good: #6cc48f; --good-soft: #1d3527; --bad: #ec7b6e; --bad-soft: #3e2220;
+  --warn: #d9a64a; --sheet-edge: #33414d; color-scheme: dark;
+}
+html, body { min-height: 100%; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-ui); font-size: 14px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 12px 32px;
+}
+h1 { font-size: 18px; font-weight: 600; margin: 0; letter-spacing: 0.01em; text-wrap: balance; }
+h2 { font-size: 12px; font-weight: 600; margin: 0; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+button, select, input, textarea { font: inherit; color: var(--ink); }
+button {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+  padding: 5px 10px; cursor: pointer;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+select, input[type="number"], textarea {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px;
+}
+input[type="number"] { width: 6.5em; font-family: var(--font-data); font-size: 12px; font-variant-numeric: tabular-nums; }
+input[type="range"] { accent-color: var(--accent); }
+
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 12px; }
+.toolbar .spacer { flex: 1 1 auto; }
+.verdict {
+  font-family: var(--font-data); font-size: 12px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid currentColor; white-space: nowrap;
+}
+.verdict.crosses { color: var(--good); background: var(--good-soft); }
+.verdict.refuses { color: var(--bad); background: var(--bad-soft); }
+.timing { font-family: var(--font-data); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+.sheet-wrap {
+  overflow-x: auto; border: 1px solid var(--sheet-edge); border-radius: 4px;
+  background: #ffffff; touch-action: pan-x;
+}
+.sheet-wrap svg { display: block; }
+.sheet-wrap [data-shape] { cursor: grab; }
+.sheet-wrap [data-shape].picked { stroke: #1f5f8b; stroke-width: 2.5; }
+.sheet-wrap.dragging, .sheet-wrap.dragging [data-shape] { cursor: grabbing; }
+.hint { color: var(--muted); font-size: 12px; margin: 6px 0 14px; }
+.error { color: var(--bad); font-family: var(--font-data); font-size: 12px; white-space: pre-wrap; }
+
+.bench { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 12px; align-items: start; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 12px; display: grid; gap: 10px; min-width: 0; }
+.panel header { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; align-items: center; }
+.field label { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.slider { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; }
+.slider label { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+.slider input[type="range"] { width: 100%; min-width: 0; }
+details { border-top: 1px solid var(--line); padding-top: 8px; }
+details summary { cursor: pointer; font-weight: 500; }
+details .group { display: grid; gap: 8px; margin-top: 8px; }
+.chip { border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); }
+.empty { color: var(--muted); font-size: 13px; }
+
+table { border-collapse: collapse; width: 100%; font-family: var(--font-data); font-size: 12px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--muted); font-weight: 500; }
+td.left { color: #3182ce; } td.right { color: #dd6b20; }
+.table-wrap { overflow-x: auto; }
+.log { font-family: var(--font-data); font-size: 12px; max-height: 12em; overflow-y: auto; margin: 0; padding-left: 1.2em; }
+.log li.gave { color: var(--warn); }
+.log li.dropped { color: var(--bad); }
+
+dialog { border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); width: min(720px, 92vw); padding: 14px; }
+dialog::backdrop { background: rgba(10, 20, 30, 0.45); }
+dialog textarea { width: 100%; min-height: 18em; font-family: var(--font-data); font-size: 12px; box-sizing: border-box; }
+dialog .row { justify-content: flex-end; margin-top: 8px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="toolbar">
+  <h1>Traversal Planner Bench</h1>
+  <label class="row" for="scene-pick">Scene
+    <select id="scene-pick"></select>
+  </label>
+  <button id="import-open" type="button">Import RON</button>
+  <button id="export-open" type="button">Export RON</button>
+  <span class="spacer"></span>
+  <span id="verdict" class="verdict">loading</span>
+  <span id="timing" class="timing"></span>
+</div>
+
+<div id="sheet" class="sheet-wrap" aria-label="Section: side view over the top-down strip"></div>
+<p class="hint">Drag a shape to move it; drag near its ends or top to resize it (side view), near its sides to widen it (strip). Click a shape to edit it below. Footfalls: blue left, orange right, solid where committed; flights dashed.</p>
+<p id="error" class="error" hidden></p>
+
+<div class="bench">
+  <section class="panel" aria-labelledby="time-h">
+    <header><h2 id="time-h">Time</h2><span id="time-readout" class="timing">0.00 s</span></header>
+    <div class="slider">
+      <label for="time">Run the body along its plans, replanning every frame</label>
+      <input id="time" type="range" min="0" max="3" step="0.0166667" value="0">
+      <button id="play" type="button">Play</button>
+    </div>
+    <label class="row" for="perturb"><input id="perturb" type="checkbox"> Loose footing gives way under each foot</label>
+    <ol id="events" class="log"></ol>
+    <p id="events-empty" class="empty">Nothing has happened yet: move the time slider.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="body-h">
+    <header><h2 id="body-h">Body and intent</h2></header>
+    <div class="row" role="group" aria-label="Speed presets">
+      <button class="chip" type="button" data-speed="2">Crouch 2</button>
+      <button class="chip" type="button" data-speed="5">Walk 5</button>
+      <button class="chip" type="button" data-speed="8">Sprint 8</button>
+    </div>
+    <div class="slider">
+      <label for="speed">Speed asked for, m/s</label>
+      <input id="speed" type="range" min="0.5" max="9" step="0.1">
+      <input id="speed-n" type="number" min="0.5" max="9" step="0.1">
+    </div>
+    <div class="field"><label for="body-s">Body along the path, m</label><input id="body-s" type="number" step="0.05"></div>
+    <div class="field"><label for="lead">Foot that lands next</label>
+      <select id="lead"><option value="LeftFoot">Left</option><option value="RightFoot">Right</option></select></div>
+  </section>
+
+  <section class="panel" aria-labelledby="shape-h">
+    <header><h2 id="shape-h">Shape</h2>
+      <div class="row">
+        <button id="add-block" type="button">Block</button>
+        <button id="add-stone" type="button">Stone</button>
+        <button id="add-plank" type="button">Plank</button>
+        <button id="add-ramp" type="button">Ramp</button>
+        <button id="add-roof" type="button">Roof</button>
+      </div>
+    </header>
+    <div id="shape-editor" class="field"></div>
+    <p id="shape-empty" class="empty">Click a shape in the drawing, or add one.</p>
+  </section>
+
+  <section class="panel" aria-labelledby="plan-h">
+    <header><h2 id="plan-h">Footfalls</h2><span id="cost" class="timing"></span></header>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Foot</th><th>s</th><th>d</th><th>z</th><th>t, s</th><th>Held</th></tr></thead>
+      <tbody id="footfalls"></tbody>
+    </table></div>
+  </section>
+
+  <section class="panel" aria-labelledby="gait-h">
+    <header><h2 id="gait-h">Gait</h2><button id="gait-reset" type="button">Defaults</button></header>
+    <div id="gait"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="costs-h">
+    <header><h2 id="costs-h">Planner</h2><button id="settings-reset" type="button">Defaults</button></header>
+    <div id="settings"></div>
+  </section>
+</div>
+
+<dialog id="ron-dialog" aria-labelledby="ron-title">
+  <h2 id="ron-title">Scene RON</h2>
+  <p id="ron-help" class="hint"></p>
+  <textarea id="ron-text" spellcheck="false"></textarea>
+  <input id="ron-file" type="file" accept=".ron,text/plain">
+  <p id="ron-error" class="error" hidden></p>
+  <div class="row">
+    <button id="ron-copy" type="button">Copy</button>
+    <button id="ron-load" type="button" class="primary">Load</button>
+    <button id="ron-close" type="button">Close</button>
+  </div>
+</dialog>
+
+<script>
+(() => {
+  const OP = { builtins: 0, builtin: 1, fromRon: 2, toRon: 3, defaultSettings: 4, render: 5, settleBody: 6 };
+  const GRAB_PX = 7;
+  const $ = (id) => document.getElementById(id);
+  let wasm = null;
+  const encoder = new TextEncoder(), decoder = new TextDecoder();
+
+  function call(op, text) {
+    const data = encoder.encode(text);
+    const ptr = wasm.alloc(data.length);
+    new Uint8Array(wasm.memory.buffer, ptr, data.length).set(data);
+    const out = wasm.call(op, ptr, data.length);
+    wasm.dealloc(ptr, data.length);
+    return decoder.decode(new Uint8Array(wasm.memory.buffer, out, wasm.result_len()));
+  }
+  function callJson(op, value) {
+    const text = call(op, typeof value === "string" ? value : JSON.stringify(value));
+    const parsed = JSON.parse(text);
+    if (parsed && parsed.error) throw new Error(parsed.error);
+    return parsed;
+  }
+
+  const state = { scene: null, settings: null, defaults: null, selected: null, time: 0, perturb: false, answer: null };
+  let renderQueued = false;
+
+  function showError(message) {
+    $("error").hidden = !message;
+    $("error").textContent = message || "";
+  }
+
+  function queueRender() {
+    if (renderQueued) return;
+    renderQueued = true;
+    requestAnimationFrame(() => { renderQueued = false; render(); });
+  }
+
+  function render() {
+    let answer;
+    const started = performance.now();
+    try {
+      answer = callJson(OP.render, { scene: state.scene, settings: state.settings, time: state.time, perturb: state.perturb });
+    } catch (error) {
+      showError("The planner could not run this scene: " + error.message);
+      return;
+    }
+    const took = performance.now() - started;
+    showError("");
+    state.answer = answer;
+    $("sheet").innerHTML = answer.svg;
+    markSelected();
+    const verdict = $("verdict");
+    verdict.className = "verdict " + (answer.crosses ? "crosses" : "refuses");
+    verdict.textContent = answer.crosses ? "crosses" : "refuses";
+    $("timing").textContent = state.time > 0
+      ? `${took.toFixed(0)} ms for ${Math.round(state.time * 60)} frames`
+      : `${took.toFixed(1)} ms to sample, plan and draw`;
+    $("cost").textContent = answer.cost == null ? "refused" : "cost " + answer.cost.toFixed(2);
+    $("footfalls").innerHTML = answer.footfalls.map((f) =>
+      `<tr><td class="${f.limb === "LeftFoot" ? "left" : "right"}">${f.limb === "LeftFoot" ? "Left" : "Right"}</td>` +
+      `<td>${f.s.toFixed(2)}</td><td>${f.d.toFixed(2)}</td><td>${f.z.toFixed(2)}</td><td>${f.time.toFixed(3)}</td>` +
+      `<td>${f.committed ? "committed" : ""}</td></tr>`).join("") ||
+      `<tr><td colspan="6" class="empty">No footfalls: the way runs out before the first.</td></tr>`;
+    const events = $("events");
+    events.innerHTML = answer.events.map((e) =>
+      `<li class="${e.includes("gave way") ? "gave" : e.includes("dropped") ? "dropped" : ""}">${e}</li>`).join("");
+    $("events-empty").hidden = answer.events.length > 0 || state.time > 0;
+    if (state.time > 0 && answer.events.length === 0) {
+      events.innerHTML = `<li>No commitment dropped and no footfall moved in ${state.time.toFixed(2)} s.</li>`;
+    }
+    $("time-readout").textContent = `${state.time.toFixed(2)} s, body at s ${answer.body.s.toFixed(2)}`;
+    save();
+  }
+
+  // ---- scene, body, intent ----
+  function setScene(scene) {
+    state.scene = scene;
+    state.selected = null;
+    syncBodyFields();
+    buildGait();
+    buildShapeEditor();
+    queueRender();
+  }
+  function syncBodyFields() {
+    const s = state.scene;
+    $("speed").value = s.intent.speed;
+    $("speed-n").value = s.intent.speed;
+    $("body-s").value = s.body.s.toFixed(2);
+    $("lead").value = s.lead;
+    document.querySelectorAll("[data-speed]").forEach((chip) =>
+      chip.setAttribute("aria-pressed", String(Number(chip.dataset.speed) === s.intent.speed)));
+  }
+  function setSpeed(value) {
+    const speed = Math.max(0.5, Math.min(9, Number(value)));
+    state.scene.intent.speed = speed;
+    state.scene.body.speed = speed;
+    syncBodyFields();
+    queueRender();
+  }
+  $("speed").addEventListener("input", (e) => setSpeed(e.target.value));
+  $("speed-n").addEventListener("change", (e) => setSpeed(e.target.value));
+  document.querySelectorAll("[data-speed]").forEach((chip) => chip.addEventListener("click", () => setSpeed(chip.dataset.speed)));
+  $("body-s").addEventListener("change", (e) => {
+    state.scene.body.s = Number(e.target.value);
+    try { state.scene = callJson(OP.settleBody, state.scene); } catch (error) { showError(error.message); }
+    syncBodyFields();
+    queueRender();
+  });
+  $("lead").addEventListener("change", (e) => { state.scene.lead = e.target.value; queueRender(); });
+
+  // ---- time ----
+  let playing = null;
+  $("time").addEventListener("input", (e) => { state.time = Number(e.target.value); queueRender(); });
+  $("perturb").addEventListener("change", (e) => { state.perturb = e.target.checked; queueRender(); });
+  $("play").addEventListener("click", () => {
+    if (playing) { stopPlaying(); return; }
+    $("play").textContent = "Stop";
+    if (state.time >= 3) state.time = 0;
+    playing = setInterval(() => {
+      state.time = Math.min(3, state.time + 0.05);
+      $("time").value = state.time;
+      render();
+      if (state.time >= 3) stopPlaying();
+    }, 50);
+  });
+  function stopPlaying() { clearInterval(playing); playing = null; $("play").textContent = "Play"; }
+
+  // ---- generic number panels ----
+  const LABELS = {
+    max_ground_slope_degrees: "steepest ride, °", max_acceleration: "acceleration, m/s²",
+    stance_half_width: "stance half width", reach_out: "reach outward", reach_in: "reach inward",
+    max_slope_degrees: "steepest foothold, °", below_body: "reach below body", above_body: "reach above body",
+    min_edge_margin: "least edge margin", min_length: "shortest step", max_length: "longest step",
+    max_rise: "highest rise", max_drop: "deepest drop", clearance: "flight clearance",
+    max_takeoff_climb: "fastest takeoff climb, m/s",
+  };
+  function label(key) { return (LABELS[key] || key.replaceAll("_", " ")); }
+  function rangeFor(value) {
+    const magnitude = Math.max(Math.abs(value), 0.05);
+    const max = value <= 0 ? 1 : Math.pow(10, Math.ceil(Math.log10(magnitude * 2.5)));
+    return { min: 0, max, step: max / 200 };
+  }
+  function numberControls(container, object, path, onChange) {
+    Object.entries(object).forEach(([key, value]) => {
+      const here = path.concat(key);
+      if (typeof value === "number") {
+        const id = "n-" + here.join("-");
+        const { min, max, step } = rangeFor(value);
+        const wrap = document.createElement("div");
+        wrap.className = "slider";
+        wrap.innerHTML = `<label for="${id}">${label(key)}</label>` +
+          `<input id="${id}" type="range" min="${min}" max="${max}" step="${step}" value="${value}">` +
+          `<input id="${id}-n" type="number" min="${min}" step="${step}" value="${value}">`;
+        const range = wrap.querySelector("input[type=range]"), number = wrap.querySelector("input[type=number]");
+        const set = (v) => { object[key] = Number(v); range.value = v; number.value = Number(v); onChange(); };
+        range.addEventListener("input", (e) => set(e.target.value));
+        number.addEventListener("change", (e) => set(e.target.value));
+        container.appendChild(wrap);
+      } else if (value && typeof value === "object" && !Array.isArray(value)) {
+        const details = document.createElement("details");
+        details.innerHTML = `<summary>${label(key)}</summary><div class="group"></div>`;
+        numberControls(details.querySelector(".group"), value, here, onChange);
+        container.appendChild(details);
+      }
+    });
+  }
+  function buildGait() {
+    const container = $("gait");
+    container.innerHTML = "";
+    numberControls(container, state.scene.params, ["gait"], queueRender);
+    container.querySelector("details")?.setAttribute("open", "");
+  }
+  function buildSettings() {
+    const container = $("settings");
+    container.innerHTML = "";
+    const { costs, ...search } = state.settings;
+    const costsBox = document.createElement("details");
+    costsBox.open = true;
+    costsBox.innerHTML = `<summary>costs</summary><div class="group"></div>`;
+    numberControls(costsBox.querySelector(".group"), state.settings.costs, ["costs"], queueRender);
+    container.appendChild(costsBox);
+    const searchBox = document.createElement("details");
+    searchBox.innerHTML = `<summary>search</summary><div class="group"></div>`;
+    const numeric = {};
+    Object.keys(search).forEach((key) => { if (typeof search[key] === "number") numeric[key] = search[key]; });
+    numberControls(searchBox.querySelector(".group"), new Proxy(numeric, {
+      set(target, key, value) { target[key] = value; state.settings[key] = value; return true; },
+    }), ["search"], queueRender);
+    container.appendChild(searchBox);
+  }
+  $("gait-reset").addEventListener("click", () => {
+    const fresh = callJson(OP.builtin, $("scene-pick").value);
+    state.scene.params = fresh.params;
+    buildGait(); queueRender();
+  });
+  $("settings-reset").addEventListener("click", () => {
+    state.settings = structuredClone(state.defaults);
+    buildSettings(); queueRender();
+  });
+
+  // ---- shapes ----
+  function shapes() {
+    return state.scene.ground.Authored ? state.scene.ground.Authored.shapes : null;
+  }
+  function formKind(shape) { return Object.keys(shape.form)[0]; }
+  function markSelected() {
+    document.querySelectorAll("#sheet [data-shape]").forEach((el) =>
+      el.classList.toggle("picked", Number(el.dataset.shape) === state.selected));
+  }
+  function addShape(kind) {
+    const list = shapes();
+    if (!list) { showError("A captured scene's ground is the game's own: shapes can only be added to authored scenes."); return; }
+    const at = state.scene.body.s + 1.5;
+    const floor = Math.max(0, state.scene.body.z - state.scene.params.body.radius);
+    const made = {
+      block: { form: { Block: { from: at, to: at + 0.8, top: floor + 0.15, tilt: 0 } }, across: null, yaw: 0, footing: "Fixed" },
+      stone: { form: { Block: { from: at, to: at + 0.3, top: floor + 0.05, tilt: 0 } }, across: [0.0, 0.25], yaw: 0, footing: { Loose: { mass: 40, resting: true } } },
+      plank: { form: { Block: { from: at, to: at + 0.6, top: floor + 0.1, tilt: 0 } }, across: [-1.2, 1.2], yaw: 0.1, footing: { Loose: { mass: 2700, resting: true } } },
+      ramp: { form: { Ramp: { from: at, to: at + 2, start_top: floor, end_top: floor + 0.4 } }, across: null, yaw: 0, footing: "Fixed" },
+      roof: { form: { Roof: { from: at, to: at + 1.5, bottom: floor + 1.4 } }, across: null, yaw: 0, footing: "Fixed" },
+    }[kind];
+    list.push(made);
+    state.selected = list.length - 1;
+    buildShapeEditor(); queueRender();
+  }
+  ["block", "stone", "plank", "ramp", "roof"].forEach((kind) => $("add-" + kind).addEventListener("click", () => addShape(kind)));
+
+  function buildShapeEditor() {
+    const editor = $("shape-editor");
+    const list = shapes();
+    const shape = list && state.selected != null ? list[state.selected] : null;
+    $("shape-empty").hidden = !!shape;
+    $("shape-empty").textContent = list ? "Click a shape in the drawing, or add one." : "This scene was captured in the game: its ground is the game's own and is not edited here.";
+    editor.innerHTML = "";
+    if (!shape) return;
+    const kind = formKind(shape);
+    const form = shape.form[kind];
+    const fields = [];
+    const num = (labelText, get, set, step = 0.01) => fields.push({ labelText, get, set, step });
+    num("from, m", () => form.from, (v) => form.from = v);
+    num("to, m", () => form.to, (v) => form.to = v);
+    if (kind === "Block") { num("top, m", () => form.top, (v) => form.top = v); num("tilt across, m/m", () => form.tilt ?? 0, (v) => form.tilt = v); }
+    if (kind === "Ramp") { num("start top, m", () => form.start_top, (v) => form.start_top = v); num("end top, m", () => form.end_top, (v) => form.end_top = v); }
+    if (kind === "Roof") { num("underside, m", () => form.bottom, (v) => form.bottom = v); }
+    num("yaw, °", () => (shape.yaw ?? 0) * 180 / Math.PI, (v) => shape.yaw = v * Math.PI / 180, 1);
+    if (shape.across) {
+      num("across from, m", () => shape.across[0], (v) => shape.across[0] = v);
+      num("across to, m", () => shape.across[1], (v) => shape.across[1] = v);
+    }
+    fields.forEach(({ labelText, get, set, step }, i) => {
+      const id = "shape-f" + i;
+      const l = document.createElement("label"); l.htmlFor = id; l.textContent = labelText;
+      const input = document.createElement("input");
+      input.type = "number"; input.id = id; input.step = step; input.value = Number(get()).toFixed(step >= 1 ? 1 : 3);
+      input.addEventListener("change", () => { set(Number(input.value)); queueRender(); });
+      editor.append(l, input);
+    });
+    const spans = document.createElement("label"); spans.htmlFor = "shape-spans"; spans.textContent = "spans the whole strip";
+    const spansBox = document.createElement("input"); spansBox.type = "checkbox"; spansBox.id = "shape-spans"; spansBox.checked = !shape.across;
+    spansBox.addEventListener("change", () => { shape.across = spansBox.checked ? null : [-0.3, 0.3]; buildShapeEditor(); queueRender(); });
+    editor.append(spans, spansBox);
+    const loose = typeof shape.footing === "object";
+    const footLabel = document.createElement("label"); footLabel.htmlFor = "shape-footing"; footLabel.textContent = "footing";
+    const footing = document.createElement("select"); footing.id = "shape-footing";
+    footing.innerHTML = `<option value="Fixed">fixed</option><option value="rest">loose, at rest</option><option value="moving">loose, moving</option>`;
+    footing.value = !loose ? "Fixed" : shape.footing.Loose.resting ? "rest" : "moving";
+    footing.addEventListener("change", () => {
+      const mass = loose ? shape.footing.Loose.mass : 40;
+      shape.footing = footing.value === "Fixed" ? "Fixed" : { Loose: { mass, resting: footing.value === "rest" } };
+      buildShapeEditor(); queueRender();
+    });
+    editor.append(footLabel, footing);
+    if (loose) {
+      const massLabel = document.createElement("label"); massLabel.htmlFor = "shape-mass"; massLabel.textContent = "mass, kg";
+      const mass = document.createElement("input"); mass.type = "number"; mass.id = "shape-mass"; mass.step = 1; mass.value = shape.footing.Loose.mass;
+      mass.addEventListener("change", () => { shape.footing.Loose.mass = Number(mass.value); queueRender(); });
+      editor.append(massLabel, mass);
+    }
+    const actions = document.createElement("div"); actions.className = "row"; actions.style.gridColumn = "1 / -1";
+    const duplicate = document.createElement("button"); duplicate.type = "button"; duplicate.textContent = "Duplicate";
+    duplicate.addEventListener("click", () => {
+      const copy = structuredClone(shape); const f = copy.form[kind]; const length = f.to - f.from;
+      f.from += length + 0.3; f.to += length + 0.3;
+      list.push(copy); state.selected = list.length - 1; buildShapeEditor(); queueRender();
+    });
+    const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Delete";
+    remove.addEventListener("click", () => { list.splice(state.selected, 1); state.selected = null; buildShapeEditor(); queueRender(); });
+    actions.append(duplicate, remove);
+    editor.append(actions);
+  }
+
+  // ---- dragging ----
+  let drag = null;
+  function svgScale() {
+    const svg = $("sheet").querySelector("svg");
+    return svg ? Number(svg.getAttribute("width")) / svg.getBoundingClientRect().width : 1;
+  }
+  function pointerSvg(event) {
+    const svg = $("sheet").querySelector("svg");
+    const box = svg.getBoundingClientRect();
+    const k = svgScale();
+    return { x: (event.clientX - box.left) * k, y: (event.clientY - box.top) * k };
+  }
+  $("sheet").addEventListener("pointerdown", (event) => {
+    const target = event.target.closest("[data-shape]");
+    const list = shapes();
+    if (!target || !list) return;
+    const index = Number(target.dataset.shape);
+    const view = target.dataset.view;
+    const shape = list[index];
+    const kind = formKind(shape);
+    const form = shape.form[kind];
+    const layout = state.answer.layout[view];
+    const at = pointerSvg(event);
+    const s = layout.s_min + (at.x - layout.left) / layout.scale;
+    const up = layout.up_max - (at.y - layout.top) / layout.scale;
+    const near = GRAB_PX / layout.scale;
+    let mode = "move";
+    if (view === "side") {
+      const top = kind === "Roof" ? form.bottom : kind === "Ramp" ? form.start_top + (form.end_top - form.start_top) * (s - form.from) / (form.to - form.from) : form.top + 0;
+      if (Math.abs(s - form.from) < near) mode = "from";
+      else if (Math.abs(s - form.to) < near) mode = "to";
+      else if (Math.abs(up - top) < near) mode = "top";
+    } else if (shape.across) {
+      if (Math.abs(up - shape.across[0]) < near) mode = "across0";
+      else if (Math.abs(up - shape.across[1]) < near) mode = "across1";
+      else mode = "slide";
+    } else {
+      mode = "along";
+    }
+    state.selected = index;
+    drag = { index, view, mode, start: at, original: structuredClone(shape), scale: layout.scale, kind, moved: false };
+    $("sheet").setPointerCapture(event.pointerId);
+    $("sheet").classList.add("dragging");
+    markSelected();
+    buildShapeEditor();
+    event.preventDefault();
+  });
+  $("sheet").addEventListener("pointermove", (event) => {
+    if (!drag) return;
+    const at = pointerSvg(event);
+    const ds = (at.x - drag.start.x) / drag.scale;
+    const dup = -(at.y - drag.start.y) / drag.scale;
+    if (Math.abs(at.x - drag.start.x) + Math.abs(at.y - drag.start.y) > 2) drag.moved = true;
+    const shape = shapes()[drag.index];
+    const o = drag.original, f = shape.form[drag.kind], of = o.form[drag.kind];
+    const round = (v) => Math.round(v * 100) / 100;
+    const lift = (dz) => {
+      if (drag.kind === "Block") f.top = round(of.top + dz);
+      if (drag.kind === "Ramp") { f.start_top = round(of.start_top + dz); f.end_top = round(of.end_top + dz); }
+      if (drag.kind === "Roof") f.bottom = round(of.bottom + dz);
+    };
+    switch (drag.mode) {
+      case "from": f.from = round(Math.min(of.from + ds, of.to - 0.05)); break;
+      case "to": f.to = round(Math.max(of.to + ds, of.from + 0.05)); break;
+      case "top": lift(dup); break;
+      case "move": f.from = round(of.from + ds); f.to = round(of.to + ds); lift(dup); break;
+      case "along": f.from = round(of.from + ds); f.to = round(of.to + ds); break;
+      case "slide":
+        f.from = round(of.from + ds); f.to = round(of.to + ds);
+        shape.across = [round(o.across[0] + dup), round(o.across[1] + dup)]; break;
+      case "across0": shape.across = [round(Math.min(o.across[0] + dup, o.across[1] - 0.05)), o.across[1]]; break;
+      case "across1": shape.across = [o.across[0], round(Math.max(o.across[1] + dup, o.across[0] + 0.05))]; break;
+    }
+    queueRender();
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    drag = null;
+    $("sheet").classList.remove("dragging");
+    buildShapeEditor();
+  };
+  $("sheet").addEventListener("pointerup", endDrag);
+  $("sheet").addEventListener("pointercancel", endDrag);
+
+  // ---- RON in and out ----
+  let ronMode = "export";
+  function openRon(mode) {
+    ronMode = mode;
+    $("ron-error").hidden = true;
+    $("ron-file").hidden = mode !== "import";
+    $("ron-load").hidden = mode !== "import";
+    $("ron-copy").hidden = mode !== "export";
+    if (mode === "export") {
+      $("ron-help").textContent = "The scene as a fixture file: save it under crates/traversal_planner/fixtures/ and add an expect line.";
+      $("ron-text").value = call(OP.toRon, JSON.stringify(state.scene));
+    } else {
+      $("ron-help").textContent = "Paste a scene file (a fixture or a capture), or choose one.";
+      $("ron-text").value = "";
+    }
+    $("ron-dialog").showModal();
+  }
+  $("export-open").addEventListener("click", () => openRon("export"));
+  $("import-open").addEventListener("click", () => openRon("import"));
+  $("ron-close").addEventListener("click", () => $("ron-dialog").close());
+  $("ron-copy").addEventListener("click", () => {
+    navigator.clipboard.writeText($("ron-text").value).catch(() => $("ron-text").select());
+  });
+  $("ron-file").addEventListener("change", () => {
+    const file = $("ron-file").files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { $("ron-text").value = reader.result; };
+    reader.readAsText(file);
+  });
+  $("ron-load").addEventListener("click", () => {
+    try {
+      setScene(callJson(OP.fromRon, $("ron-text").value));
+      $("ron-dialog").close();
+    } catch (error) {
+      $("ron-error").hidden = false;
+      $("ron-error").textContent = "That is not a scene file this planner reads: " + error.message;
+    }
+  });
+
+  // ---- remembering the bench between visits ----
+  function save() {
+    try { localStorage.setItem("bench", JSON.stringify({ scene: state.scene, settings: state.settings, pick: $("scene-pick").value })); } catch (_) {}
+  }
+  function restore() {
+    try { return JSON.parse(localStorage.getItem("bench") || "null"); } catch (_) { return null; }
+  }
+
+  // ---- start ----
+  async function start() {
+    try {
+      const bytes = await (await fetch("planner.wasm")).arrayBuffer();
+      wasm = (await WebAssembly.instantiate(bytes, {})).instance.exports;
+    } catch (error) {
+      showError("The planner did not load: " + error.message);
+      $("verdict").textContent = "not loaded";
+      return;
+    }
+    const names = callJson(OP.builtins, "");
+    $("scene-pick").innerHTML = names.map((n) => `<option value="${n}">${n.replaceAll("_", " ")}</option>`).join("");
+    state.defaults = callJson(OP.defaultSettings, "");
+    const saved = restore();
+    state.settings = saved?.settings ?? structuredClone(state.defaults);
+    buildSettings();
+    if (saved?.scene) {
+      $("scene-pick").value = saved.pick ?? names[0];
+      setScene(saved.scene);
+    } else {
+      $("scene-pick").value = names[0];
+      setScene(callJson(OP.builtin, names[0]));
+    }
+    $("scene-pick").addEventListener("change", () => {
+      state.time = 0; $("time").value = 0;
+      setScene(callJson(OP.builtin, $("scene-pick").value));
+    });
+  }
+  start();
+})();
+</script>

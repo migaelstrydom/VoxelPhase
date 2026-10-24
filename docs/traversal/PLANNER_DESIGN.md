@@ -344,7 +344,7 @@ takes its frame from the predicted path only.
 | Where | What |
 |---|---|
 | `crates/traversal_planner/` | pure: `Section`, `SectionQuery` and `StripQuery` over a sampled strip, `Plan`, `Planner` (`BodySearch`, `FootfallSearch`), `GaitParams`, the scene format, `sample_section` over a `SphereCaster`, `ShapeCaster` for authored scenes, the SVG writer, `section_svg` bin |
-| `crates/traversal_planner_web/` | the wasm front end (`wasm-bindgen`) and its HTML page |
+| `crates/traversal_planner_web/` | the planner compiled to wasm behind a JSON boundary (`api`, `ffi`), the time scrub, and the bench's HTML page |
 | `src/traversal/` | game side: `PathPredictor`, `PhysicsCaster` (a `SphereCaster` over `PhysicsWorld`), `PlanTracker`, `PlanOverlay`, the capture key; `section_capture` bin |
 
 The repo becomes a Cargo workspace with the game crate at its root and the two
@@ -406,17 +406,29 @@ This is how I read a scene.
 
 ### The web tool (wasm)
 
-The real planner in a browser page, published as a private artifact:
-- the same side view and top-down strip as `section_svg`;
-- drag, resize and add obstacles in either view (length and height in the
-  side view, sideways extent in the strip); mark them static or loose;
-- sliders for `GaitParams` and the cost weights; edit the body state;
-- replan live;
-- **time scrub**: step the body along its plan as if tracking were perfect,
-  replanning each frame, to see commitment and churn over time;
-- **perturb**: make a loose stone drop or slide as a foot lands, to
-  exercise the replanning that rubble giving way will force;
-- import and export the scene file, including the game's captures.
+The Traversal Planner Bench, a private artifact: the real planner in a
+browser page.
+- the same side view and top-down strip as `section_svg`, from the same code;
+- drag obstacles in either view: move them, drag their ends or top to resize
+  them in the side view, their sides to widen them in the strip; click one to
+  edit it (form, extent, top, tilt, yaw, footing, mass), or add blocks,
+  stones, planks, ramps and roofs;
+- sliders for every `GaitParams` and `PlannerSettings` number, speed presets
+  for crouch, walk and sprint, and the body's place and lead foot;
+- replans live on every change, with the time it took;
+- **time scrub**: runs the body along its plans, replanning every frame
+  against the last plan, and logs every commitment dropped and every next
+  footfall that moved;
+- **perturb**: while running, loose footing drops and slides under each foot
+  that lands on it, which the next plans must deal with;
+- import and export the scene file, captures included (a captured scene's
+  ground is the game's own and is not edited).
+
+`crates/traversal_planner_web` compiles the planner to `wasm32` with no
+bindings crate: the page writes a JSON request into memory from `alloc`,
+calls `call(op, ...)`, and reads the JSON answer (`api::Op` lists the
+operations). The page is `crates/traversal_planner_web/page/index.html`; it
+loads `planner.wasm` published beside it.
 
 ### Fixtures and properties
 
