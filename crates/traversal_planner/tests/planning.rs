@@ -1,12 +1,17 @@
-//! The planner on every fixture: the outcome each states, and the rules every
-//! plan keeps; then replanning against the last plan.
+//! The planner on every fixture: the outcome each states, and the properties
+//! every plan keeps, replanning a frame later included; then replanning
+//! against a last plan whose committed footfall has gone.
 
 use std::fs;
 use std::path::Path;
 
 use traversal_planner::plan::{Limb, Plan};
+
+/// A frame at the game's 60 Hz, in seconds.
+const FRAME: f32 = 1.0 / 60.0;
+use traversal_planner::properties::{check_plan, check_replan};
 use traversal_planner::scene::Outcome;
-use traversal_planner::section::{Footing, SectionQuery, StripQuery};
+use traversal_planner::section::StripQuery;
 use traversal_planner::{PathVec, Planner, PlannerSettings, TraversalScene};
 
 fn fixture(name: &str) -> TraversalScene {
@@ -38,32 +43,9 @@ fn planner(scene: &TraversalScene) -> Planner {
     Planner::new(scene.params.clone(), PlannerSettings::default())
 }
 
-/// The rules every plan keeps, whatever its scene.
-fn check_rules(name: &str, plan: &Plan, query: &dyn SectionQuery, scene: &TraversalScene) {
-    let mut last = scene.lead.other();
-    for (time, contact) in plan.footfalls() {
-        assert_ne!(contact.limb, last, "{name}: feet alternate (t = {time})");
-        last = contact.limb;
-        assert!(
-            !matches!(contact.footing, Footing::Loose { resting: false, .. }),
-            "{name}: no footfall on moving footing"
-        );
-    }
-    for phase in &plan.phases {
-        assert!(
-            query.clears(phase),
-            "{name}: phase at t = {} clears",
-            phase.start
-        );
-    }
-    for pair in plan.phases.windows(2) {
-        let gap = pair[1].start - (pair[0].start + pair[0].duration);
-        assert!(gap.abs() < 1e-4, "{name}: phases follow on");
-    }
-}
-
 #[test]
 fn every_fixture_plans_as_it_expects_and_keeps_the_rules() {
+    let mut broken = Vec::new();
     for name in fixture_names() {
         let scene = fixture(&name);
         let section = scene.section();
@@ -81,8 +63,23 @@ fn every_fixture_plans_as_it_expects_and_keeps_the_rules() {
                 }
             ),
         };
-        check_rules(&name, plan, &query, &scene);
+        let mut violations = check_plan(plan, &query, &scene.params);
+        if outcome.is_ok() {
+            violations.extend(check_replan(
+                &planner(&scene),
+                &query,
+                &scene.request(),
+                plan,
+                FRAME,
+            ));
+        }
+        broken.extend(
+            violations
+                .iter()
+                .map(|violation| format!("{name}: {violation}")),
+        );
     }
+    assert!(broken.is_empty(), "{}", broken.join("\n"));
 }
 
 #[test]

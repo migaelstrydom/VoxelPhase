@@ -75,6 +75,7 @@ impl TraversalScene {
             body: self.body,
             lead: self.lead,
             target_speed: self.intent.speed,
+            planted: None,
             previous: None,
         }
     }

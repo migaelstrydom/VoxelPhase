@@ -9,7 +9,7 @@ use crate::section::{Foothold, FootholdWindow, SectionQuery};
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
 use super::cost::FootfallCosts;
-use super::rules::reaches;
+use super::rules::PUSH_OFF_TOLERANCE;
 use super::settings::PlannerSettings;
 
 /// Length along the path of the bands the body's landing is merged in, in
@@ -33,14 +33,12 @@ pub struct FootfallPlan {
     /// In order, the planted foot not among them.
     pub footfalls: Vec<Footfall>,
     pub cost: f32,
-    pub diverged: bool,
 }
 
 /// No footfalls carry the body along its whole path.
 pub struct FootfallsRefused {
     /// The cheapest footfalls to the furthest the body was carried.
     pub footfalls: Vec<Footfall>,
-    pub diverged: bool,
 }
 
 /// The cheapest footfalls along a body path already chosen.
@@ -60,10 +58,9 @@ pub struct FootfallSearch<'a> {
     /// Spacing of candidate footfalls along the path, in metres.
     pub spacing: f32,
     pub body: &'a BodyPath,
-    /// The last plan's footfalls, in order.
+    /// The last plan's footfalls after the planted foot, in order: moving
+    /// one costs churn.
     pub previous: &'a [Contact],
-    /// The last plan's committed footfall, kept if it still can be.
-    pub committed: Option<Contact>,
 }
 
 /// A flight as the footfalls see it.
@@ -130,7 +127,7 @@ impl FootfallSearch<'_> {
         }];
         let mut cheapest: FxHashMap<CellKey, usize> = FxHashMap::default();
         let mut pending = BinaryHeap::from([Pending { cost: 0.0, node: 0 }]);
-        let (mut furthest, mut diverged) = (0, false);
+        let mut furthest = 0;
         let mut candidates = Vec::new();
 
         while let Some(Pending { node: index, .. }) = pending.pop() {
@@ -142,7 +139,6 @@ impl FootfallSearch<'_> {
                 return Ok(FootfallPlan {
                     footfalls: Self::chain(&nodes, index),
                     cost: node.cost,
-                    diverged,
                 });
             }
             let best = &nodes[furthest];
@@ -159,20 +155,6 @@ impl FootfallSearch<'_> {
                 &nodes,
                 &mut candidates,
             );
-            if index == 0 {
-                if let Some(committed) = self.committed {
-                    let kept = |candidate: &Node| {
-                        let landed = candidate.footfall.contact;
-                        landed.limb == committed.limb
-                            && (landed.at - committed.at).length() <= self.settings.commit_tolerance
-                    };
-                    if candidates.iter().any(kept) {
-                        candidates.retain(|candidate| kept(candidate));
-                    } else {
-                        diverged = true;
-                    }
-                }
-            }
             for mut candidate in candidates.drain(..) {
                 candidate.parent = Some(index);
                 let key = self.cell(&candidate.footfall);
@@ -192,7 +174,6 @@ impl FootfallSearch<'_> {
         }
         Err(FootfallsRefused {
             footfalls: Self::chain(&nodes, furthest),
-            diverged,
         })
     }
 
@@ -252,7 +233,9 @@ impl FootfallSearch<'_> {
                 let Some(body_z) = self.body.height_at(body_s, self.query) else {
                     continue;
                 };
-                if !reaches(body_z, contact.at.z, params) || !reaches(body_z, stance.at.z, params) {
+                if !params.foot_reaches(body_z, contact.at.z)
+                    || !params.foot_reaches(body_z, stance.at.z)
+                {
                     continue;
                 }
                 let cost = base + self.unheld_cost(&contact, &stance, body_s);
@@ -273,7 +256,7 @@ impl FootfallSearch<'_> {
                 let landing = flight.landing;
                 let lands_ahead = foothold.at.s >= landing - TOLERANCE
                     && foothold.at.s <= 2.0 * landing - stance.at.s + TOLERANCE;
-                if flight.takeoff < stance.at.s - TOLERANCE || !lands_ahead {
+                if flight.takeoff < stance.at.s - PUSH_OFF_TOLERANCE || !lands_ahead {
                     continue;
                 }
                 let footfall = Footfall {
@@ -281,8 +264,8 @@ impl FootfallSearch<'_> {
                     body_s: landing,
                 };
                 if !worth(&footfall, base)
-                    || !reaches(flight.landing_z, contact.at.z, params)
-                    || !reaches(flight.takeoff_z, stance.at.z, params)
+                    || !params.foot_reaches(flight.landing_z, contact.at.z)
+                    || !params.foot_reaches(flight.takeoff_z, stance.at.z)
                 {
                     continue;
                 }
@@ -329,7 +312,6 @@ impl FootfallSearch<'_> {
         let churn = self
             .previous
             .get(node.count)
-            .filter(|_| !(node.count == 0 && self.committed.is_some()))
             .map_or(0.0, |before| costs.churn(&contact, before));
         Some(
             node.cost

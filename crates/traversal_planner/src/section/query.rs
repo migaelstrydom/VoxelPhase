@@ -5,6 +5,10 @@ use crate::plan::Phase;
 
 use super::surface::Footing;
 
+/// How far across the path a foot's contact may be from the lane it was cast
+/// on, in metres: a foot's radius and more.
+const LANE_OFFSET: f32 = 0.08;
+
 /// The body floor under a point of the path.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FloorHit {
@@ -66,6 +70,25 @@ pub trait SectionQuery {
     /// Every standable foothold in `window`, appended to `out`. The planner
     /// judges which is best.
     fn footholds(&self, window: &FootholdWindow, out: &mut Vec<Foothold>);
+    /// The foothold a foot standing at `at` is on, if any is within
+    /// `tolerance` of it.
+    fn foothold_at(&self, at: &PathVec, tolerance: f32) -> Option<Foothold> {
+        // A foot on tilted ground touches it off its lane, by up to its
+        // radius, so lanes a little further across are looked at too.
+        let across = tolerance + LANE_OFFSET;
+        let mut near = Vec::new();
+        self.footholds(
+            &FootholdWindow {
+                s: at.s - tolerance..at.s + tolerance,
+                d: at.d - across..at.d + across,
+                spacing: tolerance / 16.0,
+            },
+            &mut near,
+        );
+        near.into_iter()
+            .filter(|foothold| (foothold.at - *at).length() <= tolerance)
+            .min_by(|a, b| (a.at - *at).length().total_cmp(&(b.at - *at).length()))
+    }
     /// Whether the ground under a foot at `foot` runs unbroken along its line
     /// to `s`: the same plank or stone, not one across a gap or a step.
     fn ground_reaches(&self, foot: &PathVec, s: f32) -> bool;

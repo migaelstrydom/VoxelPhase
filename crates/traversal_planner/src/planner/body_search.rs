@@ -9,11 +9,12 @@ use crate::section::{FootholdWindow, Footing, SectionQuery};
 
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
-use super::rules::{reaches, slowdown_cost, Pace, MIN_PLANNING_SPEED};
+use super::rules::{slowdown_cost, Pace, MIN_PLANNING_SPEED, PUSH_OFF_TOLERANCE};
 use super::settings::PlannerSettings;
 
-/// Width of the speed bands the body's states are merged in, in m/s.
-const SPEED_BAND: f32 = 0.5;
+/// Width of the speed bands the body's states are merged in, in m/s: fine
+/// enough that a stride's worth of braking ahead of a takeoff spans a band.
+const SPEED_BAND: f32 = 0.25;
 /// Spacing of the footholds looked for to tell whether a station is within a
 /// foot's reach of any, in metres.
 const SUPPORT_SPACING: f32 = 0.1;
@@ -43,6 +44,31 @@ pub struct BodySearch<'a> {
     pub target_speed: f32,
     /// Flights the feet could not follow: no flight spanning one is tried.
     pub vetoed: &'a [FlightSpan],
+    /// Where along the path the body's path must reach.
+    pub goal: f32,
+    /// Where along the path the foot holding the body is planted: no takeoff
+    /// before it, since that foot pushes off.
+    pub planted: f32,
+    /// The last plan's body path, if there was a last plan: one the feet
+    /// followed, so leaving it costs churn, and its rides are offered again
+    /// as they were, so it stays within reach whatever the search's own
+    /// steps.
+    pub previous: Option<&'a PreviousPath>,
+}
+
+/// The last plan's body path, as the next search reads it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PreviousPath {
+    pub flights: Vec<FlightSpan>,
+    pub rides: Vec<RideSpan>,
+}
+
+/// A stretch the body rode, along the path, and its speed at the end.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RideSpan {
+    pub from: f32,
+    pub to: f32,
+    pub end_speed: f32,
 }
 
 /// Where a flight takes off and lands, along the path.
@@ -74,8 +100,20 @@ struct Node {
     parent: Option<usize>,
     /// How the body got here from the parent.
     arrival: Option<BodySegment>,
+    /// Where along the path the body last touched down: a foot landed at or
+    /// ahead of it, so a takeoff pushes off from a foothold no further back.
+    landed: f32,
+    /// Whether it touched down within a foot's slack of here, where pushing
+    /// off depends on where.
+    just_landed: bool,
+    /// Whether it has flown since the start: until then the planted foot,
+    /// whose place is known, is the one that pushes off.
+    flown: bool,
 }
 
+/// How near a flight's takeoff and landing must be to the last plan's for
+/// it to be the same flight, in metres.
+const CHURN_MATCH: f32 = 0.1;
 /// Stretches the slowdown still due is summed over.
 const HEURISTIC_PIECES: usize = 4;
 /// Share of the slowdown still due the search counts on, below one so the
@@ -115,13 +153,17 @@ impl FootReach {
 /// What the search keeps between expansions.
 struct Frontier {
     nodes: Vec<Node>,
-    cheapest: FxHashMap<(usize, i32), usize>,
+    cheapest: FxHashMap<(usize, i32, bool), usize>,
     pending: BinaryHeap<Pending>,
 }
 
 impl Frontier {
-    fn key(node: &Node) -> (usize, i32) {
-        (node.station, (node.speed / SPEED_BAND).round() as i32)
+    fn key(node: &Node) -> (usize, i32, bool) {
+        (
+            node.station,
+            (node.speed / SPEED_BAND).round() as i32,
+            node.just_landed,
+        )
     }
 
     /// Adds `node` if it is the cheapest way yet to its station and speed,
@@ -153,7 +195,7 @@ impl BodySearch<'_> {
     /// it, the cheapest path to the furthest station reached.
     pub fn search(&self, start: BodyState) -> Result<BodyPlan, BodyPath> {
         let step = self.settings.body_step;
-        let goal = self.settings.body_goal(self.target_speed, self.params);
+        let goal = self.goal - start.s;
         let flight_reach = self.params.stride.max_length;
         let stations = ((goal + flight_reach) / step).ceil() as usize + 1;
         let mut known = FootReach::new(stations + 1);
@@ -171,6 +213,9 @@ impl BodySearch<'_> {
                 cost: 0.0,
                 parent: None,
                 arrival: None,
+                landed: self.planted,
+                just_landed: start.s - self.planted < FOOT_SLACK,
+                flown: false,
             },
             0.0,
         );
@@ -180,11 +225,18 @@ impl BodySearch<'_> {
             if !frontier.is_current(index) {
                 continue;
             }
-            let (station, speed, z, cost) = {
+            let (station, speed, z, cost, landed, flown) = {
                 let node = &frontier.nodes[index];
-                (node.station, node.speed, node.z, node.cost)
+                (
+                    node.station,
+                    node.speed,
+                    node.z,
+                    node.cost,
+                    node.landed,
+                    node.flown,
+                )
             };
-            let s = start.s + station as f32 * step;
+            let s = self.station_s(start.s, station);
             if s - start.s >= goal - STATION_TOLERANCE {
                 return Ok(BodyPlan {
                     path: Self::path_to(&frontier.nodes, index),
@@ -202,9 +254,23 @@ impl BodySearch<'_> {
 
             let mut edges: SmallVec<[(usize, f32, f32, f32, BodySegment); 16]> = SmallVec::new();
             self.ride(start.s, station, speed, &mut known, &mut edges);
-            self.fly(start.s, station, speed, z, &mut known, &mut edges);
+            self.ride_again(start.s, station, speed, &mut known, &mut edges);
+            self.fly(
+                start.s,
+                station,
+                speed,
+                z,
+                (landed, flown),
+                &mut known,
+                &mut edges,
+            );
             for (next, next_speed, next_z, edge_cost, arrival) in edges {
-                let remaining = goal - next as f32 * step;
+                let next_s = self.station_s(start.s, next);
+                let remaining = goal - (next_s - start.s);
+                let (landed, flown) = match arrival {
+                    BodySegment::Flight { landing, .. } => (landing, true),
+                    BodySegment::Ride { .. } => (landed, flown),
+                };
                 frontier.relax(
                     Node {
                         station: next,
@@ -213,6 +279,9 @@ impl BodySearch<'_> {
                         cost: cost + edge_cost,
                         parent: Some(index),
                         arrival: Some(arrival),
+                        landed,
+                        just_landed: next_s - landed < FOOT_SLACK,
+                        flown,
                     },
                     self.slowdown_still_due(next_speed, remaining),
                 );
@@ -221,12 +290,25 @@ impl BodySearch<'_> {
         Err(Self::path_to(&frontier.nodes, furthest))
     }
 
+    /// Where station `station` is along the path. Station 0 is the body;
+    /// the rest lie on a grid fixed along the path, not to the body, so the
+    /// next frame's search, from a body a little further on, tries the same
+    /// takeoffs and landings.
     fn station_s(&self, origin: f32, station: usize) -> f32 {
-        origin + station as f32 * self.settings.body_step
+        if station == 0 {
+            origin
+        } else {
+            (self.grid_index(origin) + station as i64) as f32 * self.settings.body_step
+        }
+    }
+
+    /// The grid station at or behind `origin`.
+    fn grid_index(&self, origin: f32) -> i64 {
+        ((origin + STATION_TOLERANCE) / self.settings.body_step).floor() as i64
     }
 
     /// Riding on, pressing toward the asked-for speed to the next station,
-    /// or braking as far as it takes to slow by a speed band: braking one
+    /// or braking over far enough to slow by about a speed band: braking one
     /// station at a time would never leave its band, and lose to pressing.
     fn ride(
         &self,
@@ -238,15 +320,17 @@ impl BodySearch<'_> {
     ) {
         let step = self.settings.body_step;
         let natural = self.natural_step();
-        let braking_span = (SPEED_BAND * speed / (self.params.body.max_acceleration * step))
+        // Braking a band's worth, or half that: half still leaves the band
+        // at the speeds that matter, and the two together fit the distance
+        // left to a takeoff far more closely than either alone.
+        let band_span = (SPEED_BAND * speed / (self.params.body.max_acceleration * step))
             .ceil()
             .max(1.0) as usize;
-        let paces: &[(Pace, usize)] = if self.trouble_ahead(self.station_s(origin, station)) {
-            &[(Pace::Press, 1), (Pace::Brake, braking_span)]
-        } else {
-            &[(Pace::Press, 1)]
-        };
-        for &(pace, span) in paces {
+        let mut paces: SmallVec<[(Pace, usize); 8]> = SmallVec::from_slice(&[(Pace::Press, 1)]);
+        if self.trouble_ahead(self.station_s(origin, station)) {
+            paces.extend((band_span.div_ceil(2)..=band_span).map(|span| (Pace::Brake, span)));
+        }
+        for &(pace, span) in &paces {
             let next = station + span;
             if next >= known.len()
                 || !(station + 1..=next)
@@ -270,11 +354,75 @@ impl BodySearch<'_> {
                 continue;
             }
             let cost = self.settings.costs.ride_travel * ride.vertical_travel
+                + self.ride_churn(from, to)
                 + slowdown_cost(
                     end_speed,
                     self.target_speed,
                     to - from,
                     natural,
+                    self.settings,
+                );
+            out.push((
+                next,
+                end_speed,
+                floor.z,
+                cost,
+                BodySegment::Ride {
+                    from,
+                    to,
+                    start_speed: speed,
+                    end_speed,
+                },
+            ));
+        }
+    }
+
+    /// Riding again a stretch the last plan rode from this station, to where
+    /// it ended and as near its end speed as the drive allows from here.
+    fn ride_again(
+        &self,
+        origin: f32,
+        station: usize,
+        speed: f32,
+        known: &mut FootReach,
+        out: &mut SmallVec<[(usize, f32, f32, f32, BodySegment); 16]>,
+    ) {
+        let Some(previous) = self.previous else {
+            return;
+        };
+        let step = self.settings.body_step;
+        let from = self.station_s(origin, station);
+        for ride in &previous.rides {
+            if (ride.from - from).abs() > 0.5 * step || ride.to <= from + 0.5 * step {
+                continue;
+            }
+            let next = station + ((ride.to - from) / step).round().max(1.0) as usize;
+            if next >= known.len()
+                || !(station + 1..=next)
+                    .all(|passed| self.feet_can(origin, passed, FootNeed::Support, known))
+            {
+                continue;
+            }
+            let to = self.station_s(origin, next);
+            let ridden = self.query.ride(from, to);
+            let Some(floor) = self
+                .query
+                .floor(to)
+                .filter(|_| ridden.end >= to - STATION_TOLERANCE)
+            else {
+                continue;
+            };
+            let change = self.params.body.max_acceleration * (to - from) / speed;
+            let end_speed = ride
+                .end_speed
+                .clamp(speed - change, speed + change)
+                .max(MIN_PLANNING_SPEED);
+            let cost = self.settings.costs.ride_travel * ridden.vertical_travel
+                + slowdown_cost(
+                    end_speed,
+                    self.target_speed,
+                    to - from,
+                    self.natural_step(),
                     self.settings,
                 );
             out.push((
@@ -300,6 +448,7 @@ impl BodySearch<'_> {
         station: usize,
         speed: f32,
         z: f32,
+        (landed, flown): (f32, bool),
         known: &mut FootReach,
         out: &mut SmallVec<[(usize, f32, f32, f32, BodySegment); 16]>,
     ) {
@@ -309,19 +458,30 @@ impl BodySearch<'_> {
         if !self.trouble_ahead(from) {
             return;
         }
-        if !self.feet_can(origin, station, FootNeed::PushOff, known) {
+        // Pushing off from a foot behind the takeoff: the planted one, until
+        // the first flight; after it, one that landed at or after the body
+        // last touched down.
+        let can_push_off = if from < landed - PUSH_OFF_TOLERANCE {
+            false
+        } else if from - landed >= FOOT_SLACK {
+            self.feet_can(origin, station, FootNeed::PushOff, known)
+        } else {
+            !flown || self.foothold_within(landed..from + PUSH_OFF_TOLERANCE, z)
+        };
+        if !can_push_off {
             return;
         }
         let steepest = params.body.max_ground_slope_degrees.to_radians().cos();
         let stride = (settings.flight_step / settings.body_step).round().max(1.0) as usize;
-        if station % stride != 0 {
+        if (self.grid_index(origin) + station as i64) % stride as i64 != 0 {
             return;
         }
         // The step from the foot pushing off to the foot landing spans the
         // flight and a foot's slack at either end.
         let longest = reach - 2.0 * FOOT_SLACK;
-        let first = station + (settings.min_flight / settings.body_step).ceil() as usize;
-        let last = station + (longest / settings.body_step).floor() as usize;
+        let first = station
+            + ((settings.min_flight - STATION_TOLERANCE) / settings.body_step).ceil() as usize;
+        let last = station + ((longest + STATION_TOLERANCE) / settings.body_step).floor() as usize;
         for landing_station in (first..=last.min(known.len() - 1)).step_by(stride) {
             let landing = self.station_s(origin, landing_station);
             if self
@@ -362,6 +522,7 @@ impl BodySearch<'_> {
             }
             let cost = settings.costs.flight
                 + settings.costs.takeoff_climb * climb * climb
+                + self.flight_churn(from, landing)
                 + slowdown_cost(
                     speed,
                     self.target_speed,
@@ -382,6 +543,58 @@ impl BodySearch<'_> {
                 },
             ));
         }
+    }
+
+    /// What flying from `takeoff` to `landing` costs in churn: nothing if
+    /// the last plan flew there too.
+    fn flight_churn(&self, takeoff: f32, landing: f32) -> f32 {
+        let Some(previous) = self.previous else {
+            return 0.0;
+        };
+        let matches = previous.flights.iter().any(|span| {
+            (span.takeoff - takeoff).abs() <= CHURN_MATCH
+                && (span.landing - landing).abs() <= CHURN_MATCH
+        });
+        if matches {
+            0.0
+        } else {
+            self.settings.costs.churn
+        }
+    }
+
+    /// What riding from `from` to `to` costs in churn: riding on past where
+    /// the last plan took off.
+    fn ride_churn(&self, from: f32, to: f32) -> f32 {
+        let passes_takeoff = self.previous.is_some_and(|previous| {
+            previous.flights.iter().any(|span| {
+                let left_behind = span.takeoff + CHURN_MATCH;
+                from < left_behind && to >= left_behind
+            })
+        });
+        if passes_takeoff {
+            self.settings.costs.churn
+        } else {
+            0.0
+        }
+    }
+
+    /// Whether a foothold in `window` along the path is in reach of the body
+    /// at height `body_z`, and one a foot may land on.
+    fn foothold_within(&self, window: std::ops::Range<f32>, body_z: f32) -> bool {
+        let mut footholds = Vec::new();
+        self.query.footholds(
+            &FootholdWindow {
+                s: window,
+                d: f32::MIN..f32::MAX,
+                spacing: SUPPORT_SPACING,
+            },
+            &mut footholds,
+        );
+        footholds.iter().any(|foothold| {
+            foothold.edge_margin >= self.params.foot.min_edge_margin
+                && !matches!(foothold.footing, Footing::Loose { resting: false, .. })
+                && self.params.foot_reaches(body_z, foothold.at.z)
+        })
     }
 
     /// Whether the ride within a step ahead of `from` breaks or gets rough:
@@ -433,26 +646,14 @@ impl BodySearch<'_> {
         let half = 0.5 * self.params.stride.max_length;
         let window = match need {
             FootNeed::Support => s - half..s + half,
-            FootNeed::PushOff => s - FOOT_SLACK..s + STATION_TOLERANCE,
+            FootNeed::PushOff => s - FOOT_SLACK..s + PUSH_OFF_TOLERANCE,
             FootNeed::TouchDown => s - STATION_TOLERANCE..s + FOOT_SLACK,
         };
         let answer = (station == 0 && need == FootNeed::Support)
-            || self.query.floor(s).is_some_and(|floor| {
-                let mut footholds = Vec::new();
-                self.query.footholds(
-                    &FootholdWindow {
-                        s: window,
-                        d: f32::MIN..f32::MAX,
-                        spacing: SUPPORT_SPACING,
-                    },
-                    &mut footholds,
-                );
-                footholds.iter().any(|foothold| {
-                    foothold.edge_margin >= self.params.foot.min_edge_margin
-                        && !matches!(foothold.footing, Footing::Loose { resting: false, .. })
-                        && reaches(floor.z, foothold.at.z, self.params)
-                })
-            });
+            || self
+                .query
+                .floor(s)
+                .is_some_and(|floor| self.foothold_within(window, floor.z));
         known.answers[need as usize][station] = Some(answer);
         answer
     }

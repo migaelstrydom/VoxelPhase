@@ -6,6 +6,12 @@ use super::settings::PlannerSettings;
 /// take unboundedly long.
 pub const MIN_PLANNING_SPEED: f32 = 0.3;
 
+/// How far ahead of a takeoff the foot pushing off may be, in metres: a foot
+/// is placed by where a sphere touches, so one standing at the takeoff can
+/// read a fraction of a millimetre past it. More lets the body plan
+/// takeoffs its feet then cannot make.
+pub const PUSH_OFF_TOLERANCE: f32 = 0.001;
+
 /// How the body's speed changes while it is on the ground.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pace {
@@ -40,11 +46,4 @@ pub fn slowdown_cost(
     let target = target.max(MIN_PLANNING_SPEED);
     let short = ((target - speed) / target).max(0.0);
     settings.costs.slowdown * short * short * distance / natural_step
-}
-
-/// Whether a foot at height `foot_z` is within reach of the body with its
-/// bottom-sphere centre at `body_z`.
-pub fn reaches(body_z: f32, foot_z: f32, params: &GaitParams) -> bool {
-    let bottom = body_z - params.body.radius;
-    foot_z >= bottom - params.foot.below_body && foot_z <= bottom + params.foot.above_body
 }

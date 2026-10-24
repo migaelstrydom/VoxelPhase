@@ -84,6 +84,55 @@ impl Phase {
         }
     }
 
+    /// Where along the path the body is `elapsed` seconds into the phase, and
+    /// its speed along the path then.
+    pub fn progress(&self, elapsed: f32) -> (f32, f32) {
+        match self.motion {
+            Motion::Grounded {
+                from,
+                start_speed,
+                end_speed,
+                ..
+            } => {
+                let acceleration = if self.duration > 0.0 {
+                    (end_speed - start_speed) / self.duration
+                } else {
+                    0.0
+                };
+                (
+                    from + start_speed * elapsed + 0.5 * acceleration * elapsed * elapsed,
+                    start_speed + acceleration * elapsed,
+                )
+            }
+            Motion::Flight { takeoff, .. } => (takeoff.s + takeoff.speed * elapsed, takeoff.speed),
+        }
+    }
+
+    /// Drops the first `elapsed` seconds, so the phase starts where the body
+    /// is then.
+    pub fn clip_start(&mut self, elapsed: f32) {
+        let elapsed = elapsed.clamp(0.0, self.duration);
+        if elapsed <= 0.0 {
+            return;
+        }
+        let (s, speed) = self.progress(elapsed);
+        match &mut self.motion {
+            Motion::Grounded {
+                from, start_speed, ..
+            } => {
+                *from = s;
+                *start_speed = speed;
+            }
+            Motion::Flight { takeoff, gravity } => {
+                takeoff.z += takeoff.climb * elapsed - 0.5 * *gravity * elapsed * elapsed;
+                takeoff.climb -= *gravity * elapsed;
+                takeoff.s = s;
+            }
+        }
+        self.start += elapsed;
+        self.duration -= elapsed;
+    }
+
     /// Height of the bottom-sphere centre at `s` in a flight; `None` for a
     /// grounded phase, whose height is the floor's.
     pub fn flight_height(&self, s: f32) -> Option<f32> {

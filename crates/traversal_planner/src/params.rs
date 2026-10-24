@@ -161,6 +161,15 @@ pub struct GaitParams {
     pub gravity: f32,
 }
 
+impl GaitParams {
+    /// Whether a foot at height `foot_z` is within reach of the body with its
+    /// bottom-sphere centre at `body_z`.
+    pub fn foot_reaches(&self, body_z: f32, foot_z: f32) -> bool {
+        let bottom = body_z - self.body.radius;
+        foot_z >= bottom - self.foot.below_body && foot_z <= bottom + self.foot.above_body
+    }
+}
+
 impl Default for GaitParams {
     fn default() -> Self {
         Self {

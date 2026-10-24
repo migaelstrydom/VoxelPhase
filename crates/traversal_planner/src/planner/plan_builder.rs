@@ -11,7 +11,8 @@ const TOLERANCE: f32 = 1.0e-3;
 /// The plan of a body path and the footfalls along it: a phase for each
 /// stretch between footfalls on the ground (held by the latest foot to land)
 /// and one for each flight. The first footfall, and all before it, is
-/// committed.
+/// committed. Every flight of `body` must end with a footfall; cut a path the
+/// feet did not follow with [`BodyPath::until_unlanded`] first.
 pub fn build_plan(body: &BodyPath, planted: &Contact, footfalls: &[Footfall]) -> Plan {
     let mut builder = Builder {
         body,
@@ -20,6 +21,11 @@ pub fn build_plan(body: &BodyPath, planted: &Contact, footfalls: &[Footfall]) ->
         footfalls,
         next: 0,
     };
+    // The planted foot holds the body as the plan starts, if only for an
+    // instant before a flight.
+    if let Some(BodySegment::Flight { takeoff, .. }) = body.segments.first() {
+        builder.ground(takeoff.s, takeoff.s, takeoff.speed, takeoff.speed);
+    }
     for segment in &body.segments {
         match *segment {
             BodySegment::Ride {
@@ -34,13 +40,14 @@ pub fn build_plan(body: &BodyPath, planted: &Contact, footfalls: &[Footfall]) ->
         }
     }
     builder.land_through(f32::MAX);
-    if let Some(last) = footfalls.last() {
+    if let (Some(last), Some(end)) = (footfalls.last(), body.end()) {
         let shown = builder
             .phases
             .last()
             .is_some_and(|phase| phase.contacts.contains(&last.contact));
         if !shown {
-            builder.ground(last.body_s, last.body_s, 0.0, 0.0);
+            let speed = body.speed_at(end).unwrap_or_default();
+            builder.ground(end, end, speed, speed);
         }
     }
     let committed = footfalls.first().map_or(0, |first| {

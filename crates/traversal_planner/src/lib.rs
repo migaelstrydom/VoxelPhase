@@ -12,10 +12,12 @@
 //!                    (game side)                                         GaitParams ────┘
 //! ```
 
+pub mod fuzz;
 pub mod params;
 pub mod path;
 pub mod plan;
 pub mod planner;
+pub mod properties;
 pub mod scene;
 pub mod section;
 pub mod svg;

@@ -258,8 +258,10 @@ each flight is one a foot pushes off and lands.
   body search adds an A* bound, the slowdown a slow body must still pay to
   regain speed. Footfall cells are a foothold every few cm along `s` (3.5 %
   of the natural step, 4 to 10 cm), its lane, its foot, and the band the
-  body landed in. A cold plan takes 0.05 to 1.3 ms on the fixtures at every
-  speed (median about 0.4 ms).
+  body landed in. A cold plan takes up to 4.5 ms on the fixtures at every
+  speed (median 0.6 to 0.8 ms): speed bands of 0.25 m/s and braking spans
+  from half a band to a full one, which replanning needs to reach the last
+  plan's speeds, roughly doubled it.
 - **Horizon.** A plan carries the body at least three natural steps, and at
   least as far as the asked-for speed would in 0.6 s: the legs need the next
   two or three footfalls, and the body time to see an obstacle and set up a
@@ -279,11 +281,17 @@ each flight is one a foot pushes off and lands.
   footfalls. That cost, together with commitment, keeps the plan from
   flickering between two nearly equal options.
 - **Commitment.** The current phase and the next footfall are committed. Each
-  frame the planner replans only after the committed prefix. If the body
-  strays from the committed path past a tolerance (the rubble shifted, the
-  body was hit), commitment is dropped and the planner replans from the
-  actual state. Each such event is counted, because they are where the edge
-  cases will be.
+  frame the planner keeps the last plan's phases up to the committed footfall
+  and plans only after it, from that footfall, toward a goal measured from
+  the body now; once it lands, the commitment rolls on to the next. If the
+  body strays from the committed path past a tolerance (the rubble shifted,
+  the body was hit), or the kept phases no longer clear or stand on a
+  foothold, commitment is dropped and the planner replans from the actual
+  state; if no plan goes on from the kept phases but a fresh one does, it is
+  dropped too. Each such event is counted, because they are where the edge
+  cases will be. The body search charges churn for leaving the last plan's
+  body path and offers its rides again as they were, so a replan keeps to
+  it unless something is better.
 
 ### Why body moves are not the old move state machine
 
@@ -426,23 +434,45 @@ and the one that keeps the planner from inventing a way through:
 - **avoids moving footing**: no footfall on loose footing that is not at
   rest.
 
-The tests check properties of every fixture's plan rather than exact output:
-- every flight arc and support path clears `BodyFloor` and `Ceiling`;
-- feet alternate, and every footfall is on a `Foothold` surface at its own
-  `d`;
-- strides, rises and sideways reach are within `GaitParams`;
-- replanning one frame later keeps the committed prefix and changes the
-  next tentative footfall only when the section changed.
+The tests check properties of every fixture's plan rather than exact output
+(`properties::check_plan`, `check_replan`), each a `Rule`:
+- phases follow on in time and along the path, and each clears the floor and
+  ceiling, riding only where the drive can push the body;
+- feet alternate; every footfall is on a foothold the section has, on
+  footing that is not moving, within reach of the body as it lands;
+- steps, rises, drops and sideways reach are within `GaitParams`, and every
+  takeoff climbs no faster than they allow;
+- replanning a frame later on the same ground, the body having tracked the
+  plan, keeps the commitment, and leaves the next tentative footfall within
+  a cell and a half of the lattice unless it is the last (the goal slides
+  ahead with the body, so the last one moves).
 
-Each property gets a fixture that is built to break it, to prove the check
-can fail. The tests run in milliseconds and always run.
+`tests/properties.rs` breaks a good plan on purpose for each rule, to prove
+the check can fail. The tests run in milliseconds and always run.
 
 ### Fuzzer
 
-Random scenes (planks, steps, gaps, slopes, stones on and off the line,
-cross-tilted rocks, overhangs) checked
-against the same properties, shrinking a failing seed to a minimal scene and
-writing it out as a fixture. It lives in the planner crate.
+`fuzz::generate(seed)` lays a random course (runs, lips and drops, gaps over
+voids, plank bridges laid askew, stepping stones on and off the line, tilted
+and loose stones, ramps, overhangs) and plans it at a crouch, a walk or a
+sprint; `fuzz::try_scene` checks the plan, or a refusal's partial plan,
+against every rule, and a plan's replan a frame later. `plan_fuzz` sweeps
+seeds and, with `--write`, shrinks each failing scene to the fewest shapes
+that still break its rule (`fuzz::shrink`) and writes it as a fixture. A
+300-seed sweep runs with the tests.
+
+Its first sweep found 58 failures in 500 seeds: plans starting with a flight
+dropped the planted foot; a refusal kept a flight its feet never landed;
+the body search stations moved with the body, so a frame later its takeoffs
+were not the last plan's; it let a foot push off from before the last
+touchdown; the commitment held only the footfall, not the phases before it;
+the goal of a replan from the committed footfall ran a step further than
+the last plan's. Seeds 0 to 1999 are clean; ten in 10,000 still move the
+next tentative footfall on replanning (2754, 3489, 4621, 5944, 7719, 8097,
+8237, 9191, 9291 by 0.18 to 1.4 m; 7264 drops its commitment), each the
+search from the committed footfall missing the last plan's continuation in
+its own discretisation. A plan takes 1.2 ms median, 8 ms at the 99th
+percentile and up to 31 ms on fuzzed courses.
 
 ### Offline capture
 
@@ -487,14 +517,20 @@ until E.
 
 ## Open questions
 
-- **Planning cost:** a cold plan takes up to 1.3 ms on the fixtures against
-  D's 0.5 ms for section and plan together. In game, last frame's plan bounds
+- **Planning cost:** a cold plan takes up to 4.5 ms on the fixtures, and
+  1.2 ms median on fuzzed courses, against D's 0.5 ms for section and plan
+  together. In game, last frame's plan bounds
   the search (warm start), which is still to be built and measured there.
 - **Coupling of the two stages:** the body search asks the feet only coarse
   questions (a foothold near a station, behind a takeoff, past a landing).
   Where those pass but no footfalls follow, a veto and a fresh body search
   fix it, up to four times. If captures show refusals the joint search would
   have crossed, the body search needs a finer question, not more vetoes.
+- **Replanning stability:** 0.1 % of fuzzed scenes still move the next
+  tentative footfall on a replan a frame later (seeds under *Fuzzer*). The
+  candidates: keep the last plan's tail whole while it still holds and the
+  request has not changed, planning only past its end; or search the tail on
+  the last search's own lattice.
 - **Coyote time:** a planned hop (0.15–0.25 s) falls inside the 0.16 s the
   locomotion state machine still treats as ground (`ground_forgiveness_window`
   then `CoyoteTime`), whose `clamp_up` cancels the takeoff climb, whose

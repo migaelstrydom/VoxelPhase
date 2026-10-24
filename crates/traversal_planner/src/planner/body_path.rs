@@ -1,6 +1,9 @@
 use crate::plan::BodyState;
 use crate::section::SectionQuery;
 
+/// Slack on matching a flight's landing to a footfall, in metres.
+const LANDED_TOLERANCE: f32 = 1.0e-3;
+
 /// One stretch of the body's path.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum BodySegment {
@@ -147,5 +150,20 @@ impl BodyPath {
             time += segment.time_to(segment.to());
         }
         time
+    }
+
+    /// The path as far as feet that last landed with the body at `landed`
+    /// carry it: up to the takeoff of the first flight landing past there.
+    pub fn until_unlanded(&self, landed: f32) -> BodyPath {
+        let segments = self
+            .segments
+            .iter()
+            .take_while(|segment| match segment {
+                BodySegment::Flight { landing, .. } => *landing <= landed + LANDED_TOLERANCE,
+                BodySegment::Ride { .. } => true,
+            })
+            .copied()
+            .collect();
+        BodyPath { segments }
     }
 }
