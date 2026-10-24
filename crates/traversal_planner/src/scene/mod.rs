@@ -6,6 +6,6 @@ mod authored;
 mod caster;
 mod file;
 
-pub use authored::{AuthoredGround, Form, Shape};
+pub use authored::{AuthoredGround, Form, Plane, Shape};
 pub use caster::ShapeCaster;
-pub use file::{Ground, Intent, TraversalScene};
+pub use file::{Ground, Intent, Outcome, TraversalScene};

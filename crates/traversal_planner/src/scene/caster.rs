@@ -1,25 +1,19 @@
 use crate::path::PathVec;
 use crate::section::{BodyKey, CastHit, Footing, SphereCaster};
 
-use super::authored::{AuthoredGround, Form, Shape};
+use super::authored::{AuthoredGround, Plane, Shape};
 
 /// The key of fixed ground: the base and every fixed shape, which like the
 /// game's terrain are one body.
 const FIXED_BODY: BodyKey = BodyKey(0);
 
-/// How far a shape with no `across` extends to either side: past any strip.
-const UNBOUNDED_ACROSS: f32 = 1.0e3;
-
-/// A solid bounded by a planar face over a rectangle in `(s, d)`, extending
-/// away from the face without end: down from a floor's top, up from a roof's
-/// underside.
+/// A solid bounded by a planar face over a convex quadrilateral in `(s, d)`,
+/// extending away from the face without end: down from a floor's top, up from
+/// a roof's underside.
 struct Prism {
-    s: (f32, f32),
-    d: (f32, f32),
-    /// The face's plane: `z = z0 + slope_s * s + slope_d * d`.
-    z0: f32,
-    slope_s: f32,
-    slope_d: f32,
+    /// The footprint's corners, counterclockwise seen from above.
+    footprint: [(f32, f32); 4],
+    face: Plane,
     /// `+1` for a floor (solid below the face), `-1` for a roof (solid above).
     side: f32,
     body: BodyKey,
@@ -32,34 +26,10 @@ impl Prism {
             Footing::Fixed => FIXED_BODY,
             Footing::Loose { .. } => BodyKey(number as u64 + 1),
         };
-        let d = shape
-            .across
-            .unwrap_or((-UNBOUNDED_ACROSS, UNBOUNDED_ACROSS));
-        let (s, z0, slope_s, slope_d, side) = match shape.form {
-            Form::Block {
-                from,
-                to,
-                top,
-                tilt,
-            } => ((from, to), top, 0.0, tilt, 1.0),
-            Form::Ramp {
-                from,
-                to,
-                start_top,
-                end_top,
-            } => {
-                let slope = (end_top - start_top) / (to - from);
-                ((from, to), start_top - slope * from, slope, 0.0, 1.0)
-            }
-            Form::Roof { from, to, bottom } => ((from, to), bottom, 0.0, 0.0, -1.0),
-        };
         Self {
-            s,
-            d,
-            z0,
-            slope_s,
-            slope_d,
-            side,
+            footprint: shape.footprint(),
+            face: shape.face(),
+            side: if shape.is_roof() { -1.0 } else { 1.0 },
             body,
             footing: shape.footing,
         }
@@ -67,20 +37,21 @@ impl Prism {
 
     /// The face's point over `(s, d)`.
     fn face_point(&self, s: f32, d: f32) -> PathVec {
-        PathVec::new(s, d, self.z0 + self.slope_s * s + self.slope_d * d)
+        PathVec::new(s, d, self.face.at(s, d))
     }
 
     fn corners(&self) -> [PathVec; 4] {
-        [
-            self.face_point(self.s.0, self.d.0),
-            self.face_point(self.s.1, self.d.0),
-            self.face_point(self.s.1, self.d.1),
-            self.face_point(self.s.0, self.d.1),
-        ]
+        self.footprint.map(|(s, d)| self.face_point(s, d))
     }
 
+    /// Whether `(s, d)` is over the footprint: on the inner side of every
+    /// edge.
     fn covers(&self, s: f32, d: f32) -> bool {
-        s >= self.s.0 && s <= self.s.1 && d >= self.d.0 && d <= self.d.1
+        (0..self.footprint.len()).all(|i| {
+            let (start_s, start_d) = self.footprint[i];
+            let (end_s, end_d) = self.footprint[(i + 1) % self.footprint.len()];
+            (end_s - start_s) * (d - start_d) - (end_d - start_d) * (s - start_s) >= 0.0
+        })
     }
 
     /// Where a sphere of `radius` centred over `(s, d)`, moving toward the
@@ -99,7 +70,8 @@ impl Prism {
             }
         };
 
-        let normal = PathVec::new(-self.slope_s, -self.slope_d, 1.0).normalized() * self.side;
+        let normal =
+            PathVec::new(-self.face.slope_s, -self.face.slope_d, 1.0).normalized() * self.side;
         let face_s = s - radius * normal.s;
         let face_d = d - radius * normal.d;
         if self.covers(face_s, face_d) {

@@ -18,6 +18,7 @@ fn block(from: f32, to: f32, top: f32) -> Shape {
             tilt: 0.0,
         },
         across: None,
+        yaw: 0.0,
         footing: Footing::Fixed,
     }
 }
@@ -35,6 +36,7 @@ fn section_of(base: Option<f32>, shapes: Vec<Shape>) -> Section {
         intent: Intent { speed: 0.0 },
         params: GaitParams::default(),
         layout: Default::default(),
+        expect: None,
     }
     .section()
 }
@@ -183,6 +185,7 @@ fn a_stone_tilted_across_the_path_keeps_its_tilt_in_the_normal() {
             tilt,
         },
         across: None,
+        yaw: 0.0,
         footing: Footing::Fixed,
     };
     let section = section_of(None, vec![stone]);
@@ -252,6 +255,7 @@ fn a_roof_is_the_ceiling_a_radius_below_its_underside() {
             bottom: 1.2,
         },
         across: None,
+        yaw: 0.0,
         footing: Footing::Fixed,
     };
     let section = section_of(Some(0.0), vec![roof]);
@@ -278,6 +282,7 @@ fn a_ramp_holds_the_body_its_radius_out_along_the_slope_normal() {
             end_top: 5.0 * slope,
         },
         across: None,
+        yaw: 0.0,
         footing: Footing::Fixed,
     };
     let section = section_of(None, vec![ramp]);
@@ -292,5 +297,79 @@ fn a_ramp_holds_the_body_its_radius_out_along_the_slope_normal() {
             (normal_z - 1.0 / stretch).abs() < 1e-4,
             "s = {s}: normal z = {normal_z}"
         );
+    }
+}
+
+#[test]
+fn a_plank_laid_askew_meets_each_lane_at_its_turned_edge() {
+    let yaw = 0.18_f32;
+    let plank = Shape {
+        across: Some((-0.6, 0.6)),
+        yaw,
+        ..block(1.0, 1.4, PLANK_TOP)
+    };
+    let section = section_of(Some(0.0), vec![plank]);
+    let foot_radius = GaitParams::default().foot.radius;
+    let (cos, sin) = (yaw.cos(), yaw.sin());
+    for lane in &section.foothold_lanes {
+        // The near edge, `s = 1.0` before the turn about the centre
+        // (1.2, 0), crosses this lane where the unturned `d` is
+        // `(lane + 0.2 sin) / cos`.
+        let unturned_d = (lane.d + 0.2 * sin) / cos;
+        let edge = 1.2 - 0.2 * cos - sin * unturned_d;
+        let first_on_top = lane
+            .profile
+            .surfaces
+            .iter()
+            .flat_map(|surface| &surface.points)
+            .find(|point| {
+                // On the top face itself, not the rounding over its edge.
+                (point.z - (PLANK_TOP + foot_radius)).abs() < 1e-4 && point.normal.z > 1.0 - 1e-6
+            })
+            .expect("the plank's top");
+        assert!(
+            first_on_top.s >= edge - 1e-4 && first_on_top.s <= edge + 0.02 + 1e-4,
+            "lane {}: top starts at s = {}, edge at {edge}",
+            lane.d,
+            first_on_top.s
+        );
+    }
+}
+
+#[test]
+fn a_tilt_turns_with_its_stone() {
+    let tilt = 0.4_f32;
+    let stone = Shape {
+        form: Form::Block {
+            from: -1.0,
+            to: 3.5,
+            top: 0.0,
+            tilt,
+        },
+        across: Some((-2.0, 2.0)),
+        yaw: std::f32::consts::FRAC_PI_2,
+        footing: Footing::Fixed,
+    };
+    let section = section_of(None, vec![stone]);
+    // Turned a quarter counterclockwise, a top rising toward `+d` rises
+    // toward `-s`.
+    let length = (1.0 + tilt * tilt).sqrt();
+    assert!(!samples(lane(&section, 0.0), (0.0, 2.5)).is_empty());
+    for lane in &section.foothold_lanes {
+        for point in lane
+            .profile
+            .surfaces
+            .iter()
+            .flat_map(|surface| &surface.points)
+            .filter(|point| point.s > -0.5 && point.s < 3.0)
+        {
+            assert!(
+                (point.normal.s - tilt / length).abs() < 1e-4 && point.normal.d.abs() < 1e-4,
+                "lane {}, s = {}: normal {:?}",
+                lane.d,
+                point.s,
+                point.normal
+            );
+        }
     }
 }

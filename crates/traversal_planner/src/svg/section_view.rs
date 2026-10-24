@@ -1,4 +1,4 @@
-use crate::scene::{AuthoredGround, Form, Ground, Shape, TraversalScene};
+use crate::scene::{AuthoredGround, Ground, Shape, TraversalScene};
 use crate::section::{Profile, Section, SurfacePoint};
 
 use super::canvas::{Canvas, Viewport};
@@ -150,11 +150,35 @@ fn grid(canvas: &mut Canvas, view: &Viewport, s: (f32, f32), up: (f32, f32), up_
     }
 }
 
-/// Whether a shape crosses the path itself, so a side view along it shows it.
-fn on_path(shape: &Shape) -> bool {
+/// Where a shape's footprint crosses the path line `d = 0`, as a range of
+/// `s`; `None` when it lies wholly to one side.
+fn cut_on_path(shape: &Shape) -> Option<(f32, f32)> {
+    let footprint = shape.footprint();
+    let mut cut: Option<(f32, f32)> = None;
+    for i in 0..footprint.len() {
+        let (start, end) = (footprint[i], footprint[(i + 1) % footprint.len()]);
+        if (start.1 > 0.0) == (end.1 > 0.0) && start.1 != 0.0 {
+            continue;
+        }
+        let t = if end.1 == start.1 {
+            0.0
+        } else {
+            start.1 / (start.1 - end.1)
+        };
+        let s = start.0 + t * (end.0 - start.0);
+        cut = Some(cut.map_or((s, s), |(from, to)| (from.min(s), to.max(s))));
+    }
+    cut
+}
+
+/// The shape's reach along the path, over the whole of its footprint.
+fn extent_along(shape: &Shape) -> (f32, f32) {
     shape
-        .across
-        .map_or(true, |(from, to)| from <= 0.0 && to >= 0.0)
+        .footprint()
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(from, to), &(s, _)| {
+            (from.min(s), to.max(s))
+        })
 }
 
 fn side_shapes(
@@ -165,6 +189,7 @@ fn side_shapes(
     z: (f32, f32),
 ) {
     let edge = format!(r#"stroke="{}" stroke-width="1""#, palette::SHAPE_EDGE);
+    canvas.begin_clip("side", view.at(s.0, z.1), view.at(s.1, z.0));
     if let Some(base) = ground.base {
         canvas.polygon(
             view,
@@ -172,33 +197,34 @@ fn side_shapes(
             &format!(r#"fill="{}" {edge}"#, palette::SHAPE_FILL),
         );
     }
-    let (off_path, crossing): (Vec<&Shape>, Vec<&Shape>) =
-        ground.shapes.iter().partition(|shape| !on_path(shape));
-    for shape in off_path.into_iter().chain(crossing) {
-        let fill = if on_path(shape) {
+    // Shapes off the path behind, drawn over their whole reach; shapes on it
+    // in front, drawn where the path line cuts them.
+    let (crossing, off_path): (Vec<_>, Vec<_>) = ground
+        .shapes
+        .iter()
+        .map(|shape| (shape, cut_on_path(shape)))
+        .partition(|(_, cut)| cut.is_some());
+    for (shape, cut) in off_path.into_iter().chain(crossing) {
+        let fill = if cut.is_some() {
             palette::SHAPE_FILL
         } else {
             palette::SHAPE_OFF_PATH_FILL
         };
         let style = format!(r#"fill="{fill}" {edge}"#);
-        let outline = match shape.form {
-            Form::Block { from, to, top, .. } => {
-                vec![(from, top), (to, top), (to, z.0), (from, z.0)]
-            }
-            Form::Ramp {
-                from,
-                to,
-                start_top,
-                end_top,
-            } => vec![(from, start_top), (to, end_top), (to, z.0), (from, z.0)],
-            Form::Roof { from, to, bottom } => {
-                vec![(from, bottom), (to, bottom), (to, z.1), (from, z.1)]
-            }
-        };
-        canvas.polygon(view, outline, &style);
+        let (from, to) = cut.unwrap_or_else(|| extent_along(shape));
+        let face = shape.face();
+        let (start, end) = (face.at(from, 0.0), face.at(to, 0.0));
+        let solid = if shape.is_roof() { z.1 } else { z.0 };
+        canvas.polygon(
+            view,
+            [(from, start), (to, end), (to, solid), (from, solid)],
+            &style,
+        );
     }
+    canvas.end_clip();
 }
 
+/// Every floor's footprint, cut to the strip.
 fn top_shapes(
     canvas: &mut Canvas,
     view: &Viewport,
@@ -211,23 +237,11 @@ fn top_shapes(
         palette::SHAPE_FILL,
         palette::SHAPE_EDGE
     );
-    for shape in &ground.shapes {
-        let (from, to) = match shape.form {
-            Form::Block { from, to, .. } | Form::Ramp { from, to, .. } => (from, to),
-            Form::Roof { .. } => continue,
-        };
-        let (left, right) = shape.across.unwrap_or((-d_half, d_half));
-        let (left, right) = (left.max(-d_half), right.min(d_half));
-        let (from, to) = (from.max(s.0), to.min(s.1));
-        if from >= to || left >= right {
-            continue;
-        }
-        canvas.polygon(
-            view,
-            [(from, left), (to, left), (to, right), (from, right)],
-            &style,
-        );
+    canvas.begin_clip("strip", view.at(s.0, d_half), view.at(s.1, -d_half));
+    for shape in ground.shapes.iter().filter(|shape| !shape.is_roof()) {
+        canvas.polygon(view, shape.footprint(), &style);
     }
+    canvas.end_clip();
 }
 
 /// Every lane's footholds where a foot touches them, the path's own lane

@@ -381,8 +381,20 @@ The real planner in a browser page, published as a private artifact:
 ### Fixtures and properties
 
 `crates/traversal_planner/fixtures/*.ron`: every bad case found in the web
-tool or captured in the game goes here. The tests check properties of every
-fixture's plan rather than exact output:
+tool or captured in the game goes here. Fixtures come from three sources:
+authored scenes that each isolate one rule (a lip, a gap, a vertical wall);
+captures of settled physics scenes (rubble piles, tumbled crates, crater
+rims), which no hand-authored shape describes honestly; and the fuzzer.
+
+Each fixture states its expected outcome, because refusing is a valid answer
+and the one that keeps the planner from inventing a way through:
+- **crosses**: a plan reaches the end of the strip;
+- **refuses**: no plan on this heading (a wall taller than a hop, a pile
+  only a ledge grab would climb);
+- **avoids moving footing**: no footfall on loose footing that is not at
+  rest.
+
+The tests check properties of every fixture's plan rather than exact output:
 - every flight arc and support path clears `BodyFloor` and `Ceiling`;
 - feet alternate, and every footfall is on a `Foothold` surface at its own
   `d`;
@@ -399,6 +411,14 @@ Random scenes (planks, steps, gaps, slopes, stones on and off the line,
 cross-tilted rocks, overhangs) checked
 against the same properties, shrinking a failing seed to a minimal scene and
 writing it out as a fixture. It lives in the planner crate.
+
+### Offline capture
+
+`section_capture` (a game binary, headless, no GPU): loads a level or spawns a
+pile, lets physics settle it, samples the strip from a given start and heading
+through `PhysicsCaster`, and writes a `Captured` scene. It is how real rubble
+reaches the fixtures before the game runs the planner, and the first measure
+of what the game's casts cost.
 
 ### In game
 
@@ -422,10 +442,10 @@ until E.
 
 | | Milestone | Exit check |
 |---|---|---|
-| A | Workspace, planner crate: `Section` strip and `SectionQuery`, `Plan`, `Stride`, beam search, scene format, `section_svg` with both views | the plank bridge, lips of 3–40 cm, stepping stones in line and zigzagged off it, and a stone tilted across the path as authored scenes, read as SVGs |
+| A | Workspace, planner crate: `Section` strip and `SectionQuery`, `Plan`, `Stride`, beam search, scene format, `section_svg` with both views; `PhysicsCaster` and `section_capture` | authored: the Traversal Garden plank bridge (yawed, loose planks), lips of 3–40 cm, stepping stones in line and zigzagged off it, a stone tilted across the path, a vertical wall (refused); captured: a crate pile in a crater and two or three other settled rubble scenes, each with its expected outcome; all read as SVGs |
 | B | Property tests, a breaking fixture for each, fuzzer | fuzz sweep clean; every property shown able to fail |
 | C | Web tool | published; you can author and tune the bridge in it |
-| D | `PhysicsCaster` and `PathPredictor` in game, `PlanOverlay`, capture key, the drive contract checks; plan drawn but not acted on | captures of every Traversal Garden station plan the same as their authored versions; the drive contract checks pass, with `GaitParams` set from what they measured; section (five lanes) + plan under 0.5 ms per frame |
+| D | `PathPredictor` in game, `PlanOverlay`, capture key, the drive contract checks; plan drawn but not acted on | captures of every Traversal Garden station plan the same as their authored versions; the drive contract checks pass, with `GaitParams` set from what they measured; section (five lanes) + plan under 0.5 ms per frame |
 | E | `PlanTracker`: drive and takeoffs through contacts | `traversal --summary` beats the baseline on every station, churn and divergence measured, rubble lane crossed |
 | F | `FootPlacer` reads footfalls and their timing from the plan | the legs alternate plank to plank; clipping and unplanted legs measured as in the baseline |
 

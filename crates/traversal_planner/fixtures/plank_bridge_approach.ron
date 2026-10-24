@@ -1,0 +1,25 @@
+// The Traversal Garden's plank bridge, walking up to its first plank: eight planks laid askew
+// across stringers (off the strip) by the spawnable's own rules (yaw within
+// ±0.18 rad, width ±25%, spacing jittered, then pushed 2 cm apart), from
+// s = 1 to 11. A representative draw, not the garden's seed; the garden's own
+// bridges come from captures. The planks are one dynamic body of about
+// 2.7 t. A hop onto the first plank: its top is 0.56 m up.
+TraversalScene(
+    ground: Authored(AuthoredGround(
+        base: Some(0.0),
+        shapes: [
+            Shape(form: Block(from: 1.438, to: 2.273, top: 0.56), across: Some((-1.333, 1.127)), yaw: 0.054, footing: Loose(mass: 2700.0, resting: true)),
+            Shape(form: Block(from: 2.797, to: 3.469, top: 0.56), across: Some((-1.228, 1.232)), yaw: -0.159, footing: Loose(mass: 2700.0, resting: true)),
+            Shape(form: Block(from: 3.866, to: 4.486, top: 0.56), across: Some((-1.328, 1.132)), yaw: -0.155, footing: Loose(mass: 2700.0, resting: true)),
+            Shape(form: Block(from: 4.970, to: 5.788, top: 0.56), across: Some((-1.296, 1.164)), yaw: -0.135, footing: Loose(mass: 2700.0, resting: true)),
+            Shape(form: Block(from: 6.196, to: 7.106, top: 0.56), across: Some((-1.255, 1.205)), yaw: 0.028, footing: Loose(mass: 2700.0, resting: true)),
+            Shape(form: Block(from: 7.550, to: 8.465, top: 0.56), across: Some((-1.280, 1.180)), yaw: 0.129, footing: Loose(mass: 2700.0, resting: true)),
+            Shape(form: Block(from: 8.723, to: 9.584, top: 0.56), across: Some((-1.154, 1.306)), yaw: -0.069, footing: Loose(mass: 2700.0, resting: true)),
+            Shape(form: Block(from: 9.748, to: 10.380, top: 0.56), across: Some((-1.261, 1.199)), yaw: 0.050, footing: Loose(mass: 2700.0, resting: true)),
+        ],
+    )),
+    body: BodyState(s: 0.0, z: 0.25, speed: 3.0, climb: 0.0),
+    lead: LeftFoot,
+    intent: Intent(speed: 3.0),
+    expect: Some(Crosses),
+)

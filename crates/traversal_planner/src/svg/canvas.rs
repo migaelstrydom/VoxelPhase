@@ -98,6 +98,21 @@ impl Canvas {
         );
     }
 
+    /// Starts a group whose drawing is cut to the pixel rectangle from
+    /// `top_left` to `bottom_right`; [`Canvas::end_clip`] closes it.
+    pub fn begin_clip(&mut self, id: &str, top_left: (f32, f32), bottom_right: (f32, f32)) {
+        let (x, y) = top_left;
+        let (width, height) = (bottom_right.0 - x, bottom_right.1 - y);
+        let _ = writeln!(
+            self.body,
+            r#"<clipPath id="{id}"><rect x="{x:.1}" y="{y:.1}" width="{width:.1}" height="{height:.1}"/></clipPath><g clip-path="url(#{id})">"#
+        );
+    }
+
+    pub fn end_clip(&mut self) {
+        let _ = writeln!(self.body, "</g>");
+    }
+
     pub fn finish(self) -> String {
         format!(
             "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">\n\

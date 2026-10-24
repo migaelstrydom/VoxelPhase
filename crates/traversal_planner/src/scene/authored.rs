@@ -28,6 +28,9 @@ pub enum Form {
     Roof { from: f32, to: f32, bottom: f32 },
 }
 
+/// How far a shape with no `across` extends to either side: past any strip.
+const UNBOUNDED_ACROSS: f32 = 1.0e3;
+
 /// One authored obstacle.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
@@ -36,7 +39,104 @@ pub struct Shape {
     /// the whole strip, so a plain gait scene is a pure side view.
     #[serde(default)]
     pub across: Option<(f32, f32)>,
+    /// Turn of the whole shape about its footprint's centre, in radians,
+    /// counterclockwise seen from above (from `+s` toward `+d`): a plank
+    /// laid askew. `form` and `across` describe the shape before the turn.
+    #[serde(default)]
+    pub yaw: f32,
     pub footing: Footing,
+}
+
+/// A plane over the `(s, d)` ground plan: `z = z0 + slope_s * s + slope_d * d`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Plane {
+    pub z0: f32,
+    pub slope_s: f32,
+    pub slope_d: f32,
+}
+
+impl Plane {
+    pub fn at(&self, s: f32, d: f32) -> f32 {
+        self.z0 + self.slope_s * s + self.slope_d * d
+    }
+}
+
+impl Shape {
+    /// Whether the shape is a ceiling, solid above its face.
+    pub fn is_roof(&self) -> bool {
+        matches!(self.form, Form::Roof { .. })
+    }
+
+    /// The corners of the shape's footprint in `(s, d)`, counterclockwise
+    /// seen from above, after the turn.
+    pub fn footprint(&self) -> [(f32, f32); 4] {
+        let (from, to) = self.extent_along();
+        let (left, right) = self.extent_across();
+        [(from, left), (to, left), (to, right), (from, right)].map(|corner| self.turned(corner))
+    }
+
+    /// The plane of the shape's face (a floor's top, a roof's underside),
+    /// after the turn.
+    pub fn face(&self) -> Plane {
+        let (z0, slope_s, slope_d) = match self.form {
+            Form::Block { top, tilt, .. } => (top, 0.0, tilt),
+            Form::Ramp {
+                from,
+                to,
+                start_top,
+                end_top,
+            } => {
+                let slope = (end_top - start_top) / (to - from);
+                (start_top - slope * from, slope, 0.0)
+            }
+            Form::Roof { bottom, .. } => (bottom, 0.0, 0.0),
+        };
+        // The unturned plane read at the point that the turn carries onto
+        // each world point: its slopes turn with the shape, and its height
+        // at the world origin comes from the origin's unturned position.
+        let (cos, sin) = (self.yaw.cos(), self.yaw.sin());
+        let (origin_s, origin_d) = self.unturned((0.0, 0.0));
+        Plane {
+            z0: z0 + slope_s * origin_s + slope_d * origin_d,
+            slope_s: slope_s * cos - slope_d * sin,
+            slope_d: slope_s * sin + slope_d * cos,
+        }
+    }
+
+    fn extent_along(&self) -> (f32, f32) {
+        match self.form {
+            Form::Block { from, to, .. }
+            | Form::Ramp { from, to, .. }
+            | Form::Roof { from, to, .. } => (from, to),
+        }
+    }
+
+    fn extent_across(&self) -> (f32, f32) {
+        self.across.unwrap_or((-UNBOUNDED_ACROSS, UNBOUNDED_ACROSS))
+    }
+
+    /// The point the turn pivots on: the footprint's centre.
+    fn pivot(&self) -> (f32, f32) {
+        let (from, to) = self.extent_along();
+        let (left, right) = self.extent_across();
+        (0.5 * (from + to), 0.5 * (left + right))
+    }
+
+    /// Where the turn carries an unturned point.
+    fn turned(&self, (s, d): (f32, f32)) -> (f32, f32) {
+        let (pivot_s, pivot_d) = self.pivot();
+        let (cos, sin) = (self.yaw.cos(), self.yaw.sin());
+        let (ds, dd) = (s - pivot_s, d - pivot_d);
+        (pivot_s + cos * ds - sin * dd, pivot_d + sin * ds + cos * dd)
+    }
+
+    /// The unturned point the turn carries onto `(s, d)`.
+    fn unturned(&self, (s, d): (f32, f32)) -> (f32, f32) {
+        let (pivot_s, pivot_d) = self.pivot();
+        let (cos, sin) = (self.yaw.cos(), self.yaw.sin());
+        let (ds, dd) = (s - pivot_s, d - pivot_d);
+        (pivot_s + cos * ds + sin * dd, pivot_d - sin * ds + cos * dd)
+    }
 }
 
 /// Ground built from shapes over a flat base.

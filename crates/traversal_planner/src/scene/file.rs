@@ -23,6 +23,16 @@ pub struct Intent {
     pub speed: f32,
 }
 
+/// What a scene's plan should do, for the fixtures that check it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Outcome {
+    /// A plan reaches the end of the strip.
+    Crosses,
+    /// No plan on this heading: the right answer when nothing in reach
+    /// gets the body across.
+    Refuses,
+}
+
 /// Everything the planner needs for one plan, as a file.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TraversalScene {
@@ -35,6 +45,10 @@ pub struct TraversalScene {
     pub params: GaitParams,
     #[serde(default)]
     pub layout: StripLayout,
+    /// What the plan should do; every fixture states it, a fresh capture
+    /// leaves it open.
+    #[serde(default)]
+    pub expect: Option<Outcome>,
 }
 
 impl TraversalScene {

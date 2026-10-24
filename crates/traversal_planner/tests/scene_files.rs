@@ -28,6 +28,13 @@ fn fixtures_parse() {
 }
 
 #[test]
+fn every_fixture_states_its_outcome() {
+    for (name, scene) in fixtures() {
+        assert!(scene.expect.is_some(), "{name} states no expected outcome");
+    }
+}
+
+#[test]
 fn scenes_round_trip() {
     for (name, scene) in fixtures() {
         let text = scene.to_ron().expect("serialises");
