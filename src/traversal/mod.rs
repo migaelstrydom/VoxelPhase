@@ -10,6 +10,7 @@ mod planning;
 mod section_cache;
 mod strip_scenery;
 mod system;
+mod wall_slide;
 
 pub use gait::player_gait;
 pub use marker::PlansTraversal;
@@ -19,3 +20,4 @@ pub use planning::{PlanFrame, PlanningCost, PlanningInput, TraversalPlanning};
 pub use section_cache::SectionCache;
 pub use strip_scenery::{SceneryView, StripScenery};
 pub use system::{TraversalPlanState, TraversalPlanSystem};
+pub use wall_slide::{LaidPath, WallSlide};

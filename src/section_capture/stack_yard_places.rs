@@ -39,6 +39,28 @@ fn places() -> Vec<Place> {
             heading_degrees: 0.0,
             expect: Outcome::Crosses,
         },
+        // Along the pyramid's first step, a metre deep, with the second
+        // step's face beside it: pressed 5° into the face from the middle of
+        // the step and from against the face, the path slides along it.
+        Place {
+            name: "pyramid_step_into_the_face",
+            at: (26.5, 29.6),
+            heading_degrees: 85.0,
+            expect: Outcome::Crosses,
+        },
+        Place {
+            name: "pyramid_step_against_the_face",
+            at: (26.5, 29.75),
+            heading_degrees: 85.0,
+            expect: Outcome::Crosses,
+        },
+        // Turned 35° toward the face, the body means to go at it.
+        Place {
+            name: "pyramid_step_at_the_face",
+            at: (26.5, 29.6),
+            heading_degrees: 55.0,
+            expect: Outcome::Refuses,
+        },
     ]
 }
 

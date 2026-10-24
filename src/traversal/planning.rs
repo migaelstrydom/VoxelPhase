@@ -15,10 +15,14 @@ use super::path_frame::PathFrame;
 use super::physics_caster::PhysicsCaster;
 use super::section_cache::SectionCache;
 use super::strip_scenery::{SceneryView, StripScenery};
+use super::wall_slide::WallSlide;
 
 /// How far the heading may turn from the laid path before it is laid
 /// afresh, in degrees.
 const TURN_LIMIT_DEGREES: f32 = 10.0;
+/// The same while the path slides along a wall, in degrees: the wall, not
+/// the stick, sets its way, and it must not run into the wall.
+const SLIDE_TURN_LIMIT_DEGREES: f32 = 1.0;
 /// How far the body may leave the laid path's line before it is laid
 /// afresh, in metres.
 const OFF_LINE_LIMIT: f32 = 0.2;
@@ -68,6 +72,7 @@ pub struct PlanningInput<'a> {
 pub struct PlanningCost {
     /// Casts made this frame; the rest were kept from earlier frames.
     pub casts: usize,
+    /// Laying the path, if it was, and sampling the strip.
     pub section_seconds: f64,
     pub plan_seconds: f64,
     /// Whether the path was laid afresh this frame, every cast with it.
@@ -160,17 +165,17 @@ impl TraversalPlanning {
             self.previous = None;
             return None;
         }
+        let started = Instant::now();
         let laid_afresh = self.lay_path_if_needed(input);
         let frame = *self.cache.frame().expect("laid");
         let at = frame.path_point(input.position);
         let body = BodyState {
             s: at.s,
             z: at.z,
-            speed: speed.max(STANDING_SPEED),
+            speed: input.velocity.dot(&frame.forward()).max(STANDING_SPEED),
             climb: input.velocity.y,
         };
 
-        let started = Instant::now();
         self.cache
             .forget_what_moved(input.world, input.exclude, input.terrain_changes);
         self.fetch_scenery_if_needed(input, body.s);
@@ -278,24 +283,34 @@ impl TraversalPlanning {
         self.scenery_until = until;
     }
 
-    /// Lays the path along the heading from the body when there is none,
-    /// the heading has turned, or the body has left its line; the last plan
-    /// goes with the old path. Whether it did.
+    /// Lays the path the way the body will move ([`WallSlide`]) when there is
+    /// none, that way has turned, or the body has left its line; the last
+    /// plan goes with the old path. Whether it did.
     fn lay_path_if_needed(&mut self, input: &PlanningInput) -> bool {
+        let line = WallSlide {
+            world: input.world,
+            scenery: input.scenery,
+            exclude: input.exclude,
+            body: &self.planner.params.body,
+        }
+        .path(input.position, input.heading, self.layout.ahead);
         let fresh = match self.cache.frame() {
             None => true,
             Some(frame) => {
                 let at = frame.path_point(input.position);
-                let turned =
-                    frame.forward().angle(&input.heading).to_degrees() > TURN_LIMIT_DEGREES;
+                let limit = if line.slides {
+                    SLIDE_TURN_LIMIT_DEGREES
+                } else {
+                    TURN_LIMIT_DEGREES
+                };
+                let turned = frame.forward().angle(&line.frame.forward()).to_degrees() > limit;
                 turned
                     || at.d.abs() > OFF_LINE_LIMIT
                     || (input.position.y - self.laid_at).abs() > HEIGHT_LIMIT
             }
         };
         if fresh {
-            self.cache
-                .lay_path(PathFrame::along(input.position, input.heading));
+            self.cache.lay_path(line.frame);
             self.scenery = None;
             self.laid_at = input.position.y;
             self.previous = None;

@@ -546,7 +546,8 @@ median height, and where only one has a ceiling) so a station read as other
 ground fails even when both refuse; the lips are authored as the voxels mesh
 them, sloped across the voxel at the face. The Stack Yard check
 (`stack_yard_places`) plans places that planned wrongly in play to the
-outcome they should have: the ball pit from its rim. Planned:
+outcome they should have: the ball pit from its rim, and running along the
+pyramid's first step pressed into the next step's face. Planned:
 
 - **`PlanOverlay`**: the plan through `DebugOverlays`. Footfalls as discs
   (left and right coloured, committed solid, tentative faded), flight arcs,
@@ -613,6 +614,10 @@ until E.
 - **Path prediction:** how far to trust the stick's curvature for the section
   frame on a hard turn, and what the plan does when the player stops or
   reverses (a plan that ends in a stop, and a churn cost waived on reversal).
+  Walls are settled: a path is laid along a wall the heading meets within 30°
+  of parallel, as the capsule slides on it, its line kept 3 cm clear
+  (`WallSlide`). The walls are what the capsule's top sphere meets, so lips
+  lower than its middle stay hops. The 30° is to tune in play.
 - **Lateral footing:** the strip's width and lane count (five over ±0.3 m to
   start) and how far the foot placer may move a foot from its planned
   footfall are judged on the scree and rubble lanes in D and F. If the best
