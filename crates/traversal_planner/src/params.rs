@@ -21,7 +21,7 @@ pub struct BodyDims {
     /// model it: the limit keeps a voxel lip's 45° bevel a hop.
     pub max_ground_slope_degrees: f32,
     /// Fastest change of speed along the path the drive gives on the ground,
-    /// in m/s².
+    /// in m/s²: its mean from standing to speed (`character_viewer contract`).
     pub max_acceleration: f32,
 }
 
@@ -59,7 +59,7 @@ impl Default for BodyDims {
             radius: 0.25,
             height: 1.0,
             max_ground_slope_degrees: 40.0,
-            max_acceleration: 8.0,
+            max_acceleration: 20.0,
         }
     }
 }

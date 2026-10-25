@@ -4,6 +4,7 @@
 //! ```text
 //!   slope    ramps of 30..58° climbed at walk and run ─▶ climbed up to max_ground_slope_degrees,
 //!                                                        at BodyDims::ground_speed
+//!   accel    a run-up from standing on flat ground    ─▶ max_acceleration, a little under it
 //!   takeoff  a jump on flat ground at walk and run    ─▶ the arc it flies: gravity,
 //!            and one in the coyote window off a deck     takeoff climb ≥ max_takeoff_climb,
 //!                                                        no bend, no lost climb
@@ -77,6 +78,14 @@ const RIDES: [&str; 8] = [
 /// share of it, for the body to count as falling freely.
 const FREE_FALL_SLACK: f32 = 0.5;
 const ARC_TOLERANCE: f32 = 0.03;
+/// Fastest a body counts as standing, in m/s.
+const AT_REST: f32 = 0.05;
+/// Share of its gait's speed a run-up is timed to.
+const ACCELERATED: f32 = 0.9;
+/// Largest share by which the drive's acceleration may exceed the claimed:
+/// a plan that brakes and speeds up more gently than the drive does holds
+/// the body back.
+const ACCELERATION_SLACK: f32 = 0.25;
 /// Largest share by which the effective gravity may differ from the claimed.
 const GRAVITY_TOLERANCE: f32 = 0.02;
 /// Largest share of its takeoff speed a flight may gain or lose across.
@@ -329,7 +338,8 @@ fn fit_quadratic(samples: &[(f32, f32)]) -> Option<(f32, f32, f32)> {
 }
 
 /// A jump at speed on flat ground: the arc against a ballistic one, its
-/// gravity against the claimed, its climb against the most a plan asks.
+/// gravity against the claimed, its climb against the most a plan asks; and
+/// the run-up's acceleration from standing against the plan's.
 fn takeoff(
     config: &RunConfig,
     params: &GaitParams,
@@ -341,9 +351,22 @@ fn takeoff(
         .then(gait.jump(JUMP_BEAT));
     let take = run(&lane("takeoff", FLAT_Z, script), config)?;
     let arc = flight(&take.frames).ok_or_else(|| no_flight("the flat jump"))?;
+    let accelerated = acceleration(&take.frames, gait.speed()).ok_or_else(|| {
+        EngineError::InvalidState("the run-up never reached its speed".to_string())
+    })?;
+    let claimed = params.body.max_acceleration;
     let gait = gait.name();
     let gained = arc.speeds.1 / arc.speeds.0.max(1.0e-3) - 1.0;
     Ok(vec![
+        ContractCheck {
+            name: format!("acceleration {gait}"),
+            measured: format!("{accelerated:.1} m/s²"),
+            claim: format!(
+                "max_acceleration {claimed} ≤ it, within {:.0}%",
+                ACCELERATION_SLACK * 100.0
+            ),
+            holds: claimed <= accelerated && accelerated <= claimed * (1.0 + ACCELERATION_SLACK),
+        },
         ContractCheck {
             name: format!("takeoff {gait}: climb"),
             measured: format!("{:.2} m/s", arc.v0),
@@ -369,6 +392,19 @@ fn takeoff(
             holds: arc.worst <= ARC_TOLERANCE && gained.abs() <= AIR_SPEED_TOLERANCE,
         },
     ])
+}
+
+/// The mean acceleration from standing to `ACCELERATED` of `speed`, in m/s²:
+/// from the last frame at rest to the first that far up.
+fn acceleration(frames: &[FrameRecord], speed: f32) -> Option<f32> {
+    let start = frames
+        .iter()
+        .take_while(|frame| frame.planar_speed() <= AT_REST)
+        .last()?;
+    let reached = frames
+        .iter()
+        .find(|frame| frame.planar_speed() >= ACCELERATED * speed)?;
+    Some(reached.planar_speed() / (reached.time - start.time).max(f32::EPSILON))
 }
 
 /// A jump pressed the frame after running off the deck's edge, against one

@@ -25,13 +25,23 @@ pub enum Pace {
 impl Pace {
     /// The speed after riding `distance` from `speed`, asked for `target`.
     pub fn speed_after(self, speed: f32, distance: f32, target: f32, params: &GaitParams) -> f32 {
-        let change = params.body.max_acceleration * distance / speed.max(MIN_PLANNING_SPEED);
+        let (slowest, fastest) = speed_reach(speed, distance, params);
         let next = match self {
-            Pace::Press => speed + (target - speed).clamp(-change, change),
-            Pace::Brake => speed - change,
+            Pace::Press => target.clamp(slowest, fastest),
+            Pace::Brake => slowest,
         };
         next.max(MIN_PLANNING_SPEED)
     }
+}
+
+/// The slowest and fastest the drive can bring `speed` to over `distance`,
+/// at its acceleration held throughout.
+pub fn speed_reach(speed: f32, distance: f32, params: &GaitParams) -> (f32, f32) {
+    let change = 2.0 * params.body.max_acceleration * distance;
+    (
+        (speed * speed - change).max(0.0).sqrt(),
+        (speed * speed + change).sqrt(),
+    )
 }
 
 /// What running below the asked-for speed for `distance` costs, charged by

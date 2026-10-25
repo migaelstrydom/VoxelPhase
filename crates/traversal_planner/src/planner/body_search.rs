@@ -9,7 +9,7 @@ use crate::section::{FootholdWindow, Footing, SectionQuery};
 
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
-use super::rules::{slowdown_cost, Pace, MIN_PLANNING_SPEED, PUSH_OFF_TOLERANCE};
+use super::rules::{slowdown_cost, speed_reach, Pace, MIN_PLANNING_SPEED, PUSH_OFF_TOLERANCE};
 use super::settings::PlannerSettings;
 
 /// Width of the speed bands the body's states are merged in, in m/s: fine
@@ -154,6 +154,19 @@ impl FootReach {
 
     fn len(&self) -> usize {
         self.answers[0].len()
+    }
+}
+
+/// How far apart two rides' accelerations may be, in m/s², for them to be
+/// one: a ride's phase holds its acceleration, so pressing to the asked-for
+/// speed and holding it there stay two.
+const SAME_ACCELERATION: f32 = 0.05;
+
+/// Whether two rides keep the same acceleration, so one phase can hold both.
+fn same_acceleration(a: &BodySegment, b: &BodySegment) -> bool {
+    match (a.ride_acceleration(), b.ride_acceleration()) {
+        (Some(a), Some(b)) => (a - b).abs() <= SAME_ACCELERATION,
+        _ => false,
     }
 }
 
@@ -437,10 +450,10 @@ impl BodySearch<'_> {
             else {
                 continue;
             };
-            let change = self.params.body.max_acceleration * (to - from) / speed;
+            let (slowest, fastest) = speed_reach(speed, to - from, self.params);
             let end_speed = ride
                 .end_speed
-                .clamp(speed - change, speed + change)
+                .clamp(slowest, fastest)
                 .max(MIN_PLANNING_SPEED);
             let cost = self.settings.costs.ride_travel * ridden.vertical_travel
                 + slowdown_cost(
@@ -788,9 +801,7 @@ impl BodySearch<'_> {
     /// A lower bound on the slowdown a body at `speed` has still to pay over
     /// the `remaining` metres: it can regain speed no faster than the drive
     /// allows, and pays for running slow all the way back up. Taken at the
-    /// fast end of each stretch, so it never overstates; the search's
-    /// per-station speed-ups run a little ahead of the continuous rate, which
-    /// `HEURISTIC_SLACK` allows for.
+    /// fast end of each stretch, so it never overstates.
     fn slowdown_still_due(&self, speed: f32, remaining: f32) -> f32 {
         let target = self.target_speed.max(MIN_PLANNING_SPEED);
         if speed >= target || remaining <= 0.0 {
@@ -850,6 +861,9 @@ impl BodySearch<'_> {
         arrivals.reverse();
         let mut segments: Vec<BodySegment> = Vec::new();
         for arrival in arrivals {
+            let merges = segments
+                .last()
+                .is_some_and(|last| same_acceleration(last, &arrival));
             match (segments.last_mut(), arrival) {
                 (
                     Some(BodySegment::Ride { to, end_speed, .. }),
@@ -858,7 +872,7 @@ impl BodySearch<'_> {
                         end_speed: next_end,
                         ..
                     },
-                ) => {
+                ) if merges => {
                     *to = next_to;
                     *end_speed = next_end;
                 }

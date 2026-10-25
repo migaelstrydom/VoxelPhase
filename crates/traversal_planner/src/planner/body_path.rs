@@ -31,6 +31,22 @@ pub enum BodySegment {
 }
 
 impl BodySegment {
+    /// A ride's acceleration along the path, in m/s²; `None` for a flight.
+    pub fn ride_acceleration(&self) -> Option<f32> {
+        match *self {
+            Self::Ride {
+                from,
+                to,
+                start_speed,
+                end_speed,
+            } if to > from => {
+                Some((end_speed * end_speed - start_speed * start_speed) / (2.0 * (to - from)))
+            }
+            Self::Ride { .. } => Some(0.0),
+            Self::Flight { .. } => None,
+        }
+    }
+
     pub fn from(&self) -> f32 {
         match *self {
             Self::Ride { from, .. } => from,
