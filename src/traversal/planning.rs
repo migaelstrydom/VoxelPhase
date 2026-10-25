@@ -226,7 +226,7 @@ impl TraversalPlanning {
             Err(refusal) => &refusal.partial,
         };
         let later = plan.after(input.dt);
-        self.planted = plan.stance_at(input.dt).copied();
+        self.planted = carried_stance(&outcome, input.dt);
         self.lead = match self.planted {
             Some(stance) => stance.limb.other(),
             None => later
@@ -325,5 +325,62 @@ impl TraversalPlanning {
             self.planted = None;
         }
         fresh
+    }
+}
+
+/// The foot `outcome`'s plan stands on `dt` seconds in, for the next frame's
+/// plan to start from; none under a refusal, whose partial plan holds its
+/// first foot to where it runs out however far the body has gone past it,
+/// and would be refused again from it. The next plan then stands on a foot
+/// under the body.
+fn carried_stance(outcome: &Result<Planned, Refusal>, dt: f32) -> Option<Contact> {
+    let planned = outcome.as_ref().ok()?;
+    planned.plan.stance_at(dt).copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use smallvec::smallvec;
+    use traversal_planner::plan::Phase;
+    use traversal_planner::section::Footing;
+    use traversal_planner::Motion;
+
+    use super::*;
+
+    /// A plan standing on a foot through the next frame carries it on; the
+    /// same plan refused carries none.
+    #[test]
+    fn only_a_plan_that_gets_through_carries_its_stance_on() {
+        let foot = Contact {
+            limb: Limb::LeftFoot,
+            at: PathVec::new(0.0, 0.1, 0.0),
+            normal: PathVec::UP,
+            footing: Footing::Fixed,
+        };
+        let plan = Plan {
+            phases: vec![Phase {
+                start: 0.0,
+                duration: 1.0,
+                contacts: smallvec![foot],
+                motion: Motion::Grounded {
+                    from: 0.0,
+                    to: 5.0,
+                    start_speed: 5.0,
+                    end_speed: 5.0,
+                },
+            }],
+            ..Plan::default()
+        };
+        let planned = Ok(Planned {
+            plan: plan.clone(),
+            cost: 0.0,
+            diverged: false,
+        });
+        assert_eq!(carried_stance(&planned, 0.1), Some(foot));
+        let refused = Err(Refusal {
+            partial: plan,
+            diverged: false,
+        });
+        assert_eq!(carried_stance(&refused, 0.1), None);
     }
 }
