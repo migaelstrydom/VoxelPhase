@@ -572,10 +572,16 @@ at the 99th percentile) instead of 4.
 
 **Tracking (E, first version), F8, off by default.** The plan system runs
 between the player's input and `CharacterControlSystem`: it plans from the
-player's intent, then rewrites that intent (`tracking.rs`). On the ground the
-intent asks the plan's speed one frame ahead, more up or down a grade by the
-drive contract's `ground_speed` so the drive delivers the plan's speed, and
-is steered by the stick: the path is relaid only once the heading has turned
+player's intent, then rewrites that intent (`tracking.rs`). On the ground
+the plan only holds the body back: where it is speeding up the stick sets
+the pace and the drive accelerates as it does untracked (its first frames
+on firm ground outrun the 20 m/s² mean the plan assumes, and asking the
+plan's speed made every start, turn and landing feel sluggish); where it
+holds below the asked speed or slows, the intent asks its speed one frame
+ahead, more up or down a grade by the drive contract's `ground_speed` so
+the drive delivers it. Which of the two (or a refusal's braking) sets the
+pace shows on screen as `Traversal track`. The intent is steered by the
+stick: the path is relaid only once the heading has turned
 10°, and steering along it turned the body in steps. Along a wall it slides
 on, the intent follows the path. A ride changes speed at constant
 acceleration (`v² = v₀² + 2ad`, not `a·d/v` a station at a time, which from
@@ -585,9 +591,8 @@ run held there became one slow ramp, and the body tracked the ramp. A hop starti
 `PlannedTakeoff` on the intent, which the locomotion state machine launches
 locked: the plan's climb, its planar velocity held for the flight, no
 steering, no cutoff. A roll-off asks for nothing (the body runs off the edge).
-A refused plan is followed to where it ran out, braked to stop there: the
-refusal-drop choice taken as "stop at the edge" until play says otherwise.
-Then it lets go: with under 5 cm of plan left, or the body down to 0.5 m/s,
+A refused plan is followed to where it ran out, braked to stop there. Then
+it lets go: with under 5 cm of plan left, or the body down to 0.5 m/s,
 the stick drives as untracked, so a strip read wrongly never holds the body
 (it had, beside a bank and against the corner where a ramp meets its
 plateau), and a held push carries on over the edge. A
@@ -595,20 +600,28 @@ jump the player presses still jumps. `character_viewer traversal --summary
 --track` runs the garden stations with it. A hop is taken off on the frame
 nearest its planned start, half a frame early at most.
 
-Against the untracked runs on 2026-10-25 (morning, after the fixes above):
+**Edges are jumped off.** A run at an edge leaves it at speed: a footfall
+may land up to `max_drop` (8 m) below the last, and a flight off an edge may
+land past a stride by as far as the body carries falling to its landing
+(`rules::jumped`): a jump, its feet a push-off and a landing within a foot's
+slack of where the body comes down, not a stride. Level hops stay within a
+stride. Over the Stack Yard's voussoir arch (`stack_yard_voussoir_arch`) the
+plan had hopped the top stone and then braked to 2 m/s to drop off the far
+side within a stride; it now runs the crest and jumps off at 5 or 7 m/s.
+
+Against the untracked runs on 2026-10-25 (late morning):
 - **better:** the 25 and 40 cm lips, crossed at speed instead of stalled
-  (25 cm at a run: lowest speed 7.97 m/s against 0.55; 40 cm at a run: 5.87
-  against 0.14); the narrow planks at a walk and the wide ones at either gait
-  sooner (wide at a walk: 2.03 s against 2.20); the 50° slope, which the
-  body now barges up once its refusal has stopped it;
-- **level:** the 3 and 8 cm lips, the 15 cm lip at a run, the rough lane at
-  a walk (2.60 s against 2.63), the 40° slope (time within 2%);
-- **worse:** the 15 cm lip at a walk (0.47 s against 0.43), the narrow
-  planks at a run (2.93 s against 1.30: the hop onto
-  them lands with a bounce and the run never recovers; at 8 m/s² it took
-  1.50 s, while most other rows were slower), the rough lane at a run (2.07 s
-  against 1.87), and the scree, climbed but too slowly to reach its shelf in
-  the run. The scree's rocks stand 0.6 m above its slope: a planned hop is
+  (25 cm at a walk: lowest speed 4.55 m/s against 1.07; 40 cm at a run: 5.53
+  against 0.14), the rough lane (1.70 s against 1.87 running), the wide
+  planks at a run;
+- **level:** the 3, 8 and 15 cm lips, both slopes (the 50° one barged up
+  once its refusal has stopped the body);
+- **worse:** the narrow planks (2.53 s against 2.20 walking, 1.47 against
+  1.30 running) and the wide ones at a walk (2.40 against 2.20), whose
+  landings bounce off plank edges by a frame's luck; the 25 cm lip at a run
+  lands on its edge 2 cm low after a takeoff a 30 Hz frame late, and loses
+  speed; and the scree, climbed but too slowly to reach its shelf in the
+  run. The scree's rocks stand 0.6 m above its slope: a planned hop is
   capped at 3 m/s of climb (0.45 m), and even uncapped the feet find no
   landing on their tops. Ledge and cave are refused either way.
 
@@ -674,11 +687,9 @@ until E.
   candidates: keep the last plan's tail whole while it still holds and the
   request has not changed, planning only past its end; or search the tail on
   the last search's own lattice.
-- **Past a refusal:** a refusal means no plan within the rules, but with the
-  stick still pushed the body would ride off an edge and fall, unplanned. In
-  E: either a refusal plans a stop at the edge and a held push (about 0.3 s)
-  allows a drop move (a flight off the edge with no `max_drop`, at a high
-  cost), or drops are always allowed at a high cost. To decide with play.
+- **Past a refusal:** settled: edges are jumped off up to `max_drop`, with
+  enthusiasm, and a refusal that is left (a drop deeper, a wall) brakes the
+  body to where it ran out and then leaves it to the stick.
 - **Small gaps:** settled by roll-offs. A gap the body's arc crosses at its
   speed is rolled over flat (or hopped, at the same cost), never dipped into;
   a wide one is hopped.

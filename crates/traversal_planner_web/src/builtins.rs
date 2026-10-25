@@ -50,4 +50,8 @@ pub const SCENES: &[(&str, &str)] = &[
         "stack_yard_crate_pile_east (captured)",
         include_str!("../../traversal_planner/fixtures/stack_yard_crate_pile_east.ron"),
     ),
+    (
+        "stack_yard_voussoir_arch (captured)",
+        include_str!("../../traversal_planner/fixtures/stack_yard_voussoir_arch.ron"),
+    ),
 ];

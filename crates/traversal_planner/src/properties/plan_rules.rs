@@ -1,5 +1,6 @@
 use crate::params::GaitParams;
 use crate::plan::{Contact, Motion, Phase, Plan};
+use crate::planner::rules::jumped;
 use crate::section::{Footing, SectionQuery};
 
 use super::violation::{Rule, Violation};
@@ -53,7 +54,8 @@ pub fn check_plan(plan: &Plan, query: &dyn SectionQuery, params: &GaitParams) ->
         .copied();
     for (time, contact) in plan.footfalls() {
         if let Some(last) = last {
-            check_step(&last, contact, params, &mut |rule, detail| {
+            let jump = lands_a_jump(plan, time, params);
+            check_step(&last, contact, jump, params, &mut |rule, detail| {
                 broke(rule, time, detail)
             });
         }
@@ -96,10 +98,24 @@ fn start_s(phase: &Phase) -> f32 {
     }
 }
 
-/// The step from `last` to `next` against the gait's limits.
+/// Whether the footfall at `time` lands a jump off an edge: a flight longer
+/// than a stride spans, which no step limit holds.
+fn lands_a_jump(plan: &Plan, time: f32, params: &GaitParams) -> bool {
+    plan.phases.iter().any(|phase| match phase.motion {
+        Motion::Flight { takeoff, .. } => {
+            (phase.start + phase.duration - time).abs() < TOLERANCE
+                && jumped(phase.end_s() - takeoff.s, params) > 0.0
+        }
+        Motion::Grounded { .. } => false,
+    })
+}
+
+/// The step from `last` to `next` against the gait's limits; its length
+/// not, if it lands a `jump`.
 fn check_step(
     last: &Contact,
     next: &Contact,
+    jump: bool,
     params: &GaitParams,
     broke: &mut impl FnMut(Rule, String),
 ) {
@@ -111,7 +127,10 @@ fn check_step(
     let reach = params.foot.reach(next.limb);
     let out_of_limits = [
         (length < stride.min_length - TOLERANCE, "step too short"),
-        (length > stride.max_length + TOLERANCE, "step too long"),
+        (
+            !jump && length > stride.max_length + TOLERANCE,
+            "step too long",
+        ),
         (rise > stride.max_rise + TOLERANCE, "rise too high"),
         (-rise > stride.max_drop + TOLERANCE, "drop too deep"),
         (

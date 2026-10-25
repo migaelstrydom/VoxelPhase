@@ -146,7 +146,7 @@ impl Default for StrideLimits {
             min_length: 0.2,
             max_length: 2.5,
             max_rise: 0.45,
-            max_drop: 1.0,
+            max_drop: 8.0,
         }
     }
 }

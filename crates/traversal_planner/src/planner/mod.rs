@@ -7,7 +7,7 @@ mod cheapest_first;
 mod cost;
 mod footfall_search;
 mod plan_builder;
-mod rules;
+pub(crate) mod rules;
 mod search;
 mod settings;
 

@@ -12,7 +12,9 @@
 //! `--time`, each scene is planned repeatedly and its mean plan time printed
 //! (build with `--release`). With `--speed v`, each scene is planned at `v`
 //! m/s instead of its own speed (the player crouches at 2, walks at 5 and
-//! sprints at 8).
+//! sprints at 8). With `--phases`, each plan's phases are printed: rides,
+//! hops (pushed off by a foot) and roll-offs (riding off ground that falls
+//! away), where and how fast.
 //!
 //! To look at one as a PNG at its own size (Quick Look crops to a square):
 //!
@@ -28,9 +30,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use std::{env, fs, process};
 
+use traversal_planner::plan::Phase;
 use traversal_planner::section::StripQuery;
 use traversal_planner::svg::render_scene;
-use traversal_planner::{Planner, PlannerSettings, TraversalScene};
+use traversal_planner::{Motion, Planner, PlannerSettings, TraversalScene};
 
 /// How many times `--time` plans each scene.
 const TIMED_PLANS: usize = 20;
@@ -41,12 +44,14 @@ fn main() {
     let mut out_dir: Option<PathBuf> = None;
     let mut time = false;
     let mut speed: Option<f32> = None;
+    let mut phases = false;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-o" => out = args.next().map(PathBuf::from),
             "--out-dir" => out_dir = args.next().map(PathBuf::from),
             "--time" => time = true,
+            "--phases" => phases = true,
             "--speed" => speed = args.next().and_then(|v| v.parse().ok()),
             _ => scenes.push(PathBuf::from(arg)),
         }
@@ -55,7 +60,7 @@ fn main() {
         || (out.is_some() && scenes.len() > 1)
         || (out.is_none() && out_dir.is_none())
     {
-        eprintln!("usage: section_svg <scene.ron> -o <out.svg> | section_svg <scene.ron>... --out-dir <dir> [--time] [--speed v]");
+        eprintln!("usage: section_svg <scene.ron> -o <out.svg> | section_svg <scene.ron>... --out-dir <dir> [--time] [--speed v] [--phases]");
         process::exit(2);
     }
     for scene_path in &scenes {
@@ -66,7 +71,7 @@ fn main() {
                 .with_extension("svg"),
             (None, None) => unreachable!(),
         };
-        if let Err(error) = draw(scene_path, &target, time, speed) {
+        if let Err(error) = draw(scene_path, &target, time, speed, phases) {
             eprintln!("{}: {error}", scene_path.display());
             process::exit(1);
         }
@@ -74,7 +79,13 @@ fn main() {
     }
 }
 
-fn draw(scene_path: &Path, target: &Path, time: bool, speed: Option<f32>) -> Result<(), String> {
+fn draw(
+    scene_path: &Path,
+    target: &Path,
+    time: bool,
+    speed: Option<f32>,
+    phases: bool,
+) -> Result<(), String> {
     let text = fs::read_to_string(scene_path).map_err(|error| error.to_string())?;
     let mut scene = TraversalScene::from_ron(&text).map_err(|error| error.to_string())?;
     if let Some(speed) = speed {
@@ -111,6 +122,15 @@ fn draw(scene_path: &Path, target: &Path, time: bool, speed: Option<f32>) -> Res
         format!(" (expected: {expected:?})")
     });
     eprintln!("{name}: {verdict}{expected}{timing}");
+    if phases {
+        let plan = match &outcome {
+            Ok(planned) => &planned.plan,
+            Err(refusal) => &refusal.partial,
+        };
+        for phase in &plan.phases {
+            eprintln!("  {}", describe(phase));
+        }
+    }
     let svg = render_scene(
         &format!("{name}: {verdict}"),
         &scene,
@@ -121,4 +141,29 @@ fn draw(scene_path: &Path, target: &Path, time: bool, speed: Option<f32>) -> Res
         fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     }
     fs::write(target, svg).map_err(|error| error.to_string())
+}
+
+/// One line for a phase: what it is, where along the path, how fast.
+fn describe(phase: &Phase) -> String {
+    let at = format!("t {:.3}+{:.3}", phase.start, phase.duration);
+    match phase.motion {
+        Motion::Grounded {
+            from,
+            to,
+            start_speed,
+            end_speed,
+        } => format!("{at} ride     s {from:.2}..{to:.2}  {start_speed:.2} -> {end_speed:.2} m/s"),
+        Motion::Flight { takeoff, .. } => format!(
+            "{at} {} s {:.2}..{:.2}  {:.2} m/s, climb {:.2}",
+            if phase.contacts.is_empty() {
+                "hop     "
+            } else {
+                "roll-off"
+            },
+            takeoff.s,
+            phase.end_s(),
+            takeoff.speed,
+            takeoff.climb
+        ),
+    }
 }

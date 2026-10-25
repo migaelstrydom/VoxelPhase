@@ -9,7 +9,7 @@ use crate::section::{Foothold, FootholdWindow, SectionQuery};
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
 use super::cost::FootfallCosts;
-use super::rules::PUSH_OFF_TOLERANCE;
+use super::rules::{jumped, FOOT_SLACK, PUSH_OFF_TOLERANCE};
 use super::settings::PlannerSettings;
 
 /// Length along the path of the bands the body's landing is merged in, in
@@ -209,7 +209,7 @@ impl FootfallSearch<'_> {
         };
 
         for foothold in &footholds {
-            let Some(base) = self.footfall_cost(node, limb, foothold) else {
+            let Some(base) = self.footfall_cost(node, limb, foothold, 0.0) else {
                 continue;
             };
             let contact = Contact {
@@ -252,36 +252,67 @@ impl FootfallSearch<'_> {
                     });
                 }
             }
+        }
 
-            // Landing at the end of the next flight, pushed off from the
-            // stance foot with the body over or past it.
-            if let Some(flight) = next_flight {
-                let landing = flight.landing;
-                let lands_ahead = foothold.at.s >= landing - TOLERANCE
-                    && foothold.at.s <= 2.0 * landing - stance.at.s + TOLERANCE;
-                if flight.takeoff < stance.at.s - PUSH_OFF_TOLERANCE || !lands_ahead {
-                    continue;
-                }
-                let footfall = Footfall {
-                    contact,
-                    body_s: landing,
-                };
-                if !worth(&footfall, base)
-                    || !params.foot_reaches(flight.landing_z, contact.at.z)
-                    || !params.foot_reaches(flight.takeoff_z, stance.at.z)
-                {
-                    continue;
-                }
-                let cost = base + self.unheld_cost(&contact, &stance, landing);
-                if worth(&footfall, cost) {
-                    out.push(Node {
-                        footfall,
-                        count: node.count + 1,
-                        next_flight: node.next_flight + 1,
-                        cost,
-                        parent: None,
-                    });
-                }
+        // Landing at the end of the next flight, pushed off from the stance
+        // foot with the body over or past it: from the landing to as far past
+        // it as the push-off was behind the takeoff, within a stride of the
+        // push-off; or, after a jump off an edge, which no stride spans,
+        // within a foot's slack of the landing.
+        let Some(flight) = next_flight else {
+            return;
+        };
+        let landing = flight.landing;
+        if flight.takeoff < stance.at.s - PUSH_OFF_TOLERANCE {
+            return;
+        }
+        let jump = jumped(landing - flight.takeoff, params) > 0.0;
+        let (farthest, flown) = if jump {
+            (landing + FOOT_SLACK, landing - flight.takeoff)
+        } else {
+            (
+                (2.0 * landing - stance.at.s).min(stance.at.s + params.stride.max_length),
+                0.0,
+            )
+        };
+        footholds.clear();
+        self.query.footholds(
+            &FootholdWindow {
+                s: landing - TOLERANCE..farthest + TOLERANCE,
+                d: params.foot.reach(limb),
+                spacing: self.spacing,
+            },
+            &mut footholds,
+        );
+        for foothold in &footholds {
+            let Some(base) = self.footfall_cost(node, limb, foothold, flown) else {
+                continue;
+            };
+            let contact = Contact {
+                limb,
+                at: foothold.at,
+                normal: foothold.normal,
+                footing: foothold.footing,
+            };
+            let footfall = Footfall {
+                contact,
+                body_s: landing,
+            };
+            if !worth(&footfall, base)
+                || !params.foot_reaches(flight.landing_z, contact.at.z)
+                || !params.foot_reaches(flight.takeoff_z, stance.at.z)
+            {
+                continue;
+            }
+            let cost = base + self.unheld_cost(&contact, &stance, landing);
+            if worth(&footfall, cost) {
+                out.push(Node {
+                    footfall,
+                    count: node.count + 1,
+                    next_flight: node.next_flight + 1,
+                    cost,
+                    parent: None,
+                });
             }
         }
     }
@@ -294,8 +325,15 @@ impl FootfallSearch<'_> {
     }
 
     /// What a footfall on `foothold` costs after `node`, whatever the body
-    /// does meanwhile; `None` where no foot may land.
-    fn footfall_cost(&self, node: &Node, limb: Limb, foothold: &Foothold) -> Option<f32> {
+    /// does meanwhile, `flown` metres of the step a jump rather than a
+    /// stride; `None` where no foot may land.
+    fn footfall_cost(
+        &self,
+        node: &Node,
+        limb: Limb,
+        foothold: &Foothold,
+        flown: f32,
+    ) -> Option<f32> {
         let (params, weights) = (self.params, &self.settings.costs);
         let costs = FootfallCosts { weights };
         let stance = node.footfall.contact.at;
@@ -308,7 +346,7 @@ impl FootfallSearch<'_> {
             return None;
         }
         let natural = self.settings.natural_step(self.target_speed, params);
-        let length_off = (foothold.at.s - stance.s - natural) / natural;
+        let length_off = (foothold.at.s - stance.s - flown - natural) / natural;
         let reach = params.foot.reach_in.max(params.foot.reach_out);
         let sideways_off = (foothold.at.d - params.foot.natural_offset(limb)) / reach;
         let near_edge = (weights.comfortable_edge_margin - foothold.edge_margin).max(0.0)

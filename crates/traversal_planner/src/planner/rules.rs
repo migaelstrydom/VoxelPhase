@@ -11,6 +11,15 @@ pub const MIN_PLANNING_SPEED: f32 = 0.3;
 /// read a fraction of a millimetre past it. More lets the body plan
 /// takeoffs its feet then cannot make.
 pub const PUSH_OFF_TOLERANCE: f32 = 0.001;
+/// How far a foot may be behind a takeoff or past a landing, in metres.
+pub const FOOT_SLACK: f32 = 0.15;
+
+/// How much of a flight `span` metres long is a jump's, not a step's: what
+/// is beyond the longest flight a stride spans with a foot's slack at
+/// either end. A flight off an edge may carry that far past a stride.
+pub fn jumped(span: f32, params: &GaitParams) -> f32 {
+    (span - (params.stride.max_length - 2.0 * FOOT_SLACK)).max(0.0)
+}
 
 /// How the body's speed changes while it is on the ground.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

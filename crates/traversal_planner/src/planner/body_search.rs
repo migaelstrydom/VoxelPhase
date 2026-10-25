@@ -9,7 +9,9 @@ use crate::section::{FootholdWindow, Footing, SectionQuery};
 
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
-use super::rules::{slowdown_cost, speed_reach, Pace, MIN_PLANNING_SPEED, PUSH_OFF_TOLERANCE};
+use super::rules::{
+    jumped, slowdown_cost, speed_reach, Pace, FOOT_SLACK, MIN_PLANNING_SPEED, PUSH_OFF_TOLERANCE,
+};
 use super::settings::PlannerSettings;
 
 /// Width of the speed bands the body's states are merged in, in m/s: fine
@@ -126,8 +128,6 @@ const HEURISTIC_PIECES: usize = 4;
 /// Share of the slowdown still due the search counts on, below one so the
 /// estimate stays a lower bound.
 const HEURISTIC_SLACK: f32 = 0.9;
-/// How far a foot may be behind a takeoff or past a landing, in metres.
-const FOOT_SLACK: f32 = 0.15;
 
 /// What the feet need of a station.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -630,8 +630,10 @@ impl BodySearch<'_> {
         ));
     }
 
-    /// Flying from this station to a landing up to a step ahead, where the
-    /// ride ahead breaks or gets rough.
+    /// Flying from this station, where the ride ahead breaks or gets rough,
+    /// to a landing a stride ahead; off an edge, further by as far as the
+    /// body carries falling to the landing: a jump, its feet a push-off and
+    /// a landing, not a stride.
     fn fly(
         &self,
         origin: f32,
@@ -667,9 +669,8 @@ impl BodySearch<'_> {
         if (self.grid_index(origin) + station as i64) % stride as i64 != 0 {
             return;
         }
-        // The step from the foot pushing off to the foot landing spans the
-        // flight and a foot's slack at either end.
-        let longest = reach - 2.0 * FOOT_SLACK;
+        let stride_flight = reach - 2.0 * FOOT_SLACK;
+        let longest = stride_flight + self.falling_flight(speed, params.stride.max_drop);
         let first = station
             + ((settings.min_flight - STATION_TOLERANCE) / settings.body_step).ceil() as usize;
         let last = station + ((longest + STATION_TOLERANCE) / settings.body_step).floor() as usize;
@@ -688,6 +689,9 @@ impl BodySearch<'_> {
             if floor.normal.z < steepest
                 || !self.feet_can(origin, landing_station, FootNeed::TouchDown, known)
             {
+                continue;
+            }
+            if jumped(landing - from, params) > self.falling_flight(speed, z - floor.z) {
                 continue;
             }
             let duration = (landing - from) / speed;
@@ -735,6 +739,13 @@ impl BodySearch<'_> {
                 },
             ));
         }
+    }
+
+    /// How far along the path a body at `speed` carries falling `drop`
+    /// metres with no climb: how much further than a stride a flight off an
+    /// edge may land.
+    fn falling_flight(&self, speed: f32, drop: f32) -> f32 {
+        speed * (2.0 * drop.max(0.0) / self.params.gravity).sqrt()
     }
 
     /// What flying from `takeoff` to `landing` costs in churn: nothing if

@@ -9,7 +9,7 @@ use winit::keyboard::KeyCode;
 
 use crate::character::{CharacterIntent, CharacterState, LocomotionConfig};
 use crate::components::RigidBodyComponent;
-use crate::debug::{DebugLog, DebugOverlays};
+use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::input::InputState;
 use crate::rendering::Colour;
 use crate::systems::{resolve_ground_speed, PhysicsResource};
@@ -20,7 +20,7 @@ use super::gait::player_gait;
 use super::marker::PlansTraversal;
 use super::plan_capture::{scene_of, write_capture};
 use super::planning::{PlanFrame, PlanningInput, TraversalPlanning};
-use super::tracking::{floor_grade, track};
+use super::tracking::{floor_grade, track, Pace};
 
 /// Key that shows and hides the plan in the world.
 const OVERLAY_KEY: KeyCode = KeyCode::F6;
@@ -28,6 +28,8 @@ const OVERLAY_KEY: KeyCode = KeyCode::F6;
 const CAPTURE_KEY: KeyCode = KeyCode::F7;
 /// Key that turns the plan driving the body on and off.
 const TRACK_KEY: KeyCode = KeyCode::F8;
+/// The on-screen line saying, while tracking, what sets the body's pace.
+const TRACK_LINE: &str = "Traversal track";
 /// Where captures are written, relative to the working directory.
 const CAPTURE_DIR: &str = "scratch/captures";
 /// Spacing along the path at which the body's planned path is drawn, in
@@ -82,6 +84,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
         Write<'a, TraversalPlanState>,
         Write<'a, DebugOverlays>,
         Write<'a, DebugLog>,
+        Write<'a, DebugLines>,
     );
 
     fn run(
@@ -99,6 +102,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
             mut state,
             mut overlays,
             mut log,
+            mut lines,
         ): Self::SystemData,
     ) {
         if input.is_key_just_pressed(OVERLAY_KEY) {
@@ -197,6 +201,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
                     frame.outcome.is_err(),
                     planning.params().body.max_acceleration,
                 );
+                let stick = push.norm().min(1.0);
                 if let Some(tracked) = tracked {
                     // The plan sets the pace; the stick steers, as the path is
                     // relaid only after it turns some way, but along a wall.
@@ -205,9 +210,36 @@ impl<'a> System<'a> for TraversalPlanSystem {
                     } else {
                         heading
                     };
-                    intent.direction = steer * (tracked.speed / gait_speed).min(1.0);
+                    let share = match tracked.pace {
+                        Pace::Asked => stick,
+                        Pace::Planned(speed) | Pace::Braking(speed) => {
+                            (speed / gait_speed).min(1.0)
+                        }
+                    };
+                    intent.direction = steer * share;
                     intent.takeoff = tracked.takeoff;
                 }
+                lines.add(
+                    TRACK_LINE,
+                    match tracked {
+                        None => "released: refused, nowhere to go".to_string(),
+                        Some(tracked) => format!(
+                            "{}{}",
+                            match tracked.pace {
+                                Pace::Asked => format!("as asked, {target_speed:.1} m/s"),
+                                Pace::Planned(speed) =>
+                                    format!("plan {speed:.1} of {target_speed:.1} m/s"),
+                                Pace::Braking(speed) =>
+                                    format!("braking to the refusal, {speed:.1} m/s"),
+                            },
+                            if tracked.takeoff.is_some() {
+                                ", hop"
+                            } else {
+                                ""
+                            }
+                        ),
+                    },
+                );
             }
             if input.is_key_just_pressed(CAPTURE_KEY) {
                 let scene = scene_of(frame, planning.params(), target_speed);

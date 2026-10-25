@@ -172,3 +172,35 @@ fn a_steady_slope_at_the_limit_is_ridden_not_hopped() {
         assert_eq!(hops, 0, "at {speed} m/s");
     }
 }
+
+/// Over the Stack Yard's voussoir arch the body runs the crest, its seams
+/// 12° corners it skims, and jumps off the far side at speed rather than
+/// braking to drop off within a stride.
+#[test]
+fn an_arch_is_run_over_and_jumped_off_at_speed() {
+    let mut scene = fixture("stack_yard_voussoir_arch");
+    for speed in [5.0, 8.0] {
+        scene.body.speed = speed;
+        scene.intent.speed = speed;
+        let section = scene.section();
+        let query = StripQuery::new(&section, &scene.params);
+        let planned = planner(&scene)
+            .plan(&query, &scene.request())
+            .unwrap_or_else(|_| panic!("refused at {speed} m/s"));
+        let flights: Vec<_> = planned
+            .plan
+            .phases
+            .iter()
+            .filter_map(|phase| match phase.motion {
+                traversal_planner::Motion::Flight { takeoff, .. } => Some(takeoff),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(flights.len(), 1, "one jump, off the end, at {speed} m/s");
+        assert!(
+            flights[0].speed > 0.9 * speed && flights[0].climb < 0.5,
+            "at {speed} m/s: {:?}",
+            flights[0]
+        );
+    }
+}
