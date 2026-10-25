@@ -609,8 +609,13 @@ impl<'a> System<'a> for RenderSystem {
 
                     // Add FPS and fire count to debug lines
                     if debug.config.show_fps {
-                        let fps = 1.0 / time.delta_seconds();
+                        let fps = 1.0 / time.real_delta_seconds();
                         debug.lines.add("FPS", format!("{:.0}", fps));
+                    }
+                    if time.scale() != 1.0 {
+                        debug
+                            .lines
+                            .add("Slow motion", format!("x{} (F9)", time.scale()));
                     }
                     if debug.config.show_cpu_ms {
                         debug.lines.add("CPU ms", format!("{:.2}", self.cpu_ms_ema));

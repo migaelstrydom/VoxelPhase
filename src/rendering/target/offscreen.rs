@@ -16,6 +16,7 @@ use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::frame::ManagedBuffer;
 use crate::rendering::target::images::ColorTarget;
 use crate::rendering::target::output::{AcquiredFrame, FrameOutput};
+use crate::rendering::target::readback::{read_back_image, BYTES_PER_PIXEL};
 use crate::rendering::target::sync::FrameSync;
 
 /// Output format for offscreen rendering.
@@ -25,9 +26,6 @@ use crate::rendering::target::sync::FrameSync;
 /// wants. Rendering to a linear format instead would make every offscreen image
 /// come out darker than the game, which defeats the purpose of the tool.
 const OFFSCREEN_FORMAT: vk::Format = vk::Format::R8G8B8A8_SRGB;
-
-/// Bytes per pixel of `OFFSCREEN_FORMAT`.
-const BYTES_PER_PIXEL: u32 = 4;
 
 /// A single engine-owned image that finished frames land in.
 ///
@@ -71,67 +69,6 @@ impl OffscreenOutput {
             image_views,
         })
     }
-
-    /// Copy the rendered image back to host memory as tightly packed RGBA8.
-    ///
-    /// The caller must have finished the frame first — the image is expected to
-    /// be in `TRANSFER_SRC_OPTIMAL`, which is where `final_layout` leaves it.
-    fn read_pixels_impl(&self) -> EngineResult<Vec<u8>> {
-        let cmd_buffer = self
-            .vulkan_context
-            .command_buffer_manager
-            .create_one_time_submit_buffer()?;
-
-        self.vulkan_context
-            .command_buffer_manager
-            .submit_graphics_commands_and_wait(&cmd_buffer, |device, cb| {
-                let region = vk::BufferImageCopy::default()
-                    .image_subresource(
-                        vk::ImageSubresourceLayers::default()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .layer_count(1),
-                    )
-                    .image_extent(self.extent.into());
-
-                unsafe {
-                    device.cmd_copy_image_to_buffer(
-                        cb,
-                        self.target.image,
-                        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                        self.readback.buffer,
-                        &[region],
-                    );
-
-                    // Make the transfer write visible to the host map below.
-                    let barrier = vk::BufferMemoryBarrier::default()
-                        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                        .dst_access_mask(vk::AccessFlags::HOST_READ)
-                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                        .buffer(self.readback.buffer)
-                        .size(vk::WHOLE_SIZE);
-
-                    device.cmd_pipeline_barrier(
-                        cb,
-                        vk::PipelineStageFlags::TRANSFER,
-                        vk::PipelineStageFlags::HOST,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[barrier],
-                        &[],
-                    );
-                }
-            })?;
-
-        let byte_count = (self.extent.width * self.extent.height * BYTES_PER_PIXEL) as usize;
-
-        unsafe {
-            let mapped = self.readback.map_memory(0, vk::MemoryMapFlags::empty())?;
-            let pixels = std::slice::from_raw_parts(mapped as *const u8, byte_count).to_vec();
-            self.readback.unmap_memory();
-            Ok(pixels)
-        }
-    }
 }
 
 impl FrameOutput for OffscreenOutput {
@@ -170,6 +107,13 @@ impl FrameOutput for OffscreenOutput {
     }
 
     fn read_pixels(&self) -> EngineResult<Vec<u8>> {
-        self.read_pixels_impl()
+        // The image is left in `TRANSFER_SRC_OPTIMAL` by `final_layout`.
+        read_back_image(
+            &self.vulkan_context,
+            self.target.image,
+            self.final_layout(),
+            self.extent,
+            &self.readback,
+        )
     }
 }

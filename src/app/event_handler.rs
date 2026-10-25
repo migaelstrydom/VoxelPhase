@@ -7,9 +7,12 @@ use winit::{
 
 use specs::{World, WorldExt};
 
+use super::debug_snapshot::{request_snapshot, write_finished_snapshot};
 use super::placer_recording::toggle_nearest_recording;
+use super::slow_motion::next_speed;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::input::InputState;
+use crate::time::Time;
 
 /// Result of handling an event
 pub enum EventResult {
@@ -143,13 +146,12 @@ impl EventHandler {
 
 /// Clears per-frame state after systems have processed
 pub fn clear_frame_state(world: &mut World) {
-    use winit::keyboard::KeyCode;
-
-    let (should_print_debug, should_write_recording) = {
+    let (should_print_debug, should_write_recording, should_slow_down) = {
         let input = world.read_resource::<InputState>();
         (
             input.is_key_just_pressed(KeyCode::F3),
             input.is_key_just_pressed(KeyCode::F4),
+            input.is_key_just_pressed(KeyCode::F9),
         )
     };
 
@@ -161,6 +163,16 @@ pub fn clear_frame_state(world: &mut World) {
         toggle_nearest_recording(world);
     }
 
+    if should_slow_down {
+        next_speed(&mut world.write_resource::<Time>());
+    }
+
+    // F3 prints the debug log and keeps it, with the next frame's picture.
+    write_finished_snapshot(world);
+    if should_print_debug {
+        let log = world.read_resource::<DebugLog>().text();
+        request_snapshot(world, log);
+    }
     {
         let mut debug_log = world.write_resource::<DebugLog>();
         debug_log.print_and_clear(should_print_debug);

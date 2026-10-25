@@ -115,13 +115,17 @@ impl DebugLog {
     /// set based on whether F3 is pressed.
     pub fn print_and_clear(&mut self, should_print: bool) {
         if should_print && !self.entries.is_empty() {
-            println!("\n=== Debug Log ===");
-            for (key, value) in &self.entries {
-                println!("{}: {}", key, value);
-            }
-            println!("=================\n");
+            println!("\n=== Debug Log ===\n{}=================\n", self.text());
         }
         self.entries.clear();
+    }
+
+    /// Every entry, a `key: value` line each, sorted by key.
+    pub fn text(&self) -> String {
+        self.entries
+            .iter()
+            .map(|(key, value)| format!("{key}: {value}\n"))
+            .collect()
     }
 }
 

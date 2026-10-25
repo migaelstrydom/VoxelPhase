@@ -2,11 +2,13 @@
 
 mod app;
 pub(crate) mod creatures;
+mod debug_snapshot;
 mod dispatcher_builder;
 mod event_handler;
 mod frame;
 mod game_world;
 mod placer_recording;
+mod slow_motion;
 pub(crate) mod spawnables;
 pub(crate) mod spawners;
 mod system_timing;

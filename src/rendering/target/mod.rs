@@ -19,7 +19,9 @@ pub mod frame_targets;
 pub mod images;
 pub mod offscreen;
 pub mod output;
+pub mod readback;
 pub mod refraction;
+pub mod screenshot;
 pub mod swapchain;
 pub mod sync;
 
@@ -28,5 +30,6 @@ pub use images::{ColorTarget, DepthBuffer};
 pub use offscreen::OffscreenOutput;
 pub use output::{AcquiredFrame, FrameOutput};
 pub use refraction::RefractionCopy;
+pub use screenshot::Screenshot;
 pub use swapchain::{SurfaceInfo, SwapchainOutput};
 pub use sync::FrameSync;

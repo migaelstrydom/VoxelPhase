@@ -48,7 +48,8 @@ use crate::rendering::sky::SkyRenderer;
 use crate::rendering::surface_buffer::SurfaceBuffer;
 use crate::rendering::target::frame_targets::DEPTH_FORMAT;
 use crate::rendering::target::{
-    AcquiredFrame, FrameOutput, FrameTargets, OffscreenOutput, SurfaceInfo, SwapchainOutput,
+    AcquiredFrame, FrameOutput, FrameTargets, OffscreenOutput, Screenshot, SurfaceInfo,
+    SwapchainOutput,
 };
 use crate::rendering::transparency::{BlendedDraw, BlendedShading, MeshBounds, TransparentQueue};
 use crate::rendering::vertex::Vertex;
@@ -270,6 +271,8 @@ pub struct Renderer {
     profile: RenderProfile,
     /// The last frame to finish on the GPU, complete with its GPU times.
     last_profile: RenderProfile,
+    /// The next finished frame as a picture, when asked for.
+    pub screenshot: Screenshot,
 }
 
 impl Renderer {
@@ -448,6 +451,7 @@ impl Renderer {
             current_frame: None,
             profile: RenderProfile::default(),
             last_profile: RenderProfile::default(),
+            screenshot: Screenshot::default(),
         })
     }
 
@@ -1671,6 +1675,18 @@ impl Renderer {
                 &wait_stages,
             )?;
         self.frame_mut().timer.mark_submitted();
+
+        // A failed picture must not keep the frame from its present, which
+        // the acquire's semaphores are waiting on.
+        let in_flight = &self.frames[self.slot];
+        if let Err(error) = self.screenshot.capture(
+            &self.vulkan_context,
+            self.output.as_ref(),
+            &frame,
+            &in_flight.sync,
+        ) {
+            log::error!("Screenshot failed: {error}");
+        }
 
         let released = self.output.release(
             &frame,
