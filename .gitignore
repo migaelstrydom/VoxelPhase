@@ -4,4 +4,5 @@
 .venv/
 scratch/
 .claude/
-CLAUDE.mddebug_snapshots/
+CLAUDE.md
+debug_snapshots/
