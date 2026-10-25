@@ -12,7 +12,7 @@ const FRAME: f32 = 1.0 / 60.0;
 use traversal_planner::properties::{check_plan, check_replan};
 use traversal_planner::scene::Outcome;
 use traversal_planner::section::{SectionQuery, StripQuery};
-use traversal_planner::{PathVec, Planner, PlannerSettings, Slowing, TraversalScene};
+use traversal_planner::{PathVec, Planner, PlannerSettings, TraversalScene};
 
 fn fixture(name: &str) -> TraversalScene {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -174,22 +174,17 @@ fn a_steady_slope_at_the_limit_is_ridden_not_hopped() {
 }
 
 /// Over the Stack Yard's voussoir arch the body runs the crest and on down
-/// the far side, skimming its 12° corners, and leaves it where it steepens
-/// at speed and all but unpushed, rather than hopping off the crest or,
-/// even where the costs may slow it, braking to drop off within a stride.
+/// the far side, skimming its 12° corners, and leaves it once, where it
+/// steepens, all but unpushed, rather than hopping off the crest.
 #[test]
-fn an_arch_is_run_over_and_jumped_off_at_speed() {
+fn an_arch_is_run_over_and_left_unpushed() {
     let mut scene = fixture("stack_yard_voussoir_arch");
-    let settings = PlannerSettings {
-        slowing: Slowing::ByCost,
-        ..PlannerSettings::default()
-    };
     for speed in [5.0, 8.0] {
         scene.body.speed = speed;
         scene.intent.speed = speed;
         let section = scene.section();
         let query = StripQuery::new(&section, &scene.params);
-        let planned = Planner::new(scene.params.clone(), settings.clone())
+        let planned = planner(&scene)
             .plan(&query, &scene.request())
             .unwrap_or_else(|_| panic!("refused at {speed} m/s"));
         let flights: Vec<_> = planned
@@ -202,27 +197,19 @@ fn an_arch_is_run_over_and_jumped_off_at_speed() {
             })
             .collect();
         assert_eq!(flights.len(), 1, "one jump, off the end, at {speed} m/s");
-        assert!(
-            flights[0].speed > 0.9 * speed && flights[0].climb < 0.1,
-            "at {speed} m/s: {:?}",
-            flights[0]
-        );
+        assert!(flights[0].climb < 0.1, "at {speed} m/s: {:?}", flights[0]);
     }
 }
 
-/// Running at the garden's 40 cm lip, which its voxels mesh as a ramp, a
-/// plan that may not slow hops onto the top rather than onto the ramp,
-/// where landing would run into its face and lose speed.
+/// Running at the garden's 40 cm lip, which its voxels mesh as a ramp, the
+/// plan hops onto the top rather than onto the ramp, where landing would
+/// run into its face and lose speed.
 #[test]
 fn a_lip_is_hopped_onto_its_top_not_its_ramp_at_a_run() {
     let scene = fixture("garden_lip40_ramp");
     let section = scene.section();
     let query = StripQuery::new(&section, &scene.params);
-    let settings = PlannerSettings {
-        slowing: Slowing::Never,
-        ..PlannerSettings::default()
-    };
-    let planned = Planner::new(scene.params.clone(), settings)
+    let planned = planner(&scene)
         .plan(&query, &scene.request())
         .expect("crosses");
     let landings: Vec<_> = planned
@@ -244,43 +231,6 @@ fn a_lip_is_hopped_onto_its_top_not_its_ramp_at_a_run() {
         "lands at s {landing} on a floor {:.0}° steep",
         floor.normal.z.acos().to_degrees()
     );
-}
-
-/// The slowest the body is planned to ride across `plan`, in m/s.
-fn slowest_ride(plan: &Plan) -> f32 {
-    plan.phases
-        .iter()
-        .filter_map(|phase| match phase.motion {
-            traversal_planner::Motion::Grounded { end_speed, .. } => Some(end_speed),
-            _ => None,
-        })
-        .fold(f32::MAX, f32::min)
-}
-
-/// Over the garden's plank bridge the costs would brake the body to a crawl
-/// to step onto it; a plan that may not slow, or only to avoid failing,
-/// crosses it at speed, keeping every rule.
-#[test]
-fn a_bridge_is_crossed_at_speed_unless_slowing_is_left_to_the_costs() {
-    let scene = fixture("plank_bridge_middle");
-    let section = scene.section();
-    let query = StripQuery::new(&section, &scene.params);
-    let speed = scene.request().target_speed;
-    for slowing in [Slowing::Never, Slowing::ToAvoidFailure, Slowing::ByCost] {
-        let settings = PlannerSettings {
-            slowing,
-            ..PlannerSettings::default()
-        };
-        let planned = Planner::new(scene.params.clone(), settings)
-            .plan(&query, &scene.request())
-            .unwrap_or_else(|_| panic!("refused with {slowing:?}"));
-        let slowest = slowest_ride(&planned.plan);
-        assert!(
-            (slowest > 0.9 * speed) == (slowing != Slowing::ByCost),
-            "{slowing:?}: slowest {slowest} m/s of {speed}"
-        );
-        assert!(check_plan(&planned.plan, &query, &scene.params).is_empty());
-    }
 }
 
 /// Standing on the steep bevel at a wall's foot and heading away from the

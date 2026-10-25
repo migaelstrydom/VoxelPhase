@@ -22,63 +22,28 @@ pub enum Pace {
     /// At the plan's speed, in m/s: it holds the body below the asked speed
     /// or slows it, to meet a hop or for a slope.
     Planned(f32),
-    /// Braking to stop where a refused plan ran out, at this speed in m/s.
-    Braking(f32),
 }
 
 /// How much faster the plan must be at the frame's end than now for it to
 /// count as speeding up, in m/s.
 const SPEEDING_UP: f32 = 1.0e-3;
 
-/// How little of a refused plan may be left ahead of the body for the plan
-/// to let it go, in metres: it has no way on from here, and the stick drives
-/// as it would untracked, into whatever the plan could not see past.
-const RELEASE_ROOM: f32 = 0.05;
-/// How slow a body under a refused plan may be for the plan to let it go, in
-/// m/s: stopped, by the plan's braking or by what it is pressing against.
-const RELEASE_SPEED: f32 = 0.5;
-
 /// Follows `plan`, made from where the body is now, through the frame of
-/// `dt` seconds ahead, along the path's horizontal unit `forward`; `None`
-/// when a refused plan braked to has no room left ([`RELEASE_ROOM`]) or the
-/// body has stopped under it ([`RELEASE_SPEED`]).
+/// `dt` seconds ahead, along the path's horizontal unit `forward`.
 ///
 /// Where the plan is speeding up the stick sets the pace ([`Pace::Asked`]);
-/// elsewhere it is the plan's speed at the frame's end. A `refused` plan
-/// stops where it ran out when there is a `refusal_brake`: no faster than
-/// braking at that many m/s² stops the body there. Without one the stick
-/// sets the pace, and the plan only takes off where it hops.
+/// elsewhere it is the plan's speed at the frame's end. Under a `refused`
+/// plan the stick sets the pace, and the plan only takes off where it hops.
 /// A hop is taken off on the frame whose start is nearest its own, half a
 /// frame early at most; a roll-off, which keeps its stance foot, is the body
 /// running off the edge and needs nothing asked.
-pub fn track(
-    plan: &Plan,
-    forward: Vector3<f32>,
-    dt: f32,
-    refused: bool,
-    refusal_brake: Option<f32>,
-) -> Option<Tracking> {
+pub fn track(plan: &Plan, forward: Vector3<f32>, dt: f32, refused: bool) -> Tracking {
     let (now, next) = (speed_at(plan, 0.0), speed_at(plan, dt));
-    let mut pace = if next > now + SPEEDING_UP {
+    let pace = if refused || next > now + SPEEDING_UP {
         Pace::Asked
     } else {
         Pace::Planned(next)
     };
-    if refused && refusal_brake.is_none() {
-        pace = Pace::Asked;
-    } else if let (true, Some(braking)) = (refused, refusal_brake) {
-        let room = match (plan.phases.first(), plan.phases.last()) {
-            (Some(first), Some(last)) => last.end_s() - first.progress(0.0).0,
-            _ => 0.0,
-        };
-        if room < RELEASE_ROOM || now <= RELEASE_SPEED {
-            return None;
-        }
-        let stopping = (2.0 * braking * room).sqrt();
-        if stopping < next {
-            pace = Pace::Braking(stopping);
-        }
-    }
     let takeoff = plan
         .phases
         .iter()
@@ -91,7 +56,7 @@ pub fn track(
             }),
             _ => None,
         });
-    Some(Tracking { pace, takeoff })
+    Tracking { pace, takeoff }
 }
 
 /// How far ahead the floor's grade under the body is read, in metres: a
@@ -217,8 +182,8 @@ mod tests {
     /// end; one speeding up leaves it to the stick.
     #[test]
     fn the_speed_is_the_plans_at_the_end_of_the_frame() {
-        let slowing = plan(vec![ride(0.0, 1.0, 0.0, (5.0, 3.0))]);
-        let tracked = track(&slowing, Vector3::x(), DT, false, Some(8.0)).unwrap();
+        let slowing_down = plan(vec![ride(0.0, 1.0, 0.0, (5.0, 3.0))]);
+        let tracked = track(&slowing_down, Vector3::x(), DT, false);
         let Pace::Planned(speed) = tracked.pace else {
             panic!("{tracked:?}");
         };
@@ -226,16 +191,12 @@ mod tests {
         assert_eq!(tracked.takeoff, None);
         let holding = plan(vec![ride(0.0, 1.0, 0.0, (3.0, 3.0))]);
         assert_eq!(
-            track(&holding, Vector3::x(), DT, false, Some(8.0))
-                .unwrap()
-                .pace,
+            track(&holding, Vector3::x(), DT, false).pace,
             Pace::Planned(3.0)
         );
         let speeding_up = plan(vec![ride(0.0, 1.0, 0.0, (3.0, 5.0))]);
         assert_eq!(
-            track(&speeding_up, Vector3::x(), DT, false, Some(8.0))
-                .unwrap()
-                .pace,
+            track(&speeding_up, Vector3::x(), DT, false).pace,
             Pace::Asked
         );
     }
@@ -246,7 +207,7 @@ mod tests {
             ride(0.0, 0.005, 0.0, (4.0, 4.0)),
             flight(0.005, 0.02, false),
         ]);
-        let tracked = track(&hop, Vector3::z(), DT, false, Some(8.0)).unwrap();
+        let tracked = track(&hop, Vector3::z(), DT, false);
         assert_eq!(
             tracked.takeoff,
             Some(PlannedTakeoff {
@@ -259,65 +220,29 @@ mod tests {
             ride(0.0, 0.005, 0.0, (4.0, 4.0)),
             flight(0.005, 0.02, true),
         ]);
-        assert_eq!(
-            track(&roll_off, Vector3::z(), DT, false, Some(8.0))
-                .unwrap()
-                .takeoff,
-            None
-        );
+        assert_eq!(track(&roll_off, Vector3::z(), DT, false).takeoff, None);
 
         // Nearer the next frame's start than this one's: taken off then.
         let later = plan(vec![
             ride(0.0, 0.012, 0.0, (4.0, 4.0)),
             flight(0.012, 0.05, false),
         ]);
-        assert_eq!(
-            track(&later, Vector3::z(), DT, false, Some(8.0))
-                .unwrap()
-                .takeoff,
-            None
-        );
+        assert_eq!(track(&later, Vector3::z(), DT, false).takeoff, None);
     }
 
-    /// A refused plan at full speed half a metre from where it ran out is
-    /// braked to stop there; one with no room left, or with the body
-    /// stopped, lets it go.
+    /// A refused plan leaves the pace to the stick, even at its very end,
+    /// and still takes off where it hops.
     #[test]
-    fn a_refused_plan_is_stopped_where_it_ran_out() {
-        let refused = plan(vec![ride(0.0, 0.1, 0.0, (5.0, 5.0))]);
-        let tracked = track(&refused, Vector3::x(), DT, true, Some(8.0)).unwrap();
-        assert!(
-            tracked.pace == Pace::Braking((2.0f32 * 8.0 * 0.5).sqrt()),
-            "{tracked:?}"
-        );
-        assert_eq!(
-            track(&plan(vec![]), Vector3::x(), DT, true, Some(8.0)),
-            None
-        );
-        let at_the_edge = plan(vec![ride(0.0, 0.01, 0.0, (0.3, 0.3))]);
-        assert_eq!(track(&at_the_edge, Vector3::x(), DT, true, Some(8.0)), None);
-        let stalled = plan(vec![ride(0.0, 1.0, 0.0, (0.3, 0.3))]);
-        assert_eq!(track(&stalled, Vector3::x(), DT, true, Some(8.0)), None);
-    }
-
-    /// Without a refusal brake a refused plan leaves the pace to the stick,
-    /// even at its very end, and still takes off where it hops.
-    #[test]
-    fn a_refused_plan_without_a_brake_leaves_the_pace_to_the_stick() {
+    fn a_refused_plan_leaves_the_pace_to_the_stick() {
         let at_the_edge = plan(vec![ride(0.0, 0.01, 0.0, (5.0, 5.0))]);
         assert_eq!(
-            track(&at_the_edge, Vector3::x(), DT, true, None)
-                .unwrap()
-                .pace,
+            track(&at_the_edge, Vector3::x(), DT, true).pace,
             Pace::Asked
         );
         let hop = plan(vec![
             ride(0.0, 0.005, 0.0, (4.0, 4.0)),
             flight(0.005, 0.02, false),
         ]);
-        assert!(track(&hop, Vector3::z(), DT, true, None)
-            .unwrap()
-            .takeoff
-            .is_some());
+        assert!(track(&hop, Vector3::z(), DT, true).takeoff.is_some());
     }
 }

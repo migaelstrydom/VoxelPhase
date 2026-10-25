@@ -39,26 +39,11 @@ pub fn landed_speed(speed: f32, climb: f32, normal: PathVec) -> f32 {
     (along * along_s).clamp(0.0, speed)
 }
 
-/// How the body's speed changes while it is on the ground.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Pace {
-    /// Toward the speed the player asks for, as fast as the drive allows.
-    Press,
-    /// Down, as fast as the drive allows: to meet stepping stones or a hop at
-    /// a speed the asked-for one would overshoot.
-    Brake,
-}
-
-impl Pace {
-    /// The speed after riding `distance` from `speed`, asked for `target`.
-    pub fn speed_after(self, speed: f32, distance: f32, target: f32, params: &GaitParams) -> f32 {
-        let (slowest, fastest) = speed_reach(speed, distance, params);
-        let next = match self {
-            Pace::Press => target.clamp(slowest, fastest),
-            Pace::Brake => slowest,
-        };
-        next.max(MIN_PLANNING_SPEED)
-    }
+/// The speed after riding `distance` from `speed` on the ground, pressing
+/// toward `target` as fast as the drive allows.
+pub fn pressed_speed(speed: f32, distance: f32, target: f32, params: &GaitParams) -> f32 {
+    let (slowest, fastest) = speed_reach(speed, distance, params);
+    target.clamp(slowest, fastest).max(MIN_PLANNING_SPEED)
 }
 
 /// The slowest and fastest the drive can bring `speed` to over `distance`,

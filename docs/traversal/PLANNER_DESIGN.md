@@ -273,13 +273,15 @@ along it.
 ```
 
 **The body's path** is searched over stations every 5 cm along the path,
-each with the body's speed (merged in 0.5 m/s bands). From a station the
-body either rides to the next, pressing toward the asked-for speed, or brakes
-for as many stations as it takes to slow by a band; or it flies to a landing
-up to a step ahead, landings every 10 cm, its takeoff climb set by the
-landing and its arc required to clear the floor and ceiling. Braking and
-flights are tried only where the ride within a step ahead breaks or gets
-rough, so open ground is walked at speed. The feet are asked only what they
+each with the body's speed (merged in 0.25 m/s bands). From a station the
+body either rides to the next, pressing toward the asked-for speed, or it
+flies to a landing up to a step ahead, landings every 10 cm, its takeoff
+climb set by the landing and its arc required to clear the floor and
+ceiling. The plan never slows the body below what the drive gives: the
+player's stick owns speed, the plan owns hops. A landing keeps only the
+speed along the floor it meets, and what it loses is a cost. Flights are
+tried only where the ride within a step ahead breaks, gets rough or falls
+away faster than the body skims, so open ground is walked at speed. The feet are asked only what they
 can do near a station, worked out once per station: a station is ridden
 through only with a foothold within half a step (so the capsule is never
 carried over a void propped on the corners of stones either side), and a
@@ -688,8 +690,8 @@ until E.
   request has not changed, planning only past its end; or search the tail on
   the last search's own lattice.
 - **Past a refusal:** settled: edges are jumped off up to `max_drop`, with
-  enthusiasm, and a refusal that is left (a drop deeper, a wall) brakes the
-  body to where it ran out and then leaves it to the stick.
+  enthusiasm, and a refusal that is left (a drop deeper, a wall) leaves the
+  pace to the stick.
 - **Small gaps:** settled by roll-offs. A gap the body's arc crosses at its
   speed is rolled over flat (or hopped, at the same cost), never dipped into;
   a wide one is hopped.

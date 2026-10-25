@@ -4,7 +4,7 @@ use nalgebra::{Point3, Vector3};
 use traversal_planner::plan::{BodyState, Contact, Limb, Plan};
 use traversal_planner::section::{Section, StripLayout, StripQuery};
 use traversal_planner::{
-    GaitParams, PathVec, PlanRequest, Planned, Planner, PlannerSettings, Refusal, Slowing,
+    GaitParams, PathVec, PlanRequest, Planned, Planner, PlannerSettings, Refusal,
 };
 
 use crate::collision::AABB;
@@ -144,18 +144,6 @@ impl TraversalPlanning {
 
     pub fn params(&self) -> &GaitParams {
         &self.planner.params
-    }
-
-    /// When the plan may slow the body below the asked-for speed.
-    pub fn slowing(&self) -> Slowing {
-        self.planner.settings.slowing
-    }
-
-    /// Plans from the next frame slowing as `slowing` allows, afresh: the
-    /// last plan was made under another rule.
-    pub fn set_slowing(&mut self, slowing: Slowing) {
-        self.planner.settings.slowing = slowing;
-        self.previous = None;
     }
 
     /// The caster the strip is sampled with along the laid path, reaching

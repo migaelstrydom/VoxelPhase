@@ -10,13 +10,12 @@ use crate::section::{FootholdWindow, Footing, SectionQuery};
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
 use super::rules::{
-    jumped, landed_speed, slowdown_cost, speed_reach, Pace, FOOT_SLACK, MIN_PLANNING_SPEED,
-    PUSH_OFF_TOLERANCE,
+    jumped, landed_speed, pressed_speed, slowdown_cost, speed_reach, FOOT_SLACK,
+    MIN_PLANNING_SPEED, PUSH_OFF_TOLERANCE,
 };
 use super::settings::PlannerSettings;
 
-/// Width of the speed bands the body's states are merged in, in m/s: fine
-/// enough that a stride's worth of braking ahead of a takeoff spans a band.
+/// Width of the speed bands the body's states are merged in, in m/s.
 const SPEED_BAND: f32 = 0.25;
 /// Spacing of the footholds looked for to tell whether a station is within a
 /// foot's reach of any, in metres.
@@ -39,9 +38,9 @@ const STATION_TOLERANCE: f32 = 1.0e-4;
 ///
 /// The path is searched over stations every `body_step` along the path, each
 /// with the body's speed. From a station the body rides to the next, pressing
-/// toward the asked-for speed or, when it `brakes`, braking, or flies to a
-/// landing up to a step ahead: braking and flights are tried only where the
-/// ride ahead breaks or gets rough, so open ground is walked at speed. The feet are asked only what they can
+/// toward the asked-for speed, or flies to a landing up to a step ahead:
+/// flights are tried only where the ride ahead breaks, gets rough or falls
+/// away, so open ground is walked at speed. The feet are asked only what they can
 /// do near a station: it is ridden through only with a foothold within half
 /// a step, so the body is never carried over a void propped on the corners of
 /// stones either side; a flight needs a foothold just behind its takeoff and
@@ -55,10 +54,6 @@ pub struct BodySearch<'a> {
     pub settings: &'a PlannerSettings,
     /// The speed along the path the player asks for, in m/s.
     pub target_speed: f32,
-    /// Whether the body may brake ahead of trouble; without, it rides
-    /// pressing toward `target_speed`, and hops and rolls off at the speed
-    /// that leaves it with.
-    pub brakes: bool,
     /// Flights the feet could not follow: no flight spanning one is tried.
     pub vetoed: &'a [FlightSpan],
     /// Where along the path the body's path must reach.
@@ -357,9 +352,7 @@ impl BodySearch<'_> {
         ((origin + STATION_TOLERANCE) / self.settings.body_step).floor() as i64
     }
 
-    /// Riding on, pressing toward the asked-for speed to the next station,
-    /// or braking over far enough to slow by about a speed band: braking one
-    /// station at a time would never leave its band, and lose to pressing.
+    /// Riding on to the next station, pressing toward the asked-for speed.
     fn ride(
         &self,
         origin: f32,
@@ -368,63 +361,49 @@ impl BodySearch<'_> {
         known: &mut FootReach,
         out: &mut SmallVec<[(usize, f32, f32, f32, BodySegment); 16]>,
     ) {
-        let step = self.settings.body_step;
-        let natural = self.natural_step();
-        // Braking a band's worth, or half that: half still leaves the band
-        // at the speeds that matter, and the two together fit the distance
-        // left to a takeoff far more closely than either alone.
-        let band_span = (SPEED_BAND * speed / (self.params.body.max_acceleration * step))
-            .ceil()
-            .max(1.0) as usize;
-        let mut paces: SmallVec<[(Pace, usize); 8]> = SmallVec::from_slice(&[(Pace::Press, 1)]);
-        if self.brakes && self.trouble_ahead(self.station_s(origin, station), speed) {
-            paces.extend((band_span.div_ceil(2)..=band_span).map(|span| (Pace::Brake, span)));
+        let next = station + 1;
+        if next >= known.len() || !self.feet_can(origin, next, FootNeed::Support, known) {
+            return;
         }
-        for &(pace, span) in &paces {
-            let next = station + span;
-            if next >= known.len()
-                || !(station + 1..=next)
-                    .all(|passed| self.feet_can(origin, passed, FootNeed::Support, known))
-            {
-                continue;
-            }
-            let (from, to) = (
-                self.station_s(origin, station),
-                self.station_s(origin, next),
-            );
-            let ride = self.query.ride(from, to);
-            if ride.end < to - STATION_TOLERANCE || self.falls_away(from, to, speed) {
-                continue;
-            }
-            let Some(floor) = self.query.floor(to) else {
-                continue;
-            };
-            let pressed_toward = self.ground_target(from, to);
-            let end_speed = pace.speed_after(speed, to - from, pressed_toward, self.params);
-            if pace == Pace::Brake && end_speed >= speed {
-                continue;
-            }
-            let cost = self.settings.costs.ride_travel * ride.vertical_travel
-                + self.ride_churn(from, to)
-                + slowdown_cost(end_speed, pressed_toward, to - from, natural, self.settings);
-            out.push((
-                next,
+        let (from, to) = (
+            self.station_s(origin, station),
+            self.station_s(origin, next),
+        );
+        let ride = self.query.ride(from, to);
+        if ride.end < to - STATION_TOLERANCE || self.falls_away(from, to, speed) {
+            return;
+        }
+        let Some(floor) = self.query.floor(to) else {
+            return;
+        };
+        let pressed_toward = self.ground_target(from, to);
+        let end_speed = pressed_speed(speed, to - from, pressed_toward, self.params);
+        let cost = self.settings.costs.ride_travel * ride.vertical_travel
+            + self.ride_churn(from, to)
+            + slowdown_cost(
                 end_speed,
-                floor.z,
-                cost,
-                BodySegment::Ride {
-                    from,
-                    to,
-                    start_speed: speed,
-                    end_speed,
-                },
-            ));
-        }
+                pressed_toward,
+                to - from,
+                self.natural_step(),
+                self.settings,
+            );
+        out.push((
+            next,
+            end_speed,
+            floor.z,
+            cost,
+            BodySegment::Ride {
+                from,
+                to,
+                start_speed: speed,
+                end_speed,
+            },
+        ));
     }
 
     /// Riding again a stretch the last plan rode from this station, to where
-    /// it ended and as near its end speed as the drive allows from here;
-    /// without brakes, no slower than pressing would leave it.
+    /// it ended and as near its end speed as the drive allows from here, but
+    /// no slower than pressing would leave it.
     fn ride_again(
         &self,
         origin: f32,
@@ -461,18 +440,12 @@ impl BodySearch<'_> {
             };
             let pressed_toward = self.ground_target(from, to);
             let (slowest, fastest) = speed_reach(speed, to - from, self.params);
-            let mut end_speed = ride
-                .end_speed
-                .clamp(slowest, fastest)
-                .max(MIN_PLANNING_SPEED);
-            if !self.brakes {
-                end_speed = end_speed.max(Pace::Press.speed_after(
-                    speed,
-                    to - from,
-                    pressed_toward,
-                    self.params,
-                ));
-            }
+            let end_speed = ride.end_speed.clamp(slowest, fastest).max(pressed_speed(
+                speed,
+                to - from,
+                pressed_toward,
+                self.params,
+            ));
             let cost = self.settings.costs.ride_travel * ridden.vertical_travel
                 + slowdown_cost(
                     end_speed,
@@ -844,8 +817,7 @@ impl BodySearch<'_> {
     }
 
     /// Whether the ride within a step ahead of `from` breaks, gets rough, or
-    /// falls away from a body at `speed`: only then is flying or braking
-    /// worth trying.
+    /// falls away from a body at `speed`: only then is flying worth trying.
     fn trouble_ahead(&self, from: f32, speed: f32) -> bool {
         let reach = self.params.stride.max_length;
         let ahead = self.query.ride(from, from + reach);

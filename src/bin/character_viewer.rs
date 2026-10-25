@@ -18,9 +18,6 @@
 //! body's path, flights dashed, and the footfalls, left blue and right
 //! orange, faded where tentative. `--track` has the plan drive the character
 //! (as F8 does in game): along its path at its speed, hopping where it hops.
-//! `--slowing never|avoid|cost` sets when the plan may slow it (F10 in game):
-//! never (the default), only where no plan at speed gets through, or
-//! wherever the costs prefer.
 //!
 //! `traversal` runs every scenario that crosses a station of the Traversal
 //! Garden; `--summary` prints only each one's traversal summary as a table
@@ -38,7 +35,6 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use traversal_planner::Slowing;
 use voxel_phase::character_viewer::{
     catalogue, check_contract, find, report, run, traversal, ContractCheck, RunConfig, Scenario,
     TraversalSummary,
@@ -46,7 +42,7 @@ use voxel_phase::character_viewer::{
 use voxel_phase::rendering::visual_bench::contact_sheet;
 
 const USAGE: &str =
-    "usage: character_viewer <scenario|all|traversal|contract> [--list] [--summary] [--plan] [--track] [--slowing never|avoid|cost] [--tiles N]
+    "usage: character_viewer <scenario|all|traversal|contract> [--list] [--summary] [--plan] [--track] [--tiles N]
                         [--from F] [--to F]
                         [--fps HZ] [--width W] [--height H] [--columns C]
                         [--every N] [--out <sheet.png>]
@@ -150,16 +146,6 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
             "--summary" => summary = true,
             "--plan" => config.plan = true,
             "--track" => config.track = true,
-            "--slowing" => {
-                config.slowing = match value("--slowing")?.as_str() {
-                    "never" => Slowing::Never,
-                    "avoid" => Slowing::ToAvoidFailure,
-                    "cost" => Slowing::ByCost,
-                    other => {
-                        return Err(format!("--slowing is never, avoid or cost, not '{other}'"))
-                    }
-                }
-            }
             "--tiles" => config.tiles = parse(&value("--tiles")?)?,
             "--from" => config.from = parse(&value("--from")?)?,
             "--to" => config.to = parse(&value("--to")?)?,

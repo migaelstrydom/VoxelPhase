@@ -4,7 +4,7 @@ use nalgebra::{Point3, Vector3};
 use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 use traversal_planner::plan::{Limb, Motion};
 use traversal_planner::section::{SectionQuery, StripLayout, StripQuery};
-use traversal_planner::{GaitParams, PathVec, PlannerSettings, Slowing};
+use traversal_planner::{GaitParams, PathVec, PlannerSettings};
 use winit::keyboard::KeyCode;
 
 use crate::character::{CharacterIntent, CharacterState, LocomotionConfig};
@@ -28,13 +28,8 @@ const OVERLAY_KEY: KeyCode = KeyCode::F6;
 const CAPTURE_KEY: KeyCode = KeyCode::F7;
 /// Key that turns the plan driving the body on and off.
 const TRACK_KEY: KeyCode = KeyCode::F8;
-/// Key that steps through when the plan may slow the body.
-const SLOWING_KEY: KeyCode = KeyCode::F10;
 /// The on-screen line saying, while tracking, what sets the body's pace.
 const TRACK_LINE: &str = "Traversal track";
-/// The on-screen line saying, while tracking, when the plan may slow the
-/// body.
-const SLOWING_LINE: &str = "Traversal slowing";
 /// Where captures are written, relative to the working directory.
 const CAPTURE_DIR: &str = "scratch/captures";
 /// Spacing along the path at which the body's planned path is drawn, in
@@ -59,8 +54,6 @@ pub struct TraversalPlanState {
     pub overlay: bool,
     /// Whether the plan drives the body: off, the plan is only drawn.
     pub tracking: bool,
-    /// When the plan may slow the body.
-    pub slowing: Slowing,
 }
 
 /// Plans the way across the ground ahead of the character marked
@@ -72,10 +65,8 @@ pub struct TraversalPlanState {
 /// the player's input and `CharacterControlSystem`, plans from the player's
 /// intent, and rewrites that intent to follow the plan ([`track`]): at the
 /// plan's speed, steered by the stick (along the path where it slides on a
-/// wall), and taking off where it hops. Under [`Slowing::ByCost`] a refusal
-/// brakes the body to where the plan ran out, then leaves it to the stick;
-/// otherwise the stick sets a refused plan's pace. [`SLOWING_KEY`] steps
-/// through the slowing rules. A jump the player presses still jumps.
+/// wall), and taking off where it hops. The stick sets a refused plan's
+/// pace. A jump the player presses still jumps.
 pub struct TraversalPlanSystem;
 
 impl<'a> System<'a> for TraversalPlanSystem {
@@ -123,10 +114,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
                 if state.tracking { "on" } else { "off" }
             );
         }
-        if input.is_key_just_pressed(SLOWING_KEY) {
-            state.slowing = next_slowing(state.slowing);
-        }
-        let (overlay, tracking, slowing) = (state.overlay, state.tracking, state.slowing);
+        let (overlay, tracking) = (state.overlay, state.tracking);
         let Some(terrain) = terrain else {
             return;
         };
@@ -149,9 +137,6 @@ impl<'a> System<'a> for TraversalPlanSystem {
                 StripLayout::default(),
             )
         });
-        if planning.slowing() != slowing {
-            planning.set_slowing(slowing);
-        }
         let spine = planning.params().body.spine();
         let up = rigid.rotation() * Vector3::y();
         let position = rigid.position() - up * (0.5 * spine);
@@ -213,47 +198,35 @@ impl<'a> System<'a> for TraversalPlanSystem {
                     frame.frame.forward(),
                     time.delta_seconds().max(1.0e-3),
                     frame.outcome.is_err(),
-                    (slowing == Slowing::ByCost).then_some(planning.params().body.max_acceleration),
                 );
-                let stick = push.norm().min(1.0);
-                if let Some(tracked) = tracked {
-                    // The plan sets the pace; the stick steers, as the path is
-                    // relaid only after it turns some way, but along a wall.
-                    let steer = if frame.slides {
-                        frame.frame.forward()
-                    } else {
-                        heading
-                    };
-                    let share = match tracked.pace {
-                        Pace::Asked => stick,
-                        Pace::Planned(speed) | Pace::Braking(speed) => {
-                            (speed / gait_speed).min(1.0)
-                        }
-                    };
-                    intent.direction = steer * share;
-                    intent.takeoff = tracked.takeoff;
-                }
-                lines.add(SLOWING_LINE, format!("{slowing:?} ({SLOWING_KEY:?})"));
+                // The plan sets the pace; the stick steers, as the path is
+                // relaid only after it turns some way, but along a wall.
+                let steer = if frame.slides {
+                    frame.frame.forward()
+                } else {
+                    heading
+                };
+                let share = match tracked.pace {
+                    Pace::Asked => push.norm().min(1.0),
+                    Pace::Planned(speed) => (speed / gait_speed).min(1.0),
+                };
+                intent.direction = steer * share;
+                intent.takeoff = tracked.takeoff;
                 lines.add(
                     TRACK_LINE,
-                    match tracked {
-                        None => "released: refused, nowhere to go".to_string(),
-                        Some(tracked) => format!(
-                            "{}{}",
-                            match tracked.pace {
-                                Pace::Asked => format!("as asked, {target_speed:.1} m/s"),
-                                Pace::Planned(speed) =>
-                                    format!("plan {speed:.1} of {target_speed:.1} m/s"),
-                                Pace::Braking(speed) =>
-                                    format!("braking to the refusal, {speed:.1} m/s"),
-                            },
-                            if tracked.takeoff.is_some() {
-                                ", hop"
-                            } else {
-                                ""
-                            }
-                        ),
-                    },
+                    format!(
+                        "{}{}",
+                        match tracked.pace {
+                            Pace::Asked => format!("as asked, {target_speed:.1} m/s"),
+                            Pace::Planned(speed) =>
+                                format!("plan {speed:.1} of {target_speed:.1} m/s"),
+                        },
+                        if tracked.takeoff.is_some() {
+                            ", hop"
+                        } else {
+                            ""
+                        }
+                    ),
                 );
             }
             if input.is_key_just_pressed(CAPTURE_KEY) {
@@ -266,16 +239,6 @@ impl<'a> System<'a> for TraversalPlanSystem {
             }
         }
         state.last = frame;
-    }
-}
-
-/// The slowing rule after `slowing` in the order [`SLOWING_KEY`] steps
-/// through.
-fn next_slowing(slowing: Slowing) -> Slowing {
-    match slowing {
-        Slowing::Never => Slowing::ToAvoidFailure,
-        Slowing::ToAvoidFailure => Slowing::ByCost,
-        Slowing::ByCost => Slowing::Never,
     }
 }
 
