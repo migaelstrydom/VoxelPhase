@@ -36,6 +36,15 @@ const CEILING_RECAST_DROP: f32 = 0.1;
 /// in metres: one stopped where it starts has no room there, and the layer
 /// it followed has closed.
 const LAYER_CLOSED: f32 = 1.0e-3;
+/// How far across the path a floor cast is moved off a face too steep to
+/// ride beside the path, in metres: a sphere resting in the crease between
+/// the ground and a wall touches the wall first, and moved off it reads the
+/// ground.
+const CREASE_NUDGE: f32 = 0.02;
+/// How much lower than the steep hit the cast moved off it may land for both
+/// to be the one floor, in metres: more, and the steep face was holding the
+/// sphere up.
+const CREASE_DROP: f32 = 0.01;
 
 /// Sphere casts in path coordinates: what a section is sampled from. The game
 /// casts in its physics world; authored scenes cast against their shapes.
@@ -86,7 +95,15 @@ pub fn sample_section(
     let body_stations = stations(origin, layout, layout.body_spacing);
     let foot_stations = stations(origin, layout, layout.foot_spacing);
 
-    let layer = body_layer(caster, &body_stations, origin, body_z, body_radius);
+    let least_floor_normal_z = params.body.steepest_ride().cos();
+    let layer = body_layer(
+        caster,
+        &body_stations,
+        origin,
+        body_z,
+        body_radius,
+        least_floor_normal_z,
+    );
     let line = |hit: fn(&LayerStation) -> Option<CastHit>| {
         profile(
             body_stations.iter().copied().zip(layer.iter().map(hit)),
@@ -144,13 +161,14 @@ fn body_layer(
     origin: f32,
     body_z: f32,
     radius: f32,
+    least_floor_normal_z: f32,
 ) -> Vec<LayerStation> {
     let mut layer = vec![LayerStation::default(); stations.len()];
     let ahead = stations.partition_point(|&s| s < origin);
     let mut follow = |indices: &mut dyn Iterator<Item = usize>| {
         let mut z = body_z;
         for index in indices {
-            let station = layer_station(caster, stations[index], z, radius);
+            let station = layer_station(caster, stations[index], z, radius, least_floor_normal_z);
             if let Some(floor) = station.floor {
                 z = floor.z;
             }
@@ -170,11 +188,20 @@ fn body_layer(
 /// up still bounds the layer, but nothing hangs over the body there. Where
 /// the sphere has no room to start, the layer has closed, and the station is
 /// read from the top.
-fn layer_station(caster: &impl SphereCaster, s: f32, z: f32, radius: f32) -> LayerStation {
+fn layer_station(
+    caster: &impl SphereCaster,
+    s: f32,
+    z: f32,
+    radius: f32,
+    least_floor_normal_z: f32,
+) -> LayerStation {
     let rising = caster.cast_up(s, 0.0, radius, z);
     let closed = rising.is_some_and(|hit| hit.z < z + LAYER_CLOSED);
     let above = rising.filter(|_| !closed);
-    let floor = caster.cast_down(s, 0.0, radius, above.map_or(f32::INFINITY, |above| above.z));
+    let from = above.map_or(f32::INFINITY, |above| above.z);
+    let floor = caster
+        .cast_down(s, 0.0, radius, from)
+        .map(|floor| off_the_wall(caster, s, from, radius, floor, least_floor_normal_z));
     let over = match floor {
         Some(floor) if closed || floor.z < z - CEILING_RECAST_DROP => {
             caster.cast_up(s, 0.0, radius, floor.z + CEILING_START_GAP)
@@ -191,6 +218,31 @@ fn layer_station(caster: &impl SphereCaster, s: f32, z: f32, radius: f32) -> Lay
         ceiling: over.filter(|hit| hit.normal.z <= -CEILING_FACING),
         upper_floor,
     }
+}
+
+/// The floor a body cast down at `s` from `from` stands on, when `floor`,
+/// what the cast met, is a face too steep to ride beside the path: the ground
+/// it meets moved [`CREASE_NUDGE`] off the face, if that is ridable and no
+/// lower than [`CREASE_DROP`] under it. A steep slope, or a face ahead, stays
+/// what it is.
+fn off_the_wall(
+    caster: &impl SphereCaster,
+    s: f32,
+    from: f32,
+    radius: f32,
+    floor: CastHit,
+    least_floor_normal_z: f32,
+) -> CastHit {
+    let normal = floor.normal;
+    if normal.z >= least_floor_normal_z || normal.d.abs() <= normal.s.abs() {
+        return floor;
+    }
+    caster
+        .cast_down(s, CREASE_NUDGE * normal.d.signum(), radius, from)
+        .filter(|beside| {
+            beside.normal.z >= least_floor_normal_z && beside.z >= floor.z - CREASE_DROP
+        })
+        .unwrap_or(floor)
 }
 
 /// The `s` of every sample from `behind` the origin to `ahead` of it, on the

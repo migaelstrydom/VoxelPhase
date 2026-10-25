@@ -107,7 +107,12 @@ room to start (a crack between two balls), the layer has closed and the
 station is read from the top. What roofs the layer over, where something does,
 is kept as the **upper floor**: a flight may pass over it (the bulge of a
 ball over the trench at its foot) but the body does not ride or land on it.
-Moving between layers (onto a slab from under it) is climbing's, later.
+Moving between layers (onto a slab from under it) is climbing's, later. A
+floor cast that meets a face too steep to ride, leaning across the path, is
+cast again 2 cm off it: a sphere in the crease between the ground and a bank
+beside the path touches the bank first, and if the cast moved off lands on
+ridable ground no more than a centimetre lower, that is the floor. A bank the
+sphere is held up on, or a slope along the path, stays steep.
 
 Casts that start inside something pass out of it unseen, the game's sweeps
 and the authored prisms alike; an authored `Slab` is a floor prism and a roof
@@ -228,6 +233,7 @@ game-side bench tests measure the drive and assert it agrees with
 |---|---|
 | Slope | ramps of 30–58° at walk and run: whether the capsule gets up, and its speed across the ground against `ground_speed` |
 | Takeoff | the takeoff velocity the body actually leaves with, against the one commanded, and the arc it flies against the ballistic one; a jump in the coyote window against one on flat ground |
+| Acceleration | a run-up from standing on flat ground at walk and run: the mean to 90% of the gait's speed, against `max_acceleration`, which must not claim more nor lag it by over a quarter |
 | Ride | the capsule's height over plank gaps and lips, against the body floor the cast reported, where a plan rides |
 
 When someone tunes the drive, these fail and name the number to update. They
@@ -243,6 +249,12 @@ Measured on 2026-10-24:
 - **Takeoff:** a jump leaves at 7.00 m/s and flies ballistic at 9.81 m/s² to
   under a millimetre; one pressed 33 ms after running off an edge climbs the
   same.
+- **Acceleration** (2026-10-25): 21.4 m/s² walking, 21.7 running, from
+  standing to 90% of speed; `max_acceleration` is 20. It had been guessed at
+  8, so a tracked body took 0.6 s to reach a walk the untracked one reached in
+  0.15. The drive's frame-to-frame gain depends on the surface (44 m/s² on
+  the garden's grass at first, 107 on the Stack Yard's stone); the mean on
+  the contract's flat lane is what is claimed.
 - **Ride:** fails, by collisions the plan avoids or does not model. Driven
   straight at a 25 or 40 cm lip (which a plan hops) the capsule stalls and
   pops 6–13 cm; carried up a gap's far brow after rolling off (which a plan
@@ -547,7 +559,12 @@ ground fails even when both refuse; the lips are authored as the voxels mesh
 them, sloped across the voxel at the face. The Stack Yard check
 (`stack_yard_places`) plans places that planned wrongly in play to the
 outcome they should have: the ball pit from its rim, and running along the
-pyramid's first step pressed into the next step's face. The strip's casts
+pyramid's first step pressed into the next step's face. A loose body is
+resting footing when it is asleep or its surface moves no faster than
+5 cm/s: whatever the player stands on is awake, so a floor of dynamic bodies
+(the temple's stylobate, the pyramid's blocks) read as moving under the body
+and every plan on it was refused, which captures of the settled level never
+showed. The strip's casts
 pass through dynamic bodies whose surface moves faster than 2 m/s: a blast's
 pieces in flight are not ground, and are seen again where they slow, which
 keeps a blast's first second to 0.4 ms of sampling a frame (median; 1.6 ms
@@ -556,34 +573,47 @@ at the 99th percentile) instead of 4.
 **Tracking (E, first version), F8, off by default.** The plan system runs
 between the player's input and `CharacterControlSystem`: it plans from the
 player's intent, then rewrites that intent (`tracking.rs`). On the ground the
-intent points along the path at the plan's speed one frame ahead, asked for
-more up or down a grade by the drive contract's `ground_speed` so the drive
-delivers the plan's speed. A hop starting in the frame becomes a
+intent asks the plan's speed one frame ahead, more up or down a grade by the
+drive contract's `ground_speed` so the drive delivers the plan's speed, and
+is steered by the stick: the path is relaid only once the heading has turned
+10°, and steering along it turned the body in steps. Along a wall it slides
+on, the intent follows the path. A ride changes speed at constant
+acceleration (`v² = v₀² + 2ad`, not `a·d/v` a station at a time, which from
+standing jumped to 1.6 m/s in 5 cm), and consecutive rides are one phase only
+where their accelerations agree: merged regardless, a press to speed and the
+run held there became one slow ramp, and the body tracked the ramp. A hop starting in the frame becomes a
 `PlannedTakeoff` on the intent, which the locomotion state machine launches
 locked: the plan's climb, its planar velocity held for the flight, no
 steering, no cutoff. A roll-off asks for nothing (the body runs off the edge).
 A refused plan is followed to where it ran out, braked to stop there: the
-refusal-drop choice taken as "stop at the edge" until play says otherwise. A
+refusal-drop choice taken as "stop at the edge" until play says otherwise.
+Then it lets go: with under 5 cm of plan left, or the body down to 0.5 m/s,
+the stick drives as untracked, so a strip read wrongly never holds the body
+(it had, beside a bank and against the corner where a ramp meets its
+plateau), and a held push carries on over the edge. A
 jump the player presses still jumps. `character_viewer traversal --summary
 --track` runs the garden stations with it. A hop is taken off on the frame
 nearest its planned start, half a frame early at most.
 
-Against the untracked runs on 2026-10-25:
+Against the untracked runs on 2026-10-25 (morning, after the fixes above):
 - **better:** the 25 and 40 cm lips, crossed at speed instead of stalled
-  (25 cm at a walk: lowest speed 4.8 m/s against 1.1; 40 cm at a run: 4.6
-  against 0.1), and all four plank runs (narrow at a run: 7.4 m/s lowest, no
-  snags, against 5.9);
-- **level:** the 3 and 8 cm lips, the 15 cm lip at a run, the 40° slope (time
-  within 5%);
-- **worse:** the 15 cm lip at a walk (0.57 s against 0.43), the rough lane
-  (3.2 s against 2.6 walking, 2.4 against 1.9 running), and the 50° slope and
-  scree, refused and stopped at where the untracked capsule barges up. The
-  scree's rocks stand 0.6 m above its slope: a planned hop is capped at 3 m/s
-  of climb (0.45 m), and even uncapped the feet find no landing on their
-  tops. Ledge and cave are refused either way.
+  (25 cm at a run: lowest speed 7.97 m/s against 0.55; 40 cm at a run: 5.87
+  against 0.14); the narrow planks at a walk and the wide ones at either gait
+  sooner (wide at a walk: 2.03 s against 2.20); the 50° slope, which the
+  body now barges up once its refusal has stopped it;
+- **level:** the 3 and 8 cm lips, the 15 cm lip at a run, the rough lane at
+  a walk (2.60 s against 2.63), the 40° slope (time within 2%);
+- **worse:** the 15 cm lip at a walk (0.47 s against 0.43), the narrow
+  planks at a run (2.93 s against 1.30: the hop onto
+  them lands with a bounce and the run never recovers; at 8 m/s² it took
+  1.50 s, while most other rows were slower), the rough lane at a run (2.07 s
+  against 1.87), and the scree, climbed but too slowly to reach its shelf in
+  the run. The scree's rocks stand 0.6 m above its slope: a planned hop is
+  capped at 3 m/s of climb (0.45 m), and even uncapped the feet find no
+  landing on their tops. Ledge and cave are refused either way.
 
-The drive contract's ride rows run tracked: none sinks below the floor any
-more, five of eight hold, and the rest ride 3-6 cm high. The 40 cm lip at a
+The drive contract's ride rows run tracked: none sinks below the floor, four
+of eight hold (six at 8 m/s²), and the rest ride 3-9 cm high. The 40 cm lip at a
 walk shows why: the plan hops the bevel's 45° face and lands on its 30°
 part, which is ridable; landing on a rising floor at speed turns the body's
 forward speed into climb, and at the lip's top it is thrown. A cap on the
@@ -669,7 +699,12 @@ until E.
   Walls are settled: a path is laid along a wall the heading meets within 30°
   of parallel, as the capsule slides on it, its line kept 3 cm clear
   (`WallSlide`). The walls are what the capsule's top sphere meets, so lips
-  lower than its middle stay hops. The 30° is to tune in play.
+  lower than its middle stay hops; the bottom sphere keeps the line 3 cm off
+  what it stands against and follows a face it meets within 5° of parallel
+  (a bank's foot converging on the path, not a lip to hop). A wall is any
+  face steeper than the body rides. Walls are looked for 2 m ahead, about a
+  sprint's stopping distance: over the strip's 10 m, a column far off turned
+  the path along its tangent. The 30° is to tune in play.
 - **Lateral footing:** the strip's width and lane count (five over ±0.3 m to
   start) and how far the foot placer may move a foot from its planned
   footfall are judged on the scree and rubble lanes in D and F. If the best

@@ -61,9 +61,11 @@ pub struct TraversalPlanState {
 ///
 /// With tracking on ([`TRACK_KEY`]) the plan drives the body: it runs between
 /// the player's input and `CharacterControlSystem`, plans from the player's
-/// intent, and rewrites that intent to follow the plan ([`track`]): along
-/// the path at the plan's speed, and taking off where it hops. A jump the
-/// player presses still jumps.
+/// intent, and rewrites that intent to follow the plan ([`track`]): at the
+/// plan's speed, steered by the stick (along the path where it slides on a
+/// wall), and taking off where it hops. A refusal brakes the body to where
+/// the plan ran out, then leaves it to the stick. A jump the player presses
+/// still jumps.
 pub struct TraversalPlanSystem;
 
 impl<'a> System<'a> for TraversalPlanSystem {
@@ -195,8 +197,17 @@ impl<'a> System<'a> for TraversalPlanSystem {
                     frame.outcome.is_err(),
                     planning.params().body.max_acceleration,
                 );
-                intent.direction = frame.frame.forward() * (tracked.speed / gait_speed).min(1.0);
-                intent.takeoff = tracked.takeoff;
+                if let Some(tracked) = tracked {
+                    // The plan sets the pace; the stick steers, as the path is
+                    // relaid only after it turns some way, but along a wall.
+                    let steer = if frame.slides {
+                        frame.frame.forward()
+                    } else {
+                        heading
+                    };
+                    intent.direction = steer * (tracked.speed / gait_speed).min(1.0);
+                    intent.takeoff = tracked.takeoff;
+                }
             }
             if input.is_key_just_pressed(CAPTURE_KEY) {
                 let scene = scene_of(frame, planning.params(), target_speed);

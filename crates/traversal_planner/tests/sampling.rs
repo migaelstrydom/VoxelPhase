@@ -431,3 +431,44 @@ fn on_a_slab_the_floor_is_its_top() {
         "open sky over the slab"
     );
 }
+
+/// A bank of grade 4 rising across the path from `foot` metres beside it.
+fn bank_beside(foot: f32) -> Shape {
+    let grade = 4.0;
+    Shape {
+        form: Form::Block {
+            from: -1.0,
+            to: 11.0,
+            top: -grade * foot,
+            tilt: grade,
+        },
+        across: Some((foot, 3.0)),
+        yaw: 0.0,
+        footing: Footing::Fixed,
+    }
+}
+
+/// The body floor's height and normal height at `s = 1`.
+fn floor_at_one(section: &Section) -> (f32, f32) {
+    let (_, z, normal_z) = samples(&section.body_floor, (0.99, 1.01))[0];
+    (z, normal_z)
+}
+
+/// A sphere on the line touches a bank whose foot is a hair inside its
+/// radius before the ground, and reads the ground moved off the bank; one
+/// the bank holds well up stays on the bank.
+#[test]
+fn a_crease_beside_a_bank_reads_as_the_ground_but_a_bank_under_the_body_does_not() {
+    // Touching 5 mm above where the ground holds it, worked out from the
+    // sphere's distance to the bank's face.
+    let grade = 4.0_f32;
+    let touching = |z: f32| ((grade * grade + 1.0).sqrt() * BODY_RADIUS - z) / grade;
+    let beside = |foot| section_with_body_at(BODY_RADIUS, Some(0.0), vec![bank_beside(foot)]);
+    let (z, normal_z) = floor_at_one(&beside(touching(0.255)));
+    assert!((z - BODY_RADIUS).abs() < 1e-3, "on the ground: z = {z}");
+    assert!(normal_z > 0.999, "level: normal z = {normal_z}");
+
+    let (z, normal_z) = floor_at_one(&beside(touching(0.35)));
+    assert!((z - 0.35).abs() < 1e-3, "held on the bank: z = {z}");
+    assert!(normal_z < 0.5, "steep: normal z = {normal_z}");
+}

@@ -8,7 +8,7 @@
 //!     --blast 108,2,100,350,4 --frames 120 --verify
 //! ```
 //!
-//! - `--at x,z`, `--heading deg` (turned about `+Y` from `+Z`; 90 runs along
+//! - `--at x,z` or `--at x,y,z` (the floor first below `y`), `--heading deg` (turned about `+Y` from `+Z`; 90 runs along
 //!   `+X`), `--speed v` (default 5), `--frames n` (default 180).
 //! - `--blast x,y,z,strength,radius` (repeatable): shoves after settling; the
 //!   world is then stepped every frame, so the rubble moves while planned
@@ -33,7 +33,7 @@ const STALE_HEIGHT: f32 = 0.03;
 const STALE_SHARE: f32 = 0.01;
 
 const USAGE: &str =
-    "usage: traversal_perf <level.ron> --at x,z --heading deg [--speed v] [--frames n] \
+    "usage: traversal_perf <level.ron> --at x[,y],z --heading deg [--speed v] [--frames n] \
                      [--blast x,y,z,strength,radius]... [--verify]";
 
 fn numbers(text: &str, count: usize) -> Result<Vec<f32>, String> {
@@ -59,8 +59,12 @@ fn parse(args: &[String]) -> Result<PerfSpec, String> {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
             "--at" => {
-                let v = numbers(value()?, 2)?;
-                at = Some((v[0], v[1]));
+                let text = value()?;
+                let v = numbers(text, 2).or_else(|_| numbers(text, 3))?;
+                at = Some(match v[..] {
+                    [x, y, z] => ((x, z), Some(y)),
+                    _ => ((v[0], v[1]), None),
+                });
             }
             "--heading" => heading = Some(numbers(value()?, 1)?[0]),
             "--speed" => speed = numbers(value()?, 1)?[0],
@@ -80,7 +84,8 @@ fn parse(args: &[String]) -> Result<PerfSpec, String> {
     }
     Ok(PerfSpec {
         level: level.ok_or("no level")?,
-        at: at.ok_or("no --at")?,
+        at: at.ok_or("no --at")?.0,
+        below: at.and_then(|at| at.1),
         heading_degrees: heading.ok_or("no --heading")?,
         speed,
         frames,

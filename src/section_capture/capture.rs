@@ -41,6 +41,9 @@ pub struct Capture {
     pub level: PathBuf,
     /// World `(x, z)` the body stands at.
     pub at: (f32, f32),
+    /// World height the body's floor is found below; the highest floor
+    /// there if none.
+    pub below: Option<f32>,
     /// The path's heading, turned about `+Y` from `+Z`, in degrees.
     pub heading_degrees: f32,
     /// Applied in order once the level has spawned, before it settles.
@@ -119,12 +122,13 @@ impl CaptureWorld {
 
     /// The strip from world `(x, z)` for a body heading along
     /// `heading_degrees` (turned about `+Y` from `+Z`), as a scene with the
-    /// body standing on its floor there; and the seconds one sampling of it
+    /// body standing on its floor there, the first below `below` if given; and the seconds one sampling of it
     /// took. The path is laid as the game lays it: along a wall the heading
     /// meets nearly parallel ([`WallSlide`]).
     pub fn capture(
         &self,
         at: (f32, f32),
+        below: Option<f32>,
         heading_degrees: f32,
         speed: f32,
         lead: Limb,
@@ -146,8 +150,9 @@ impl CaptureWorld {
         // The ground right under the start, which a sphere the body's size
         // might not reach beside a wall, then the body's floor where the
         // path leaves from.
+        let from = below.unwrap_or(f32::INFINITY);
         let ground = caster
-            .cast_down(0.0, 0.0, params.foot.radius, f32::INFINITY)
+            .cast_down(0.0, 0.0, params.foot.radius, from)
             .ok_or("no floor under the start")?;
         let bottom = ground.z - params.foot.radius + params.body.radius;
         caster.frame = WallSlide {
@@ -156,14 +161,10 @@ impl CaptureWorld {
             exclude: &[],
             body: &params.body,
         }
-        .path(
-            Point3::new(at.0, bottom, at.1),
-            frame.forward(),
-            layout.ahead,
-        )
+        .path(Point3::new(at.0, bottom, at.1), frame.forward())
         .frame;
         let floor = caster
-            .cast_down(0.0, 0.0, params.body.radius, f32::INFINITY)
+            .cast_down(0.0, 0.0, params.body.radius, from)
             .ok_or("no floor under the start")?;
         let (above, below) = strip_reach(&layout, &params);
         caster.top = floor.z + above;
@@ -197,6 +198,7 @@ pub fn capture(spec: &Capture) -> Result<Captured, String> {
     let world = CaptureWorld::open(&spec.level, &spec.blasts)?;
     let (scene, sample_seconds) = world.capture(
         spec.at,
+        spec.below,
         spec.heading_degrees,
         spec.speed,
         spec.lead,

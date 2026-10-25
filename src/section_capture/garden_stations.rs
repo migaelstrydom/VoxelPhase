@@ -281,6 +281,7 @@ fn garden_station_captures_plan_like_their_authored_twins() {
             let (captured, _) = world
                 .capture(
                     (station.start_x, station.lane_z),
+                    None,
                     HEADING_DEGREES,
                     speed,
                     Limb::LeftFoot,

@@ -25,6 +25,9 @@ pub struct PerfSpec {
     pub level: PathBuf,
     /// World `(x, z)` the body starts at.
     pub at: (f32, f32),
+    /// World height the body's floor is found below; the highest floor
+    /// there if none.
+    pub below: Option<f32>,
     pub heading_degrees: f32,
     pub speed: f32,
     pub frames: usize,
@@ -134,7 +137,12 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             bottom: -SKY,
         };
         let floor = ground
-            .cast_down(0.0, 0.0, params.body.radius, f32::INFINITY)
+            .cast_down(
+                0.0,
+                0.0,
+                params.body.radius,
+                spec.below.unwrap_or(f32::INFINITY),
+            )
             .ok_or("no floor under the start")?;
         Point3::new(spec.at.0, floor.z, spec.at.1)
     };

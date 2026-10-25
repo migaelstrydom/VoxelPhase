@@ -8,7 +8,8 @@
 //!     -o crates/traversal_planner/fixtures/crate_pile.ron
 //! ```
 //!
-//! - `--at x,z`: world point the body stands at; its height is the floor's.
+//! - `--at x,z` or `--at x,y,z`: world point the body stands at; its height
+//!   is the floor's, the first below `y` if given (inside a roofed building).
 //! - `--heading deg`: the path's heading, turned about `+Y` from `+Z` like
 //!   every yaw in the level format (90 runs along `+X`).
 //! - `--blast x,y,z,strength,radius` (repeatable): a grenade's shove, N·s at
@@ -27,7 +28,7 @@ use traversal_planner::plan::Limb;
 use traversal_planner::scene::Outcome;
 use voxel_phase::section_capture::{capture, Blast, Capture};
 
-const USAGE: &str = "usage: section_capture <level.ron> --at x,z --heading deg \
+const USAGE: &str = "usage: section_capture <level.ron> --at x[,y],z --heading deg \
                      [--blast x,y,z,strength,radius]... [--speed v] [--lead left|right] \
                      [--expect crosses|refuses] -o <scene.ron>";
 
@@ -58,8 +59,12 @@ fn parse(args: &[String]) -> Result<(Capture, PathBuf), String> {
         let mut value = || args.next().ok_or(format!("{arg} needs a value"));
         match arg.as_str() {
             "--at" => {
-                let v = numbers(value()?, 2)?;
-                at = Some((v[0], v[1]));
+                let text = value()?;
+                let v = numbers(text, 2).or_else(|_| numbers(text, 3))?;
+                at = Some(match v[..] {
+                    [x, y, z] => ((x, z), Some(y)),
+                    _ => ((v[0], v[1]), None),
+                });
             }
             "--heading" => heading = Some(numbers(value()?, 1)?[0]),
             "--blast" => {
@@ -92,7 +97,8 @@ fn parse(args: &[String]) -> Result<(Capture, PathBuf), String> {
     }
     let spec = Capture {
         level: level.ok_or("no level")?,
-        at: at.ok_or("no --at")?,
+        at: at.ok_or("no --at")?.0,
+        below: at.and_then(|at| at.1),
         heading_degrees: heading.ok_or("no --heading")?,
         blasts,
         speed,

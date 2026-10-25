@@ -78,6 +78,9 @@ pub struct PlanningCost {
 /// A frame's plan, the strip it was made on, and what it cost.
 pub struct PlanFrame {
     pub frame: PathFrame,
+    /// Whether the path was laid along a wall the heading meets
+    /// ([`WallSlide`]) rather than along the heading.
+    pub slides: bool,
     pub section: Section,
     pub body: BodyState,
     pub outcome: Result<Planned, Refusal>,
@@ -109,6 +112,8 @@ pub struct TraversalPlanning {
     laid_at: f32,
     /// How far above and below there they reach ([`strip_reach`]).
     reach: (f32, f32),
+    /// Whether the path was laid along a wall ([`WallSlide`]).
+    slides: bool,
     /// How far ahead of the body the strip is sampled: short when a path is
     /// laid, growing frame by frame to the layout's reach, so laying a path
     /// costs a few frames a little each rather than one frame a lot.
@@ -129,6 +134,7 @@ impl TraversalPlanning {
             scenery_until: f32::MIN,
             laid_at: 0.0,
             reach,
+            slides: false,
             previous: None,
             sampled_ahead: 0.0,
             planted: None,
@@ -232,6 +238,7 @@ impl TraversalPlanning {
 
         Some(PlanFrame {
             frame,
+            slides: self.slides,
             section,
             body,
             outcome,
@@ -293,7 +300,7 @@ impl TraversalPlanning {
             exclude: input.exclude,
             body: &self.planner.params.body,
         }
-        .path(input.position, input.heading, self.layout.ahead);
+        .path(input.position, input.heading);
         let fresh = match self.cache.frame() {
             None => true,
             Some(frame) => {
@@ -313,6 +320,7 @@ impl TraversalPlanning {
             self.cache.lay_path(line.frame);
             self.scenery = None;
             self.laid_at = input.position.y;
+            self.slides = line.slides;
             self.previous = None;
             self.planted = None;
         }

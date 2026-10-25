@@ -71,7 +71,14 @@ fn stack_yard_places_plan_as_they_should() {
     for place in places() {
         for speed in [RUN, SPRINT] {
             let (captured, _) = world
-                .capture(place.at, place.heading_degrees, speed, Limb::LeftFoot, None)
+                .capture(
+                    place.at,
+                    None,
+                    place.heading_degrees,
+                    speed,
+                    Limb::LeftFoot,
+                    None,
+                )
                 .expect("a floor under every start");
             let scene = TraversalScene {
                 intent: Intent { speed },
