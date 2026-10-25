@@ -373,7 +373,7 @@ impl BodySearch<'_> {
             .ceil()
             .max(1.0) as usize;
         let mut paces: SmallVec<[(Pace, usize); 8]> = SmallVec::from_slice(&[(Pace::Press, 1)]);
-        if self.brakes && self.trouble_ahead(self.station_s(origin, station)) {
+        if self.brakes && self.trouble_ahead(self.station_s(origin, station), speed) {
             paces.extend((band_span.div_ceil(2)..=band_span).map(|span| (Pace::Brake, span)));
         }
         for &(pace, span) in &paces {
@@ -662,7 +662,7 @@ impl BodySearch<'_> {
         let (params, settings) = (self.params, self.settings);
         let from = self.station_s(origin, station);
         let reach = params.stride.max_length;
-        if !self.trouble_ahead(from) {
+        if !self.trouble_ahead(from, speed) {
             return;
         }
         // Pushing off from a foot behind the takeoff: the planted one, until
@@ -814,13 +814,15 @@ impl BodySearch<'_> {
         })
     }
 
-    /// Whether the ride within a step ahead of `from` breaks or gets rough:
-    /// only then is flying or braking worth trying.
-    fn trouble_ahead(&self, from: f32) -> bool {
+    /// Whether the ride within a step ahead of `from` breaks, gets rough, or
+    /// falls away from a body at `speed`: only then is flying or braking
+    /// worth trying.
+    fn trouble_ahead(&self, from: f32, speed: f32) -> bool {
         let reach = self.params.stride.max_length;
         let ahead = self.query.ride(from, from + reach);
         ahead.end < from + reach - STATION_TOLERANCE
             || ahead.vertical_travel >= self.settings.rough_ride
+            || self.falls_away(from, ahead.end, speed)
     }
 
     /// A lower bound on the slowdown a body at `speed` has still to pay over

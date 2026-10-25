@@ -92,7 +92,8 @@ impl Line {
 /// so a ride is two lookups.
 struct Rideway {
     /// Whether the body can stand at each station: floor there, not too
-    /// steep for the drive, headroom over it.
+    /// steep for the drive, or falling ahead no steeper than the feet stand
+    /// on, and headroom over it.
     standable: Vec<bool>,
     /// The furthest station each one rides to without a break.
     reach: Vec<usize>,
@@ -102,13 +103,26 @@ struct Rideway {
 
 impl Rideway {
     fn new(floor: &Line, ceiling: &Line, params: &GaitParams) -> Self {
+        // Down a face steeper than the drive climbs, gravity carries the
+        // body; where it does so faster than it rides, the face is run off.
         let steepest = params.body.steepest_ride();
+        let steepest_descent = steepest.max(params.foot.max_slope_degrees.to_radians());
         let (least_normal_z, greatest_rise) = (steepest.cos(), floor.spacing * steepest.tan());
+        let (least_descent_normal_z, greatest_drop) = (
+            steepest_descent.cos(),
+            floor.spacing * steepest_descent.tan(),
+        );
         let count = floor.samples.len();
         let standable: Vec<bool> = (0..count)
             .map(|station| {
                 floor.samples[station].is_some_and(|hit| {
-                    hit.normal.z >= least_normal_z
+                    let falling = hit.normal.s > 0.0;
+                    hit.normal.z
+                        >= if falling {
+                            least_descent_normal_z
+                        } else {
+                            least_normal_z
+                        }
                         && has_headroom(ceiling, floor.station_s(station), hit.z, params)
                 })
             })
@@ -123,7 +137,8 @@ impl Rideway {
             travel[station] = travel[station - 1] + rise.abs();
             linked[station - 1] = standable[station - 1]
                 && standable[station]
-                && rise.abs() <= greatest_rise + RIDE_TOLERANCE;
+                && rise <= greatest_rise + RIDE_TOLERANCE
+                && -rise <= greatest_drop + RIDE_TOLERANCE;
         }
         let mut reach: Vec<usize> = (0..count).collect();
         for station in (0..count.saturating_sub(1)).rev() {

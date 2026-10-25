@@ -18,7 +18,9 @@ pub struct BodyDims {
     /// wide gap, it has to fly. The drive climbs a long ramp far steeper
     /// (`character_viewer contract`), but meeting a slope's foot at speed is
     /// a collision, which stalls the capsule and pops it up, and rides do not
-    /// model it: the limit keeps a voxel lip's 45° bevel a hop.
+    /// model it: the limit keeps a voxel lip's 45° bevel a hop. Down a
+    /// floor falling ahead the limit is the feet's, [`FootDims::max_slope_degrees`]:
+    /// gravity carries the body down it.
     pub max_ground_slope_degrees: f32,
     /// Fastest change of speed along the path the drive gives on the ground,
     /// in m/s²: its mean from standing to speed (`character_viewer contract`).

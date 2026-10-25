@@ -241,3 +241,22 @@ fn a_bridge_is_crossed_at_speed_unless_slowing_is_left_to_the_costs() {
         assert!(check_plan(&planned.plan, &query, &scene.params).is_empty());
     }
 }
+
+/// Standing on the steep bevel at a wall's foot and heading away from the
+/// wall, the body rides down it: steeper than the drive climbs, but down a
+/// face the feet stand on gravity carries it.
+#[test]
+fn a_steep_bevel_underfoot_is_walked_down_not_hopped() {
+    let scene = fixture("wall_foot_bevel");
+    let section = scene.section();
+    let query = StripQuery::new(&section, &scene.params);
+    let plan = match planner(&scene).plan(&query, &scene.request()) {
+        Ok(planned) => planned.plan,
+        Err(refusal) => refusal.partial,
+    };
+    assert!(plan
+        .phases
+        .iter()
+        .all(|phase| matches!(phase.motion, traversal_planner::Motion::Grounded { .. })));
+    assert!(plan.phases.last().is_some_and(|phase| phase.end_s() > 1.5));
+}
