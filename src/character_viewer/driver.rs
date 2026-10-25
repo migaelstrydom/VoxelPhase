@@ -23,6 +23,7 @@ use std::path::Path;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use specs::{Entity, Join, World, WorldExt};
 use traversal_planner::section::SphereCaster;
+use traversal_planner::Slowing;
 
 use crate::animation::{CharacterAnimator, CharacterRigConfig, FootSide};
 use crate::character::{
@@ -70,6 +71,8 @@ pub struct RunConfig {
     pub plan: bool,
     /// Whether the traversal plan drives the character.
     pub track: bool,
+    /// When the traversal plan may slow the character.
+    pub slowing: Slowing,
 }
 
 impl Default for RunConfig {
@@ -83,6 +86,7 @@ impl Default for RunConfig {
             to: 1.0,
             plan: false,
             track: false,
+            slowing: Slowing::default(),
         }
     }
 }
@@ -99,6 +103,7 @@ pub fn run(scenario: &Scenario, config: &RunConfig) -> EngineResult<Take> {
         let mut planning = harness.world_mut().write_resource::<TraversalPlanState>();
         planning.overlay = config.plan;
         planning.tracking = config.track;
+        planning.slowing = config.slowing;
     }
     place_character(&mut harness, character, scenario)?;
 

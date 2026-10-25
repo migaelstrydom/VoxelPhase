@@ -58,6 +58,19 @@ impl Default for CostWeights {
     }
 }
 
+/// When the plan may slow the body below the speed the player asks for. The
+/// drive's own limits, up and down slopes, hold in every mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Slowing {
+    /// Never: the plan hops at whatever speed the body has, or refuses.
+    Never,
+    /// Only where no plan at the body's speed reaches the goal.
+    ToAvoidFailure,
+    /// Wherever slowing makes the plan cheaper, by the costs.
+    #[default]
+    ByCost,
+}
+
 /// How the planner searches: its resolution and reach, and its costs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlannerSettings {
@@ -97,6 +110,8 @@ pub struct PlannerSettings {
     /// How far, in metres, the last plan's committed footfall may be from a
     /// candidate and still be kept.
     pub commit_tolerance: f32,
+    #[serde(default)]
+    pub slowing: Slowing,
     pub costs: CostWeights,
 }
 
@@ -115,6 +130,7 @@ impl Default for PlannerSettings {
             min_flight: 0.1,
             step_rate: 3.0,
             commit_tolerance: 0.03,
+            slowing: Slowing::default(),
             costs: CostWeights::default(),
         }
     }

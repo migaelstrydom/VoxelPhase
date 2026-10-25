@@ -7,7 +7,7 @@ use super::body_path::BodySegment;
 use super::body_search::{BodySearch, FlightSpan, PreviousPath, RideSpan};
 use super::footfall_search::{Footfall, FootfallSearch};
 use super::plan_builder::build_plan;
-use super::settings::PlannerSettings;
+use super::settings::{PlannerSettings, Slowing};
 
 /// How far the body may be from where the last plan has it now, in metres,
 /// before its commitment is dropped.
@@ -277,7 +277,8 @@ impl Planner {
     /// The goal is measured from the request's body, so a plan from its
     /// committed footfall reaches no further than a fresh one. Each footfall
     /// moved from `previous`, and each flight from the last plan's, costs
-    /// churn.
+    /// churn. The body brakes as `slowing` allows: to avoid failure, only
+    /// once no plan without braking reaches the goal.
     fn plan_from(
         &self,
         query: &dyn SectionQuery,
@@ -285,6 +286,24 @@ impl Planner {
         body: &BodyState,
         planted: Contact,
         previous: &[Contact],
+    ) -> Result<(Plan, f32), Plan> {
+        let plan = |brakes| self.plan_braking(query, request, body, planted, previous, brakes);
+        match self.settings.slowing {
+            Slowing::Never => plan(false),
+            Slowing::ToAvoidFailure => plan(false).or_else(|_| plan(true)),
+            Slowing::ByCost => plan(true),
+        }
+    }
+
+    /// [`Self::plan_from`] with the body braking ahead of trouble or not.
+    fn plan_braking(
+        &self,
+        query: &dyn SectionQuery,
+        request: &PlanRequest,
+        body: &BodyState,
+        planted: Contact,
+        previous: &[Contact],
+        brakes: bool,
     ) -> Result<(Plan, f32), Plan> {
         let previous_path = request.previous.map(previous_path);
         let mut vetoed = Vec::new();
@@ -294,6 +313,7 @@ impl Planner {
                 params: &self.params,
                 settings: &self.settings,
                 target_speed: request.target_speed,
+                brakes,
                 vetoed: &vetoed,
                 goal: self.goal(request),
                 planted: planted.at.s,
