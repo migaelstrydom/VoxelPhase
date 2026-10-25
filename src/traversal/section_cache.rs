@@ -8,7 +8,7 @@ use traversal_planner::GaitParams;
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
 
 use super::path_frame::PathFrame;
-use super::physics_caster::IN_FLIGHT_SPEED;
+use super::physics_caster::{is_resting, IN_FLIGHT_SPEED};
 
 /// How far a body moves before the casts around it are dropped, in metres.
 const MOVED: f32 = 0.01;
@@ -25,6 +25,8 @@ struct Pose {
     reach: f32,
     /// Whether the strip's casts see it: not in flight.
     settled: bool,
+    /// Whether its casts read it as resting footing.
+    resting: bool,
 }
 
 impl Pose {
@@ -142,8 +144,9 @@ impl SectionCache {
     /// was then and where it is now; till then its casts are good to within
     /// that. A body in flight ([`IN_FLIGHT_SPEED`]) is not seen by the casts:
     /// it is forgotten around where it took off and where it slows again,
-    /// not on the way. A body that went to sleep or was removed gets a last
-    /// look.
+    /// not on the way. One that comes to rest or starts moving is forgotten
+    /// around, as the casts' footing says which it is. A body that was
+    /// removed gets a last look.
     pub fn forget_what_moved(
         &mut self,
         world: &PhysicsWorld,
@@ -167,17 +170,20 @@ impl SectionCache {
                 rotation: body.rotation(),
                 reach: world.reach(handle),
                 settled: !awake || world.surface_speed(handle) <= IN_FLIGHT_SPEED,
+                resting: is_resting(world, handle),
             };
             match self.poses.get(&handle) {
                 None => {
                     // Woken this frame, where the casts saw it at rest.
-                    if !now.settled {
+                    if !now.settled || !now.resting {
                         stale.push((now.position, now.reach));
                     }
                     self.poses.insert(handle, now);
                 }
                 Some(then)
-                    if then.settled != now.settled || (now.settled && then.moved_from(&now)) =>
+                    if then.settled != now.settled
+                        || then.resting != now.resting
+                        || (now.settled && then.moved_from(&now)) =>
                 {
                     stale.push((then.position, then.reach));
                     stale.push((now.position, now.reach));

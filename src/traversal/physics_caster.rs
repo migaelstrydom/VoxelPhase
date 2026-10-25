@@ -31,6 +31,14 @@ pub fn strip_reach(layout: &StripLayout, params: &GaitParams) -> (f32, f32) {
 /// a step could land on it. A blast's pieces are passed through until they
 /// slow.
 pub const IN_FLIGHT_SPEED: f32 = 2.0;
+/// How fast a dynamic body's surface may move, in m/s, and still be resting
+/// footing. Whatever the player stands on is awake, so asleep is no test.
+const RESTING_SPEED: f32 = 0.05;
+
+/// Whether a dynamic body is at rest as footing: asleep, or awake but still.
+pub fn is_resting(world: &PhysicsWorld, handle: RigidBodyHandle) -> bool {
+    world.is_sleeping(handle) || world.surface_speed(handle) <= RESTING_SPEED
+}
 
 /// The planner's sphere casts in the physics world: the terrain and every
 /// body, rubble and spawnables included, but those in flight.
@@ -87,7 +95,7 @@ impl PhysicsCaster<'_> {
         match self.world.body(handle) {
             Some(body) if body.is_dynamic() => Footing::Loose {
                 mass: body.mass(),
-                resting: self.world.is_sleeping(handle),
+                resting: is_resting(self.world, handle),
             },
             _ => Footing::Fixed,
         }
@@ -126,5 +134,50 @@ impl SphereCaster for PhysicsCaster<'_> {
             self.top - from,
             radius,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nalgebra::Point3;
+
+    use crate::physics::bench_harness::geometry::EmptyGeometry;
+    use crate::physics::{ColliderDesc, PhysicsConfig, RigidBodyDesc};
+
+    use super::*;
+
+    /// The footing a cast down onto a dynamic box reads: resting asleep, and
+    /// awake but still, as whatever the player stands on is; not sliding.
+    fn footing_of_box(awake: bool, speed: f32) -> Footing {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let slab = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(0.0, 0.5, 0.0))
+                .linear_velocity(Vector3::x() * speed),
+        );
+        world.attach_collider(slab, ColliderDesc::box_shape(Vector3::new(2.0, 0.5, 2.0)));
+        if awake {
+            world.wake_body(slab);
+        }
+        let caster = PhysicsCaster {
+            world: &world,
+            scenery: &EmptyGeometry,
+            frame: PathFrame::new(Point3::origin(), 0.0),
+            exclude: &[],
+            top: 5.0,
+            bottom: -5.0,
+        };
+        caster
+            .cast_down(0.0, 0.0, 0.25, f32::INFINITY)
+            .expect("the box under the cast")
+            .footing
+    }
+
+    #[test]
+    fn a_still_body_is_resting_footing_awake_or_asleep() {
+        let resting = |footing| matches!(footing, Footing::Loose { resting, .. } if resting);
+        assert!(resting(footing_of_box(false, 0.0)), "asleep");
+        assert!(resting(footing_of_box(true, 0.0)), "awake and still");
+        assert!(!resting(footing_of_box(true, 0.5)), "sliding");
     }
 }
