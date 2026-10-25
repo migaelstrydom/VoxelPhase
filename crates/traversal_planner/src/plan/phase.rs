@@ -55,7 +55,52 @@ pub enum Motion {
         takeoff: BodyState,
         /// Downward acceleration, in m/s².
         gravity: f32,
+        /// How long the body rises before the drive cancels the rise, in
+        /// seconds, for a flight nothing pushed: off a brow it is held for
+        /// grounded that long. `None` for a hop, whose rise runs its course.
+        #[serde(default)]
+        rise_held: Option<f32>,
     },
+}
+
+/// Height and climb `t` seconds into a flight from `takeoff` under
+/// `gravity`, its rise cut off after `rise_held` seconds, if it has one.
+pub fn flight_at(takeoff: &BodyState, gravity: f32, rise_held: Option<f32>, t: f32) -> (f32, f32) {
+    let ballistic = |t: f32| {
+        (
+            takeoff.z + takeoff.climb * t - 0.5 * gravity * t * t,
+            takeoff.climb - gravity * t,
+        )
+    };
+    match rise_held {
+        Some(held) if t > held && takeoff.climb - gravity * held > 0.0 => {
+            let fallen = t - held;
+            (
+                ballistic(held).0 - 0.5 * gravity * fallen * fallen,
+                -gravity * fallen,
+            )
+        }
+        _ => ballistic(t),
+    }
+}
+
+/// The takeoff climb that brings a flight `rise` metres up (down, if
+/// negative) in `duration` seconds under `gravity`, its rise cut off after
+/// `rise_held` seconds, if it has one.
+pub fn climb_reaching(rise: f32, duration: f32, gravity: f32, rise_held: Option<f32>) -> f32 {
+    let ballistic = (rise + 0.5 * gravity * duration * duration) / duration;
+    match rise_held {
+        Some(held) if duration > held && held > 0.0 => {
+            let fallen = duration - held;
+            let cut = (rise + 0.5 * gravity * (held * held + fallen * fallen)) / held;
+            if cut - gravity * held > 0.0 {
+                cut
+            } else {
+                ballistic
+            }
+        }
+        _ => ballistic,
+    }
 }
 
 /// One stretch of the plan: who holds the body, and how it moves meanwhile.
@@ -123,10 +168,14 @@ impl Phase {
                 *from = s;
                 *start_speed = speed;
             }
-            Motion::Flight { takeoff, gravity } => {
-                takeoff.z += takeoff.climb * elapsed - 0.5 * *gravity * elapsed * elapsed;
-                takeoff.climb -= *gravity * elapsed;
+            Motion::Flight {
+                takeoff,
+                gravity,
+                rise_held,
+            } => {
+                (takeoff.z, takeoff.climb) = flight_at(takeoff, *gravity, *rise_held, elapsed);
                 takeoff.s = s;
+                *rise_held = rise_held.map(|held| (held - elapsed).max(0.0));
             }
         }
         self.start += elapsed;
@@ -138,9 +187,13 @@ impl Phase {
     pub fn flight_height(&self, s: f32) -> Option<f32> {
         match self.motion {
             Motion::Grounded { .. } => None,
-            Motion::Flight { takeoff, gravity } => {
+            Motion::Flight {
+                takeoff,
+                gravity,
+                rise_held,
+            } => {
                 let t = (s - takeoff.s) / takeoff.speed;
-                Some(takeoff.z + takeoff.climb * t - 0.5 * gravity * t * t)
+                Some(flight_at(&takeoff, gravity, rise_held, t).0)
             }
         }
     }

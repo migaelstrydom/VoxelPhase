@@ -10,6 +10,7 @@ pub fn player_gait(config: &LocomotionConfig) -> GaitParams {
         body: BodyDims {
             radius: config.collider_radius,
             height: 2.0 * config.collider_half_height,
+            rise_held: config.ground_forgiveness_window,
             ..BodyDims::default()
         },
         ..GaitParams::default()

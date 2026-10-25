@@ -9,6 +9,9 @@
 //   z 40               flat: a jump at speed, against a ballistic arc
 //   z 48               a deck 1 m high ending at x = 7: a jump in the coyote
 //                      window after running off it
+//   z 56 64 72         faces of 20, 30 and 38 degrees rising 0.3 m from x = 7
+//                      to a shelf: what meeting a rise and leaving its brow
+//                      at speed do
 Level(
     name: "Drive Contract",
 
@@ -18,7 +21,7 @@ Level(
 
             terrain: Terrain(
                 voxel_size: 0.25,
-                bounds: (min: (-16.0, -8.0, -32.0), max: (40.0, 16.0, 56.0)),
+                bounds: (min: (-16.0, -8.0, -32.0), max: (40.0, 16.0, 80.0)),
                 base_height: 0.0,
                 material_layers: [
                     (depth: 1.0,  material: Grass),
@@ -42,6 +45,12 @@ Level(
                     Plateau(min: (13.0, -18.5), max: (30.0, -13.5), height: 8.26),
                     Ramp(from: (7.0, -24.0), to: (13.0, -24.0), start_height: 0.0, end_height: 9.60, width: 5.0, flat_width: 4.0),
                     Plateau(min: (13.0, -26.5), max: (30.0, -21.5), height: 9.60),
+                    Ramp(from: (7.0, 56.0), to: (7.82, 56.0), start_height: 0.0, end_height: 0.3, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (7.82, 53.5), max: (30.0, 58.5), height: 0.3),
+                    Ramp(from: (7.0, 64.0), to: (7.52, 64.0), start_height: 0.0, end_height: 0.3, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (7.52, 61.5), max: (30.0, 66.5), height: 0.3),
+                    Ramp(from: (7.0, 72.0), to: (7.38, 72.0), start_height: 0.0, end_height: 0.3, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (7.38, 69.5), max: (30.0, 74.5), height: 0.3),
                 ],
                 volumes: [
                     Platform(center: (-1.0, 1.0, 48.0), half_extents: (8.0, 2.0), thickness: 2.0),

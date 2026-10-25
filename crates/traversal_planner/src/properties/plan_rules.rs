@@ -34,10 +34,14 @@ pub fn check_plan(plan: &Plan, query: &dyn SectionQuery, params: &GaitParams) ->
                 format!("phase {index}: {:?}", phase.motion),
             );
         }
-        if let Motion::Flight { takeoff, .. } = phase.motion {
+        if let Motion::Flight {
+            takeoff, rise_held, ..
+        } = phase.motion
+        {
             // No floor on the climb: a body rolling off ground that falls
-            // away leaves it moving down.
-            if takeoff.climb > params.flight.max_takeoff_climb + TOLERANCE {
+            // away leaves it moving down. Nor a ceiling on one leaving a rise
+            // (`rise_held`): it carries the climb it rode up with, no push.
+            if rise_held.is_none() && takeoff.climb > params.flight.max_takeoff_climb + TOLERANCE {
                 broke(
                     Rule::ClimbWithinLimits,
                     phase.start,

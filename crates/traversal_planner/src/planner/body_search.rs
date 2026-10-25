@@ -4,14 +4,15 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::params::GaitParams;
-use crate::plan::{BodyState, Motion, Phase};
+use crate::path::PathVec;
+use crate::plan::{climb_reaching, flight_at, BodyState, Motion, Phase};
 use crate::section::{FootholdWindow, Footing, SectionQuery};
 
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
 use super::rules::{
-    jumped, landed_speed, pressed_speed, slowdown_cost, speed_reach, FOOT_SLACK,
-    MIN_PLANNING_SPEED, PUSH_OFF_TOLERANCE,
+    jumped, landed_speed, pressed_speed, slowdown_cost, FOOT_SLACK, MIN_PLANNING_SPEED,
+    PUSH_OFF_TOLERANCE,
 };
 use super::settings::PlannerSettings;
 
@@ -21,11 +22,12 @@ const SPEED_BAND: f32 = 0.25;
 /// foot's reach of any, in metres.
 const SUPPORT_SPACING: f32 = 0.1;
 /// How far below the arc of a body flying free the floor may fall and still
-/// be ridden where it climbs again soon after, in metres: a capsule's
-/// contacts absorb a sample's rounding, but a dip's far side is struck.
+/// be ridden where the body could not ride out of where it comes down, in
+/// metres: a capsule's contacts absorb a sample's rounding, but a dip's far
+/// side is struck.
 const FALL_AWAY_SLACK: f32 = 0.005;
-/// How far on a floor the body skims off must not climb again, in metres:
-/// past it the body is back down.
+/// How far past where a body skims the floor it must be able to ride on, in
+/// metres: past it the body is back down.
 const SKIM_RUN: f32 = 0.5;
 /// How far past where a rolling body's arc meets the floor it may be carried
 /// up onto ground it can ride on, in metres: up a gap's far brow.
@@ -377,8 +379,9 @@ impl BodySearch<'_> {
             return;
         };
         let pressed_toward = self.ground_target(from, to);
-        let end_speed = pressed_speed(speed, to - from, pressed_toward, self.params);
+        let (end_speed, met_loss) = self.ridden_speed(from, to, speed, pressed_toward);
         let cost = self.settings.costs.ride_travel * ride.vertical_travel
+            + met_loss
             + self.ride_churn(from, to)
             + slowdown_cost(
                 end_speed,
@@ -402,8 +405,7 @@ impl BodySearch<'_> {
     }
 
     /// Riding again a stretch the last plan rode from this station, to where
-    /// it ended and as near its end speed as the drive allows from here, but
-    /// no slower than pressing would leave it.
+    /// it ended.
     fn ride_again(
         &self,
         origin: f32,
@@ -439,14 +441,9 @@ impl BodySearch<'_> {
                 continue;
             };
             let pressed_toward = self.ground_target(from, to);
-            let (slowest, fastest) = speed_reach(speed, to - from, self.params);
-            let end_speed = ride.end_speed.clamp(slowest, fastest).max(pressed_speed(
-                speed,
-                to - from,
-                pressed_toward,
-                self.params,
-            ));
+            let (end_speed, met_loss) = self.ridden_speed(from, to, speed, pressed_toward);
             let cost = self.settings.costs.ride_travel * ridden.vertical_travel
+                + met_loss
                 + slowdown_cost(
                     end_speed,
                     pressed_toward,
@@ -483,58 +480,108 @@ impl BodySearch<'_> {
     }
 
     /// The grade the body leaves the floor at `s` with: the floor's over the
-    /// station before, where that falls, and level where it rises or there
-    /// is none, since the drive holds the body down off a brow rather than
-    /// launch it as off a ramp.
+    /// station before, level where there is none.
     fn leaving_grade(&self, s: f32) -> f32 {
         let step = self.settings.body_step;
         match (self.query.floor(s - step), self.query.floor(s)) {
-            (Some(before), Some(at)) => ((at.z - before.z) / step).min(0.0),
+            (Some(before), Some(at)) => (at.z - before.z) / step,
             _ => 0.0,
         }
     }
 
     /// Where a body leaving the floor at `from` at `speed`, climbing as the
     /// floor did, is `along` metres on: free of it, gravity pulls it down no
-    /// faster than this.
+    /// faster than this. Leaving while rising, as off a brow, it rises on for
+    /// [`BodyDims::rise_held`](crate::params::BodyDims::rise_held) at most,
+    /// then falls from where the drive cancelled the rise.
     fn free_height(&self, from: f32, z: f32, speed: f32, along: f32) -> f32 {
-        let time = along / speed.max(MIN_PLANNING_SPEED);
-        z + self.leaving_grade(from) * along - 0.5 * self.params.gravity * time * time
+        let speed = speed.max(MIN_PLANNING_SPEED);
+        let leaving = BodyState {
+            s: from,
+            z,
+            speed,
+            climb: speed * self.leaving_grade(from),
+        };
+        let rise_held = Some(self.params.body.rise_held);
+        flight_at(&leaving, self.params.gravity, rise_held, along / speed).0
+    }
+
+    /// The speed a body riding from `from` to `to` at `speed` ends with,
+    /// station by station meeting the floor's faces and pressing toward
+    /// `target`, and what the speed its faces took costs.
+    fn ridden_speed(&self, from: f32, to: f32, speed: f32, target: f32) -> (f32, f32) {
+        let step = self.settings.body_step;
+        let stations = ((to - from) / step).round().max(1.0) as usize;
+        let run = (to - from) / stations as f32;
+        let (mut speed, mut cost) = (speed, 0.0);
+        for index in 0..stations {
+            let at = from + index as f32 * run;
+            let met = self.met_speed(at, at + run, speed);
+            cost += self.settings.costs.landing_loss * (speed - met).powi(2);
+            speed = pressed_speed(met, run, target, self.params);
+        }
+        (speed, cost)
+    }
+
+    /// The speed along the path a body riding from `from` to `to` at `speed`
+    /// keeps where the floor there turns up more steeply than at `from`: it
+    /// meets it as a face, which takes what runs into it and leaves what runs
+    /// along it ([`landed_speed`]). Read from the floor's normals, which a
+    /// corner between stations does not smear.
+    fn met_speed(&self, from: f32, to: f32, speed: f32) -> f32 {
+        let (Some(before), Some(after)) = (self.query.floor(from), self.query.floor(to)) else {
+            return speed;
+        };
+        let grade = |normal: PathVec| -normal.s / normal.z.max(f32::EPSILON);
+        let (riding, meeting) = (grade(before.normal), grade(after.normal));
+        if meeting <= riding {
+            return speed;
+        }
+        landed_speed(speed, speed * riding, after.normal)
     }
 
     /// Whether the floor between `from` and `to` drops away from the body
     /// riding it at `speed` faster than gravity can follow: past `from` the
     /// body flies, over a gap or off a step down, rather than dipping. Over
-    /// a brow, or an arch's corners, that keeps falling, it skims by up to
-    /// the body's skim height and rides on.
+    /// a brow, or an arch's corners, it skims by up to the body's skim height
+    /// and rides on, where it can ride on from where it comes down.
+    ///
+    /// A body leaving while rising is followed past `to`, up to a stride,
+    /// until its arc is back down on the floor: off a brow the floor falls
+    /// away under the climb it carries.
     fn falls_away(&self, from: f32, to: f32, speed: f32) -> bool {
         let Some(start) = self.query.floor(from) else {
             return false;
         };
         let step = self.settings.body_step;
         let stations = ((to - from) / step).round().max(1.0) as usize;
-        (1..=stations).any(|index| {
+        let followed = if self.leaving_grade(from) > 0.0 {
+            stations.max((self.params.stride.max_length / step).round() as usize)
+        } else {
+            stations
+        };
+        for index in 1..=followed {
             let along = index as f32 * step;
-            self.query.floor(from + along).is_some_and(|floor| {
-                let below = self.free_height(from, start.z, speed, along) - floor.z;
-                below > self.params.body.skim_height
-                    || (below > FALL_AWAY_SLACK && self.climbs_within(from + along, SKIM_RUN))
-            })
-        })
+            let Some(floor) = self.query.floor(from + along) else {
+                continue;
+            };
+            let below = self.free_height(from, start.z, speed, along) - floor.z;
+            if below > self.params.body.skim_height
+                || (below > FALL_AWAY_SLACK && !self.rides_on(from + along, SKIM_RUN))
+            {
+                return true;
+            }
+            if index >= stations && below <= FALL_AWAY_SLACK {
+                break;
+            }
+        }
+        false
     }
 
-    /// Whether the floor climbs above its height at `s` within `run` past it.
-    fn climbs_within(&self, s: f32, run: f32) -> bool {
-        let Some(here) = self.query.floor(s) else {
-            return false;
-        };
-        let step = self.settings.body_step;
-        let stations = (run / step).round() as usize;
-        (1..=stations).any(|index| {
-            self.query
-                .floor(s + index as f32 * step)
-                .is_some_and(|floor| floor.z > here.z + FALL_AWAY_SLACK)
-        })
+    /// Whether the floor can be ridden on for `run` past `s`: no face too
+    /// steep to ride, as a gap's far side, rises across it.
+    fn rides_on(&self, s: f32, run: f32) -> bool {
+        self.query.ride(s, s + run).end >= s + run - STATION_TOLERANCE
     }
 
     /// Rolling off where the floor falls away: no push, the body flies on
@@ -598,18 +645,24 @@ impl BodySearch<'_> {
             return;
         };
         let (duration, gravity) = ((landing - from) / speed, params.gravity);
-        let climb = (floor.z - start.z + 0.5 * gravity * duration * duration) / duration;
+        // Only a body leaving while rising has a rise for the drive to cut:
+        // one carried up a gap's far brow is held to it, not flying free.
+        let rise_held = (self.leaving_grade(from) > 0.0).then_some(params.body.rise_held);
         let takeoff = BodyState {
             s: from,
             z: start.z,
             speed,
-            climb,
+            climb: climb_reaching(floor.z - start.z, duration, gravity, rise_held),
         };
         let phase = Phase {
             start: 0.0,
             duration,
             contacts: SmallVec::new(),
-            motion: Motion::Flight { takeoff, gravity },
+            motion: Motion::Flight {
+                takeoff,
+                gravity,
+                rise_held,
+            },
         };
         if !self.query.clears(&phase) {
             return;
@@ -625,8 +678,8 @@ impl BodySearch<'_> {
                 self.natural_step(),
                 settings,
             );
-        let landed =
-            landed_speed(speed, climb - gravity * duration, floor.normal).max(MIN_PLANNING_SPEED);
+        let landing_climb = flight_at(&takeoff, gravity, rise_held, duration).1;
+        let landed = landed_speed(speed, landing_climb, floor.normal).max(MIN_PLANNING_SPEED);
         let cost = cost + settings.costs.landing_loss * (speed - landed).powi(2);
         out.push((
             landing_station,
@@ -638,6 +691,7 @@ impl BodySearch<'_> {
                 landing,
                 landing_z: floor.z,
                 gravity,
+                rise_held,
                 pushed: false,
             },
         ));
@@ -682,6 +736,8 @@ impl BodySearch<'_> {
         if (self.grid_index(origin) + station as i64) % stride as i64 != 0 {
             return;
         }
+        // A push adds to the climb the body leaves with, never takes from it.
+        let carried = (speed * self.leaving_grade(from)).max(0.0);
         let stride_flight = reach - 2.0 * FOOT_SLACK;
         let longest = stride_flight + self.falling_flight(speed, params.stride.max_drop);
         let first = station
@@ -710,7 +766,7 @@ impl BodySearch<'_> {
             let duration = (landing - from) / speed;
             let gravity = params.gravity;
             let climb = (floor.z - z + 0.5 * gravity * duration * duration) / duration;
-            if !(0.0..=params.flight.max_takeoff_climb).contains(&climb) {
+            if !(carried..=params.flight.max_takeoff_climb).contains(&climb) {
                 continue;
             }
             let takeoff = BodyState {
@@ -723,7 +779,11 @@ impl BodySearch<'_> {
                 start: 0.0,
                 duration,
                 contacts: SmallVec::new(),
-                motion: Motion::Flight { takeoff, gravity },
+                motion: Motion::Flight {
+                    takeoff,
+                    gravity,
+                    rise_held: None,
+                },
             };
             let cost = settings.costs.flight
                 + settings.costs.takeoff_climb * climb * climb
@@ -751,6 +811,7 @@ impl BodySearch<'_> {
                     landing,
                     landing_z: floor.z,
                     gravity,
+                    rise_held: None,
                     pushed: true,
                 },
             ));

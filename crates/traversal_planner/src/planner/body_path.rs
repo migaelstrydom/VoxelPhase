@@ -1,4 +1,4 @@
-use crate::plan::BodyState;
+use crate::plan::{flight_at, BodyState};
 use crate::section::SectionQuery;
 
 /// Slack on matching a flight's landing to a footfall, in metres.
@@ -23,6 +23,9 @@ pub enum BodySegment {
         landing_z: f32,
         /// Downward acceleration, in m/s².
         gravity: f32,
+        /// How long the body rises before the drive cancels the rise, if it
+        /// does ([`Motion::Flight`](crate::plan::Motion::Flight)).
+        rise_held: Option<f32>,
         /// Whether a foot pushed it off: a hop, which a foot lands. A body
         /// rolling off ground that falls away is not pushed and needs no
         /// foot at either end, and no foot lands while it flies.
@@ -159,10 +162,11 @@ impl BodyPath {
                 takeoff,
                 landing,
                 gravity,
+                rise_held,
                 ..
             } if s < *landing => {
                 let t = (s - takeoff.s) / takeoff.speed;
-                Some(takeoff.z + takeoff.climb * t - 0.5 * gravity * t * t)
+                Some(flight_at(takeoff, *gravity, *rise_held, t).0)
             }
             _ => query.floor(s).map(|floor| floor.z),
         }

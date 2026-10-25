@@ -174,12 +174,13 @@ fn a_steady_slope_at_the_limit_is_ridden_not_hopped() {
 }
 
 /// Over the Stack Yard's voussoir arch the body runs the crest and on down
-/// the far side, skimming its 12° corners, and leaves it once, where it
-/// steepens, all but unpushed, rather than hopping off the crest.
+/// the far side, skimming its 12° corners, and leaves it where it steepens,
+/// all but unpushed, rather than hopping off the crest. Running, it pops off
+/// a corner on the way up by itself, on the climb it carries.
 #[test]
 fn an_arch_is_run_over_and_left_unpushed() {
     let mut scene = fixture("stack_yard_voussoir_arch");
-    for speed in [5.0, 8.0] {
+    for (speed, roll_offs) in [(5.0, 0), (8.0, 1)] {
         scene.body.speed = speed;
         scene.intent.speed = speed;
         let section = scene.section();
@@ -187,17 +188,18 @@ fn an_arch_is_run_over_and_left_unpushed() {
         let planned = planner(&scene)
             .plan(&query, &scene.request())
             .unwrap_or_else(|_| panic!("refused at {speed} m/s"));
-        let flights: Vec<_> = planned
+        let (hops, rolled): (Vec<_>, Vec<_>) = planned
             .plan
             .phases
             .iter()
-            .filter_map(|phase| match phase.motion {
-                traversal_planner::Motion::Flight { takeoff, .. } => Some(takeoff),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(flights.len(), 1, "one jump, off the end, at {speed} m/s");
-        assert!(flights[0].climb < 0.1, "at {speed} m/s: {:?}", flights[0]);
+            .filter(|phase| matches!(phase.motion, traversal_planner::Motion::Flight { .. }))
+            .partition(|phase| phase.contacts.is_empty());
+        assert_eq!(hops.len(), 1, "one jump, off the end, at {speed} m/s");
+        let traversal_planner::Motion::Flight { takeoff, .. } = hops[0].motion else {
+            unreachable!("a flight");
+        };
+        assert!(takeoff.climb < 0.1, "at {speed} m/s: {takeoff:?}");
+        assert_eq!(rolled.len(), roll_offs, "roll-offs at {speed} m/s");
     }
 }
 

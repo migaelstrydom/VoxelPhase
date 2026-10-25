@@ -297,7 +297,7 @@ impl<'a> StripQuery<'a> {
     }
 
     fn clears_flight(&self, phase: &Phase) -> bool {
-        let Motion::Flight { takeoff, gravity } = phase.motion else {
+        let Motion::Flight { takeoff, .. } = phase.motion else {
             unreachable!("a flight");
         };
         let (from, to) = (takeoff.s, phase.end_s());
@@ -306,8 +306,7 @@ impl<'a> StripQuery<'a> {
         self.floor.stations_between(from, to).all(|station| {
             let (floor, roof) = self.bounds[station];
             let s = self.floor.station_s(station);
-            let t = (s - from) / takeoff.speed;
-            let z = takeoff.z + takeoff.climb * t - 0.5 * gravity * t * t;
+            let z = phase.flight_height(s).expect("a flight");
             let near_end = s - from < end_zone || to - s < end_zone;
             let margin = if near_end {
                 -FLIGHT_END_TOLERANCE

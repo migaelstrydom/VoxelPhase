@@ -142,6 +142,7 @@ mod tests {
                     climb: 1.5,
                 },
                 gravity: 9.81,
+                rise_held: None,
             },
         }
     }

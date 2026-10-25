@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::section::SectionQuery;
 
 use super::body::BodyState;
-use super::phase::{Contact, Motion, Phase};
+use super::phase::{flight_at, Contact, Motion, Phase};
 
 /// The body's phases from now to the planning horizon. A footfall that lands
 /// as a flight takes off, or at the very end, shows as a stance zero long.
@@ -77,9 +77,11 @@ impl Plan {
         let elapsed = (t - phase.start).clamp(0.0, phase.duration);
         let (s, speed) = phase.progress(elapsed);
         let (z, climb) = match phase.motion {
-            Motion::Flight { takeoff, gravity } => {
-                (phase.flight_height(s)?, takeoff.climb - gravity * elapsed)
-            }
+            Motion::Flight {
+                takeoff,
+                gravity,
+                rise_held,
+            } => flight_at(&takeoff, gravity, rise_held, elapsed),
             Motion::Grounded { .. } => (query.floor(s)?.z, 0.0),
         };
         Some(BodyState { s, z, speed, climb })

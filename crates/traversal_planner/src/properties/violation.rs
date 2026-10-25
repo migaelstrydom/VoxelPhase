@@ -18,7 +18,7 @@ pub enum Rule {
     WithinStride,
     /// Every foot that lands is within reach of the body.
     FootReachesBody,
-    /// No takeoff climbs faster than the gait allows.
+    /// No push climbs faster than the gait allows.
     ClimbWithinLimits,
     /// Replanning a frame later on the same ground keeps the commitment.
     KeepsCommitment,

@@ -37,9 +37,10 @@ pub fn build_plan(body: &BodyPath, planted: &Contact, footfalls: &[Footfall]) ->
             BodySegment::Flight {
                 takeoff,
                 gravity,
+                rise_held,
                 pushed,
                 ..
-            } => builder.flight(segment, takeoff, gravity, pushed),
+            } => builder.flight(segment, takeoff, gravity, rise_held, pushed),
         }
     }
     builder.land_through(f32::MAX);
@@ -106,7 +107,14 @@ impl Builder<'_> {
     /// A flight; a foot landing at its takeoff shows as a zero-long stance.
     /// A hop leaves the ground with both feet; rolling off it, the stance
     /// foot stays planted behind the body.
-    fn flight(&mut self, segment: &BodySegment, takeoff: BodyState, gravity: f32, pushed: bool) {
+    fn flight(
+        &mut self,
+        segment: &BodySegment,
+        takeoff: BodyState,
+        gravity: f32,
+        rise_held: Option<f32>,
+        pushed: bool,
+    ) {
         if self.land_through(takeoff.s) {
             self.ground(takeoff.s, takeoff.s, takeoff.speed, takeoff.speed);
         }
@@ -119,7 +127,11 @@ impl Builder<'_> {
             start: self.body.time_at(takeoff.s),
             duration: segment.time_to(segment.to()),
             contacts,
-            motion: Motion::Flight { takeoff, gravity },
+            motion: Motion::Flight {
+                takeoff,
+                gravity,
+                rise_held,
+            },
         });
     }
 

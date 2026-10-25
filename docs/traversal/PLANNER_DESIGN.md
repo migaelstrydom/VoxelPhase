@@ -278,8 +278,12 @@ body either rides to the next, pressing toward the asked-for speed, or it
 flies to a landing up to a step ahead, landings every 10 cm, its takeoff
 climb set by the landing and its arc required to clear the floor and
 ceiling. The plan never slows the body below what the drive gives: the
-player's stick owns speed, the plan owns hops. A landing keeps only the
-speed along the floor it meets, and what it loses is a cost. Flights are
+player's stick owns speed, the plan owns hops. A landing, or a ride
+meeting a steeper face, keeps only the speed along the floor it meets, and
+what it loses is a cost. Leaving a brow while rising, the body carries its
+climb until the drive cancels the rise (`BodyDims::rise_held`), so a short
+face at a run is a pop the plan sees, not a ride; a push only adds to the
+climb the body carries. Flights are
 tried only where the ride within a step ahead breaks, gets rough or falls
 away faster than the body skims, so open ground is walked at speed. The feet are asked only what they
 can do near a station, worked out once per station: a station is ridden

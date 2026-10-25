@@ -10,6 +10,9 @@
 //!                                                        no bend, no lost climb
 //!   ride     the garden's lips and plank bridges      ─▶ the capsule's height against
 //!                                                        the floor a cast finds under it
+//!   face     short faces of 20..38° met at walk and   ─▶ the speed kept along the face,
+//!            run, up to a shelf                          and the rise off its brow cut
+//!                                                        after BodyDims::rise_held
 //! ```
 //!
 //! Each check names the number it measured and the claim it holds it to, so
@@ -92,6 +95,16 @@ const GRAVITY_TOLERANCE: f32 = 0.02;
 const AIR_SPEED_TOLERANCE: f32 = 0.05;
 /// Largest share of a flat jump's climb a coyote jump may lose.
 const COYOTE_TOLERANCE: f32 = 0.05;
+/// Face lanes: angle in degrees, and the lane's z. Each face rises
+/// [`FACE_RISE`] from x = [`FACE_X`] to a shelf.
+const FACES: [(f32, f32); 3] = [(20.0, 56.0), (30.0, 64.0), (38.0, 72.0)];
+const FACE_X: f32 = 7.0;
+const FACE_RISE: f32 = 0.3;
+/// Largest share by which the speed across the ground kept meeting a face
+/// may differ from the claimed.
+const FACE_SPEED_TOLERANCE: f32 = 0.05;
+/// How long a face run lasts, in seconds: well past the brow.
+const FACE_RUN: f32 = 4.0;
 /// Furthest the grounded capsule may be from the cast floor, in metres.
 const RIDE_TOLERANCE: f32 = 0.03;
 
@@ -175,6 +188,11 @@ pub fn check_contract(config: &RunConfig) -> EngineResult<Vec<ContractCheck>> {
 
     for name in RIDES {
         checks.push(ride(config, &params, name)?);
+    }
+    for (angle, lane_z) in FACES {
+        for gait in Gait::BOTH {
+            checks.extend(face(config, &params, angle, lane_z, gait)?);
+        }
     }
     Ok(checks)
 }
@@ -512,6 +530,81 @@ fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<Con
         ),
         holds: above <= RIDE_TOLERANCE + params.body.skim_height && below <= RIDE_TOLERANCE,
     })
+}
+
+/// A face lane at `gait`: the speed across the ground the body keeps meeting
+/// the face, against its share along the face's slope (`landed_speed` in the
+/// planner: `v·cos²θ`), and how far it rises after leaving the brow, against
+/// its climb there held for `BodyDims::rise_held` and then cut.
+fn face(
+    config: &RunConfig,
+    params: &GaitParams,
+    angle: f32,
+    lane_z: f32,
+    gait: Gait,
+) -> EngineResult<Vec<ContractCheck>> {
+    let script = Script::new()
+        .then(Beat::stand(0.3))
+        .then(gait.beat(FACE_RUN));
+    let frames = run(&lane("face", lane_z, script), config)?.frames;
+    let missing = || EngineError::InvalidState(format!("face {angle}° {}: no", gait.name()));
+    let before = frames
+        .iter()
+        .rev()
+        .find(|frame| frame.body.x < FACE_X - 0.5 && frame.grounded)
+        .ok_or_else(missing)?;
+    let met_at = frames
+        .iter()
+        .position(|frame| frame.body.x > FACE_X - 0.5 && frame.velocity.y > 0.1 * before.velocity.x)
+        .ok_or_else(missing)?;
+    let met = &frames[met_at];
+    let cos = angle.to_radians().cos();
+    let claimed = before.velocity.x * cos * cos;
+    let left_at = met_at
+        + frames[met_at..]
+            .iter()
+            .position(|frame| !frame.grounded)
+            .ok_or_else(missing)?;
+    let left = &frames[left_at];
+    let peak = frames[left_at..]
+        .iter()
+        .take_while(|frame| frame.velocity.y > -1.0)
+        .map(|frame| frame.bottom)
+        .fold(left.bottom, f32::max);
+    // Contact was lost on average half a frame before the first frame that
+    // reports it: that much of the held rise is already spent there.
+    let frame_time = left.time - frames[left_at - 1].time;
+    let held = params.body.rise_held - 0.5 * frame_time;
+    let (climb, gravity) = (left.velocity.y, params.gravity);
+    let claimed_rise = if climb - gravity * held > 0.0 {
+        climb * held - 0.5 * gravity * held * held
+    } else {
+        climb.max(0.0).powi(2) / (2.0 * gravity)
+    };
+    let name = format!("face {angle}° {}", gait.name());
+    Ok(vec![
+        ContractCheck {
+            name: format!("{name}: met"),
+            measured: format!(
+                "{:.2} → {:.2} m/s across",
+                before.velocity.x, met.velocity.x
+            ),
+            claim: format!(
+                "v·cos²θ {claimed:.2} within {:.0}%",
+                FACE_SPEED_TOLERANCE * 100.0
+            ),
+            holds: (met.velocity.x / claimed - 1.0).abs() <= FACE_SPEED_TOLERANCE,
+        },
+        ContractCheck {
+            name: format!("{name}: brow"),
+            measured: format!("climb {climb:.2} m/s, rises {:.3} m", peak - left.bottom),
+            claim: format!(
+                "held {} s: {claimed_rise:.3} within {ARC_TOLERANCE} m",
+                params.body.rise_held
+            ),
+            holds: (peak - left.bottom - claimed_rise).abs() <= ARC_TOLERANCE,
+        },
+    ])
 }
 
 fn no_flight(what: &str) -> EngineError {
