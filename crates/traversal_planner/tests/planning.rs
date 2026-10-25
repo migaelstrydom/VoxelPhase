@@ -173,8 +173,9 @@ fn a_steady_slope_at_the_limit_is_ridden_not_hopped() {
     }
 }
 
-/// Over the Stack Yard's voussoir arch the body runs the crest, its seams
-/// 12° corners it skims, and jumps off the far side at speed rather than
+/// Over the Stack Yard's voussoir arch the body runs the crest and on down
+/// the far side, skimming its 12° corners, and leaves it where it steepens
+/// at speed and all but unpushed, rather than hopping off the crest or
 /// braking to drop off within a stride.
 #[test]
 fn an_arch_is_run_over_and_jumped_off_at_speed() {
@@ -198,7 +199,7 @@ fn an_arch_is_run_over_and_jumped_off_at_speed() {
             .collect();
         assert_eq!(flights.len(), 1, "one jump, off the end, at {speed} m/s");
         assert!(
-            flights[0].speed > 0.9 * speed && flights[0].climb < 0.5,
+            flights[0].speed > 0.9 * speed && flights[0].climb < 0.1,
             "at {speed} m/s: {:?}",
             flights[0]
         );

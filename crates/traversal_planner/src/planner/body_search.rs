@@ -21,9 +21,12 @@ const SPEED_BAND: f32 = 0.25;
 /// foot's reach of any, in metres.
 const SUPPORT_SPACING: f32 = 0.1;
 /// How far below the arc of a body flying free the floor may fall and still
-/// be ridden, in metres: a capsule's contacts absorb a sample's rounding,
-/// not a dip.
+/// be ridden where it climbs again soon after, in metres: a capsule's
+/// contacts absorb a sample's rounding, but a dip's far side is struck.
 const FALL_AWAY_SLACK: f32 = 0.005;
+/// How far on a floor the body skims off must not climb again, in metres:
+/// past it the body is back down.
+const SKIM_RUN: f32 = 0.5;
 /// How far past where a rolling body's arc meets the floor it may be carried
 /// up onto ground it can ride on, in metres: up a gap's far brow.
 const MOUNT_REACH: f32 = 0.1;
@@ -527,7 +530,9 @@ impl BodySearch<'_> {
 
     /// Whether the floor between `from` and `to` drops away from the body
     /// riding it at `speed` faster than gravity can follow: past `from` the
-    /// body flies, over a gap or off a step down, rather than dipping.
+    /// body flies, over a gap or off a step down, rather than dipping. Over
+    /// a brow, or an arch's corners, that keeps falling, it skims by up to
+    /// the body's skim height and rides on.
     fn falls_away(&self, from: f32, to: f32, speed: f32) -> bool {
         let Some(start) = self.query.floor(from) else {
             return false;
@@ -537,8 +542,24 @@ impl BodySearch<'_> {
         (1..=stations).any(|index| {
             let along = index as f32 * step;
             self.query.floor(from + along).is_some_and(|floor| {
-                floor.z < self.free_height(from, start.z, speed, along) - FALL_AWAY_SLACK
+                let below = self.free_height(from, start.z, speed, along) - floor.z;
+                below > self.params.body.skim_height
+                    || (below > FALL_AWAY_SLACK && self.climbs_within(from + along, SKIM_RUN))
             })
+        })
+    }
+
+    /// Whether the floor climbs above its height at `s` within `run` past it.
+    fn climbs_within(&self, s: f32, run: f32) -> bool {
+        let Some(here) = self.query.floor(s) else {
+            return false;
+        };
+        let step = self.settings.body_step;
+        let stations = (run / step).round() as usize;
+        (1..=stations).any(|index| {
+            self.query
+                .floor(s + index as f32 * step)
+                .is_some_and(|floor| floor.z > here.z + FALL_AWAY_SLACK)
         })
     }
 

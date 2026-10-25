@@ -8,6 +8,7 @@ use crate::plan::Limb;
 
 /// The capsule that is the body.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BodyDims {
     /// Capsule radius, in metres.
     pub radius: f32,
@@ -25,6 +26,11 @@ pub struct BodyDims {
     /// Fastest change of speed along the path the drive gives on the ground,
     /// in m/s²: its mean from standing to speed (`character_viewer contract`).
     pub max_acceleration: f32,
+    /// How far the floor may fall below the arc the body would fly riding
+    /// off it and still be ridden, in metres: over a brow, a slat's dip or
+    /// an arch's corners at speed the body lifts off by about this much,
+    /// and is carried on as on the ground rather than by a flight.
+    pub skim_height: f32,
 }
 
 /// How much steeper than `max_ground_slope_degrees` a floor may read and
@@ -62,6 +68,7 @@ impl Default for BodyDims {
             height: 1.0,
             max_ground_slope_degrees: 40.0,
             max_acceleration: 20.0,
+            skim_height: 0.05,
         }
     }
 }

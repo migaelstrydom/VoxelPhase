@@ -92,10 +92,6 @@ const GRAVITY_TOLERANCE: f32 = 0.02;
 const AIR_SPEED_TOLERANCE: f32 = 0.05;
 /// Largest share of a flat jump's climb a coyote jump may lose.
 const COYOTE_TOLERANCE: f32 = 0.05;
-/// How far the floor may fall below a free body's path over the second cast's
-/// run before the body counts as rolling off it, in metres: the planner's
-/// own slack.
-const FALL_AWAY_SLACK: f32 = 0.005;
 /// Furthest the grounded capsule may be from the cast floor, in metres.
 const RIDE_TOLERANCE: f32 = 0.03;
 
@@ -468,7 +464,9 @@ fn coyote(config: &RunConfig) -> EngineResult<ContractCheck> {
 /// under it rises steeper than a plan rides, as up a lip's face, the plan
 /// flies; where it falls away faster than gravity follows, as into a gap,
 /// the plan rolls off it until the body is back on the floor. Neither is
-/// judged, nor a frame leaving on a planned takeoff.
+/// judged, nor a frame leaving on a planned takeoff. Where it falls away by
+/// less than the body skims, the plan rides on over it, and the capsule may
+/// lift off by that much.
 fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<ContractCheck> {
     let scenario = find(name).ok_or_else(|| EngineError::InvalidState(format!("no {name}")))?;
     let station = scenario
@@ -492,7 +490,7 @@ fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<Con
         };
         let speed = frame.velocity.x.hypot(frame.velocity.z).max(0.1);
         let fall = 0.5 * params.gravity * (RIDE_SLOPE_RUN / speed).powi(2);
-        if behind - floor > fall + FALL_AWAY_SLACK {
+        if behind - floor > fall + params.body.skim_height {
             rolling = true;
         }
         if rolling && (frame.bottom - floor).abs() > RIDE_TOLERANCE {
@@ -508,8 +506,11 @@ fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<Con
     Ok(ContractCheck {
         name: format!("ride {name}"),
         measured: format!("{above:.3} m above, {below:.3} m below"),
-        claim: format!("on the cast floor within {RIDE_TOLERANCE} m"),
-        holds: above <= RIDE_TOLERANCE && below <= RIDE_TOLERANCE,
+        claim: format!(
+            "on the cast floor within {RIDE_TOLERANCE} m, skimming {} m above",
+            params.body.skim_height
+        ),
+        holds: above <= RIDE_TOLERANCE + params.body.skim_height && below <= RIDE_TOLERANCE,
     })
 }
 
