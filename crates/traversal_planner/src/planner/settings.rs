@@ -5,6 +5,7 @@ use crate::params::GaitParams;
 /// What the planner weighs. Every cost is unitless, so the weights say how
 /// much one kind of awkwardness is worth against another.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CostWeights {
     /// A step's length off the natural length for its speed, per squared
     /// fraction of the natural length.
@@ -16,6 +17,9 @@ pub struct CostWeights {
     pub flight: f32,
     /// Upward speed at takeoff, per (m/s)².
     pub takeoff_climb: f32,
+    /// Speed along the path a landing loses to the floor's face, per
+    /// (m/s)²: the jolt of meeting a rise rather than landing on it.
+    pub landing_loss: f32,
     /// Height gained and lost riding the floor, per metre: the dips and bumps
     /// felt as snags.
     pub ride_travel: f32,
@@ -46,6 +50,7 @@ impl Default for CostWeights {
             sideways: 0.5,
             flight: 0.3,
             takeoff_climb: 0.1,
+            landing_loss: 0.3,
             ride_travel: 4.0,
             loose: 0.5,
             loose_reference_mass: 100.0,
@@ -63,11 +68,11 @@ impl Default for CostWeights {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Slowing {
     /// Never: the plan hops at whatever speed the body has, or refuses.
+    #[default]
     Never,
     /// Only where no plan at the body's speed reaches the goal.
     ToAvoidFailure,
     /// Wherever slowing makes the plan cheaper, by the costs.
-    #[default]
     ByCost,
 }
 

@@ -19,8 +19,8 @@
 //! orange, faded where tentative. `--track` has the plan drive the character
 //! (as F8 does in game): along its path at its speed, hopping where it hops.
 //! `--slowing never|avoid|cost` sets when the plan may slow it (F10 in game):
-//! never, only where no plan at speed gets through, or wherever the costs
-//! prefer (the default).
+//! never (the default), only where no plan at speed gets through, or
+//! wherever the costs prefer.
 //!
 //! `traversal` runs every scenario that crosses a station of the Traversal
 //! Garden; `--summary` prints only each one's traversal summary as a table

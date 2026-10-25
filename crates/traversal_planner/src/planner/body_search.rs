@@ -10,7 +10,8 @@ use crate::section::{FootholdWindow, Footing, SectionQuery};
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
 use super::rules::{
-    jumped, slowdown_cost, speed_reach, Pace, FOOT_SLACK, MIN_PLANNING_SPEED, PUSH_OFF_TOLERANCE,
+    jumped, landed_speed, slowdown_cost, speed_reach, Pace, FOOT_SLACK, MIN_PLANNING_SPEED,
+    PUSH_OFF_TOLERANCE,
 };
 use super::settings::PlannerSettings;
 
@@ -624,11 +625,12 @@ impl BodySearch<'_> {
             return;
         };
         let (duration, gravity) = ((landing - from) / speed, params.gravity);
+        let climb = (floor.z - start.z + 0.5 * gravity * duration * duration) / duration;
         let takeoff = BodyState {
             s: from,
             z: start.z,
             speed,
-            climb: (floor.z - start.z + 0.5 * gravity * duration * duration) / duration,
+            climb,
         };
         let phase = Phase {
             start: 0.0,
@@ -650,9 +652,12 @@ impl BodySearch<'_> {
                 self.natural_step(),
                 settings,
             );
+        let landed =
+            landed_speed(speed, climb - gravity * duration, floor.normal).max(MIN_PLANNING_SPEED);
+        let cost = cost + settings.costs.landing_loss * (speed - landed).powi(2);
         out.push((
             landing_station,
-            speed,
+            landed,
             floor.z,
             cost,
             BodySegment::Flight {
@@ -757,12 +762,15 @@ impl BodySearch<'_> {
                     self.natural_step(),
                     settings,
                 );
-            if !worth(landing_station, speed, cost) || !self.query.clears(&phase) {
+            let landed = landed_speed(speed, climb - gravity * duration, floor.normal)
+                .max(MIN_PLANNING_SPEED);
+            let cost = cost + settings.costs.landing_loss * (speed - landed).powi(2);
+            if !worth(landing_station, landed, cost) || !self.query.clears(&phase) {
                 continue;
             }
             out.push((
                 landing_station,
-                speed,
+                landed,
                 floor.z,
                 cost,
                 BodySegment::Flight {

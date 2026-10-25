@@ -1,4 +1,5 @@
 use crate::params::GaitParams;
+use crate::path::PathVec;
 
 use super::settings::PlannerSettings;
 
@@ -19,6 +20,23 @@ pub const FOOT_SLACK: f32 = 0.15;
 /// either end. A flight off an edge may carry that far past a stride.
 pub fn jumped(span: f32, params: &GaitParams) -> f32 {
     (span - (params.stride.max_length - 2.0 * FOOT_SLACK)).max(0.0)
+}
+
+/// The speed along the path a body keeps landing on a floor whose normal is
+/// `normal`, flying along it at `speed` and rising at `climb` (falling, if
+/// negative), in m/s: the contact takes what runs into the floor's face and
+/// leaves what runs along it, of which `cos θ` is across the ground. On
+/// level ground that is all of `speed`; on a rise met head-on, a share of
+/// it. Never more than `speed`: what a fall down a slope would add, the
+/// drive soon takes back.
+pub fn landed_speed(speed: f32, climb: f32, normal: PathVec) -> f32 {
+    let face = normal.s.hypot(normal.z);
+    if face <= f32::EPSILON {
+        return speed;
+    }
+    let (along_s, along_z) = (normal.z / face, -normal.s / face);
+    let along = speed * along_s + climb * along_z;
+    (along * along_s).clamp(0.0, speed)
 }
 
 /// How the body's speed changes while it is on the ground.

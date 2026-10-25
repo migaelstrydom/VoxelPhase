@@ -11,7 +11,7 @@ use traversal_planner::plan::{Limb, Plan};
 const FRAME: f32 = 1.0 / 60.0;
 use traversal_planner::properties::{check_plan, check_replan};
 use traversal_planner::scene::Outcome;
-use traversal_planner::section::StripQuery;
+use traversal_planner::section::{SectionQuery, StripQuery};
 use traversal_planner::{PathVec, Planner, PlannerSettings, Slowing, TraversalScene};
 
 fn fixture(name: &str) -> TraversalScene {
@@ -175,17 +175,21 @@ fn a_steady_slope_at_the_limit_is_ridden_not_hopped() {
 
 /// Over the Stack Yard's voussoir arch the body runs the crest and on down
 /// the far side, skimming its 12° corners, and leaves it where it steepens
-/// at speed and all but unpushed, rather than hopping off the crest or
-/// braking to drop off within a stride.
+/// at speed and all but unpushed, rather than hopping off the crest or,
+/// even where the costs may slow it, braking to drop off within a stride.
 #[test]
 fn an_arch_is_run_over_and_jumped_off_at_speed() {
     let mut scene = fixture("stack_yard_voussoir_arch");
+    let settings = PlannerSettings {
+        slowing: Slowing::ByCost,
+        ..PlannerSettings::default()
+    };
     for speed in [5.0, 8.0] {
         scene.body.speed = speed;
         scene.intent.speed = speed;
         let section = scene.section();
         let query = StripQuery::new(&section, &scene.params);
-        let planned = planner(&scene)
+        let planned = Planner::new(scene.params.clone(), settings.clone())
             .plan(&query, &scene.request())
             .unwrap_or_else(|_| panic!("refused at {speed} m/s"));
         let flights: Vec<_> = planned
@@ -204,6 +208,42 @@ fn an_arch_is_run_over_and_jumped_off_at_speed() {
             flights[0]
         );
     }
+}
+
+/// Running at the garden's 40 cm lip, which its voxels mesh as a ramp, a
+/// plan that may not slow hops onto the top rather than onto the ramp,
+/// where landing would run into its face and lose speed.
+#[test]
+fn a_lip_is_hopped_onto_its_top_not_its_ramp_at_a_run() {
+    let scene = fixture("garden_lip40_ramp");
+    let section = scene.section();
+    let query = StripQuery::new(&section, &scene.params);
+    let settings = PlannerSettings {
+        slowing: Slowing::Never,
+        ..PlannerSettings::default()
+    };
+    let planned = Planner::new(scene.params.clone(), settings)
+        .plan(&query, &scene.request())
+        .expect("crosses");
+    let landings: Vec<_> = planned
+        .plan
+        .phases
+        .iter()
+        .filter_map(|phase| match phase.motion {
+            traversal_planner::Motion::Flight { takeoff, .. } => {
+                let landing = takeoff.s + takeoff.speed * phase.duration;
+                Some((landing, query.floor(landing).expect("lands on a floor")))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(landings.len(), 1, "one hop");
+    let (landing, floor) = landings[0];
+    assert!(
+        floor.normal.z > 10f32.to_radians().cos(),
+        "lands at s {landing} on a floor {:.0}° steep",
+        floor.normal.z.acos().to_degrees()
+    );
 }
 
 /// The slowest the body is planned to ride across `plan`, in m/s.
