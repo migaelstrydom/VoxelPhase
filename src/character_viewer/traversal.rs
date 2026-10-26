@@ -4,7 +4,8 @@
 //! ```text
 //!   Station (where, along which way) ─┐
 //!                                     ├─▶ summarise ─▶ TraversalSummary ─▶ row
-//!   FrameRecord per frame ────────────┘
+//!   FrameRecord per frame ────────────┘                    │
+//!                     several, from staggered starts ──────┴─▶ TraversalSpread ─▶ row
 //! ```
 //!
 //! Everything is read off the recorded frames: the summary is a pure function
@@ -261,6 +262,10 @@ impl TraversalSummary {
 
     /// One line of the summary table, for the scenario `name`.
     pub fn row(&self, name: &str) -> String {
+        self.row_crossed(name, if self.crossed { "yes" } else { "NO" })
+    }
+
+    fn row_crossed(&self, name: &str, crossed: &str) -> String {
         let time = self
             .crossing_time
             .map(|t| format!("{t:5.2}/{:5.2}", self.ideal_time))
@@ -268,7 +273,7 @@ impl TraversalSummary {
         format!(
             "{:18} {:>5} {:5.2} {:5.2} {:>11} {:>3}({:>2}) {:>3}/{:<3} {:5.2} {:5.2} {:6.1} {:5.3} {:8.3} {:>4}",
             name,
-            if self.crossed { "yes" } else { "NO" },
+            crossed,
             self.asked,
             self.min_speed,
             time,
@@ -282,6 +287,60 @@ impl TraversalSummary {
             self.worst_foot_slip,
             self.total_foot_slip,
             self.foot_pops
+        )
+    }
+}
+
+/// One station crossed several times, from starts staggered along the way
+/// in: how many got across, the worst crossing, and how fast the best one's
+/// slowest moment was. A single crossing turns on the phase of the frames and
+/// the stride at the station, so a change judged on one may only have moved
+/// that phase.
+#[derive(Clone, Debug)]
+pub struct TraversalSpread {
+    /// The crossing whose slowest moment was slowest.
+    pub worst: TraversalSummary,
+    pub crossed: usize,
+    pub runs: usize,
+    /// The highest of the crossings' slowest speeds, in m/s.
+    pub best_min_speed: f32,
+}
+
+impl TraversalSpread {
+    /// The spread of `summaries`, `None` if there are none.
+    pub fn of(summaries: &[TraversalSummary]) -> Option<Self> {
+        let worst = summaries
+            .iter()
+            .min_by(|a, b| a.min_speed.total_cmp(&b.min_speed))?
+            .clone();
+        Some(Self {
+            worst,
+            crossed: summaries.iter().filter(|summary| summary.crossed).count(),
+            runs: summaries.len(),
+            best_min_speed: summaries
+                .iter()
+                .map(|summary| summary.min_speed)
+                .fold(f32::MIN, f32::max),
+        })
+    }
+
+    /// Column headings for `row`: the worst crossing's, how many crossed,
+    /// and the best slowest speed.
+    pub fn header() -> String {
+        format!("{} {:>5}", TraversalSummary::header(), "best")
+    }
+
+    /// One line of the table, for the scenario `name`.
+    pub fn row(&self, name: &str) -> String {
+        let crossed = if self.runs == 1 {
+            (if self.crossed == 1 { "yes" } else { "NO" }).to_string()
+        } else {
+            format!("{}/{}", self.crossed, self.runs)
+        };
+        format!(
+            "{} {:5.2}",
+            self.worst.row_crossed(name, &crossed),
+            self.best_min_speed
         )
     }
 }

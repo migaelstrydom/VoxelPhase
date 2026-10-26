@@ -100,3 +100,19 @@ pub struct Scenario {
     /// What a traversal scenario crosses, for the report to judge it on.
     pub station: Option<Station>,
 }
+
+impl Scenario {
+    /// The scenario started `back` metres further back along the way it
+    /// crosses its station, if it has one: the same crossing met at another
+    /// phase of the frames and the stride.
+    pub fn started_back(&self, back: f32) -> Scenario {
+        let Some(station) = self.station else {
+            return self.clone();
+        };
+        let (x, z) = self.start;
+        Scenario {
+            start: (x - back * station.axis.x, z - back * station.axis.z),
+            ..self.clone()
+        }
+    }
+}

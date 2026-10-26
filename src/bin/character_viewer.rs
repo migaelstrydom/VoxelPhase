@@ -22,6 +22,10 @@
 //! `traversal` runs every scenario that crosses a station of the Traversal
 //! Garden; `--summary` prints only each one's traversal summary as a table
 //! (speed lost, snags, bounce, foot slip, whether it got across).
+//! `--starts N` crosses each station N times, from starts staggered back by
+//! 0.11 m, and prints the worst crossing, how many got across and the best
+//! slowest speed: one crossing turns on where the frames and the stride fall
+//! at the station.
 //!
 //! `contract` measures the traction drive against what the traversal
 //! planner's `GaitParams` claim it does (slope, takeoff, ride; see
@@ -37,12 +41,16 @@ use std::process::ExitCode;
 
 use voxel_phase::character_viewer::{
     catalogue, check_contract, find, report, run, traversal, ContractCheck, RunConfig, Scenario,
-    TraversalSummary,
+    TraversalSpread,
 };
 use voxel_phase::rendering::visual_bench::contact_sheet;
 
+/// How much further back each staggered start is, in metres: no divisor of
+/// a frame's travel or a step at the garden's speeds.
+const START_STAGGER: f32 = 0.11;
+
 const USAGE: &str =
-    "usage: character_viewer <scenario|all|traversal|contract> [--list] [--summary] [--plan] [--track] [--tiles N]
+    "usage: character_viewer <scenario|all|traversal|contract> [--list] [--summary] [--starts N] [--plan] [--track] [--tiles N]
                         [--from F] [--to F]
                         [--fps HZ] [--width W] [--height H] [--columns C]
                         [--every N] [--out <sheet.png>]
@@ -64,6 +72,8 @@ struct Args {
     every: usize,
     /// Print only the traversal summary table, not the frame-by-frame report.
     summary: bool,
+    /// Crossings of each station the summary judges, from staggered starts.
+    starts: usize,
     /// Run the drive contract checks instead of scenarios.
     contract: bool,
     out: Option<PathBuf>,
@@ -84,7 +94,24 @@ fn main() -> ExitCode {
         return contract(&args.config);
     }
     if args.summary {
-        println!("{}", TraversalSummary::header());
+        println!("{}", TraversalSpread::header());
+        for scenario in &args.scenarios {
+            let mut summaries = Vec::new();
+            for start in 0..args.starts {
+                let staggered = scenario.started_back(start as f32 * START_STAGGER);
+                match run(&staggered, &args.config) {
+                    Ok(take) => summaries.extend(traversal(&take)),
+                    Err(e) => {
+                        eprintln!("{}: {e}", scenario.name);
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            if let Some(spread) = TraversalSpread::of(&summaries) {
+                println!("{}", spread.row(scenario.name));
+            }
+        }
+        return ExitCode::SUCCESS;
     }
     for scenario in &args.scenarios {
         let take = match run(scenario, &args.config) {
@@ -94,13 +121,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        if args.summary {
-            if let Some(summary) = traversal(&take) {
-                println!("{}", summary.row(&take.scenario));
-            }
-        } else {
-            print!("{}", report(&take, args.every));
-        }
+        print!("{}", report(&take, args.every));
         if take.tiles.is_empty() {
             continue;
         }
@@ -131,6 +152,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
     let mut columns = 4;
     let mut every = 3;
     let mut summary = false;
+    let mut starts = 1;
     let mut out = None;
     let mut camera = CameraOverride::default();
 
@@ -144,6 +166,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
                 return Ok(None);
             }
             "--summary" => summary = true,
+            "--starts" => starts = parse::<usize>(&value("--starts")?)?.max(1),
             "--plan" => config.plan = true,
             "--track" => config.track = true,
             "--tiles" => config.tiles = parse(&value("--tiles")?)?,
@@ -189,6 +212,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
         columns,
         every,
         summary,
+        starts,
         contract,
         out,
     }))

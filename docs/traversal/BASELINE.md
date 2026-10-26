@@ -127,3 +127,49 @@ cave_walk             NO  5.00  0.00     -/ 2.40 145( 1)   0/166  0.10  0.02    
 | scree_run | As walking: running buys little on scree (0.8 m/s low, 2.6× ideal). |
 | ledge_walk | Stops at the wall and bounces against it (1.8 m/s rises, 25 airborne frames) for the rest of the run. |
 | cave_walk | Wedged under the roof's edge at x = 7.16, pressed 4 cm into the ground and pitched 4°; the solver reports 1.5 m/s of velocity the body never travels. |
+
+## Plan driving, at 60 Hz, from five starts
+
+The game runs at about 60 Hz; the phase 0 table above was taken at 30. Each
+station is crossed five times, from starts staggered back 0.11 m at a time
+(`--starts 5`), because one crossing turns on where the frames and the
+stride fall at the station. `cross` counts the crossings that got across;
+the row is the worst one, and `best` is the best crossing's slowest speed.
+Measured on `2e1749c` (2026-10-26), with the plan driving (`--track`):
+
+```bash
+./target/release/character_viewer traversal --tiles 0 --summary --track --starts 5
+```
+
+```text
+scenario           cross asked   min  time/ideal    snags     air  rise  drop rms_ay  slip slip_sum pops  best
+lip3_walk            5/5  5.00  4.91  0.40/ 0.40   0( 0)   0/48   0.54  0.00    5.3 0.004    0.006    0  4.92
+lip3_run             5/5  8.00  7.84  0.25/ 0.25   0( 0)   8/30   0.86  0.78   13.9 0.005    0.006    0  7.88
+lip8_walk            5/5  5.00  4.41  0.42/ 0.40   0( 0)  13/49   1.39  1.27   17.6 0.010    0.030    1  4.53
+lip8_run             5/5  8.00  6.98  0.27/ 0.25   0( 0)  17/31   2.26  1.76   36.4 0.000    0.000    0  7.30
+lip15_walk           5/5  5.00  3.39  0.47/ 0.40  14( 1)  16/52   2.16  1.59   25.5 0.010    0.033    1  3.65
+lip15_run            5/5  8.00  5.02  0.33/ 0.25  19( 2)  20/36   3.56  2.25   51.1 0.000    0.000    0  5.87
+lip25_walk           5/5  5.00  4.42  0.40/ 0.40   0( 0)  26/48   1.86  1.59   24.0 0.010    0.031    0  4.99
+lip25_run            5/5  8.00  6.93  0.27/ 0.25   0( 0)  29/31   3.27  2.25   50.2 0.000    0.000    1  7.96
+lip40_walk           5/5  5.00  4.14  0.42/ 0.40   0( 0)  31/49   2.47  1.76   28.3 0.011    0.031    0  4.74
+lip40_run            5/5  8.00  6.80  0.27/ 0.25   0( 0)  29/31   3.45  2.25   53.7 0.000    0.000    1  7.95
+planks_walk          5/5  5.00  4.82  2.00/ 2.00   0( 0)  96/144  1.70  1.90   26.5 0.000    0.000    0  4.95
+planks_run           5/5  8.00  4.15  1.27/ 1.25  14( 1)  68/97   3.45  2.28   39.7 0.039    0.045    0  7.87
+planks_wide_walk     5/5  5.00  4.66  2.00/ 2.00   0( 0) 111/144  1.58  1.69   29.1 0.004    0.004    0  4.95
+planks_wide_run      5/5  8.00  0.53  1.40/ 1.25  20( 1)  88/108  2.64  2.95   43.9 0.131    0.189    1  7.81
+rough_walk           5/5  5.00  3.16  2.72/ 2.40  40( 1) 119/187  2.75  2.44   28.3 0.046    0.168    1  4.66
+rough_run            5/5  8.00  6.53  1.58/ 1.50   0( 0)  86/109  2.79  2.88   36.9 0.013    0.013    1  7.85
+slope40_walk         5/5  5.00  1.89  2.77/ 1.60 179( 1)  13/195  2.46  1.27   12.5 0.012    0.140    0  2.60
+slope40_run          5/5  8.00  3.07  1.72/ 1.00 115( 1)  13/123  3.99  1.27   26.8 0.013    0.034    0  4.63
+slope50_walk         5/5  5.00  0.91  3.03/ 1.20 193( 1)   7/213  2.49  0.32   10.8 0.041    0.176    0  1.50
+slope50_run          5/5  8.00  1.38  1.87/ 0.75 126( 1)  16/134  4.03  1.43   27.4 0.006    0.022    0  2.44
+scree_walk           0/5  5.00  0.05     -/ 1.60 240( 1)  99/282  2.87  2.59   21.1 0.442    0.714    0  0.37
+scree_run            3/5  8.00  0.52     -/ 1.00 175( 1)  82/213  4.18  1.63   26.9 0.079    0.256    1  1.44
+ledge_walk           0/5  5.00  0.00     -/ 0.40 171( 1)  76/210  2.78  3.18   18.9 0.286    0.311    0  0.00
+cave_walk            0/5  5.00  0.00     -/ 2.40 288( 1)   0/330  0.06  0.02    0.4 0.035    0.068    0  0.00
+```
+
+Read the gap between `min` and `best` before any single number: a plank
+bridge crossed at a run turns from clean to a near stop on a 0.1 m shift of
+the start.
+

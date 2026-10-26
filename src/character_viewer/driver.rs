@@ -55,7 +55,7 @@ pub const RIDE_SLOPE_RUN: f32 = 0.05;
 /// How a run is played and filmed.
 #[derive(Clone, Copy, Debug)]
 pub struct RunConfig {
-    /// Display rate. The game is locked to 30 Hz by the display it runs on.
+    /// Frame rate, in Hz: the game's, about 60.
     pub frame_rate: f32,
     /// Render target size of each tile.
     pub width: u32,
@@ -75,7 +75,7 @@ pub struct RunConfig {
 impl Default for RunConfig {
     fn default() -> Self {
         Self {
-            frame_rate: 30.0,
+            frame_rate: 60.0,
             width: 480,
             height: 320,
             tiles: 12,

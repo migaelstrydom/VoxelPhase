@@ -17,4 +17,4 @@ pub use record::{FootRecord, FrameRecord, Take, Tile};
 pub use report::{report, traversal};
 pub use scenario::{CameraRig, Scenario};
 pub use scenarios::{catalogue, find};
-pub use traversal::{summarise, Station, TraversalSummary};
+pub use traversal::{summarise, Station, TraversalSpread, TraversalSummary};
