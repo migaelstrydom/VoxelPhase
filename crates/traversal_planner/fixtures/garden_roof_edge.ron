@@ -300,37 +300,6 @@
     intent: (
         speed: 8.0,
     ),
-    params: (
-        body: (
-            radius: 0.25,
-            height: 1.0,
-            max_ground_slope_degrees: 40.0,
-            max_acceleration: 20.0,
-            skim_height: 0.05,
-            rise_held: 0.08,
-        ),
-        foot: (
-            radius: 0.05,
-            stance_half_width: 0.1,
-            reach_out: 0.15,
-            reach_in: 0.15,
-            max_slope_degrees: 50.0,
-            below_body: 0.35,
-            above_body: 0.1,
-            min_edge_margin: 0.04,
-        ),
-        stride: (
-            min_length: 0.2,
-            max_length: 2.5,
-            max_rise: 0.45,
-            max_drop: 8.0,
-        ),
-        flight: (
-            clearance: 0.03,
-            max_takeoff_climb: 3.0,
-        ),
-        gravity: 9.81,
-    ),
     layout: (
         lanes: [
             -0.3,

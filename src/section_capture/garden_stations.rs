@@ -182,6 +182,8 @@ fn twin(captured: &TraversalScene, forms: &[Form]) -> TraversalScene {
 struct Summary {
     crosses: bool,
     flights: usize,
+    /// Where the first foot lands, if it steps before any flight: after a
+    /// hop straight away it is the landing, which a rounded corner moves.
     first_footfall: Option<f32>,
     /// The planner's rules the plan breaks.
     broken: Vec<String>,
@@ -196,7 +198,16 @@ fn summarise(scene: &TraversalScene) -> Summary {
         Ok(planned) => &planned.plan,
         Err(refusal) => &refusal.partial,
     };
-    let first_footfall = plan.footfalls().next().map(|(_, contact)| contact.at.s);
+    let first_flight = plan
+        .phases
+        .iter()
+        .find(|phase| matches!(phase.motion, Motion::Flight { .. }))
+        .map_or(f32::INFINITY, |phase| phase.start);
+    let first_footfall = plan
+        .footfalls()
+        .next()
+        .filter(|(time, _)| *time <= first_flight)
+        .map(|(_, contact)| contact.at.s);
     let broken = check_plan(plan, &query, &scene.params)
         .iter()
         .map(|violation| format!("{violation:?}"))
@@ -262,9 +273,11 @@ fn disagreement(captured: &Summary, authored: Option<&Summary>) -> Option<String
         return Some(format!("breaks {:?}", captured.broken));
     }
     let authored = authored?;
+    // Where only one steps before it flies, the ground's rounding chose the
+    // takeoff, not a misreading.
     let footfalls_apart = match (captured.first_footfall, authored.first_footfall) {
         (Some(a), Some(b)) => (a - b).abs() > FOOTFALL_TOLERANCE,
-        (a, b) => a.is_some() != b.is_some(),
+        _ => false,
     };
     let differs = captured.crosses != authored.crosses
         || (captured.crosses

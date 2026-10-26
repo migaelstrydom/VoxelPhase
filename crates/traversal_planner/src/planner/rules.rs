@@ -1,8 +1,6 @@
 use crate::params::GaitParams;
 use crate::path::PathVec;
 
-use super::settings::PlannerSettings;
-
 /// Slowest speed the body is planned at, in m/s: below it a stretch would
 /// take unboundedly long.
 pub const MIN_PLANNING_SPEED: f32 = 0.3;
@@ -14,13 +12,6 @@ pub const MIN_PLANNING_SPEED: f32 = 0.3;
 pub const PUSH_OFF_TOLERANCE: f32 = 0.001;
 /// How far a foot may be behind a takeoff or past a landing, in metres.
 pub const FOOT_SLACK: f32 = 0.15;
-
-/// How much of a flight `span` metres long is a jump's, not a step's: what
-/// is beyond the longest flight a stride spans with a foot's slack at
-/// either end. A flight off an edge may carry that far past a stride.
-pub fn jumped(span: f32, params: &GaitParams) -> f32 {
-    (span - (params.stride.max_length - 2.0 * FOOT_SLACK)).max(0.0)
-}
 
 /// The speed along the path a body keeps landing on a floor whose normal is
 /// `normal`, flying along it at `speed` and rising at `climb` (falling, if
@@ -56,16 +47,18 @@ pub fn speed_reach(speed: f32, distance: f32, params: &GaitParams) -> (f32, f32)
     )
 }
 
-/// What running below the asked-for speed for `distance` costs, charged by
-/// the natural step so a stride's worth costs `slowdown`.
-pub fn slowdown_cost(
-    speed: f32,
-    target: f32,
-    distance: f32,
-    natural_step: f32,
-    settings: &PlannerSettings,
-) -> f32 {
-    let target = target.max(MIN_PLANNING_SPEED);
-    let short = ((target - speed) / target).max(0.0);
-    settings.costs.slowdown * short * short * distance / natural_step
+/// Seconds lost covering `distance` metres from `start` to `end` speed,
+/// changing evenly in time, against covering them at `target`: what running
+/// slow costs. Running faster gains nothing.
+pub fn time_lost(start: f32, end: f32, distance: f32, target: f32) -> f32 {
+    let mean = (0.5 * (start + end)).max(MIN_PLANNING_SPEED);
+    (distance / mean - distance / target.max(MIN_PLANNING_SPEED)).max(0.0)
+}
+
+/// Seconds still to lose getting from `speed` back up to `target` at
+/// `acceleration`: what arriving slow costs, however the way on goes, since
+/// the drive regains speed no faster.
+pub fn recovery_time_lost(speed: f32, target: f32, acceleration: f32) -> f32 {
+    let short = (target - speed).max(0.0);
+    short * short / (2.0 * acceleration * target.max(MIN_PLANNING_SPEED))
 }

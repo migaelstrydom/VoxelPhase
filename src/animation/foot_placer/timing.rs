@@ -28,6 +28,12 @@ use super::config::FootPlacerConfig;
 /// act as an emergency valve only.
 const STRIDE_REACH_SAFETY: f32 = 0.9;
 
+/// How far from the hip, horizontally, a leg reaching `extension` plants a
+/// foot `drop` below it.
+pub(super) fn reach_budget(extension: f32, drop: f32) -> f32 {
+    (extension * extension - drop * drop).max(0.0).sqrt()
+}
+
 /// All cadence quantities for one substep, derived from the gait speed.
 #[derive(Clone, Copy, Debug)]
 pub struct GaitTiming {
@@ -45,6 +51,36 @@ pub struct GaitTiming {
 }
 
 impl GaitTiming {
+    /// The step a gait at `speed` plans on level ground: hip travel from
+    /// footfall to footfall, for legs `leg_length` long whose foot rests
+    /// `standing_height` below the hip. What a planner laying footfalls for
+    /// these legs spaces them by.
+    pub fn level_step(
+        speed: f32,
+        standing_height: f32,
+        leg_length: f32,
+        stride_gain: f32,
+        cfg: &FootPlacerConfig,
+    ) -> f32 {
+        let reach = Self::level_reach(standing_height, leg_length, cfg);
+        Self::derive(speed, standing_height, leg_length, stride_gain, reach, cfg).trigger_threshold
+    }
+
+    /// How far from the hip, horizontally, a foot plants on level ground,
+    /// for legs `leg_length` long whose foot rests `standing_height` below
+    /// the hip.
+    pub fn level_reach(standing_height: f32, leg_length: f32, cfg: &FootPlacerConfig) -> f32 {
+        reach_budget(leg_length * cfg.plant_reach_ratio, standing_height)
+    }
+
+    /// The longest step these legs take on level ground: hip travel while a
+    /// foot planted at full reach ahead passes to full reach behind, over
+    /// the stance share of the fastest gait's cycle. Past it, a step needs
+    /// a flight.
+    pub fn longest_step(standing_height: f32, leg_length: f32, cfg: &FootPlacerConfig) -> f32 {
+        Self::level_reach(standing_height, leg_length, cfg) / cfg.fast_duty_factor
+    }
+
     /// Derive timing from the gait speed (the speed driving the phase
     /// clock — actual horizontal speed, floored by intent).
     /// `reach_budget` is the horizontal distance a foot may sit from its

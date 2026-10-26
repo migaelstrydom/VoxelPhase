@@ -26,7 +26,7 @@ use super::capture_point::{capture_point_xz, stance_offset, turn_in_place_offset
 use super::clock::{GaitClock, ReleaseKind};
 use super::config::FootPlacerConfig;
 use super::swing::swing_position;
-use super::timing::GaitTiming;
+use super::timing::{reach_budget, GaitTiming};
 
 /// Hard cap on substeps per frame, guarding against pathological dt.
 const MAX_SUBSTEPS: f32 = 64.0;
@@ -1191,9 +1191,10 @@ fn plant_reach(ctx: &PlacerCtx<'_>) -> f32 {
 /// plant. Pythagoras on `plant_reach`, against the *actual* rest
 /// vertical from pelvis to foot centre (`pelvis.y − foot_y_fallback`).
 fn horizontal_reach_budget(ctx: &PlacerCtx<'_>) -> f32 {
-    let ext = plant_reach(ctx);
-    let vertical = (ctx.pelvis.y - ctx.foot_y_fallback).max(0.0);
-    (ext * ext - vertical * vertical).max(0.0).sqrt()
+    reach_budget(
+        plant_reach(ctx),
+        (ctx.pelvis.y - ctx.foot_y_fallback).max(0.0),
+    )
 }
 
 /// Reach budget shrunk for terrain slope along the travel direction.

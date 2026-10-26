@@ -2,7 +2,7 @@
 //!
 //! All tuning parameters in one place.
 
-use super::foot_placer::FootPlacerConfig;
+use super::foot_placer::{FootPlacerConfig, GaitTiming};
 use super::legged::LegRigDims;
 use crate::rendering::Colour;
 
@@ -161,6 +161,38 @@ impl CharacterRigConfig {
     #[inline]
     pub fn probe_length(&self) -> f32 {
         self.leg_length() * self.probe_length_factor
+    }
+
+    /// The step this rig plans at `speed` on level ground in `gait`: hip
+    /// travel from footfall to footfall, which a planner laying footfalls
+    /// for these legs spaces them by.
+    pub fn level_step(&self, speed: f32, gait: super::humanoid::pose_state::Gait) -> f32 {
+        let dims = self.leg_dims();
+        GaitTiming::level_step(
+            speed,
+            dims.standing_height,
+            dims.leg_length,
+            self.gait_presets.for_gait(gait).stride_gain,
+            &self.foot_placer,
+        )
+    }
+
+    /// How far from the hip, horizontally, a foot plants on level ground.
+    pub fn level_reach(&self) -> f32 {
+        let dims = self.leg_dims();
+        GaitTiming::level_reach(dims.standing_height, dims.leg_length, &self.foot_placer)
+    }
+
+    /// The longest step the legs take without a flight.
+    pub fn longest_step(&self) -> f32 {
+        let dims = self.leg_dims();
+        GaitTiming::longest_step(dims.standing_height, dims.leg_length, &self.foot_placer)
+    }
+
+    /// How far from its hip a foot plants: the leg straightened, the
+    /// placer's plant reach.
+    pub fn leg_reach(&self) -> f32 {
+        self.leg_length() * self.foot_placer.plant_reach_ratio
     }
 
     /// The subset of this rig the gait is planned against.

@@ -110,9 +110,10 @@ fn a_footfall_on_moving_rubble_is_caught() {
 fn a_step_past_the_stride_is_caught() {
     let case = Case::new("lip_40cm");
     let plan = case.plan();
-    let broken = with_footfall(&plan, 1, |contact| contact.at.s += 3.0);
+    // The step after the hop's landing: a hop's own step has no limit.
+    let broken = with_footfall(&plan, 2, |contact| contact.at.s += 3.0);
     assert!(case.rules_broken(&broken).contains(&Rule::WithinStride));
-    let sideways = with_footfall(&plan, 1, |contact| contact.at.d = -contact.at.d * 4.0);
+    let sideways = with_footfall(&plan, 1, |contact| contact.at.d += 0.5);
     assert!(case.rules_broken(&sideways).contains(&Rule::WithinStride));
 }
 

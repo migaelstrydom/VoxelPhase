@@ -315,21 +315,57 @@ each flight is one a foot pushes off and lands.
   speed (median 0.6 to 0.8 ms): speed bands of 0.25 m/s and braking spans
   from half a band to a full one, which replanning needs to reach the last
   plan's speeds, roughly doubled it.
-- **Horizon.** A plan carries the body at least three natural steps, and at
-  least as far as the asked-for speed would in 0.6 s: the legs need the next
-  two or three footfalls, and the body time to see an obstacle and set up a
-  hop or stop. A plan that only slows to a stop before an obstacle covers
-  less, so it is a refusal. The strip samples one step past that: 10 m by
-  default, a sprint's reach (`PlannerSettings::reach`). When no plan
-  finishes, the planner refuses and returns the cheapest plan to the furthest
-  point reached, which is where the way runs out.
+- **Steps.** The plan's footfalls are the legs': its natural step at each
+  speed is the step the animation's foot placer plans on level ground
+  (`GaitTiming::level_step`, the stride the leg's reach caps), which the
+  game hands the planner in `StrideLimits::natural`; the planner's default
+  table is the player's, and a game test holds the two together. The
+  player's legs step 0.73 m at a walk and a sprint alike, so a sprint is
+  ten steps a second, and a hop is a running leap: its step is judged by
+  the ground either side of its flight, not as an overlong stride.
+- **Legs.** Everything else about the feet is the rig's too, passed the same
+  way and held to the planner's defaults by the same test: the longest step
+  without a flight (0.81 m, the leg's level reach over the sprint's stance
+  share), the feet half the hips apart, reaching half the leg's level reach
+  to either side, and a foot in reach of the body when it is within the
+  straightened leg (0.525 m) of a hip 0.425 m above the capsule's bottom.
+  A flight, hop or roll-off, has a hop's feet: the last near the brow, the
+  next at the landing, and no stride limit between them. These legs only
+  just reach the ground under the capsule: up a slope past 38° the foot
+  behind is out of reach, so the planner refuses it and the stick and the
+  drive carry the body up (`slope_38deg`, `slope_40deg`), until a sliding
+  or scrambling motion takes such slopes over. The limits had been a human
+  runner's (2.5 m strides, a foot 0.35 m below the body), which hid that.
+- **Horizon.** Counted in footfalls, a flight as one step: a plan carries
+  the body three natural steps and then as far as the longest flight
+  (`max_length`), and a step past its last landing. The footfalls it
+  settles are chosen knowing every flight that could take off past them,
+  so no takeoff they rule out goes unseen (with a horizon of three steps
+  alone, a sprint settled its footfalls past the best takeoff for the 40 cm
+  lip before the lip came into the plan), and a landing is known to lead
+  on. Flights are searched as far as the strip was sampled (10 m by
+  default), so a drop's landing is found wherever it can be seen. When no
+  plan finishes, the planner refuses and returns the cheapest plan to the
+  furthest point reached, which is where the way runs out.
+- **In the air.** A plan made with the body in the air starts with the arc
+  it is on, at its own climb, to where that arc meets the floor: nothing
+  else is open to it, and nothing pushes it.
 - **Pace.** Pressing or braking as above; running below the asked-for speed,
   on the ground or in the air, costs `slowdown`. That is how a sprint meets
   stepping stones.
-- **Cost.** Time to the horizon, deviation from the speed the stick asks
-  for, uneven stride lengths, feet far from their natural offset (a
-  cross-step costs more), flights (they cost a little), and footing:
-  `Static` is cheapest, then heavy sleeping bodies, then light awake ones.
+- **Cost.** What can be measured is charged as the time it loses: running
+  slower than the drive presses for there (`rules::time_lost`), and, for a
+  plan that ends slow, the time still to lose regaining speed at the
+  drive's acceleration, which is also the search's lower bound on what is
+  left. A hop costs no time (the contract's `hop: cost` rows measure it), so
+  the rest are preferences: the jolt of meeting a face or landing on one,
+  bumps ridden, flights and their climb, steps off the reachable step (the
+  gait's, or the longest the legs reach on that ground if shorter, so a
+  slope is not charged for the short steps it forces), feet off their
+  natural offset, edges, and footing: `Static` is cheapest, then heavy
+  sleeping bodies, then light awake ones. Their weights are still to be put
+  in seconds against the hop; a sweep of the hop's price over the garden
+  kept 0.3, cheaper hops costing time on the plank bridges.
   Plus a **churn cost**: diverging from what the previous plan settled,
   its next tentative footfall and the flights landing on its first two
   footfalls, and only where it chose them knowing what lay past them: a
@@ -601,14 +637,14 @@ standing jumped to 1.6 m/s in 5 cm), and consecutive rides are one phase only
 where their accelerations agree: merged regardless, a press to speed and the
 run held there became one slow ramp, and the body tracked the ramp. A hop starting in the frame becomes a
 `PlannedTakeoff` on the intent, which the locomotion state machine launches
-locked: the plan's climb, its planar velocity held for the flight, no
-steering, no cutoff. A roll-off asks for nothing (the body runs off the edge).
-A refused plan is followed to where it ran out, braked to stop there. Then
-it lets go: with under 5 cm of plan left, or the body down to 0.5 m/s,
-the stick drives as untracked, so a strip read wrongly never holds the body
-(it had, beside a bank and against the corner where a ramp meets its
-plateau), and a held push carries on over the edge. A
-jump the player presses still jumps. `character_viewer traversal --summary
+as a leap: the plan's climb, its air speed capped at the plan's, no cutoff,
+and the stick steering as in any flight, so a hop stays responsive; steered
+off the plan's arc, the body is replanned from where it goes. A roll-off
+asks for nothing (the body runs off the edge). A refused plan knows no way
+through, so it leaves the body to the drive: the stick sets the pace and
+nothing takes off, which is never worse than no plan (on the garden's
+scree, taking off on a refusal's hops had stalled the body on the rocks).
+A jump the player presses still jumps. `character_viewer traversal --summary
 --track` runs the garden stations with it. A hop is taken off on the frame
 nearest its planned start, half a frame early at most.
 
@@ -621,10 +657,20 @@ stride. Over the Stack Yard's voussoir arch (`stack_yard_voussoir_arch`) the
 plan had hopped the top stone and then braked to 2 m/s to drop off the far
 side within a stride; it now runs the crest and jumps off at 5 or 7 m/s.
 
+**A flight clears what it does not land on.** A flight keeps
+`clearance` (3 cm) over the floor, except near its ends, where an arc meets
+the floor: there it may run along the surface it takes off from or lands on
+(normals within 5°), and after its takeoff over floor falling away beneath
+both that surface and the line it leaves along, as off a rounded brow. Any
+other face near its ends is struck, not landed on: a plank's bevel, a lip's
+rounded top corner met level with the top. Letting the arc touch the floor
+anywhere near its ends had planned hops that struck those corners and
+popped the body up, and the garden's plank and lip runs lose nothing now.
+
 **A landing out of sight is leapt into.** Where the floor is seen to drop
 away within a stride of a brow the body can ride no further from, and an
-arc pushed off it with `leap_climb` (1.5 m/s) meets no floor up to the
-search's last station, the body leaps: the plan ends in the air, its feet
+arc pushed off it with `leap_climb` (1.5 m/s) meets no floor as far as the
+strip was sampled, the body leaps: the plan ends in the air, its feet
 carrying the body to the push-off and none landing after it, as a runner
 jumps off an edge without seeing the landing. Its climb is set, not
 chosen, so it costs only a flight and is not traded against a hop's. Once

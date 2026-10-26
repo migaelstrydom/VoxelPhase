@@ -11,7 +11,7 @@ use crate::section::{FootholdWindow, Footing, SectionQuery};
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
 use super::rules::{
-    jumped, landed_speed, pressed_speed, slowdown_cost, FOOT_SLACK, MIN_PLANNING_SPEED,
+    landed_speed, pressed_speed, recovery_time_lost, time_lost, FOOT_SLACK, MIN_PLANNING_SPEED,
     PUSH_OFF_TOLERANCE,
 };
 use super::settings::PlannerSettings;
@@ -131,11 +131,6 @@ struct Node {
 /// How near a flight's takeoff and landing must be to the last plan's for
 /// it to be the same flight, in metres.
 const CHURN_MATCH: f32 = 0.1;
-/// Stretches the slowdown still due is summed over.
-const HEURISTIC_PIECES: usize = 4;
-/// Share of the slowdown still due the search counts on, below one so the
-/// estimate stays a lower bound.
-const HEURISTIC_SLACK: f32 = 0.9;
 
 /// What the feet need of a station.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -232,9 +227,17 @@ impl BodySearch<'_> {
     pub fn search(&self, start: BodyState) -> Result<BodyPlan, BodyPath> {
         let step = self.settings.body_step;
         let goal = self.goal - start.s;
-        let flight_reach = self.params.stride.max_length;
-        let stations = ((goal + flight_reach) / step).ceil() as usize + 1;
+        let flight_reach = self.params.longest_hop(start.speed.max(self.target_speed));
+        let natural = self.natural_step();
+        // As far as the ground was sampled, for a flight off an edge to land
+        // or to leap into what lies past it.
+        let searched = (goal + flight_reach + natural).max(self.query.sampled_to() - start.s);
+        let stations = (searched / step).ceil() as usize + 1;
         let mut known = FootReach::new(stations + 1);
+        let airborne = self
+            .query
+            .floor(start.s)
+            .is_none_or(|floor| start.z > floor.z + self.params.body.skim_height);
 
         let mut frontier = Frontier {
             nodes: Vec::new(),
@@ -273,10 +276,13 @@ impl BodySearch<'_> {
                 )
             };
             let s = self.station_s(start.s, station);
-            if s - start.s >= goal - STATION_TOLERANCE {
+            // At the goal, and a step past the last landing: what the plan
+            // commits to is chosen knowing it goes on from there.
+            let stepped_on = !flown || s - landed >= natural - STATION_TOLERANCE;
+            if s - start.s >= goal - STATION_TOLERANCE && stepped_on {
                 return Ok(BodyPlan {
                     path: Self::path_to(&frontier.nodes, index),
-                    cost,
+                    cost: cost + self.recovery_due(s, speed),
                 });
             }
             let further = (station, -cost);
@@ -289,39 +295,52 @@ impl BodySearch<'_> {
             }
 
             let mut edges: SmallVec<[(usize, f32, f32, f32, BodySegment); 16]> = SmallVec::new();
-            self.ride(start.s, station, speed, &mut known, &mut edges);
-            self.ride_again(start.s, station, speed, &mut known, &mut edges);
-            self.roll_off(start.s, station, speed, &mut known, &mut edges);
-            // A flight is checked for clearance only if it could be the
-            // cheapest way yet to its landing: it lands just landed.
-            let worth = |landing: usize, landing_speed: f32, edge_cost: f32| {
-                frontier.could_improve(
-                    &(landing, speed_band(landing_speed), true),
-                    cost + edge_cost,
-                )
-            };
-            self.fly(
-                start.s,
-                station,
-                speed,
-                z,
-                (landed, flown),
-                &worth,
-                &mut known,
-                &mut edges,
-            );
-            self.leap(
-                start.s,
-                station,
-                speed,
-                z,
-                (landed, flown),
-                &mut known,
-                &mut edges,
-            );
+            // A body in the air flies on the arc it is on until it meets
+            // the floor: nothing else is open to it.
+            if station == 0 && airborne {
+                edges.extend(self.carried_flight(start, known.len()));
+            } else {
+                self.ride(start.s, station, speed, &mut known, &mut edges);
+                self.ride_again(start.s, station, speed, &mut known, &mut edges);
+                self.roll_off(
+                    start.s,
+                    station,
+                    speed,
+                    z,
+                    (landed, flown),
+                    &mut known,
+                    &mut edges,
+                );
+                // A flight is checked for clearance only if it could be the
+                // cheapest way yet to its landing: it lands just landed.
+                let worth = |landing: usize, landing_speed: f32, edge_cost: f32| {
+                    frontier.could_improve(
+                        &(landing, speed_band(landing_speed), true),
+                        cost + edge_cost,
+                    )
+                };
+                self.fly(
+                    start.s,
+                    station,
+                    speed,
+                    z,
+                    (landed, flown),
+                    &worth,
+                    &mut known,
+                    &mut edges,
+                );
+                self.leap(
+                    start.s,
+                    station,
+                    speed,
+                    z,
+                    (landed, flown),
+                    &mut known,
+                    &mut edges,
+                );
+            }
             for (next, next_speed, next_z, edge_cost, arrival) in edges {
                 let next_s = self.station_s(start.s, next);
-                let remaining = goal - (next_s - start.s);
                 let (landed, flown) = match arrival {
                     BodySegment::Flight {
                         landing,
@@ -342,7 +361,7 @@ impl BodySearch<'_> {
                         just_landed: next_s - landed < FOOT_SLACK,
                         flown,
                     },
-                    self.slowdown_still_due(next_speed, remaining),
+                    self.recovery_due(next_s, next_speed),
                 );
             }
         }
@@ -395,13 +414,7 @@ impl BodySearch<'_> {
         let cost = self.settings.costs.ride_travel * ride.vertical_travel
             + met_loss
             + self.ride_churn(from, to)
-            + slowdown_cost(
-                end_speed,
-                pressed_toward,
-                to - from,
-                self.natural_step(),
-                self.settings,
-            );
+            + time_lost(speed, end_speed, to - from, pressed_toward);
         out.push((
             next,
             end_speed,
@@ -456,13 +469,7 @@ impl BodySearch<'_> {
             let (end_speed, met_loss) = self.ridden_speed(from, to, speed, pressed_toward);
             let cost = self.settings.costs.ride_travel * ridden.vertical_travel
                 + met_loss
-                + slowdown_cost(
-                    end_speed,
-                    pressed_toward,
-                    to - from,
-                    self.natural_step(),
-                    self.settings,
-                );
+                + time_lost(speed, end_speed, to - from, pressed_toward);
             out.push((
                 next,
                 end_speed,
@@ -598,7 +605,8 @@ impl BodySearch<'_> {
 
     /// Rolling off where the floor falls away: no push, the body flies on
     /// the speed and climb it rode with until its arc meets the floor again,
-    /// within a step for the feet to span. Meeting the far side of a gap
+    /// as far as that is. Its feet are a hop's: the last near the brow, the
+    /// next at the landing. Meeting the far side of a gap
     /// below its brow, it is carried up onto it, as a capsule rides up a
     /// rounded corner, where it meets it at a slope the drive rides: it
     /// lands on the first station near there that it can ride on from, its
@@ -608,21 +616,23 @@ impl BodySearch<'_> {
         origin: f32,
         station: usize,
         speed: f32,
+        z: f32,
+        landed: (f32, bool),
         known: &mut FootReach,
         out: &mut SmallVec<[(usize, f32, f32, f32, BodySegment); 16]>,
     ) {
         let (params, settings) = (self.params, self.settings);
         let step = settings.body_step;
         let from = self.station_s(origin, station);
-        if !self.falls_away(from, from + step, speed) {
+        if !self.falls_away(from, from + step, speed)
+            || !self.pushes_off(origin, station, z, landed, known)
+        {
             return;
         }
         let Some(start) = self.query.floor(from) else {
             return;
         };
-        let longest = params.stride.max_length - 2.0 * FOOT_SLACK;
-        let last = (station + ((longest + STATION_TOLERANCE) / step).floor() as usize)
-            .min(known.len() - 1);
+        let last = known.len() - 1;
         let Some(meets) = (station + 1..=last).find(|&next| {
             let along = self.station_s(origin, next) - from;
             self.query
@@ -683,13 +693,7 @@ impl BodySearch<'_> {
         let cost = settings.costs.flight
             + settings.costs.ride_travel * (start.z - floor.z).abs()
             + self.flight_churn(from, landing)
-            + slowdown_cost(
-                speed,
-                self.target_speed,
-                landing - from,
-                self.natural_step(),
-                settings,
-            );
+            + time_lost(speed, speed, landing - from, self.target_speed);
         let landing_climb = flight_at(&takeoff, gravity, rise_held, duration).1;
         let landed = landed_speed(speed, landing_climb, floor.normal).max(MIN_PLANNING_SPEED);
         let cost = cost + settings.costs.landing_loss * (speed - landed).powi(2);
@@ -709,10 +713,9 @@ impl BodySearch<'_> {
         ));
     }
 
-    /// Flying from this station, where the ride ahead breaks or gets rough,
-    /// to a landing a stride ahead; off an edge, further by as far as the
-    /// body carries falling to the landing: a jump, its feet a push-off and
-    /// a landing, not a stride.
+    /// Flying from this station, where the ride ahead breaks or gets rough
+    /// within a hop's reach, to any landing the climb it asks for allows: a
+    /// running leap, its feet a push-off and a landing, not a stride.
     fn fly(
         &self,
         origin: f32,
@@ -726,7 +729,6 @@ impl BodySearch<'_> {
     ) {
         let (params, settings) = (self.params, self.settings);
         let from = self.station_s(origin, station);
-        let reach = params.stride.max_length;
         if !self.trouble_ahead(from, speed)
             || !self.pushes_off(origin, station, z, (landed, flown), known)
         {
@@ -739,12 +741,10 @@ impl BodySearch<'_> {
         }
         // A push adds to the climb the body leaves with, never takes from it.
         let carried = (speed * self.leaving_grade(from)).max(0.0);
-        let stride_flight = reach - 2.0 * FOOT_SLACK;
-        let longest = stride_flight + self.falling_flight(speed, params.stride.max_drop);
+        // As far as was sampled: the climb a landing asks for bounds a hop.
         let first = station
             + ((settings.min_flight - STATION_TOLERANCE) / settings.body_step).ceil() as usize;
-        let last = station + ((longest + STATION_TOLERANCE) / settings.body_step).floor() as usize;
-        for landing_station in (first..=last.min(known.len() - 1)).step_by(stride) {
+        for landing_station in (first..known.len()).step_by(stride) {
             let landing = self.station_s(origin, landing_station);
             if self
                 .vetoed
@@ -759,9 +759,6 @@ impl BodySearch<'_> {
             if floor.normal.z < steepest
                 || !self.feet_can(origin, landing_station, FootNeed::TouchDown, known)
             {
-                continue;
-            }
-            if jumped(landing - from, params) > self.falling_flight(speed, z - floor.z) {
                 continue;
             }
             let duration = (landing - from) / speed;
@@ -789,13 +786,7 @@ impl BodySearch<'_> {
             let cost = settings.costs.flight
                 + settings.costs.takeoff_climb * climb * climb
                 + self.flight_churn(from, landing)
-                + slowdown_cost(
-                    speed,
-                    self.target_speed,
-                    landing - from,
-                    self.natural_step(),
-                    settings,
-                );
+                + time_lost(speed, speed, landing - from, self.target_speed);
             let landed = landed_speed(speed, climb - gravity * duration, floor.normal)
                 .max(MIN_PLANNING_SPEED);
             let cost = cost + settings.costs.landing_loss * (speed - landed).powi(2);
@@ -819,6 +810,64 @@ impl BodySearch<'_> {
         }
     }
 
+    /// The flight a body `start`ing in the air is on: from where it is, at
+    /// its own climb, unpushed, to the first of the `stations` where its arc
+    /// meets the floor, its climb set to land there; past the last without
+    /// meeting one, a leap into what lies out of sight.
+    fn carried_flight(
+        &self,
+        start: BodyState,
+        stations: usize,
+    ) -> Option<(usize, f32, f32, f32, BodySegment)> {
+        let gravity = self.params.gravity;
+        let speed = start.speed.max(MIN_PLANNING_SPEED);
+        let takeoff = BodyState { speed, ..start };
+        let meets = (1..stations).find_map(|station| {
+            let s = self.station_s(start.s, station);
+            let t = (s - start.s) / speed;
+            let floor = self.query.floor(s)?;
+            (floor.z >= flight_at(&takeoff, gravity, None, t).0).then_some((station, s, floor))
+        });
+        let Some((station, landing, floor)) = meets else {
+            let last = stations - 1;
+            let until = self.station_s(start.s, last);
+            let t = (until - start.s) / speed;
+            let end_z = flight_at(&takeoff, gravity, None, t).0;
+            return Some((
+                last,
+                speed,
+                end_z,
+                0.0,
+                BodySegment::Leap {
+                    takeoff,
+                    until,
+                    gravity,
+                },
+            ));
+        };
+        let duration = (landing - start.s) / speed;
+        let takeoff = BodyState {
+            climb: climb_reaching(floor.z - start.z, duration, gravity, None),
+            ..takeoff
+        };
+        let landing_climb = flight_at(&takeoff, gravity, None, duration).1;
+        let landed = landed_speed(speed, landing_climb, floor.normal).max(MIN_PLANNING_SPEED);
+        Some((
+            station,
+            landed,
+            floor.z,
+            0.0,
+            BodySegment::Flight {
+                takeoff,
+                landing,
+                landing_z: floor.z,
+                gravity,
+                rise_held: None,
+                pushed: false,
+            },
+        ))
+    }
+
     /// Whether a foot behind the takeoff at `station` can push the body off:
     /// the planted one, until the first flight; after it, one that landed at
     /// or after the body last touched down.
@@ -836,18 +885,19 @@ impl BodySearch<'_> {
         } else if from - landed >= FOOT_SLACK {
             self.feet_can(origin, station, FootNeed::PushOff, known)
         } else {
-            !flown || self.foothold_within(landed..from + PUSH_OFF_TOLERANCE, z)
+            !flown || self.foothold_within(landed..from + PUSH_OFF_TOLERANCE, from, z)
         }
     }
 
     /// Leaping off a brow, where the floor is seen to drop away within a
     /// stride and the body can ride no further, into what lies out of sight: pushed off with
-    /// `leap_climb`, its arc meets no floor the search sees up to its last
-    /// station, so the body is taken to fall on past it, as off a drop too
+    /// `leap_climb`, its arc meets no floor up to where the ground was
+    /// sampled, so the body is taken to fall on past it, as off a drop too
     /// deep to see the bottom of. The path ends in the air there; replanned
     /// as the ground below comes into sight, the leap becomes a hop that
     /// lands. Where nothing is sampled past the brow, or the floor ahead
-    /// rises, there is nothing seen to leap off.
+    /// rises, there is nothing seen to leap off, and a body already in the
+    /// air has no brow under it to push off.
     fn leap(
         &self,
         origin: f32,
@@ -870,12 +920,17 @@ impl BodySearch<'_> {
         );
         let rides_on = self.query.ride(from, next).end >= next - STATION_TOLERANCE
             && !self.falls_away(from, next, speed);
+        let on_brow = self
+            .query
+            .floor(from)
+            .is_some_and(|floor| (z - floor.z).abs() <= params.body.skim_height);
         let stride = (params.stride.max_length / settings.body_step).ceil() as usize;
-        let drops = (station + 1..=(station + stride).min(last)).any(|ahead| {
-            self.query
-                .floor(self.station_s(origin, ahead))
-                .is_some_and(|below| below.z < z - params.body.skim_height)
-        });
+        let drops = on_brow
+            && (station + 1..=(station + stride).min(last)).any(|ahead| {
+                self.query
+                    .floor(self.station_s(origin, ahead))
+                    .is_some_and(|below| below.z < z - params.body.skim_height)
+            });
         if rides_on
             || !drops
             || self
@@ -929,13 +984,6 @@ impl BodySearch<'_> {
         ));
     }
 
-    /// How far along the path a body at `speed` carries falling `drop`
-    /// metres with no climb: how much further than a stride a flight off an
-    /// edge may land.
-    fn falling_flight(&self, speed: f32, drop: f32) -> f32 {
-        speed * (2.0 * drop.max(0.0) / self.params.gravity).sqrt()
-    }
-
     /// What flying from `takeoff` to `landing` costs in churn: nothing if
     /// the last plan flew there too, or settled nothing there.
     fn flight_churn(&self, takeoff: f32, landing: f32) -> f32 {
@@ -974,7 +1022,7 @@ impl BodySearch<'_> {
 
     /// Whether a foothold in `window` along the path is in reach of the body
     /// at height `body_z`, and one a foot may land on.
-    fn foothold_within(&self, window: std::ops::Range<f32>, body_z: f32) -> bool {
+    fn foothold_within(&self, window: std::ops::Range<f32>, body_s: f32, body_z: f32) -> bool {
         let mut footholds = Vec::new();
         self.query.footholds(
             &FootholdWindow {
@@ -987,40 +1035,27 @@ impl BodySearch<'_> {
         footholds.iter().any(|foothold| {
             foothold.edge_margin >= self.params.foot.min_edge_margin
                 && !matches!(foothold.footing, Footing::Loose { resting: false, .. })
-                && self.params.foot_reaches(body_z, foothold.at.z)
+                && self.params.foot_reaches(body_s, body_z, &foothold.at)
         })
     }
 
-    /// Whether the ride within a step ahead of `from` breaks, gets rough, or
-    /// falls away from a body at `speed`: only then is flying worth trying.
+    /// Whether the ride within a hop's reach ahead of `from` breaks, gets
+    /// rough, or falls away from a body at `speed`: only then is flying
+    /// worth trying.
     fn trouble_ahead(&self, from: f32, speed: f32) -> bool {
-        let reach = self.params.stride.max_length;
+        let reach = self.params.longest_hop(speed);
         let ahead = self.query.ride(from, from + reach);
         ahead.end < from + reach - STATION_TOLERANCE
             || ahead.vertical_travel >= self.settings.rough_ride
             || self.falls_away(from, ahead.end, speed)
     }
 
-    /// A lower bound on the slowdown a body at `speed` has still to pay over
-    /// the `remaining` metres: it can regain speed no faster than the drive
-    /// allows, and pays for running slow all the way back up. Taken at the
-    /// fast end of each stretch, so it never overstates.
-    fn slowdown_still_due(&self, speed: f32, remaining: f32) -> f32 {
-        let target = self.target_speed.max(MIN_PLANNING_SPEED);
-        if speed >= target || remaining <= 0.0 {
-            return 0.0;
-        }
-        let acceleration = self.params.body.max_acceleration;
-        let recovery = ((target * target - speed * speed) / (2.0 * acceleration)).min(remaining);
-        let piece = recovery / HEURISTIC_PIECES as f32;
-        let natural = self.natural_step();
-        let due: f32 = (1..=HEURISTIC_PIECES)
-            .map(|index| {
-                let reached = (speed * speed + 2.0 * acceleration * piece * index as f32).sqrt();
-                slowdown_cost(reached, target, piece, natural, self.settings)
-            })
-            .sum();
-        HEURISTIC_SLACK * due
+    /// Seconds a body at `speed` at `s` has still to lose regaining the
+    /// speed the drive presses toward there: a lower bound on what the way
+    /// on costs, and what a plan arriving slow at its goal is charged.
+    fn recovery_due(&self, s: f32, speed: f32) -> f32 {
+        let target = self.ground_target(s, s + self.settings.body_step);
+        recovery_time_lost(speed, target, self.params.body.max_acceleration)
     }
 
     fn natural_step(&self) -> f32 {
@@ -1046,7 +1081,7 @@ impl BodySearch<'_> {
             || self
                 .query
                 .floor(s)
-                .is_some_and(|floor| self.foothold_within(window, floor.z));
+                .is_some_and(|floor| self.foothold_within(window, s, floor.z));
         known.answers[need as usize][station] = Some(answer);
         answer
     }

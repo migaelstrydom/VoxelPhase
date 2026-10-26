@@ -4,7 +4,7 @@
 use nalgebra::Vector3;
 
 use crate::anim_viewer::{Beat, Script};
-use crate::character::CharacterIntent;
+use crate::character::{CharacterIntent, PlannedTakeoff};
 
 /// Turns a script into one `CharacterIntent` per frame.
 ///
@@ -37,8 +37,15 @@ impl<'a> Pilot<'a> {
         let released = was_jumping && (first_frame && !beat.jump);
         self.previous = Some(beat);
 
+        let direction = rotate_y(beat.direction, self.turn);
+        let takeoff = beat
+            .planned_hop
+            .filter(|_| first_frame)
+            .map(|(speed, climb)| PlannedTakeoff {
+                velocity: direction.normalize() * speed + Vector3::y() * climb,
+            });
         let intent = CharacterIntent {
-            direction: rotate_y(beat.direction, self.turn),
+            direction,
             jump: beat.jump && first_frame,
             jump_held: beat.jump,
             jump_released: released,
@@ -47,6 +54,7 @@ impl<'a> Pilot<'a> {
             sprint: beat.sprint,
             throw: beat.throw && first_frame,
             aim: beat.aim,
+            takeoff,
             ..Default::default()
         };
         Some((intent, beat))

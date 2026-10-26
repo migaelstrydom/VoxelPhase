@@ -43,8 +43,8 @@ pub struct PlanRequest<'a> {
     pub reach_limit: Option<f32>,
 }
 
-/// A plan that carries the body to the goal: as far as the asked-for speed
-/// goes in `min_duration`, and at least `min_footfalls` natural steps.
+/// A plan that carries the body to the goal: `min_footfalls` natural steps
+/// and the longest hop, and a step past its last landing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Planned {
     pub plan: Plan,
@@ -292,7 +292,7 @@ impl Planner {
                         .last()
                         .map_or(body.s, |footfall| footfall.body_s);
                     let unfollowed =
-                        path.hops()
+                        path.flights()
                             .chain(path.leap())
                             .find_map(|flight| match *flight {
                                 BodySegment::Flight {

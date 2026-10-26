@@ -97,4 +97,7 @@ pub trait SectionQuery {
     /// driven over, or flying with clearance over the floor and under the
     /// ceiling.
     fn clears(&self, phase: &Phase) -> bool;
+    /// How far along the path the ground was sampled: past it nothing is
+    /// known, whether there is a floor or not.
+    fn sampled_to(&self) -> f32;
 }

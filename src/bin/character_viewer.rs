@@ -25,7 +25,8 @@
 //! `--starts N` crosses each station N times, from starts staggered back by
 //! 0.11 m, and prints the worst crossing, how many got across and the best
 //! slowest speed: one crossing turns on where the frames and the stride fall
-//! at the station.
+//! at the station. `--back M` starts every scenario M metres further back,
+//! to follow one of those crossings frame by frame.
 //!
 //! `contract` measures the traction drive against what the traversal
 //! planner's `GaitParams` claim it does (slope, takeoff, ride; see
@@ -50,7 +51,7 @@ use voxel_phase::rendering::visual_bench::contact_sheet;
 const START_STAGGER: f32 = 0.11;
 
 const USAGE: &str =
-    "usage: character_viewer <scenario|all|traversal|contract> [--list] [--summary] [--starts N] [--plan] [--track] [--tiles N]
+    "usage: character_viewer <scenario|all|traversal|contract> [--list] [--summary] [--starts N] [--back M] [--plan] [--track] [--tiles N]
                         [--from F] [--to F]
                         [--fps HZ] [--width W] [--height H] [--columns C]
                         [--every N] [--out <sheet.png>]
@@ -153,6 +154,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
     let mut every = 3;
     let mut summary = false;
     let mut starts = 1;
+    let mut back = 0.0;
     let mut out = None;
     let mut camera = CameraOverride::default();
 
@@ -167,6 +169,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
             }
             "--summary" => summary = true,
             "--starts" => starts = parse::<usize>(&value("--starts")?)?.max(1),
+            "--back" => back = parse(&value("--back")?)?,
             "--plan" => config.plan = true,
             "--track" => config.track = true,
             "--tiles" => config.tiles = parse(&value("--tiles")?)?,
@@ -201,6 +204,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
         vec![find(&which).ok_or(format!("no scenario '{which}' (try --list)"))?]
     };
     for scenario in &mut scenarios {
+        *scenario = scenario.started_back(back);
         let rig = &mut scenario.camera;
         rig.azimuth = camera.azimuth.unwrap_or(rig.azimuth);
         rig.elevation = camera.elevation.unwrap_or(rig.elevation);

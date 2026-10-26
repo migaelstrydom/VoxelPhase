@@ -16,6 +16,9 @@ const FLIGHT_END_TIME: f32 = 0.04;
 /// How far an arc may dip under the floor near its ends, in metres:
 /// rounding, not a collision.
 const FLIGHT_END_TOLERANCE: f32 = 0.005;
+/// How far apart, in degrees, two floor normals may be for both to be the
+/// one surface: a mesh facets a surface a degree or two either way.
+const SAME_SURFACE_DEGREES: f32 = 5.0;
 /// Slack on a ride's slope test for rounding, in metres per station.
 const RIDE_TOLERANCE: f32 = 1.0e-4;
 
@@ -307,8 +310,29 @@ impl<'a> StripQuery<'a> {
             let (floor, roof) = self.bounds[station];
             let s = self.floor.station_s(station);
             let z = phase.flight_height(s).expect("a flight");
-            let near_end = s - from < end_zone || to - s < end_zone;
-            let margin = if near_end {
+            // Near its ends an arc may run along the floor it leaves or lands
+            // on, and after its takeoff over floor falling away beneath both
+            // that floor and the line the arc leaves along, as off a rounded
+            // brow; but it may not meet another face: a plank's bevel or a
+            // lip's rounded corner, met from the side, is struck, not landed
+            // on.
+            let same_surface = |end: f32| {
+                let (Some(here), Some(there)) = (self.floor.at(s), self.floor.at(end)) else {
+                    return true;
+                };
+                here.normal.dot(there.normal) >= SAME_SURFACE_DEGREES.to_radians().cos()
+            };
+            let falls_away = || {
+                let (Some(here), Some(left)) = (self.floor.at(s), self.floor.at(from)) else {
+                    return true;
+                };
+                let floor_grade = -left.normal.s / left.normal.z.max(f32::EPSILON);
+                let arc_grade = takeoff.climb / takeoff.speed;
+                here.z <= left.z + (s - from) * floor_grade.min(arc_grade) + FLIGHT_END_TOLERANCE
+            };
+            let lifting_off = s - from < end_zone && (same_surface(from) || falls_away());
+            let coming_down = to - s < end_zone && same_surface(to);
+            let margin = if lifting_off || coming_down {
                 -FLIGHT_END_TOLERANCE
             } else {
                 clearance
@@ -322,6 +346,11 @@ impl<'a> StripQuery<'a> {
 impl SectionQuery for StripQuery<'_> {
     fn floor(&self, s: f32) -> Option<FloorHit> {
         self.floor.at(s)
+    }
+
+    fn sampled_to(&self) -> f32 {
+        self.floor
+            .station_s(self.floor.samples.len().saturating_sub(1))
     }
 
     fn ride(&self, from: f32, to: f32) -> Ride {

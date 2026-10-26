@@ -135,11 +135,12 @@ impl BodyPath {
         self.segments.last().map(BodySegment::to)
     }
 
-    /// The hops, the flights feet push off for and land, in order.
-    pub fn hops(&self) -> impl Iterator<Item = &BodySegment> {
+    /// The flights that land, hops and roll-offs, in order: a foot leaves
+    /// near each takeoff and the next lands at its landing.
+    pub fn flights(&self) -> impl Iterator<Item = &BodySegment> {
         self.segments
             .iter()
-            .filter(|segment| matches!(segment, BodySegment::Flight { pushed: true, .. }))
+            .filter(|segment| matches!(segment, BodySegment::Flight { .. }))
     }
 
     /// The leap the path ends in, if it does.
@@ -147,20 +148,6 @@ impl BodyPath {
         self.segments
             .last()
             .filter(|segment| matches!(segment, BodySegment::Leap { .. }))
-    }
-
-    /// Where along the path the body rolls off ground and flies unpushed,
-    /// `(takeoff, landing)` in order: no foot lands within one.
-    pub fn roll_offs(&self) -> impl Iterator<Item = (f32, f32)> + '_ {
-        self.segments.iter().filter_map(|segment| match *segment {
-            BodySegment::Flight {
-                takeoff,
-                landing,
-                pushed: false,
-                ..
-            } => Some((takeoff.s, landing)),
-            _ => None,
-        })
     }
 
     /// The segment the body is in at `s`, a flight's landing counting as the

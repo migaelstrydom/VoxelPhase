@@ -1,5 +1,6 @@
-// A steady 39.9° slope from a metre ahead, just inside the steepest the body
-// rides: ridden up, not hopped.
+// A steady 39.9° slope from a metre ahead, inside the steepest the body rides
+// but past the steepest the legs step up: refused, the stick and the drive
+// carry the body up it.
 TraversalScene(
     ground: Authored(AuthoredGround(
         base: Some(0.0),
@@ -10,5 +11,5 @@ TraversalScene(
     body: BodyState(s: 0.0, z: 0.25, speed: 5.0, climb: 0.0),
     lead: LeftFoot,
     intent: Intent(speed: 5.0),
-    expect: Some(Crosses),
+    expect: Some(Refuses),
 )

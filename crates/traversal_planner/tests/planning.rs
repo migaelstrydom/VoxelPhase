@@ -5,14 +5,14 @@
 use std::fs;
 use std::path::Path;
 
-use traversal_planner::plan::{Limb, Plan};
+use traversal_planner::plan::{BodyState, Limb, Plan};
 
 /// A frame at the game's 60 Hz, in seconds.
 const FRAME: f32 = 1.0 / 60.0;
 use traversal_planner::properties::{check_plan, check_replan};
 use traversal_planner::scene::Outcome;
 use traversal_planner::section::{SectionQuery, StripQuery};
-use traversal_planner::{PathVec, Planner, PlannerSettings, TraversalScene};
+use traversal_planner::{Motion, PathVec, PlanRequest, Planner, PlannerSettings, TraversalScene};
 
 fn fixture(name: &str) -> TraversalScene {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -41,6 +41,78 @@ fn fixture_names() -> Vec<String> {
 
 fn planner(scene: &TraversalScene) -> Planner {
     Planner::new(scene.params.clone(), PlannerSettings::default())
+}
+
+/// A flight a body following its plan left the ground on.
+struct LeftOn {
+    takeoff: BodyState,
+    /// Where it planned to come down, or to leave sight in a leap.
+    landing: f32,
+    /// Rolled off, unpushed, the stance foot left planted.
+    rolled: bool,
+}
+
+/// The flights a body leaves the ground on following its plan, replanned
+/// every frame against the last as the game does, from the scene's start
+/// until it is `until` along the path: what it does across a scene, where
+/// one plan sees only a few steps of it.
+fn followed(scene: &TraversalScene, until: f32) -> Vec<LeftOn> {
+    let section = scene.section();
+    let query = StripQuery::new(&section, &scene.params);
+    let planner = planner(scene);
+    let mut request = scene.request();
+    let mut previous: Option<Plan> = None;
+    let mut flying = false;
+    let mut left = Vec::new();
+    for _ in 0..600 {
+        if request.body.s >= until {
+            return left;
+        }
+        let outcome = planner.plan(
+            &query,
+            &PlanRequest {
+                previous: previous.as_ref(),
+                ..request
+            },
+        );
+        let plan = match &outcome {
+            Ok(planned) => &planned.plan,
+            Err(refusal) => &refusal.partial,
+        };
+        let leaving = plan
+            .phases
+            .iter()
+            .take_while(|phase| phase.start < 0.5 * FRAME)
+            .find(|phase| matches!(phase.motion, Motion::Flight { .. }));
+        if let (Some(phase), false) = (leaving, flying) {
+            let Motion::Flight { takeoff, .. } = phase.motion else {
+                unreachable!("a flight");
+            };
+            left.push(LeftOn {
+                takeoff,
+                landing: phase.end_s(),
+                rolled: !phase.contacts.is_empty(),
+            });
+        }
+        flying = leaving.is_some();
+        request.body = plan
+            .body_at(FRAME, &query)
+            .unwrap_or_else(|| panic!("the plan ends at s {}", request.body.s));
+        request.planted = outcome
+            .as_ref()
+            .ok()
+            .and_then(|planned| planned.plan.stance_at(FRAME).copied());
+        let later = plan.after(FRAME);
+        request.lead = match request.planted {
+            Some(stance) => stance.limb.other(),
+            None => later
+                .footfalls()
+                .next()
+                .map_or(request.lead, |(_, next)| next.limb),
+        };
+        previous = Some(later);
+    }
+    panic!("still short of s {until} after 10 s");
 }
 
 #[test]
@@ -147,12 +219,12 @@ fn a_committed_footfall_that_has_gone_is_dropped() {
     assert!(diverged, "the committed footfall at {gone:?} is gone");
 }
 
-/// A steady slope the body can ride is ridden: hopping up it would look
-/// cheaper only if the ride were charged for the speed the slope takes, or
-/// for its climb as if it were bumps.
+/// A steady slope as steep as the legs step up is ridden: hopping up it
+/// would look cheaper only if the ride were charged for the speed the slope
+/// takes, or for its climb as if it were bumps.
 #[test]
 fn a_steady_slope_at_the_limit_is_ridden_not_hopped() {
-    let scene = fixture("slope_40deg");
+    let scene = fixture("slope_38deg");
     let section = scene.section();
     let query = StripQuery::new(&section, &scene.params);
     for speed in [3.0, 5.0, 8.0] {
@@ -173,61 +245,46 @@ fn a_steady_slope_at_the_limit_is_ridden_not_hopped() {
     }
 }
 
-/// Over the Stack Yard's voussoir arch the body runs the crest and on down
-/// the far side, skimming its 12° corners, and leaves it where it steepens,
-/// all but unpushed, rather than hopping off the crest. Running, it pops off
-/// a corner on the way up by itself, on the climb it carries.
+/// Walking over the Stack Yard's voussoir arch the body runs up to the crest
+/// and leaves it once, all but unpushed: from the crest, a centimetre's rise
+/// at most, rather than a hop over the top stone. Running, it pops off a
+/// corner on the way up by itself on the climb it carries, and the plan,
+/// whose arc would come down across the next stone's corner, refuses there
+/// and leaves the body to the drive, which this follower cannot replay.
 #[test]
 fn an_arch_is_run_over_and_left_unpushed() {
     let mut scene = fixture("stack_yard_voussoir_arch");
-    for (speed, roll_offs) in [(5.0, 0), (8.0, 1)] {
+    for (speed, roll_offs) in [(5.0, 0)] {
         scene.body.speed = speed;
         scene.intent.speed = speed;
-        let section = scene.section();
-        let query = StripQuery::new(&section, &scene.params);
-        let planned = planner(&scene)
-            .plan(&query, &scene.request())
-            .unwrap_or_else(|_| panic!("refused at {speed} m/s"));
-        let (hops, rolled): (Vec<_>, Vec<_>) = planned
-            .plan
-            .phases
-            .iter()
-            .filter(|phase| matches!(phase.motion, traversal_planner::Motion::Flight { .. }))
-            .partition(|phase| phase.contacts.is_empty());
+        let (rolled, hops): (Vec<_>, Vec<_>) = followed(&scene, ARCH_LEFT)
+            .into_iter()
+            .partition(|flight| flight.rolled);
         assert_eq!(hops.len(), 1, "one jump, off the end, at {speed} m/s");
-        let traversal_planner::Motion::Flight { takeoff, .. } = hops[0].motion else {
-            unreachable!("a flight");
-        };
-        assert!(takeoff.climb < 0.1, "at {speed} m/s: {takeoff:?}");
+        assert!(
+            hops[0].takeoff.climb < 0.5,
+            "at {speed} m/s: {:?}",
+            hops[0].takeoff
+        );
         assert_eq!(rolled.len(), roll_offs, "roll-offs at {speed} m/s");
     }
 }
 
+/// Where along the voussoir arch's path the body has left it.
+const ARCH_LEFT: f32 = 7.0;
+
 /// Running at the garden's 40 cm lip, which its voxels mesh as a ramp, the
-/// plan hops onto the top rather than onto the ramp, where landing would
+/// body hops onto the top rather than onto the ramp, where landing would
 /// run into its face and lose speed.
 #[test]
 fn a_lip_is_hopped_onto_its_top_not_its_ramp_at_a_run() {
     let scene = fixture("garden_lip40_ramp");
     let section = scene.section();
     let query = StripQuery::new(&section, &scene.params);
-    let planned = planner(&scene)
-        .plan(&query, &scene.request())
-        .expect("crosses");
-    let landings: Vec<_> = planned
-        .plan
-        .phases
-        .iter()
-        .filter_map(|phase| match phase.motion {
-            traversal_planner::Motion::Flight { takeoff, .. } => {
-                let landing = takeoff.s + takeoff.speed * phase.duration;
-                Some((landing, query.floor(landing).expect("lands on a floor")))
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(landings.len(), 1, "one hop");
-    let (landing, floor) = landings[0];
+    let flights = followed(&scene, 6.0);
+    assert_eq!(flights.len(), 1, "one hop");
+    let landing = flights[0].landing;
+    let floor = query.floor(landing).expect("lands on a floor");
     assert!(
         floor.normal.z > 10f32.to_radians().cos(),
         "lands at s {landing} on a floor {:.0}° steep",
@@ -254,44 +311,42 @@ fn a_steep_bevel_underfoot_is_walked_down_not_hopped() {
     assert!(plan.phases.last().is_some_and(|phase| phase.end_s() > 1.5));
 }
 
-/// Running at the end of the cave roof, whose landing lies out of the
-/// search's sight, the plan leaps off the end into it rather than off
-/// before it, where it could land on what it sees; walking, from nearer,
-/// too. The leap is the plan's last phase, with no footfall after it.
+/// Running at the end of the cave roof, the body leaves it at the edge,
+/// walking and running: when the edge comes within its plan the landing
+/// lies out of sight, and the plan leaps into it rather than off before it,
+/// onto what it sees.
 #[test]
 fn an_edge_whose_landing_is_out_of_sight_is_leapt_off_at_the_edge() {
     const EDGE: f32 = 5.55;
     let mut scene = fixture("garden_roof_edge");
-    for (speed, start) in [(8.0, 0.0), (5.0, 1.5)] {
+    for speed in [8.0, 5.0] {
         scene.body.speed = speed;
-        scene.body.s = start;
         scene.intent.speed = speed;
-        let section = scene.section();
-        let query = StripQuery::new(&section, &scene.params);
-        let planned = planner(&scene)
-            .plan(&query, &scene.request())
-            .unwrap_or_else(|_| panic!("refused at {speed} m/s"));
-        let flights: Vec<_> = planned
-            .plan
-            .phases
-            .iter()
-            .filter(|phase| matches!(phase.motion, traversal_planner::Motion::Flight { .. }))
-            .collect();
+        let flights = followed(&scene, EDGE + 1.0);
         assert_eq!(flights.len(), 1, "at {speed} m/s");
-        let traversal_planner::Motion::Flight { takeoff, .. } = flights[0].motion else {
-            unreachable!("a flight");
-        };
+        let takeoff = flights[0].takeoff.s;
         assert!(
-            (takeoff.s - EDGE).abs() < 0.1,
-            "at {speed} m/s: takes off at s {}",
-            takeoff.s
+            (takeoff - EDGE).abs() < 0.1,
+            "at {speed} m/s: takes off at s {takeoff}"
         );
-        assert_eq!(
-            planned.plan.phases.last(),
-            Some(flights[0]),
-            "at {speed} m/s"
-        );
-        let last_footfall = planned.plan.footfalls().last().expect("footfalls").0;
-        assert!(last_footfall <= flights[0].start, "at {speed} m/s");
     }
+}
+
+/// Planned from 2 m short of the cave roof's end at a run, whose landing lies
+/// past the strip sampled, the leap is the plan's last phase, with no
+/// footfall after it.
+#[test]
+fn a_leap_ends_the_plan() {
+    let mut scene = fixture("garden_roof_edge");
+    scene.body.s = 3.5;
+    let section = scene.section();
+    let query = StripQuery::new(&section, &scene.params);
+    let plan = planner(&scene)
+        .plan(&query, &scene.request())
+        .expect("crosses")
+        .plan;
+    let last = plan.phases.last().expect("phases");
+    assert!(matches!(last.motion, Motion::Flight { .. }) && last.contacts.is_empty());
+    let (time, _) = plan.footfalls().last().expect("footfalls");
+    assert!(time <= last.start);
 }

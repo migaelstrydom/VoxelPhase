@@ -30,6 +30,9 @@ pub struct Beat {
     /// Rotate `direction` about Y at this rate, in radians per second. Turns a
     /// straight walk into a circle without needing a per-frame script.
     pub turn_rate: f32,
+    /// Take off on the first frame of this beat as a traversal plan's hop
+    /// does: `(speed, climb)` along `direction` and up, in m/s.
+    pub planned_hop: Option<(f32, f32)>,
 }
 
 impl Beat {
@@ -45,6 +48,7 @@ impl Beat {
             throw: false,
             aim: None,
             turn_rate: 0.0,
+            planned_hop: None,
         }
     }
 
@@ -119,6 +123,13 @@ impl Beat {
 
     pub fn turning(mut self, radians_per_second: f32) -> Self {
         self.turn_rate = radians_per_second;
+        self
+    }
+
+    /// Take off as a planned hop at `speed` with `climb`, in m/s, on the
+    /// beat's first frame.
+    pub fn hopping(mut self, speed: f32, climb: f32) -> Self {
+        self.planned_hop = Some((speed, climb));
         self
     }
 

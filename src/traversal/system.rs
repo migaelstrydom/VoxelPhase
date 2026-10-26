@@ -7,6 +7,7 @@ use traversal_planner::section::{SectionQuery, StripLayout, StripQuery};
 use traversal_planner::{GaitParams, PathVec, PlannerSettings};
 use winit::keyboard::KeyCode;
 
+use crate::animation::CharacterAnimator;
 use crate::character::{CharacterIntent, CharacterState, LocomotionConfig};
 use crate::components::RigidBodyComponent;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
@@ -76,6 +77,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
         WriteStorage<'a, CharacterIntent>,
         ReadStorage<'a, CharacterState>,
         ReadStorage<'a, LocomotionConfig>,
+        ReadStorage<'a, CharacterAnimator>,
         Read<'a, PhysicsResource>,
         Option<Read<'a, TerrainWorld>>,
         Read<'a, InputState>,
@@ -94,6 +96,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
             mut intents,
             states,
             configs,
+            animators,
             physics,
             terrain,
             input,
@@ -118,11 +121,19 @@ impl<'a> System<'a> for TraversalPlanSystem {
         let Some(terrain) = terrain else {
             return;
         };
-        let Some((body, intent, character, config)) =
-            (&planned, &bodies, &mut intents, &states, &configs)
-                .join()
-                .next()
-                .map(|(_, body, intent, character, config)| (body.0, intent, character, config))
+        let Some((body, intent, character, config, animator)) = (
+            &planned,
+            &bodies,
+            &mut intents,
+            &states,
+            &configs,
+            &animators,
+        )
+            .join()
+            .next()
+            .map(|(_, body, intent, character, config, animator)| {
+                (body.0, intent, character, config, animator)
+            })
         else {
             return;
         };
@@ -132,7 +143,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
 
         let planning = state.planning.get_or_insert_with(|| {
             TraversalPlanning::new(
-                player_gait(config),
+                player_gait(config, &animator.config),
                 PlannerSettings::default(),
                 StripLayout::default(),
             )

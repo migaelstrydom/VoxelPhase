@@ -4,6 +4,7 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
+use crate::path::PathVec;
 use crate::plan::Limb;
 
 /// The capsule that is the body.
@@ -97,9 +98,13 @@ pub struct FootDims {
     pub reach_in: f32,
     /// Steepest ground, in degrees from level, a foot can stand on.
     pub max_slope_degrees: f32,
-    /// Deepest a foot reaches below the capsule's bottom, in metres: down
-    /// into a dip the body rides over.
-    pub below_body: f32,
+    /// Height of the hips above the capsule's bottom, in metres: where the
+    /// legs hang from, standing.
+    pub hip_height: f32,
+    /// Farthest a foot reaches from its hip, in metres: the leg straightened.
+    /// Down into a dip, back to the foot behind on a rise and on ahead to
+    /// the next, all within it.
+    pub leg_reach: f32,
     /// Highest a foot lands above the capsule's bottom, in metres: onto a lip
     /// the capsule is still rounding.
     pub above_body: f32,
@@ -109,14 +114,19 @@ pub struct FootDims {
 }
 
 impl Default for FootDims {
+    /// The player's feet as the animation placed them on 2026-10-26: across
+    /// the path half its hips apart, reaching half the leg's level reach to
+    /// either side, on legs hung at its standing height that straighten to
+    /// its plant reach; the game passes its own.
     fn default() -> Self {
         Self {
             radius: 0.05,
-            stance_half_width: 0.1,
-            reach_out: 0.15,
-            reach_in: 0.15,
+            stance_half_width: 0.06,
+            reach_out: 0.154,
+            reach_in: 0.154,
             max_slope_degrees: 50.0,
-            below_body: 0.35,
+            hip_height: 0.425,
+            leg_reach: 0.525,
             above_body: 0.1,
             min_edge_margin: 0.04,
         }
@@ -144,25 +154,82 @@ impl FootDims {
 
 /// How far one footfall may be from the last.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct StrideLimits {
     /// Shortest step along the path, in metres.
     pub min_length: f32,
-    /// Longest step along the path, in metres: a sprinter's.
+    /// Longest step along the path without a flight, in metres: as far as
+    /// the legs reach. Longer is a hop, a running leap.
     pub max_length: f32,
     /// Highest a footfall may be above the last, in metres.
     pub max_rise: f32,
     /// Lowest a footfall may be below the last, in metres.
     pub max_drop: f32,
+    /// The step the legs' gait takes at each speed.
+    pub natural: NaturalSteps,
 }
 
 impl Default for StrideLimits {
+    /// The player's legs as the animation planned them on 2026-10-26, from
+    /// its smallest step to its longest without a flight; the game passes
+    /// its own.
     fn default() -> Self {
         Self {
-            min_length: 0.2,
-            max_length: 2.5,
+            min_length: 0.05,
+            max_length: 0.81,
             max_rise: 0.45,
             max_drop: 8.0,
+            natural: NaturalSteps::default(),
         }
+    }
+}
+
+/// The step the legs' gait takes on level ground at each of a set of
+/// speeds, hip travel from footfall to footfall, as `(speed, step)` in m/s
+/// and metres, speeds increasing: the game fills it from the animation,
+/// whose footfalls the plan's must be. Read linearly between speeds and
+/// held past the ends.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NaturalSteps(pub Vec<(f32, f32)>);
+
+impl NaturalSteps {
+    /// The natural step at `speed`, in metres.
+    pub fn at(&self, speed: f32) -> f32 {
+        let steps = &self.0;
+        let Some(&(first_speed, first_step)) = steps.first() else {
+            return 0.0;
+        };
+        if speed <= first_speed {
+            return first_step;
+        }
+        steps
+            .windows(2)
+            .find(|pair| speed <= pair[1].0)
+            .map_or(steps[steps.len() - 1].1, |pair| {
+                let ((slow, short), (fast, long)) = (pair[0], pair[1]);
+                short + (long - short) * (speed - slow) / (fast - slow)
+            })
+    }
+}
+
+impl Default for NaturalSteps {
+    /// The player's legs, walking to 5 m/s and sprinting above, as the
+    /// animation planned them on 2026-10-26; the game passes its own.
+    fn default() -> Self {
+        Self(vec![
+            (0.5, 0.083),
+            (1.0, 0.167),
+            (1.5, 0.25),
+            (2.0, 0.333),
+            (2.5, 0.416),
+            (3.0, 0.5),
+            (3.5, 0.583),
+            (4.0, 0.666),
+            (4.5, 0.73),
+            (5.0, 0.73),
+            (5.5, 0.687),
+            (6.0, 0.73),
+        ])
     }
 }
 
@@ -200,11 +267,42 @@ pub struct GaitParams {
 }
 
 impl GaitParams {
-    /// Whether a foot at height `foot_z` is within reach of the body with its
-    /// bottom-sphere centre at `body_z`.
-    pub fn foot_reaches(&self, body_z: f32, foot_z: f32) -> bool {
+    /// How far along the path a hop at `speed` carries, landing as high as
+    /// it left, pushed off with the most climb the gait gives, in metres:
+    /// further than any hop that lands where it took off from would need.
+    pub fn longest_hop(&self, speed: f32) -> f32 {
+        speed * 2.0 * self.flight.max_takeoff_climb / self.gravity
+    }
+
+    /// The longest step both feet stay within reach of a body midway
+    /// between them over, on ground rising `grade` metres per metre (falling,
+    /// if negative), in metres: the lower foot runs out of reach first, and
+    /// on a slope the capsule rests clear of the ground beneath it.
+    pub fn reachable_step(&self, grade: f32) -> f32 {
+        let grade = grade.abs();
+        let slope = 1.0 + grade * grade;
+        let rest_gap = self.body.radius * (slope.sqrt() - 1.0);
+        let hip = self.foot.hip_height + rest_gap;
+        let reach = self.foot.leg_reach;
+        let room = (hip * grade).powi(2) - slope * (hip * hip - reach * reach);
+        if room <= 0.0 {
+            return 0.0;
+        }
+        2.0 * ((room.sqrt() - hip * grade) / slope).max(0.0)
+    }
+
+    /// Whether a foot at `foot` is within reach of the body with its
+    /// bottom-sphere centre at `body_s`, `body_z`: within a leg's reach of
+    /// the nearer hip, along the path, across it and up, and no higher above
+    /// the capsule's bottom than a foot lands.
+    pub fn foot_reaches(&self, body_s: f32, body_z: f32, foot: &PathVec) -> bool {
         let bottom = body_z - self.body.radius;
-        foot_z >= bottom - self.foot.below_body && foot_z <= bottom + self.foot.above_body
+        let hip = self.foot.stance_half_width;
+        let along = foot.s - body_s;
+        let across = (foot.d - hip).abs().min((foot.d + hip).abs());
+        let down = bottom + self.foot.hip_height - foot.z;
+        along * along + across * across + down * down <= self.foot.leg_reach * self.foot.leg_reach
+            && foot.z <= bottom + self.foot.above_body
     }
 }
 

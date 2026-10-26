@@ -47,7 +47,10 @@ pub struct TraversalScene {
     /// The foot that lands next.
     pub lead: Limb,
     pub intent: Intent,
-    #[serde(default)]
+    /// The gait planned for; left out of the file when it is the default,
+    /// the player's, so a scene plans with the gait of the day, not the one
+    /// it was captured with.
+    #[serde(default, skip_serializing_if = "is_default_gait")]
     pub params: GaitParams,
     #[serde(default)]
     pub layout: StripLayout,
@@ -55,6 +58,10 @@ pub struct TraversalScene {
     /// leaves it open.
     #[serde(default)]
     pub expect: Option<Outcome>,
+}
+
+fn is_default_gait(params: &GaitParams) -> bool {
+    *params == GaitParams::default()
 }
 
 impl TraversalScene {

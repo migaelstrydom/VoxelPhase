@@ -1,6 +1,5 @@
 use crate::params::GaitParams;
 use crate::plan::{Contact, Motion, Phase, Plan};
-use crate::planner::rules::jumped;
 use crate::section::{Footing, SectionQuery};
 
 use super::violation::{Rule, Violation};
@@ -58,7 +57,7 @@ pub fn check_plan(plan: &Plan, query: &dyn SectionQuery, params: &GaitParams) ->
         .copied();
     for (time, contact) in plan.footfalls() {
         if let Some(last) = last {
-            let jump = lands_a_jump(plan, time, params);
+            let jump = lands_a_flight(plan, time);
             check_step(&last, contact, jump, params, &mut |rule, detail| {
                 broke(rule, time, detail)
             });
@@ -78,7 +77,7 @@ pub fn check_plan(plan: &Plan, query: &dyn SectionQuery, params: &GaitParams) ->
             );
         }
         match plan.body_at(time, query) {
-            Some(body) if params.foot_reaches(body.z, contact.at.z) => {}
+            Some(body) if params.foot_reaches(body.s, body.z, &contact.at) => {}
             body => broke(
                 Rule::FootReachesBody,
                 time,
@@ -102,14 +101,11 @@ fn start_s(phase: &Phase) -> f32 {
     }
 }
 
-/// Whether the footfall at `time` lands a jump off an edge: a flight longer
-/// than a stride spans, which no step limit holds.
-fn lands_a_jump(plan: &Plan, time: f32, params: &GaitParams) -> bool {
+/// Whether the footfall at `time` lands a flight, a hop or a roll-off,
+/// which no step limit holds.
+fn lands_a_flight(plan: &Plan, time: f32) -> bool {
     plan.phases.iter().any(|phase| match phase.motion {
-        Motion::Flight { takeoff, .. } => {
-            (phase.start + phase.duration - time).abs() < TOLERANCE
-                && jumped(phase.end_s() - takeoff.s, params) > 0.0
-        }
+        Motion::Flight { .. } => (phase.start + phase.duration - time).abs() < TOLERANCE,
         Motion::Grounded { .. } => false,
     })
 }

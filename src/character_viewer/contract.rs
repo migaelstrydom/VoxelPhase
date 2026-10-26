@@ -21,9 +21,10 @@
 use std::f32::consts::FRAC_PI_2;
 
 use traversal_planner::params::STANDARD_GRAVITY;
-use traversal_planner::GaitParams;
+use traversal_planner::{GaitParams, PlannerSettings};
 
 use crate::anim_viewer::{Beat, Script};
+use crate::animation::CharacterRigConfig;
 use crate::character::LocomotionConfig;
 use crate::core::error::{EngineError, EngineResult};
 use crate::traversal::player_gait;
@@ -106,6 +107,16 @@ const FACE_SPEED_TOLERANCE: f32 = 0.05;
 const FACE_RUN: f32 = 4.0;
 /// Furthest the grounded capsule may be from the cast floor, in metres.
 const RIDE_TOLERANCE: f32 = 0.03;
+/// How long into the run a hop's cost is measured from, in seconds: up to
+/// speed by then.
+const HOP_AT: f32 = 1.5;
+/// Climb of the hop measured, in m/s: a typical planned hop's.
+const HOP_CLIMB: f32 = 1.5;
+/// How far past the takeoff the crossing is timed to, in metres: past the
+/// landing and the speed regained after it.
+const HOP_RUN: f32 = 5.0;
+/// How long the run goes on after the takeoff, in seconds.
+const HOP_TAIL: f32 = 2.0;
 
 /// One measurement, against what the planner claims.
 #[derive(Debug)]
@@ -178,7 +189,7 @@ impl Gait {
 
 /// Runs every check against the player's `GaitParams`.
 pub fn check_contract(config: &RunConfig) -> EngineResult<Vec<ContractCheck>> {
-    let params = player_gait(&LocomotionConfig::default());
+    let params = player_gait(&LocomotionConfig::default(), &CharacterRigConfig::default());
     let mut checks = slope(config, &params)?;
     for gait in Gait::BOTH {
         checks.extend(takeoff(config, &params, gait)?);
@@ -192,6 +203,9 @@ pub fn check_contract(config: &RunConfig) -> EngineResult<Vec<ContractCheck>> {
         for gait in Gait::BOTH {
             checks.extend(face(config, &params, angle, lane_z, gait)?);
         }
+    }
+    for gait in Gait::BOTH {
+        checks.push(hop(config, gait)?);
     }
     Ok(checks)
 }
@@ -604,6 +618,72 @@ fn face(
             holds: (peak - left.bottom - claimed_rise).abs() <= ARC_TOLERANCE,
         },
     ])
+}
+
+/// What a planned hop costs on level ground: how much later a body that
+/// hops at `HOP_CLIMB` crosses a line `HOP_RUN` past its takeoff than one
+/// that runs on. The planner prices a hop at `costs.flight` seconds, which
+/// must cover it.
+fn hop(config: &RunConfig, gait: Gait) -> EngineResult<ContractCheck> {
+    let script = |tail: Beat| {
+        Script::new()
+            .then(Beat::stand(0.3))
+            .then(gait.beat(HOP_AT))
+            .then(tail)
+    };
+    let plain = run(&lane("hop", FLAT_Z, script(gait.beat(HOP_TAIL))), config)?;
+    let hopped = run(
+        &lane(
+            "hop",
+            FLAT_Z,
+            script(
+                gait.beat(HOP_TAIL)
+                    .hopping(gait.speed(), HOP_CLIMB)
+                    .named("hop"),
+            ),
+        ),
+        config,
+    )?;
+    let takeoff = hopped
+        .frames
+        .iter()
+        .find(|frame| frame.beat == "hop")
+        .ok_or_else(|| EngineError::InvalidState("the hop never came".to_string()))?
+        .body
+        .x;
+    let airborne = hopped
+        .frames
+        .iter()
+        .skip_while(|frame| frame.beat != "hop")
+        .take_while(|frame| frame.body.x < takeoff + HOP_RUN)
+        .filter(|frame| !frame.grounded)
+        .count();
+    let line = takeoff + HOP_RUN;
+    let crossed = |frames: &[FrameRecord]| crossing(frames, line);
+    let (Some(ran), Some(hopped)) = (crossed(&plain.frames), crossed(&hopped.frames)) else {
+        return Err(EngineError::InvalidState(format!(
+            "a run never crossed x = {line:.1}"
+        )));
+    };
+    let lost = hopped - ran;
+    let price = PlannerSettings::default().costs.flight;
+    Ok(ContractCheck {
+        name: format!("hop {}: cost", gait.name()),
+        measured: format!("{lost:.3} s lost over {airborne} frames in the air"),
+        claim: format!("climbing {HOP_CLIMB} m/s; costs.flight {price} s covers it"),
+        holds: airborne > 0 && lost <= price,
+    })
+}
+
+/// When the body first crosses `x`, interpolated between frames.
+fn crossing(frames: &[FrameRecord], x: f32) -> Option<f32> {
+    frames.windows(2).find_map(|pair| {
+        let (before, after) = (&pair[0], &pair[1]);
+        (before.body.x < x && after.body.x >= x).then(|| {
+            let fraction = (x - before.body.x) / (after.body.x - before.body.x);
+            before.time + fraction * (after.time - before.time)
+        })
+    })
 }
 
 fn no_flight(what: &str) -> EngineError {

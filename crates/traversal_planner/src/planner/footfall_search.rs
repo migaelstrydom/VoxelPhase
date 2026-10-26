@@ -9,7 +9,7 @@ use crate::section::{Foothold, FootholdWindow, SectionQuery};
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
 use super::cost::FootfallCosts;
-use super::rules::{jumped, FOOT_SLACK, PUSH_OFF_TOLERANCE};
+use super::rules::{FOOT_SLACK, PUSH_OFF_TOLERANCE};
 use super::settings::PlannerSettings;
 
 /// Length along the path of the bands the body's landing is merged in, in
@@ -95,7 +95,7 @@ impl FootfallSearch<'_> {
     pub fn search(&self, planted: Footfall) -> Result<FootfallPlan, FootfallsRefused> {
         let flights: Vec<Flight> = self
             .body
-            .hops()
+            .flights()
             .filter_map(|segment| match *segment {
                 BodySegment::Flight {
                     takeoff,
@@ -230,10 +230,7 @@ impl FootfallSearch<'_> {
             // Landing as the body rides on, before any flight.
             for lead in &self.settings.landing_leads {
                 let body_s = foothold.at.s - lead * step;
-                if body_s <= node.footfall.body_s + TOLERANCE
-                    || body_s > ridden_until + TOLERANCE
-                    || self.rolling_at(body_s)
-                {
+                if body_s <= node.footfall.body_s + TOLERANCE || body_s > ridden_until + TOLERANCE {
                     continue;
                 }
                 let footfall = Footfall { contact, body_s };
@@ -243,8 +240,8 @@ impl FootfallSearch<'_> {
                 let Some(body_z) = self.body.height_at(body_s, self.query) else {
                     continue;
                 };
-                if !params.foot_reaches(body_z, contact.at.z)
-                    || !params.foot_reaches(body_z, stance.at.z)
+                if !params.foot_reaches(body_s, body_z, &contact.at)
+                    || !params.foot_reaches(body_s, body_z, &stance.at)
                 {
                     continue;
                 }
@@ -262,10 +259,9 @@ impl FootfallSearch<'_> {
         }
 
         // Landing at the end of the next flight, pushed off from the stance
-        // foot with the body over or past it: from the landing to as far past
-        // it as the push-off was behind the takeoff, within a stride of the
-        // push-off; or, after a jump off an edge, which no stride spans,
-        // within a foot's slack of the landing.
+        // foot with the body over or past it, within a foot's slack of where
+        // the body comes down: a running leap, its step judged by the ground
+        // either side of the flight.
         let Some(flight) = next_flight else {
             return;
         };
@@ -273,15 +269,8 @@ impl FootfallSearch<'_> {
         if flight.takeoff < stance.at.s - PUSH_OFF_TOLERANCE {
             return;
         }
-        let jump = jumped(landing - flight.takeoff, params) > 0.0;
-        let (farthest, flown) = if jump {
-            (landing + FOOT_SLACK, landing - flight.takeoff)
-        } else {
-            (
-                (2.0 * landing - stance.at.s).min(stance.at.s + params.stride.max_length),
-                0.0,
-            )
-        };
+        let flown = landing - flight.takeoff;
+        let farthest = landing + FOOT_SLACK;
         footholds.clear();
         self.query.footholds(
             &FootholdWindow {
@@ -306,8 +295,8 @@ impl FootfallSearch<'_> {
                 body_s: landing,
             };
             if !worth(&footfall, base)
-                || !params.foot_reaches(flight.landing_z, contact.at.z)
-                || !params.foot_reaches(flight.takeoff_z, stance.at.z)
+                || !params.foot_reaches(landing, flight.landing_z, &contact.at)
+                || !params.foot_reaches(flight.takeoff, flight.takeoff_z, &stance.at)
             {
                 continue;
             }
@@ -322,13 +311,6 @@ impl FootfallSearch<'_> {
                 });
             }
         }
-    }
-
-    /// Whether the body is rolling off ground at `body_s`, so no foot lands.
-    fn rolling_at(&self, body_s: f32) -> bool {
-        self.body
-            .roll_offs()
-            .any(|(takeoff, landing)| body_s > takeoff + TOLERANCE && body_s < landing - TOLERANCE)
     }
 
     /// What a footfall on `foothold` costs after `node`, whatever the body
@@ -352,7 +334,14 @@ impl FootfallSearch<'_> {
         {
             return None;
         }
-        let natural = self.settings.natural_step(self.target_speed, params);
+        // The gait's step, or the longest the legs reach on this ground if
+        // that is shorter: a slope is not charged for the steps it forces.
+        let grade = -foothold.normal.s / foothold.normal.z.max(f32::EPSILON);
+        let natural = self
+            .settings
+            .natural_step(self.target_speed, params)
+            .min(params.reachable_step(grade))
+            .max(params.stride.min_length);
         let length_off = (foothold.at.s - stance.s - flown - natural) / natural;
         let reach = params.foot.reach_in.max(params.foot.reach_out);
         let sideways_off = (foothold.at.d - params.foot.natural_offset(limb)) / reach;
