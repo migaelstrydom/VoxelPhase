@@ -65,6 +65,7 @@ impl BodySearch<'_> {
                 s: window,
                 d: f32::MIN..f32::MAX,
                 spacing: SUPPORT_SPACING,
+                line: None,
             },
             &mut footholds,
         );

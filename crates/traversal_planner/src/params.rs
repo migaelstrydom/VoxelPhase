@@ -234,6 +234,14 @@ impl NaturalSteps {
             },
         )
     }
+
+    /// The shortest of the steps, in metres: the slowest walk's.
+    pub fn shortest(&self) -> f32 {
+        self.0
+            .iter()
+            .map(|step| step.length)
+            .fold(f32::INFINITY, f32::min)
+    }
 }
 
 impl Default for NaturalSteps {
@@ -378,6 +386,14 @@ impl GaitParams {
             return 2.0 * half_stance;
         }
         half_stance * natural.length / natural.plant_ahead
+    }
+
+    /// Whether the legs step on ground rising `grade` metres per metre at
+    /// `speed`: whether even the gait's shortest step keeps the foot behind
+    /// within reach of the body resting there. Past it the stick and the
+    /// drive carry the body.
+    pub fn steps_up(&self, grade: f32, speed: f32) -> bool {
+        self.reachable_step(grade, speed) >= self.stride.natural.shortest()
     }
 
     /// Whether a foot at `foot` is within reach of the body with its

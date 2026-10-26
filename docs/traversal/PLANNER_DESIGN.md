@@ -126,7 +126,7 @@ Transition models and the planner never read lanes directly. They ask a
 | Query | Answers |
 |---|---|
 | `floor(s)` | the body floor under the path, with its normal and footing |
-| `footholds(window)` | every standable foothold in a window along and across the path, with its normal, footing and margin to an edge; the planner judges which is best |
+| `footholds(window)` | every standable foothold in a window along and across the path, with its normal, footing and margin to an edge, and, when the window names a foot's line, footholds on that line wherever the lanes either side hold the same surface; the planner judges which is best |
 | `clears(motion)` | whether the capsule along a grounded stretch or flight arc stays on or above the body floor and under the ceiling |
 
 Climbing adds `edges(s range)`, the grabbable edges, with the wall pass.
@@ -183,7 +183,12 @@ Contact
 
 A contact's `d` is where that foot actually lands, not its lane: the planner
 picks it within a window around the foot's natural offset, and the foot
-placer can still refine it on the real ground.
+placer lands on it. The lanes are where the ground is sampled, not where a
+foot may go: on ground running unbroken between two lanes the query gives
+footholds on each foot's own line, between them, so on open ground the
+feet land half the hips apart rather than both drawn onto the nearest lane
+(the centre one, for these hips). Where the lanes disagree, at a plank's
+edge or on rubble, only the lanes' footholds are offered.
 
 The plan says where the feet land; the legs say when. The game hands the
 foot placer each foot's next footfall (`PlannedSteps`, through
@@ -361,10 +366,14 @@ each flight is one a foot pushes off and lands.
   straightened leg (0.525 m) of a hip 0.425 m above the capsule's bottom.
   A flight, hop or roll-off, has a hop's feet: the last near the brow, the
   next at the landing, and no stride limit between them. These legs only
-  just reach the ground under the capsule: up a slope past 38° the foot
-  behind is out of reach, so the planner refuses it and the stick and the
-  drive carry the body up (`slope_38deg`, `slope_40deg`), until a sliding
-  or scrambling motion takes such slopes over. The limits had been a human
+  just reach the ground under the capsule: up a slope past about 39° even
+  the gait's shortest step (its slowest walk's) puts the foot behind out of
+  reach of the body resting there (`GaitParams::steps_up`), so the planner
+  refuses it and the stick and the drive carry the body up (`slope_38deg`,
+  `slope_40deg`), until a sliding or scrambling motion takes such slopes
+  over. Up to that limit it plans steps shorter than the legs' clock takes
+  (8 cm at 3 m/s on `slope_38deg`): the plan's cadence on a steep slope is
+  not yet the legs'. The limits had been a human
   runner's (2.5 m strides, a foot 0.35 m below the body), which hid that.
 - **Horizon.** Counted in footfalls, a flight as one step: a plan carries
   the body three natural steps and then as far as the longest flight

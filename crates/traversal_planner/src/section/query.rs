@@ -56,6 +56,11 @@ pub struct FootholdWindow {
     /// Least distance along `s` between two footholds returned on one line
     /// across the path: the resolution the planner searches at.
     pub spacing: f32,
+    /// A foot's own line across the path, if footholds are wanted on it: where
+    /// the lanes either side hold the same surface, a foothold on the line
+    /// between them is given too, so a foot is not drawn onto a lane by the
+    /// strip's sampling.
+    pub line: Option<f32>,
 }
 
 /// How the planner reads the ground, for one gait: what the body can ride
@@ -83,6 +88,7 @@ pub trait SectionQuery {
                 s: at.s - tolerance..at.s + tolerance,
                 d: at.d - across..at.d + across,
                 spacing: tolerance / 16.0,
+                line: Some(at.d),
             },
             &mut near,
         );

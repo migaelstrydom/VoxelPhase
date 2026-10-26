@@ -207,6 +207,7 @@ impl FootfallSearch<'_> {
                 s: stance.at.s + params.stride.min_length..stance.at.s + params.stride.max_length,
                 d: params.foot.reach(limb),
                 spacing: self.spacing,
+                line: Some(params.foot.natural_offset(limb)),
             },
             &mut footholds,
         );
@@ -281,6 +282,7 @@ impl FootfallSearch<'_> {
                 s: landing - TOLERANCE..farthest + TOLERANCE,
                 d: params.foot.reach(limb),
                 spacing: self.spacing,
+                line: Some(params.foot.natural_offset(limb)),
             },
             &mut footholds,
         );
@@ -348,6 +350,12 @@ impl FootfallSearch<'_> {
             || rise > params.stride.max_rise
             || -rise > params.stride.max_drop
         {
+            return None;
+        }
+        let slope = self.query.floor(foothold.at.s).map_or(0.0, |floor| {
+            -floor.normal.s / floor.normal.z.max(f32::EPSILON)
+        });
+        if !params.steps_up(slope, self.target_speed) {
             return None;
         }
         // The gait's step, or the longest the legs reach on this ground if

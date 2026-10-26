@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::params::GaitParams;
 use crate::path::PathVec;
 use crate::plan::{Motion, Phase};
@@ -232,6 +234,65 @@ impl LaneFootholds {
             .map(|index| self.runs[index])
             .filter(|run| s <= run.1)
     }
+
+    /// The footholds from `s.start` up to `s.end`.
+    fn within(&self, s: &Range<f32>) -> impl Iterator<Item = &Foothold> {
+        let first = self
+            .footholds
+            .partition_point(|foothold| foothold.at.s < s.start);
+        let end = s.end;
+        self.footholds[first..]
+            .iter()
+            .take_while(move |foothold| foothold.at.s < end)
+    }
+
+    /// The foothold on this lane on the same surface as `other`, from
+    /// another lane, if there is one: as near along the path as ground on
+    /// one lane is joined, and where `other`'s slope carries it.
+    fn same_surface_as(&self, other: &Foothold) -> Option<&Foothold> {
+        let after = self
+            .footholds
+            .partition_point(|foothold| foothold.at.s < other.at.s);
+        let nearest = [after.checked_sub(1), Some(after)]
+            .into_iter()
+            .flatten()
+            .filter_map(|index| self.footholds.get(index))
+            .min_by(|a, b| {
+                (a.at.s - other.at.s)
+                    .abs()
+                    .total_cmp(&(b.at.s - other.at.s).abs())
+            })?;
+        let apart = nearest.at - other.at;
+        let normal = other.normal;
+        let carried = -(normal.s * apart.s + normal.d * apart.d) / normal.z.max(f32::EPSILON);
+        let same = nearest.footing == other.footing
+            && apart.s.abs() <= GROUND_GAP
+            && (apart.z - carried).abs() <= GROUND_STEP
+            && nearest.normal.dot(normal) >= SAME_SURFACE_DEGREES.to_radians().cos();
+        same.then_some(nearest)
+    }
+}
+
+/// A foothold `share` of the way from `near` to `far`, on one surface.
+fn between(near: &Foothold, far: &Foothold, share: f32) -> Foothold {
+    Foothold {
+        at: near.at + (far.at - near.at) * share,
+        normal: (near.normal * (1.0 - share) + far.normal * share).normalized(),
+        footing: near.footing,
+        edge_margin: near.edge_margin.min(far.edge_margin),
+    }
+}
+
+/// `footholds` into `out`, at most one in each `spacing` along the path.
+fn thinned(footholds: impl Iterator<Item = Foothold>, spacing: f32, out: &mut Vec<Foothold>) {
+    let mut last_bucket = None;
+    for foothold in footholds {
+        let bucket = (foothold.at.s / spacing).floor() as i64;
+        if last_bucket != Some(bucket) {
+            last_bucket = Some(bucket);
+            out.push(foothold);
+        }
+    }
 }
 
 /// Whether the top sphere, its bottom sphere's centre at `(s, z)`, is under
@@ -391,24 +452,29 @@ impl SectionQuery for StripQuery<'_> {
 
     fn footholds(&self, window: &FootholdWindow, out: &mut Vec<Foothold>) {
         for lane in &self.foothold_lanes {
-            if !window.d.contains(&lane.d) {
-                continue;
-            }
-            let first = lane
-                .footholds
-                .partition_point(|foothold| foothold.at.s < window.s.start);
-            let mut last_bucket = None;
-            for foothold in lane.footholds[first..]
-                .iter()
-                .take_while(|foothold| foothold.at.s < window.s.end)
-            {
-                let bucket = (foothold.at.s / window.spacing).floor() as i64;
-                if last_bucket != Some(bucket) {
-                    last_bucket = Some(bucket);
-                    out.push(*foothold);
-                }
+            if window.d.contains(&lane.d) {
+                thinned(lane.within(&window.s).copied(), window.spacing, out);
             }
         }
+        let Some(line) = window.line.filter(|line| window.d.contains(line)) else {
+            return;
+        };
+        let Some((near, far)) = self
+            .foothold_lanes
+            .windows(2)
+            .find(|pair| pair[0].d < line && line < pair[1].d)
+            .map(|pair| (&pair[0], &pair[1]))
+        else {
+            return;
+        };
+        let on_line = near.within(&window.s).filter_map(|foothold| {
+            let other = far.same_surface_as(foothold)?;
+            let share = (line - foothold.at.d) / (other.at.d - foothold.at.d);
+            (0.0..=1.0)
+                .contains(&share)
+                .then(|| between(foothold, other, share))
+        });
+        thinned(on_line, window.spacing, out);
     }
 
     fn ground_reaches(&self, foot: &PathVec, s: f32) -> bool {

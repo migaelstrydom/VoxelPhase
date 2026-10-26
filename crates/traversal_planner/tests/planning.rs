@@ -459,3 +459,25 @@ fn a_leap_ends_the_plan() {
     let (time, _) = plan.footfalls().last().expect("footfalls");
     assert!(time <= last.start);
 }
+
+#[test]
+fn feet_land_on_their_own_lines_on_open_ground() {
+    let scene = fixture("lip_03cm");
+    let section = scene.section();
+    let query = StripQuery::new(&section, &scene.params);
+    let plan = planner(&scene)
+        .plan(&query, &scene.request())
+        .expect("crosses")
+        .plan;
+    let off: Vec<_> = plan
+        .footfalls()
+        .map(|(_, contact)| {
+            (
+                contact.limb,
+                contact.at.d - scene.params.foot.natural_offset(contact.limb),
+            )
+        })
+        .filter(|(_, off)| off.abs() > 0.01)
+        .collect();
+    assert!(off.is_empty(), "footfalls off their foot's line: {off:?}");
+}
