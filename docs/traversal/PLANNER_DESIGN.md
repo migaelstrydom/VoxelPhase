@@ -57,11 +57,11 @@ This design keeps three rules:
                               │                     │          │        + tentative rest)
                               ▼                     ▼          │
                         PlanTracker            FootPlacer      │ also consumed by:
-                        (traction drive        (footfalls and  │   section_svg (CLI), web tool (wasm),
+                        (traction drive        (footfalls and  │   section_svg (CLI),
                          command, takeoffs)     their timing)  │   fixture tests, fuzzer
                               │                                │
                               ▼                                │
-                        PlanOverlay (DebugOverlays), capture key ──► scene file (RON) ──► web tool / fixtures
+                        PlanOverlay (DebugOverlays), capture key ──► scene file (RON) ──► fixtures
 ```
 
 The planner crate does not depend on the game. The game depends on it.
@@ -439,14 +439,13 @@ takes its frame from the predicted path only.
 | Where | What |
 |---|---|
 | `crates/traversal_planner/` | pure: `Section`, `SectionQuery` and `StripQuery` over a sampled strip, `Plan`, `Planner` (`BodySearch`, `FootfallSearch`), `GaitParams`, the scene format, `sample_section` over a `SphereCaster`, `ShapeCaster` for authored scenes, the SVG writer, `section_svg` bin |
-| `crates/traversal_planner_web/` | the planner compiled to wasm behind a JSON boundary (`api`, `ffi`), the time scrub, and the bench's HTML page |
 | `src/traversal/` | game side: `PathPredictor`, `PhysicsCaster` (a `SphereCaster` over `PhysicsWorld`), `PlanTracker`, `PlanOverlay`, the capture key; `section_capture` bin |
 
-The repo becomes a Cargo workspace with the game crate at its root and the two
-crates under `crates/`. `default-members` stays the game, so `cargo test` and
-`cargo run` keep working, and CLAUDE.md gains the planner's test and tool
-commands. The planner crate depends on `nalgebra` and `serde`/`ron` only, all
-of which build for `wasm32-unknown-unknown`.
+The repo is a Cargo workspace with the game crate at its root and the planner
+under `crates/`. `default-members` is the game, so `cargo test` and `cargo run`
+work as before. The planner crate depends on `serde`/`ron`, `smallvec` and
+`rustc-hash` only, so it cannot reach the game: the boundary that keeps it
+pure is the crate's, and its tests build and run without the engine.
 
 `GaitParams` (stride, rise and drop limits, foot and body radii, flight
 margins) lives in the planner crate. The game fills it in from the rig's leg
@@ -499,36 +498,10 @@ the lateral cases a side view gets wrong. Both views draw:
 
 This is how I read a scene.
 
-### The web tool (wasm)
-
-The Traversal Planner Bench, a private artifact: the real planner in a
-browser page.
-- the same side view and top-down strip as `section_svg`, from the same code;
-- drag obstacles in either view: move them, drag their ends or top to resize
-  them in the side view, their sides to widen them in the strip; click one to
-  edit it (form, extent, top, tilt, yaw, footing, mass), or add blocks,
-  stones, planks, ramps and roofs;
-- sliders for every `GaitParams` and `PlannerSettings` number, speed presets
-  for crouch, walk and sprint, and the body's place and lead foot;
-- replans live on every change, with the time it took;
-- **time scrub**: runs the body along its plans, replanning every frame
-  against the last plan, and logs every commitment dropped and every next
-  footfall that moved;
-- **perturb**: while running, loose footing drops and slides under each foot
-  that lands on it, which the next plans must deal with;
-- import and export the scene file, captures included (a captured scene's
-  ground is the game's own and is not edited).
-
-`crates/traversal_planner_web` compiles the planner to `wasm32` with no
-bindings crate: the page writes a JSON request into memory from `alloc`,
-calls `call(op, ...)`, and reads the JSON answer (`api::Op` lists the
-operations). The page is `crates/traversal_planner_web/page/index.html`; it
-loads `planner.wasm` published beside it.
-
 ### Fixtures and properties
 
-`crates/traversal_planner/fixtures/*.ron`: every bad case found in the web
-tool or captured in the game goes here. Fixtures come from three sources:
+`crates/traversal_planner/fixtures/*.ron`: every bad case found in
+play or captured in the game goes here. Fixtures come from three sources:
 authored scenes that each isolate one rule (a lip, a gap, a vertical wall);
 captures of settled physics scenes (rubble piles, tumbled crates, crater
 rims), which no hand-authored shape describes honestly; and the fuzzer.
@@ -650,12 +623,13 @@ nearest its planned start, half a frame early at most.
 
 **Edges are jumped off.** A run at an edge leaves it at speed: a footfall
 may land up to `max_drop` (8 m) below the last, and a flight off an edge may
-land past a stride by as far as the body carries falling to its landing
-(`rules::jumped`): a jump, its feet a push-off and a landing within a foot's
-slack of where the body comes down, not a stride. Level hops stay within a
-stride. Over the Stack Yard's voussoir arch (`stack_yard_voussoir_arch`) the
+land past a stride by as far as the body carries falling to its landing:
+a jump, its feet a push-off and a landing within a foot's slack of where the
+body comes down, not a stride. Level hops reach as far as the drive's climb
+carries the body (`GaitParams::longest_hop`). Over the Stack Yard's voussoir arch (`stack_yard_voussoir_arch`) the
 plan had hopped the top stone and then braked to 2 m/s to drop off the far
-side within a stride; it now runs the crest and jumps off at 5 or 7 m/s.
+side within a stride; walking, it now runs up to the crest and leaves it
+all but unpushed.
 
 **A flight clears what it does not land on.** A flight keeps
 `clearance` (3 cm) over the floor, except near its ends, where an arc meets
@@ -722,7 +696,7 @@ cut off where it passes 3 m. Planned:
   footing, the body's actual trail beside its planned one, and a flash when
   the next footfall changes.
 - **Capture key**: writes the current section, body state, intent, params and
-  plan to a scene file that the web tool and fixtures load.
+  plan to a scene file that `section_svg` and the fixtures load.
 - **`DebugLog`** under `Traversal/`: planner time, section time, churn,
   divergence events.
 - **`character_viewer`**: the overlay drawn in its filmstrips, and churn per
@@ -738,7 +712,7 @@ until E.
 |---|---|---|
 | A | Workspace, planner crate: `Section` strip and `SectionQuery`, `Plan`, the planner, scene format, `section_svg` with both views; `PhysicsCaster` and `section_capture` | authored: the Traversal Garden plank bridge (yawed, loose planks), lips of 3–40 cm, stepping stones in line and zigzagged off it, a stone tilted across the path, a vertical wall (refused); captured: a crate pile in a crater and two or three other settled rubble scenes, each with its expected outcome; all read as SVGs |
 | B | Property tests, a breaking fixture for each, fuzzer | fuzz sweep clean; every property shown able to fail |
-| C | Web tool | published; you can author and tune the bridge in it |
+| C | Web tool (dropped 2026-10-26: the plan drawn in game proved the better tool) | published; you can author and tune the bridge in it |
 | D | `PathPredictor` in game, `PlanOverlay`, capture key, the drive contract checks; plan drawn but not acted on | captures of every Traversal Garden station plan the same as their authored versions; the drive contract checks pass, with `GaitParams` set from what they measured; section (five lanes) + plan under 0.5 ms per frame |
 | E | `PlanTracker`: drive and takeoffs through contacts | `traversal --summary` beats the baseline on every station, churn and divergence measured, rubble lane crossed |
 | F | `FootPlacer` reads footfalls and their timing from the plan | the legs alternate plank to plank; clipping and unplanted legs measured as in the baseline |

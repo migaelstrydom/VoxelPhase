@@ -1,10 +1,8 @@
 use std::fmt::Write;
 
-use serde::Serialize;
-
 /// A rectangle of the drawing that shows one view, mapping metres to pixels
 /// at one scale on both axes, so slopes and gaps read at their true shape.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug)]
 pub struct Viewport {
     /// Pixel position of the viewport's top-left corner.
     pub left: f32,

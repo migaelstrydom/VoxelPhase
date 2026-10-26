@@ -2,8 +2,6 @@ use crate::planner::{Planned, Refusal};
 use crate::scene::{AuthoredGround, Ground, Plane, Shape, TraversalScene};
 use crate::section::{Profile, Section, StripQuery, SurfacePoint};
 
-use serde::Serialize;
-
 use super::canvas::{Canvas, Viewport};
 use super::palette;
 use super::plan_view::draw_plan;
@@ -17,16 +15,6 @@ const PADDING: f32 = 0.15;
 /// Metres between grid lines.
 const GRID_STEP: f32 = 0.5;
 
-/// Where the two views of a rendered scene are, so a front end can turn a
-/// pointer's pixels into path coordinates.
-#[derive(Clone, Copy, Debug, Serialize)]
-pub struct SceneLayout {
-    /// `s` across, `z` up.
-    pub side: Viewport,
-    /// `s` across, `d` up.
-    pub top: Viewport,
-}
-
 /// The scene's section in a side view over a top-down strip, with the
 /// planner's answer over it when there is one.
 pub fn render_scene(
@@ -35,18 +23,6 @@ pub fn render_scene(
     section: &Section,
     outcome: Option<&Result<Planned, Refusal>>,
 ) -> String {
-    render_scene_with_layout(title, scene, section, outcome).0
-}
-
-/// [`render_scene`], and where its views are. Each authored shape's outline
-/// carries `data-shape` (its index in the scene) and `data-view` (`side` or
-/// `top`), for a front end to pick it.
-pub fn render_scene_with_layout(
-    title: &str,
-    scene: &TraversalScene,
-    section: &Section,
-    outcome: Option<&Result<Planned, Refusal>>,
-) -> (String, SceneLayout) {
     let s_min = scene.body.s - section.layout.behind;
     let s_max = scene.body.s + section.layout.ahead;
     let (z_min, z_max) = height_range(scene, section);
@@ -146,7 +122,7 @@ pub fn render_scene_with_layout(
     }
 
     legend(&mut canvas, width, top_view_top - 10.0);
-    (canvas.finish(), SceneLayout { side, top })
+    canvas.finish()
 }
 
 /// The heights the side view must show: the ground under every foothold,
@@ -257,16 +233,15 @@ fn side_shapes(
     let (crossing, off_path): (Vec<_>, Vec<_>) = ground
         .shapes
         .iter()
-        .enumerate()
-        .map(|(index, shape)| (index, shape, cut_on_path(shape)))
-        .partition(|(_, _, cut)| cut.is_some());
-    for (index, shape, cut) in off_path.into_iter().chain(crossing) {
+        .map(|shape| (shape, cut_on_path(shape)))
+        .partition(|(_, cut)| cut.is_some());
+    for (shape, cut) in off_path.into_iter().chain(crossing) {
         let fill = if cut.is_some() {
             palette::SHAPE_FILL
         } else {
             palette::SHAPE_OFF_PATH_FILL
         };
-        let style = format!(r#"fill="{fill}" {edge} data-shape="{index}" data-view="side""#);
+        let style = format!(r#"fill="{fill}" {edge}"#);
         let (from, to) = cut.unwrap_or_else(|| extent_along(shape));
         // Solid from the top down to the view's floor, or from the
         // underside up to its top, or between the two.
@@ -294,12 +269,12 @@ fn top_shapes(
     d_half: f32,
 ) {
     canvas.begin_clip("strip", view.at(s.0, d_half), view.at(s.1, -d_half));
-    for (index, shape) in ground.shapes.iter().enumerate() {
+    for shape in &ground.shapes {
         if shape.top().is_none() {
             continue;
         }
         let style = format!(
-            r#"fill="{}" stroke="{}" stroke-width="1" data-shape="{index}" data-view="top""#,
+            r#"fill="{}" stroke="{}" stroke-width="1""#,
             palette::SHAPE_FILL,
             palette::SHAPE_EDGE
         );
