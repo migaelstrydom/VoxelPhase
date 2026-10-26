@@ -434,7 +434,7 @@ impl PlannedTakeoff {
                 kind: LaunchKind::Leap,
                 steering: AirSteering::Locked {
                     velocity: planar,
-                    remaining: self.flight,
+                    remaining: self.locked_for,
                 },
                 allow_cutoff: false,
                 remaining: launch_window,
@@ -568,15 +568,14 @@ pub struct CharacterIntent {
     pub takeoff: Option<PlannedTakeoff>,
 }
 
-/// A takeoff a plan chose: the velocity to leave the ground with and how
-/// long the flight lasts. It is flown ballistic, with no steering, as the
-/// plan predicts it.
+/// A takeoff a plan chose: the velocity to leave the ground with, and how
+/// long the arc is flown as the plan predicts it, with no steering.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlannedTakeoff {
     /// Planar velocity and climb, in m/s.
     pub velocity: Vector3<f32>,
-    /// Seconds the plan has it in the air.
-    pub flight: f32,
+    /// Seconds steering is locked to the arc.
+    pub locked_for: f32,
 }
 
 impl Default for CharacterIntent {
@@ -637,7 +636,7 @@ mod tests {
 
     const HOP: PlannedTakeoff = PlannedTakeoff {
         velocity: Vector3::new(4.0, 1.5, 0.0),
-        flight: 0.3,
+        locked_for: 0.3,
     };
 
     /// A planned hop leaves with the plan's climb, its planar velocity locked
