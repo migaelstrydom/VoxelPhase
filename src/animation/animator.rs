@@ -17,8 +17,8 @@ use super::pose::{Crossfade, Linear, PoseFragment};
 use super::state::{AnimationState, FootState, ThrowGesture, WaterEntry};
 use crate::character::grab::GrabConfig;
 use crate::character::{
-    AirSteering, ArmState, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionState,
-    ThrowStroke, ThrowingHand,
+    AirSteering, ArmState, CharacterIntent, CharacterState, Grounding, Immersion, LaunchKind,
+    LocomotionState, ThrowStroke, ThrowingHand,
 };
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
@@ -750,10 +750,11 @@ fn next_pose_state(
             };
             PoseState::Grounded { gait }
         }
-        LocomotionState::Launching { steering, .. } => {
-            let kind = match steering {
-                AirSteering::Locked { .. } => AirKind::LongJump,
-                AirSteering::Responsive => AirKind::Jump,
+        LocomotionState::Launching { kind, .. } => {
+            let kind = match kind {
+                LaunchKind::Jump => AirKind::Jump,
+                LaunchKind::LongJump => AirKind::LongJump,
+                LaunchKind::Leap => AirKind::Leap,
             };
             let takeoff = Takeoff {
                 facing,
@@ -813,6 +814,35 @@ fn next_pose_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hop a plan took off on is a running leap: the capsule is already
+    /// rising as Launching begins, so a wind-up crouch would sink the body
+    /// into the gap it is clearing.
+    #[test]
+    fn a_planned_takeoff_leaps_without_a_wind_up() {
+        let mut character = CharacterState::default();
+        character.locomotion = LocomotionState::Launching {
+            kind: LaunchKind::Leap,
+            steering: AirSteering::Responsive,
+            allow_cutoff: false,
+            remaining: 0.1,
+        };
+        let next = next_pose_state(
+            PoseState::Grounded { gait: Gait::Walk },
+            &character,
+            &CharacterIntent::default(),
+            5.0,
+            0.1,
+            Vector3::z(),
+            0.0,
+            false,
+        );
+        let PoseState::Launching { kind, .. } = next else {
+            panic!("{next:?}");
+        };
+        assert_eq!(kind, AirKind::Leap);
+        assert_eq!(kind.launch_crouch_depth(), 0.0);
+    }
 
     /// One-frame ground-contact losses (seams) put locomotion in
     /// CoyoteTime; the pose must stay Grounded — flicking to Airborne

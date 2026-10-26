@@ -54,6 +54,9 @@ impl Gait {
 pub enum AirKind {
     Jump,
     LongJump,
+    /// A planned hop's running leap: no wind-up, as the body has already
+    /// left the ground, and a light landing back into the run.
+    Leap,
     Fall,
 }
 
@@ -66,7 +69,7 @@ impl AirKind {
         match self {
             AirKind::Jump => 0.14,
             AirKind::LongJump => 0.16,
-            AirKind::Fall => 0.0,
+            AirKind::Leap | AirKind::Fall => 0.0,
         }
     }
 
@@ -75,6 +78,7 @@ impl AirKind {
         match self {
             AirKind::Jump => 0.12,
             AirKind::LongJump => 0.20,
+            AirKind::Leap => 0.08,
             AirKind::Fall => 0.15,
         }
     }
@@ -84,7 +88,7 @@ impl AirKind {
         match self {
             AirKind::Jump => 0.10,
             AirKind::LongJump => 0.15,
-            AirKind::Fall => 0.0,
+            AirKind::Leap | AirKind::Fall => 0.0,
         }
     }
 
@@ -93,6 +97,7 @@ impl AirKind {
         match self {
             AirKind::Jump => 0.08,
             AirKind::LongJump => 0.14,
+            AirKind::Leap => 0.03,
             AirKind::Fall => 0.10,
         }
     }
@@ -391,6 +396,7 @@ fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> Pose
     let (hang_factor, feet_forward, torso_pitch, head_tilt) = match kind {
         AirKind::Jump => (0.7, 0.0, 0.08, Vector2::new(0.0, 0.0)),
         AirKind::LongJump => (0.85, 0.18, 0.20, Vector2::new(0.08, 0.0)),
+        AirKind::Leap => (0.9, 0.0, 0.12, Vector2::new(0.03, 0.0)),
         AirKind::Fall => (0.85, 0.0, -0.05, Vector2::new(-0.05, 0.0)),
     };
 

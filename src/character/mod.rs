@@ -27,8 +27,8 @@ mod throws;
 
 pub use attitude::{approach, AttitudeControl};
 pub use components::{
-    AirSteering, ArmState, CharacterIntent, CharacterState, LocomotionInput, LocomotionOutcome,
-    LocomotionState, MovementRule, PlannedTakeoff, RuleSpeeds, Timer,
+    AirSteering, ArmState, CharacterIntent, CharacterState, LaunchKind, LocomotionInput,
+    LocomotionOutcome, LocomotionState, MovementRule, PlannedTakeoff, RuleSpeeds, Timer,
 };
 pub use config::LocomotionConfig;
 pub use facing::facing_from_rotation;

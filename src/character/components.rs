@@ -26,6 +26,18 @@ impl Timer {
     }
 }
 
+/// What a launch is, for how it is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchKind {
+    /// A jump pressed from standing or running.
+    Jump,
+    /// A committed long jump.
+    LongJump,
+    /// A hop a traversal plan took off on: a running leap, flowing out of the
+    /// run and back into it.
+    Leap,
+}
+
 /// Air steering policy — how the character's horizontal velocity responds to
 /// input while airborne.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -80,6 +92,7 @@ pub enum LocomotionState {
     /// handles no input, so a grounding signal that never goes false would
     /// strand the character here with the controls dead.
     Launching {
+        kind: LaunchKind,
         steering: AirSteering,
         allow_cutoff: bool,
         remaining: f32,
@@ -213,6 +226,7 @@ impl LocomotionState {
                     let speed = cfg.walk_speed * cfg.long_jump_speed_mul;
                     let planar = Vector3::new(dir.x * speed, 0.0, dir.z * speed);
                     out.next_state = LocomotionState::Launching {
+                        kind: LaunchKind::LongJump,
                         steering: AirSteering::Locked {
                             velocity: planar,
                             remaining: cfg.long_jump_air_lock_duration,
@@ -225,6 +239,7 @@ impl LocomotionState {
                     out.consumed_jump = true;
                 } else if input.jump_pressed {
                     out.next_state = LocomotionState::Launching {
+                        kind: LaunchKind::Jump,
                         steering: AirSteering::Responsive,
                         allow_cutoff: true,
                         remaining: cfg.launch_window,
@@ -240,6 +255,7 @@ impl LocomotionState {
                 }
             }
             LocomotionState::Launching {
+                kind,
                 steering,
                 allow_cutoff,
                 remaining,
@@ -257,6 +273,7 @@ impl LocomotionState {
                     }
                 } else {
                     LocomotionState::Launching {
+                        kind,
                         steering,
                         allow_cutoff,
                         remaining: r,
@@ -414,6 +431,7 @@ impl PlannedTakeoff {
         let planar = Vector3::new(self.velocity.x, 0.0, self.velocity.z);
         LocomotionOutcome {
             next_state: LocomotionState::Launching {
+                kind: LaunchKind::Leap,
                 steering: AirSteering::Locked {
                     velocity: planar,
                     remaining: self.flight,
@@ -636,6 +654,7 @@ mod tests {
             assert!(!out.consumed_jump);
             match out.next_state {
                 LocomotionState::Launching {
+                    kind: LaunchKind::Leap,
                     steering:
                         AirSteering::Locked {
                             velocity,
