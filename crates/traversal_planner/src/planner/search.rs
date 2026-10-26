@@ -12,9 +12,11 @@ use super::settings::PlannerSettings;
 /// How far the body may be from where the last plan has it now, in metres,
 /// before its commitment is dropped.
 const STRAY_DISTANCE: f32 = 0.05;
-/// How near the asked-for speed must be to the last plan's for it to be
-/// kept, in m/s.
-const SAME_SPEED: f32 = 1.0e-3;
+/// How many of the last plan's footfalls moving costs churn at most: the
+/// committed one and the next, which the feet are already setting up for.
+/// Past them the last plan guessed with less of the way in sight, and each
+/// frame chooses again.
+const CHURNED_FOOTFALLS: usize = 2;
 /// Slack on the committed footfall's time, in seconds.
 const STRAY_TIME: f32 = 1.0e-3;
 /// How near a foothold the committed footfall must still be, in metres.
@@ -107,24 +109,27 @@ impl Planner {
         query: &dyn SectionQuery,
         request: &PlanRequest,
     ) -> Result<Planned, Refusal> {
-        // The last plan whole, while it holds and the player asks for the
-        // same: only what lies past its end is planned.
-        if let Some(extended) = self.extend_last_plan(query, request) {
-            return Ok(extended);
-        }
-
         let previous: Vec<Contact> = request
             .previous
-            .map(|plan| plan.footfalls().map(|(_, contact)| *contact).collect())
+            .map(|plan| {
+                plan.footfalls()
+                    .take(settled_footfalls(plan))
+                    .map(|(_, contact)| *contact)
+                    .collect()
+            })
             .unwrap_or_default();
         let wanted_commitment = request.previous.is_some_and(|plan| plan.committed > 0);
 
-        // Failing that, the last plan through its next tentative footfall,
-        // which then stays where it was: what follows is planned again.
-        if let Some(kept) = self.kept_through(query, request, 1) {
-            let later = previous.get(2..).unwrap_or_default();
-            if let Ok((tail, cost)) =
-                self.plan_from(query, request, &kept.body, kept.planted, later)
+        // The last plan through its next tentative footfall, which then
+        // stays where it was: what follows is planned again.
+        let next_settled = request
+            .previous
+            .is_some_and(|plan| settled_footfalls(plan) > 1);
+        if let Some(kept) = next_settled
+            .then(|| self.kept_through(query, request, 1))
+            .flatten()
+        {
+            if let Ok((tail, cost)) = self.plan_from(query, request, &kept.body, kept.planted, &[])
             {
                 return Ok(Planned {
                     plan: kept.followed_by(tail),
@@ -137,7 +142,13 @@ impl Planner {
         // Failing that, only what follows the committed footfall.
         let mut kept_refusal = None;
         if let Some(kept) = self.kept_through(query, request, 0) {
-            match self.plan_from(query, request, &kept.body, kept.planted, &previous[1..]) {
+            match self.plan_from(
+                query,
+                request,
+                &kept.body,
+                kept.planted,
+                previous.get(1..).unwrap_or_default(),
+            ) {
                 Ok((tail, cost)) => {
                     return Ok(Planned {
                         plan: kept.followed_by(tail),
@@ -175,61 +186,6 @@ impl Planner {
                 diverged: wanted_commitment,
             }),
         }
-    }
-
-    /// The last plan kept whole and carried on to the goal, if the body is
-    /// still on it, every phase of it still clears, every footfall still
-    /// stands on a foothold that holds, and the player asks for the speed it
-    /// was made for. `None` sends the planner to search again.
-    fn extend_last_plan(&self, query: &dyn SectionQuery, request: &PlanRequest) -> Option<Planned> {
-        let previous = request.previous?;
-        if (previous.target_speed - request.target_speed).abs() > SAME_SPEED {
-            return None;
-        }
-        let kept = self.kept_through(query, request, 0)?;
-        let holds = previous.phases[previous.committed..]
-            .iter()
-            .all(|phase| query.clears(phase))
-            && previous.footfalls().all(|(_, contact)| {
-                query
-                    .foothold_at(&contact.at, FOOTHOLD_TOLERANCE)
-                    .is_some_and(|foothold| {
-                        !matches!(foothold.footing, Footing::Loose { resting: false, .. })
-                    })
-            });
-        if !holds {
-            return None;
-        }
-        let last = *previous
-            .footfalls()
-            .last()
-            .map(|(_, contact)| contact)
-            .unwrap_or(&kept.planted);
-        let end = previous.duration();
-        let body = previous.body_at(end, query)?;
-        let goal = self.goal(request);
-        if body.s >= goal - STRAY_DISTANCE {
-            return Some(Planned {
-                plan: previous.clone(),
-                cost: 0.0,
-                diverged: false,
-            });
-        }
-        let (tail, cost) = self.plan_from(query, request, &body, last, &[]).ok()?;
-        let mut phases = previous.phases.clone();
-        phases.extend(tail.phases.into_iter().map(|phase| Phase {
-            start: phase.start + end,
-            ..phase
-        }));
-        Some(Planned {
-            plan: Plan {
-                phases,
-                committed: previous.committed,
-                target_speed: request.target_speed,
-            },
-            cost,
-            diverged: false,
-        })
     }
 
     /// The last plan's phases up to its `footfall`th footfall (the first is
@@ -276,8 +232,8 @@ impl Planner {
     /// as asked for by `request`; or, refused, the plan as far as it got.
     /// The goal is measured from the request's body, so a plan from its
     /// committed footfall reaches no further than a fresh one. Each footfall
-    /// moved from `previous`, and each flight from the last plan's, costs
-    /// churn.
+    /// moved from `previous`, and leaving each of the last plan's near
+    /// flights, costs churn.
     fn plan_from(
         &self,
         query: &dyn SectionQuery,
@@ -418,15 +374,41 @@ impl Kept {
     }
 }
 
-/// The body path of the last plan, as the next search reads it.
+/// How many of the last plan's footfalls it chose knowing what lies past
+/// them, up to [`CHURNED_FOOTFALLS`]: its last footfall, and a flight landing
+/// on it, were where its search stopped, not what it settled on.
+fn settled_footfalls(plan: &Plan) -> usize {
+    plan.footfalls()
+        .count()
+        .saturating_sub(1)
+        .min(CHURNED_FOOTFALLS)
+}
+
+/// The body path of the last plan, as the next search reads it: its rides,
+/// and the flights landing on its settled footfalls, which it settled up to
+/// its last settled footfall.
 fn previous_path(plan: &Plan) -> PreviousPath {
-    let mut path = PreviousPath::default();
+    let last_settled = settled_footfalls(plan)
+        .checked_sub(1)
+        .and_then(|last| plan.footfalls().nth(last));
+    let (settled_time, settled_until) = last_settled
+        .map_or((f32::NEG_INFINITY, f32::NEG_INFINITY), |(time, contact)| {
+            (time + STRAY_TIME, contact.at.s)
+        });
+    let mut path = PreviousPath {
+        flights: Vec::new(),
+        rides: Vec::new(),
+        settled_until,
+    };
     for phase in &plan.phases {
         match phase.motion {
-            Motion::Flight { takeoff, .. } => path.flights.push(FlightSpan {
-                takeoff: takeoff.s,
-                landing: phase.end_s(),
-            }),
+            Motion::Flight { takeoff, .. } if phase.start + phase.duration <= settled_time => {
+                path.flights.push(FlightSpan {
+                    takeoff: takeoff.s,
+                    landing: phase.end_s(),
+                })
+            }
+            Motion::Flight { .. } => {}
             Motion::Grounded {
                 from,
                 to,

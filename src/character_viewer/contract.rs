@@ -95,11 +95,10 @@ const GRAVITY_TOLERANCE: f32 = 0.02;
 const AIR_SPEED_TOLERANCE: f32 = 0.05;
 /// Largest share of a flat jump's climb a coyote jump may lose.
 const COYOTE_TOLERANCE: f32 = 0.05;
-/// Face lanes: angle in degrees, and the lane's z. Each face rises
-/// [`FACE_RISE`] from x = [`FACE_X`] to a shelf.
+/// Face lanes: angle in degrees, and the lane's z. Each face rises 0.3 m
+/// from x = [`FACE_X`] to a shelf.
 const FACES: [(f32, f32); 3] = [(20.0, 56.0), (30.0, 64.0), (38.0, 72.0)];
 const FACE_X: f32 = 7.0;
-const FACE_RISE: f32 = 0.3;
 /// Largest share by which the speed across the ground kept meeting a face
 /// may differ from the claimed.
 const FACE_SPEED_TOLERANCE: f32 = 0.05;

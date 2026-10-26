@@ -63,18 +63,21 @@ pub struct BodySearch<'a> {
     /// Where along the path the foot holding the body is planted: no takeoff
     /// before it, since that foot pushes off.
     pub planted: f32,
-    /// The last plan's body path, if there was a last plan: one the feet
-    /// followed, so leaving it costs churn, and its rides are offered again
-    /// as they were, so it stays within reach whatever the search's own
-    /// steps.
+    /// The last plan's body path, if there was a last plan: leaving the
+    /// flights it settled on costs churn, and its rides are offered again as
+    /// they were, so it stays within reach whatever the search's own steps.
     pub previous: Option<&'a PreviousPath>,
 }
 
 /// The last plan's body path, as the next search reads it.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PreviousPath {
+    /// The flights it settled on.
     pub flights: Vec<FlightSpan>,
     pub rides: Vec<RideSpan>,
+    /// How far along the path it settled, in metres: flying from further on
+    /// costs no churn, as it chose nothing there knowing what lay past it.
+    pub settled_until: f32,
 }
 
 /// A stretch the body rode, along the path, and its speed at the end.
@@ -826,9 +829,12 @@ impl BodySearch<'_> {
     }
 
     /// What flying from `takeoff` to `landing` costs in churn: nothing if
-    /// the last plan flew there too.
+    /// the last plan flew there too, or settled nothing there.
     fn flight_churn(&self, takeoff: f32, landing: f32) -> f32 {
-        let Some(previous) = self.previous else {
+        let Some(previous) = self
+            .previous
+            .filter(|previous| takeoff < previous.settled_until)
+        else {
             return 0.0;
         };
         let matches = previous.flights.iter().any(|span| {

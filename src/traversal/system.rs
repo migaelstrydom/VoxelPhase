@@ -196,6 +196,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
                 let tracked = track(
                     frame.plan(),
                     frame.frame.forward(),
+                    frame.body.climb,
                     time.delta_seconds().max(1.0e-3),
                     frame.outcome.is_err(),
                 );

@@ -330,9 +330,14 @@ each flight is one a foot pushes off and lands.
   for, uneven stride lengths, feet far from their natural offset (a
   cross-step costs more), flights (they cost a little), and footing:
   `Static` is cheapest, then heavy sleeping bodies, then light awake ones.
-  Plus a **churn cost**: diverging from the previous plan's tentative
-  footfalls. That cost, together with commitment, keeps the plan from
-  flickering between two nearly equal options.
+  Plus a **churn cost**: diverging from what the previous plan settled,
+  its next tentative footfall and the flights landing on its first two
+  footfalls, and only where it chose them knowing what lay past them: a
+  plan's last footfall, and a flight landing on it, are where its search
+  stopped (the goal, or the end of the strip in sight), not choices. Past
+  them each frame chooses again with what it now sees. That cost, together
+  with commitment, keeps the plan from flickering between two nearly equal
+  options without holding on to guesses.
 - **Commitment.** The current phase and the next footfall are committed. Each
   frame the planner keeps the last plan's phases up to the committed footfall
   and plans only after it, from that footfall, toward a goal measured from
@@ -342,9 +347,10 @@ each flight is one a foot pushes off and lands.
   foothold, commitment is dropped and the planner replans from the actual
   state; if no plan goes on from the kept phases but a fresh one does, it is
   dropped too. Each such event is counted, because they are where the edge
-  cases will be. The body search charges churn for leaving the last plan's
-  body path and offers its rides again as they were, so a replan keeps to
-  it unless something is better.
+  cases will be. The next tentative footfall is kept too while it holds,
+  if the last plan settled it. The body search charges churn for leaving
+  the flights the last plan settled and offers its rides again as they
+  were, so a replan keeps to it unless something is better.
 
 ### Why body moves are not the old move state machine
 
@@ -690,9 +696,10 @@ until E.
   have crossed, the body search needs a finer question, not more vetoes.
 - **Replanning stability:** 0.1 % of fuzzed scenes still move the next
   tentative footfall on a replan a frame later (seeds under *Fuzzer*). The
-  candidates: keep the last plan's tail whole while it still holds and the
-  request has not changed, planning only past its end; or search the tail on
-  the last search's own lattice.
+  last plan's tail is not kept whole: it was tried, and it held on to
+  choices made at the edge of sight, such as a leap before an edge whose
+  landing was not yet seen, long after better ones came into view. Searching
+  the tail on the last search's own lattice is still open.
 - **Past a refusal:** settled: edges are jumped off up to `max_drop`, with
   enthusiasm, and a refusal that is left (a drop deeper, a wall) leaves the
   pace to the stick.

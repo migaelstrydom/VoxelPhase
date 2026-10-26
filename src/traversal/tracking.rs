@@ -27,17 +27,23 @@ pub enum Pace {
 /// How much faster the plan must be at the frame's end than now for it to
 /// count as speeding up, in m/s.
 const SPEEDING_UP: f32 = 1.0e-3;
+/// How much more upward speed than the body has a hop must ask for to be a
+/// takeoff, in m/s: asking less, the body is already on its arc.
+const PUSHED_CLIMB: f32 = 0.05;
 
-/// Follows `plan`, made from where the body is now, through the frame of
-/// `dt` seconds ahead, along the path's horizontal unit `forward`.
+/// Follows `plan`, made from where the body is now, rising at `climb` m/s,
+/// through the frame of `dt` seconds ahead, along the path's horizontal unit
+/// `forward`.
 ///
 /// Where the plan is speeding up the stick sets the pace ([`Pace::Asked`]);
 /// elsewhere it is the plan's speed at the frame's end. Under a `refused`
 /// plan the stick sets the pace, and the plan only takes off where it hops.
 /// A hop is taken off on the frame whose start is nearest its own, half a
 /// frame early at most; a roll-off, which keeps its stance foot, is the body
-/// running off the edge and needs nothing asked.
-pub fn track(plan: &Plan, forward: Vector3<f32>, dt: f32, refused: bool) -> Tracking {
+/// running off the edge and needs nothing asked, and so is a hop asking no
+/// more climb than the body has: a plan made in the air, or in a bounce off
+/// a landing, starts with the flight the body is already on.
+pub fn track(plan: &Plan, forward: Vector3<f32>, climb: f32, dt: f32, refused: bool) -> Tracking {
     let (now, next) = (speed_at(plan, 0.0), speed_at(plan, dt));
     let pace = if refused || next > now + SPEEDING_UP {
         Pace::Asked
@@ -50,10 +56,14 @@ pub fn track(plan: &Plan, forward: Vector3<f32>, dt: f32, refused: bool) -> Trac
         .take_while(|phase| phase.start < 0.5 * dt)
         .find_map(|phase| match phase.motion {
             // A hop's phase holds no contact; a roll-off's keeps the stance.
-            Motion::Flight { takeoff, .. } if phase.contacts.is_empty() => Some(PlannedTakeoff {
-                velocity: forward * takeoff.speed + Vector3::y() * takeoff.climb,
-                flight: phase.duration,
-            }),
+            Motion::Flight { takeoff, .. }
+                if phase.contacts.is_empty() && takeoff.climb > climb + PUSHED_CLIMB =>
+            {
+                Some(PlannedTakeoff {
+                    velocity: forward * takeoff.speed + Vector3::y() * takeoff.climb,
+                    flight: phase.duration,
+                })
+            }
             _ => None,
         });
     Tracking { pace, takeoff }
@@ -184,7 +194,7 @@ mod tests {
     #[test]
     fn the_speed_is_the_plans_at_the_end_of_the_frame() {
         let slowing_down = plan(vec![ride(0.0, 1.0, 0.0, (5.0, 3.0))]);
-        let tracked = track(&slowing_down, Vector3::x(), DT, false);
+        let tracked = track(&slowing_down, Vector3::x(), 0.0, DT, false);
         let Pace::Planned(speed) = tracked.pace else {
             panic!("{tracked:?}");
         };
@@ -192,23 +202,20 @@ mod tests {
         assert_eq!(tracked.takeoff, None);
         let holding = plan(vec![ride(0.0, 1.0, 0.0, (3.0, 3.0))]);
         assert_eq!(
-            track(&holding, Vector3::x(), DT, false).pace,
+            track(&holding, Vector3::x(), 0.0, DT, false).pace,
             Pace::Planned(3.0)
         );
         let speeding_up = plan(vec![ride(0.0, 1.0, 0.0, (3.0, 5.0))]);
         assert_eq!(
-            track(&speeding_up, Vector3::x(), DT, false).pace,
+            track(&speeding_up, Vector3::x(), 0.0, DT, false).pace,
             Pace::Asked
         );
     }
 
     #[test]
-    fn a_hop_is_taken_off_on_the_nearest_frame_and_a_roll_off_is_not() {
-        let hop = plan(vec![
-            ride(0.0, 0.005, 0.0, (4.0, 4.0)),
-            flight(0.005, 0.02, false),
-        ]);
-        let tracked = track(&hop, Vector3::z(), DT, false);
+    fn a_hop_is_taken_off_on_the_nearest_frame_and_a_roll_off_or_an_arc_under_way_is_not() {
+        let hop = plan(vec![flight(0.0, 0.0, false)]);
+        let tracked = track(&hop, Vector3::z(), 0.0, DT, false);
         assert_eq!(
             tracked.takeoff,
             Some(PlannedTakeoff {
@@ -221,14 +228,17 @@ mod tests {
             ride(0.0, 0.005, 0.0, (4.0, 4.0)),
             flight(0.005, 0.02, true),
         ]);
-        assert_eq!(track(&roll_off, Vector3::z(), DT, false).takeoff, None);
+        assert_eq!(track(&roll_off, Vector3::z(), 0.0, DT, false).takeoff, None);
 
         // Nearer the next frame's start than this one's: taken off then.
         let later = plan(vec![
             ride(0.0, 0.012, 0.0, (4.0, 4.0)),
             flight(0.012, 0.05, false),
         ]);
-        assert_eq!(track(&later, Vector3::z(), DT, false).takeoff, None);
+        assert_eq!(track(&later, Vector3::z(), 0.0, DT, false).takeoff, None);
+
+        // Already rising as fast as the hop leaves: in the air, or bouncing.
+        assert_eq!(track(&hop, Vector3::z(), 1.5, DT, false).takeoff, None);
     }
 
     /// A refused plan leaves the pace to the stick, even at its very end,
@@ -237,13 +247,13 @@ mod tests {
     fn a_refused_plan_leaves_the_pace_to_the_stick() {
         let at_the_edge = plan(vec![ride(0.0, 0.01, 0.0, (5.0, 5.0))]);
         assert_eq!(
-            track(&at_the_edge, Vector3::x(), DT, true).pace,
+            track(&at_the_edge, Vector3::x(), 0.0, DT, true).pace,
             Pace::Asked
         );
         let hop = plan(vec![
             ride(0.0, 0.005, 0.0, (4.0, 4.0)),
             flight(0.005, 0.02, false),
         ]);
-        assert!(track(&hop, Vector3::z(), DT, true).takeoff.is_some());
+        assert!(track(&hop, Vector3::z(), 0.0, DT, true).takeoff.is_some());
     }
 }
