@@ -291,15 +291,23 @@ impl Planner {
                         .footfalls
                         .last()
                         .map_or(body.s, |footfall| footfall.body_s);
-                    let unfollowed = path.hops().find_map(|flight| match *flight {
-                        BodySegment::Flight {
-                            takeoff, landing, ..
-                        } if landing > reached => Some(FlightSpan {
-                            takeoff: takeoff.s,
-                            landing,
-                        }),
-                        _ => None,
-                    });
+                    let unfollowed =
+                        path.hops()
+                            .chain(path.leap())
+                            .find_map(|flight| match *flight {
+                                BodySegment::Flight {
+                                    takeoff, landing, ..
+                                }
+                                | BodySegment::Leap {
+                                    takeoff,
+                                    until: landing,
+                                    ..
+                                } if landing > reached => Some(FlightSpan {
+                                    takeoff: takeoff.s,
+                                    landing,
+                                }),
+                                _ => None,
+                            });
                     match unfollowed {
                         Some(span) if vetoed.len() < self.settings.max_vetoes => vetoed.push(span),
                         _ => {

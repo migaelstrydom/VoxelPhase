@@ -31,6 +31,16 @@ pub enum BodySegment {
         /// foot at either end, and no foot lands while it flies.
         pushed: bool,
     },
+    /// Pushed off a brow into what lies out of sight, ballistic from
+    /// `takeoff`: the path ends in it at `until`, where the search stops, its
+    /// arc having met no floor it saw. Replanned once the ground it falls to
+    /// comes into sight, it is a hop that lands.
+    Leap {
+        takeoff: BodyState,
+        until: f32,
+        /// Downward acceleration, in m/s².
+        gravity: f32,
+    },
 }
 
 impl BodySegment {
@@ -46,14 +56,14 @@ impl BodySegment {
                 Some((end_speed * end_speed - start_speed * start_speed) / (2.0 * (to - from)))
             }
             Self::Ride { .. } => Some(0.0),
-            Self::Flight { .. } => None,
+            Self::Flight { .. } | Self::Leap { .. } => None,
         }
     }
 
     pub fn from(&self) -> f32 {
         match *self {
             Self::Ride { from, .. } => from,
-            Self::Flight { takeoff, .. } => takeoff.s,
+            Self::Flight { takeoff, .. } | Self::Leap { takeoff, .. } => takeoff.s,
         }
     }
 
@@ -61,6 +71,7 @@ impl BodySegment {
         match *self {
             Self::Ride { to, .. } => to,
             Self::Flight { landing, .. } => landing,
+            Self::Leap { until, .. } => until,
         }
     }
 
@@ -85,7 +96,7 @@ impl BodySegment {
                     .max(0.0)
                     .sqrt()
             }
-            Self::Flight { takeoff, .. } => takeoff.speed,
+            Self::Flight { takeoff, .. } | Self::Leap { takeoff, .. } => takeoff.speed,
         }
     }
 
@@ -101,7 +112,7 @@ impl BodySegment {
                     0.0
                 }
             }
-            Self::Flight { takeoff, .. } => distance / takeoff.speed,
+            Self::Flight { takeoff, .. } | Self::Leap { takeoff, .. } => distance / takeoff.speed,
         }
     }
 }
@@ -129,6 +140,13 @@ impl BodyPath {
         self.segments
             .iter()
             .filter(|segment| matches!(segment, BodySegment::Flight { pushed: true, .. }))
+    }
+
+    /// The leap the path ends in, if it does.
+    pub fn leap(&self) -> Option<&BodySegment> {
+        self.segments
+            .last()
+            .filter(|segment| matches!(segment, BodySegment::Leap { .. }))
     }
 
     /// Where along the path the body rolls off ground and flies unpushed,
@@ -168,6 +186,12 @@ impl BodyPath {
                 let t = (s - takeoff.s) / takeoff.speed;
                 Some(flight_at(takeoff, *gravity, *rise_held, t).0)
             }
+            BodySegment::Leap {
+                takeoff, gravity, ..
+            } => {
+                let t = (s - takeoff.s) / takeoff.speed;
+                Some(flight_at(takeoff, *gravity, None, t).0)
+            }
             _ => query.floor(s).map(|floor| floor.z),
         }
     }
@@ -202,6 +226,7 @@ impl BodyPath {
                     pushed: true,
                     ..
                 } => *landing <= landed + LANDED_TOLERANCE,
+                BodySegment::Leap { .. } => false,
                 _ => true,
             })
             .copied()

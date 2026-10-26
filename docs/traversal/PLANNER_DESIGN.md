@@ -621,6 +621,20 @@ stride. Over the Stack Yard's voussoir arch (`stack_yard_voussoir_arch`) the
 plan had hopped the top stone and then braked to 2 m/s to drop off the far
 side within a stride; it now runs the crest and jumps off at 5 or 7 m/s.
 
+**A landing out of sight is leapt into.** Where the floor is seen to drop
+away within a stride of a brow the body can ride no further from, and an
+arc pushed off it with `leap_climb` (1.5 m/s) meets no floor up to the
+search's last station, the body leaps: the plan ends in the air, its feet
+carrying the body to the push-off and none landing after it, as a runner
+jumps off an edge without seeing the landing. Its climb is set, not
+chosen, so it costs only a flight and is not traded against a hop's. Once
+the ground below comes into the search, the leap is a hop that lands. Only
+able to land on what it saw, the plan had taken off 1.9 m before the
+Traversal Garden's cave roof at a run, on a leap whose landing was the end
+of the strip (`garden_roof_edge`). Where nothing is sampled past the brow,
+or the floor ahead rises (the voussoir arch's corners), there is nothing
+seen to leap off.
+
 Against the untracked runs on 2026-10-25 (late morning):
 - **better:** the 25 and 40 cm lips, crossed at speed instead of stalled
   (25 cm at a walk: lowest speed 4.55 m/s against 1.07; 40 cm at a run: 5.53
@@ -701,8 +715,9 @@ until E.
   landing was not yet seen, long after better ones came into view. Searching
   the tail on the last search's own lattice is still open.
 - **Past a refusal:** settled: edges are jumped off up to `max_drop`, with
-  enthusiasm, and a refusal that is left (a drop deeper, a wall) leaves the
-  pace to the stick.
+  enthusiasm, a drop whose landing is out of sight is leapt into, and a
+  refusal that is left (a wall, a drop with nothing sampled below it)
+  leaves the pace to the stick.
 - **Small gaps:** settled by roll-offs. A gap the body's arc crosses at its
   speed is rolled over flat (or hopped, at the same cost), never dipped into;
   a wide one is hopped.

@@ -310,6 +310,15 @@ impl BodySearch<'_> {
                 &mut known,
                 &mut edges,
             );
+            self.leap(
+                start.s,
+                station,
+                speed,
+                z,
+                (landed, flown),
+                &mut known,
+                &mut edges,
+            );
             for (next, next_speed, next_z, edge_cost, arrival) in edges {
                 let next_s = self.station_s(start.s, next);
                 let remaining = goal - (next_s - start.s);
@@ -718,20 +727,9 @@ impl BodySearch<'_> {
         let (params, settings) = (self.params, self.settings);
         let from = self.station_s(origin, station);
         let reach = params.stride.max_length;
-        if !self.trouble_ahead(from, speed) {
-            return;
-        }
-        // Pushing off from a foot behind the takeoff: the planted one, until
-        // the first flight; after it, one that landed at or after the body
-        // last touched down.
-        let can_push_off = if from < landed - PUSH_OFF_TOLERANCE {
-            false
-        } else if from - landed >= FOOT_SLACK {
-            self.feet_can(origin, station, FootNeed::PushOff, known)
-        } else {
-            !flown || self.foothold_within(landed..from + PUSH_OFF_TOLERANCE, z)
-        };
-        if !can_push_off {
+        if !self.trouble_ahead(from, speed)
+            || !self.pushes_off(origin, station, z, (landed, flown), known)
+        {
             return;
         }
         let steepest = params.body.steepest_ride().cos();
@@ -819,6 +817,116 @@ impl BodySearch<'_> {
                 },
             ));
         }
+    }
+
+    /// Whether a foot behind the takeoff at `station` can push the body off:
+    /// the planted one, until the first flight; after it, one that landed at
+    /// or after the body last touched down.
+    fn pushes_off(
+        &self,
+        origin: f32,
+        station: usize,
+        z: f32,
+        (landed, flown): (f32, bool),
+        known: &mut FootReach,
+    ) -> bool {
+        let from = self.station_s(origin, station);
+        if from < landed - PUSH_OFF_TOLERANCE {
+            false
+        } else if from - landed >= FOOT_SLACK {
+            self.feet_can(origin, station, FootNeed::PushOff, known)
+        } else {
+            !flown || self.foothold_within(landed..from + PUSH_OFF_TOLERANCE, z)
+        }
+    }
+
+    /// Leaping off a brow, where the floor is seen to drop away within a
+    /// stride and the body can ride no further, into what lies out of sight: pushed off with
+    /// `leap_climb`, its arc meets no floor the search sees up to its last
+    /// station, so the body is taken to fall on past it, as off a drop too
+    /// deep to see the bottom of. The path ends in the air there; replanned
+    /// as the ground below comes into sight, the leap becomes a hop that
+    /// lands. Where nothing is sampled past the brow, or the floor ahead
+    /// rises, there is nothing seen to leap off.
+    fn leap(
+        &self,
+        origin: f32,
+        station: usize,
+        speed: f32,
+        z: f32,
+        landed: (f32, bool),
+        known: &mut FootReach,
+        out: &mut SmallVec<[(usize, f32, f32, f32, BodySegment); 16]>,
+    ) {
+        let (params, settings) = (self.params, self.settings);
+        let last = known.len() - 1;
+        if station >= last {
+            return;
+        }
+        let (from, next, until) = (
+            self.station_s(origin, station),
+            self.station_s(origin, station + 1),
+            self.station_s(origin, last),
+        );
+        let rides_on = self.query.ride(from, next).end >= next - STATION_TOLERANCE
+            && !self.falls_away(from, next, speed);
+        let stride = (params.stride.max_length / settings.body_step).ceil() as usize;
+        let drops = (station + 1..=(station + stride).min(last)).any(|ahead| {
+            self.query
+                .floor(self.station_s(origin, ahead))
+                .is_some_and(|below| below.z < z - params.body.skim_height)
+        });
+        if rides_on
+            || !drops
+            || self
+                .vetoed
+                .iter()
+                .any(|span| span.is_spanned_by(from, until))
+            || !self.pushes_off(origin, station, z, landed, known)
+        {
+            return;
+        }
+        let carried = (speed * self.leaving_grade(from)).max(0.0);
+        let climb = settings
+            .leap_climb
+            .max(carried)
+            .min(params.flight.max_takeoff_climb);
+        let takeoff = BodyState {
+            s: from,
+            z,
+            speed,
+            climb,
+        };
+        let gravity = params.gravity;
+        let phase = Phase {
+            start: 0.0,
+            duration: (until - from) / speed,
+            contacts: SmallVec::new(),
+            motion: Motion::Flight {
+                takeoff,
+                gravity,
+                rise_held: None,
+            },
+        };
+        let Some(end_z) = phase.flight_height(until) else {
+            return;
+        };
+        if !self.query.clears(&phase) {
+            return;
+        }
+        // Its climb is set, not chosen: it is not traded against a hop's.
+        let cost = settings.costs.flight + self.flight_churn(from, until);
+        out.push((
+            last,
+            speed,
+            end_z,
+            cost,
+            BodySegment::Leap {
+                takeoff,
+                until,
+                gravity,
+            },
+        ));
     }
 
     /// How far along the path a body at `speed` carries falling `drop`

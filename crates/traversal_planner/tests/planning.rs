@@ -253,3 +253,45 @@ fn a_steep_bevel_underfoot_is_walked_down_not_hopped() {
         .all(|phase| matches!(phase.motion, traversal_planner::Motion::Grounded { .. })));
     assert!(plan.phases.last().is_some_and(|phase| phase.end_s() > 1.5));
 }
+
+/// Running at the end of the cave roof, whose landing lies out of the
+/// search's sight, the plan leaps off the end into it rather than off
+/// before it, where it could land on what it sees; walking, from nearer,
+/// too. The leap is the plan's last phase, with no footfall after it.
+#[test]
+fn an_edge_whose_landing_is_out_of_sight_is_leapt_off_at_the_edge() {
+    const EDGE: f32 = 5.55;
+    let mut scene = fixture("garden_roof_edge");
+    for (speed, start) in [(8.0, 0.0), (5.0, 1.5)] {
+        scene.body.speed = speed;
+        scene.body.s = start;
+        scene.intent.speed = speed;
+        let section = scene.section();
+        let query = StripQuery::new(&section, &scene.params);
+        let planned = planner(&scene)
+            .plan(&query, &scene.request())
+            .unwrap_or_else(|_| panic!("refused at {speed} m/s"));
+        let flights: Vec<_> = planned
+            .plan
+            .phases
+            .iter()
+            .filter(|phase| matches!(phase.motion, traversal_planner::Motion::Flight { .. }))
+            .collect();
+        assert_eq!(flights.len(), 1, "at {speed} m/s");
+        let traversal_planner::Motion::Flight { takeoff, .. } = flights[0].motion else {
+            unreachable!("a flight");
+        };
+        assert!(
+            (takeoff.s - EDGE).abs() < 0.1,
+            "at {speed} m/s: takes off at s {}",
+            takeoff.s
+        );
+        assert_eq!(
+            planned.plan.phases.last(),
+            Some(flights[0]),
+            "at {speed} m/s"
+        );
+        let last_footfall = planned.plan.footfalls().last().expect("footfalls").0;
+        assert!(last_footfall <= flights[0].start, "at {speed} m/s");
+    }
+}

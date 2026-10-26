@@ -108,10 +108,17 @@ impl FootfallSearch<'_> {
                     landing,
                     landing_z,
                 }),
-                BodySegment::Ride { .. } => None,
+                BodySegment::Ride { .. } | BodySegment::Leap { .. } => None,
             })
             .collect();
-        let body_end = self.body.end().unwrap_or(planted.body_s);
+        // Feet carry the body as far as it rides: to its end, or to a leap
+        // it ends in, which they push off for and nothing lands.
+        let body_end = self
+            .body
+            .leap()
+            .map(BodySegment::from)
+            .or(self.body.end())
+            .unwrap_or(planted.body_s);
         let natural = self.settings.natural_step(self.target_speed, self.params);
         let goal = flights
             .last()

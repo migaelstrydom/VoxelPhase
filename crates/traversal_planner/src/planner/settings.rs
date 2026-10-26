@@ -97,6 +97,9 @@ pub struct PlannerSettings {
     pub max_vetoes: usize,
     /// Shortest flight, in metres along the path.
     pub min_flight: f32,
+    /// Upward speed a hop off a brow into what lies out of sight leaves
+    /// with, in m/s: a runner jumps off an edge without seeing the landing.
+    pub leap_climb: f32,
     /// Natural steps per second: the natural step length is speed over this.
     pub step_rate: f32,
     /// How far, in metres, the last plan's committed footfall may be from a
@@ -118,6 +121,7 @@ impl Default for PlannerSettings {
             landing_leads: vec![0.5, 0.25, 0.0],
             max_vetoes: 4,
             min_flight: 0.1,
+            leap_climb: 1.5,
             step_rate: 3.0,
             commit_tolerance: 0.03,
             costs: CostWeights::default(),

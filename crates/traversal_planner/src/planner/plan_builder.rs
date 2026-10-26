@@ -11,8 +11,9 @@ const TOLERANCE: f32 = 1.0e-3;
 /// The plan of a body path and the footfalls along it: a phase for each
 /// stretch between footfalls on the ground (held by the latest foot to land)
 /// and one for each flight. The first footfall, and all before it, is
-/// committed. Every flight of `body` must end with a footfall; cut a path the
-/// feet did not follow with [`BodyPath::until_unlanded`] first.
+/// committed. Every flight of `body` must end with a footfall, but a leap
+/// the path ends in; cut a path the feet did not follow with
+/// [`BodyPath::until_unlanded`] first.
 pub fn build_plan(body: &BodyPath, planted: &Contact, footfalls: &[Footfall]) -> Plan {
     let mut builder = Builder {
         body,
@@ -41,10 +42,14 @@ pub fn build_plan(body: &BodyPath, planted: &Contact, footfalls: &[Footfall]) ->
                 pushed,
                 ..
             } => builder.flight(segment, takeoff, gravity, rise_held, pushed),
+            BodySegment::Leap {
+                takeoff, gravity, ..
+            } => builder.flight(segment, takeoff, gravity, None, true),
         }
     }
     builder.land_through(f32::MAX);
-    if let (Some(last), Some(end)) = (footfalls.last(), body.end()) {
+    let ends_grounded = body.leap().is_none();
+    if let (Some(last), Some(end), true) = (footfalls.last(), body.end(), ends_grounded) {
         let shown = builder
             .phases
             .last()
