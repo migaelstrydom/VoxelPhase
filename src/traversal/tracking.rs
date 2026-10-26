@@ -40,8 +40,7 @@ const PUSHED_CLIMB: f32 = 0.05;
 /// knows no way through, so it leaves the body to the drive: the stick sets
 /// the pace and nothing takes off, which is never worse than no plan at all.
 /// A hop is taken off on the frame whose start is nearest its own, half a
-/// frame early at most, its steering locked to the arc over the hop and
-/// free in any fall past it; a roll-off, which keeps its stance foot, is the body
+/// frame early at most; a roll-off, which keeps its stance foot, is the body
 /// running off the edge and needs nothing asked, and so is a hop asking no
 /// more climb than the body has: a plan made in the air, or in a bounce off
 /// a landing, starts with the flight the body is already on.
@@ -58,15 +57,11 @@ pub fn track(plan: &Plan, forward: Vector3<f32>, climb: f32, dt: f32, refused: b
         .take_while(|phase| !refused && phase.start < 0.5 * dt)
         .find_map(|phase| match phase.motion {
             // A hop's phase holds no contact; a roll-off's keeps the stance.
-            Motion::Flight {
-                takeoff, gravity, ..
-            } if phase.contacts.is_empty() && takeoff.climb > climb + PUSHED_CLIMB => {
-                // Over the hop, until the arc is back down to where it left;
-                // a fall on past that is the player's to steer.
-                let hop = 2.0 * takeoff.climb / gravity;
+            Motion::Flight { takeoff, .. }
+                if phase.contacts.is_empty() && takeoff.climb > climb + PUSHED_CLIMB =>
+            {
                 Some(PlannedTakeoff {
                     velocity: forward * takeoff.speed + Vector3::y() * takeoff.climb,
-                    locked_for: phase.duration.min(hop),
                 })
             }
             _ => None,
@@ -225,7 +220,6 @@ mod tests {
             tracked.takeoff,
             Some(PlannedTakeoff {
                 velocity: Vector3::new(0.0, 1.5, 4.0),
-                locked_for: 0.3,
             })
         );
 
@@ -241,18 +235,6 @@ mod tests {
             flight(0.012, 0.05, false),
         ]);
         assert_eq!(track(&later, Vector3::z(), 0.0, DT, false).takeoff, None);
-
-        // Off a ledge, falling far past the height it left: steering is
-        // locked over the hop, 2 × 1.5 / 9.81 s, not the whole fall.
-        let leap = plan(vec![Phase {
-            duration: 1.2,
-            ..flight(0.0, 0.0, false)
-        }]);
-        let locked = track(&leap, Vector3::z(), 0.0, DT, false)
-            .takeoff
-            .expect("taken off")
-            .locked_for;
-        assert!((locked - 3.0 / 9.81).abs() < 1.0e-5, "{locked}");
 
         // Already rising as fast as the hop leaves: in the air, or bouncing.
         assert_eq!(track(&hop, Vector3::z(), 1.5, DT, false).takeoff, None);

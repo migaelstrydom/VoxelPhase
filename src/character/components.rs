@@ -425,17 +425,15 @@ impl LocomotionState {
 }
 
 impl PlannedTakeoff {
-    /// Leaves the ground as planned: the climb set, and the planar velocity
-    /// locked for the flight, so nothing steers the arc off the plan's.
+    /// Leaves the ground as planned: the climb set and the air speed capped
+    /// at the plan's, the stick steering as in any flight. Steered off the
+    /// plan's arc, the body is replanned from where it goes.
     fn launch(self, launch_window: f32) -> LocomotionOutcome {
         let planar = Vector3::new(self.velocity.x, 0.0, self.velocity.z);
         LocomotionOutcome {
             next_state: LocomotionState::Launching {
                 kind: LaunchKind::Leap,
-                steering: AirSteering::Locked {
-                    velocity: planar,
-                    remaining: self.locked_for,
-                },
+                steering: AirSteering::Responsive,
                 allow_cutoff: false,
                 remaining: launch_window,
             },
@@ -568,14 +566,11 @@ pub struct CharacterIntent {
     pub takeoff: Option<PlannedTakeoff>,
 }
 
-/// A takeoff a plan chose: the velocity to leave the ground with, and how
-/// long the arc is flown as the plan predicts it, with no steering.
+/// A takeoff a plan chose: the velocity to leave the ground with.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlannedTakeoff {
     /// Planar velocity and climb, in m/s.
     pub velocity: Vector3<f32>,
-    /// Seconds steering is locked to the arc.
-    pub locked_for: f32,
 }
 
 impl Default for CharacterIntent {
@@ -636,14 +631,13 @@ mod tests {
 
     const HOP: PlannedTakeoff = PlannedTakeoff {
         velocity: Vector3::new(4.0, 1.5, 0.0),
-        locked_for: 0.3,
     };
 
-    /// A planned hop leaves with the plan's climb, its planar velocity locked
-    /// for the flight so the arc is the plan's, and no jump cutoff; from the
-    /// ground and from coyote time alike.
+    /// A planned hop leaves with the plan's climb and air speed, steered as
+    /// any flight is, and no jump cutoff; from the ground and from coyote
+    /// time alike.
     #[test]
-    fn a_planned_takeoff_launches_locked_with_its_climb() {
+    fn a_planned_takeoff_launches_with_its_climb_and_steers() {
         let config = LocomotionConfig::player();
         for from in [LocomotionState::Grounded, LocomotionState::CoyoteTime(0.1)] {
             let mut asked = input(&config, true, Vector3::x());
@@ -651,20 +645,14 @@ mod tests {
             let out = from.tick(&asked);
             assert_eq!(out.set_vy, Some(1.5), "from {from:?}");
             assert!(!out.consumed_jump);
+            assert_eq!(out.set_air_speed, Some(4.0), "from {from:?}");
             match out.next_state {
                 LocomotionState::Launching {
                     kind: LaunchKind::Leap,
-                    steering:
-                        AirSteering::Locked {
-                            velocity,
-                            remaining,
-                        },
+                    steering: AirSteering::Responsive,
                     allow_cutoff: false,
                     ..
-                } => {
-                    assert_eq!(velocity, Vector3::new(4.0, 0.0, 0.0));
-                    assert_eq!(remaining, 0.3);
-                }
+                } => {}
                 other => panic!("from {from:?}: {other:?}"),
             }
         }
