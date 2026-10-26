@@ -3,6 +3,7 @@
 //! frame by frame for the player, drawn and captured.
 
 mod gait;
+mod legs;
 mod marker;
 mod path_frame;
 mod physics_caster;
@@ -15,6 +16,7 @@ mod tracking;
 mod wall_slide;
 
 pub use gait::player_gait;
+pub use legs::Legs;
 pub use marker::PlansTraversal;
 pub use path_frame::PathFrame;
 pub use physics_caster::{strip_reach, PhysicsCaster};

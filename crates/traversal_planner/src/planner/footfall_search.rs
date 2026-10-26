@@ -45,10 +45,13 @@ pub struct FootfallsRefused {
 ///
 /// Each footfall is a foot landing on a foothold as the body passes a point
 /// of its path. Every hop ends with one, pushed off from a stance foot at
-/// or behind the takeoff; none lands while the body rolls off ground; on ridden stretches the body is behind the landing
-/// foot by one of the `landing_leads`. The body's height is the path's, so
-/// a candidate costs no physics: only reach, rise and drop, edge margins,
-/// footing, whether the body rests on ground a foot is on, and churn.
+/// or behind the takeoff; none lands while the body rolls off ground; on
+/// ridden stretches the body is behind the landing foot by one of the
+/// `landing_leads`, and the foot stays within reach until the body has
+/// passed it by the gait's plant-ahead distance, where it lifts. The body's
+/// height is the path's, so a candidate costs no physics: only reach, rise
+/// and drop, edge margins, footing, whether the body rests on ground a foot
+/// is on, and churn.
 pub struct FootfallSearch<'a> {
     pub query: &'a dyn SectionQuery,
     pub params: &'a GaitParams,
@@ -225,11 +228,12 @@ impl FootfallSearch<'_> {
                 normal: foothold.normal,
                 footing: foothold.footing,
             };
-            let step = foothold.at.s - stance.at.s;
 
             // Landing as the body rides on, before any flight.
+            let plant_ahead = params.plant_ahead(self.target_speed, foothold.at.s - stance.at.s);
+            let lifts = (foothold.at.s + plant_ahead).min(ridden_until);
             for lead in &self.settings.landing_leads {
-                let body_s = foothold.at.s - lead * step;
+                let body_s = foothold.at.s - lead * plant_ahead;
                 if body_s <= node.footfall.body_s + TOLERANCE || body_s > ridden_until + TOLERANCE {
                     continue;
                 }
@@ -241,7 +245,7 @@ impl FootfallSearch<'_> {
                     continue;
                 };
                 if !params.foot_reaches(body_s, body_z, &contact.at)
-                    || !params.foot_reaches(body_s, body_z, &stance.at)
+                    || !self.reaches_until_lifted(&contact, body_s, lifts)
                 {
                     continue;
                 }
@@ -313,6 +317,18 @@ impl FootfallSearch<'_> {
         }
     }
 
+    /// Whether a foot landed with the body at `body_s` is still within its
+    /// reach when the body is at `lifts`, where the foot lifts: the lower of
+    /// the two stations binds, and within reach at both it is in between.
+    fn reaches_until_lifted(&self, contact: &Contact, body_s: f32, lifts: f32) -> bool {
+        if lifts <= body_s + TOLERANCE {
+            return true;
+        }
+        self.body
+            .height_at(lifts, self.query)
+            .is_some_and(|body_z| self.params.foot_reaches(lifts, body_z, &contact.at))
+    }
+
     /// What a footfall on `foothold` costs after `node`, whatever the body
     /// does meanwhile, `flown` metres of the step a jump rather than a
     /// stride; `None` where no foot may land.
@@ -340,7 +356,7 @@ impl FootfallSearch<'_> {
         let natural = self
             .settings
             .natural_step(self.target_speed, params)
-            .min(params.reachable_step(grade))
+            .min(params.reachable_step(grade, self.target_speed))
             .max(params.stride.min_length);
         let length_off = (foothold.at.s - stance.s - flown - natural) / natural;
         let reach = params.foot.reach_in.max(params.foot.reach_out);

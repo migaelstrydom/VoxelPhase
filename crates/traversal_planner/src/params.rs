@@ -184,31 +184,55 @@ impl Default for StrideLimits {
     }
 }
 
+/// The step the legs' gait takes on level ground at one speed.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NaturalStep {
+    /// The speed, in m/s.
+    pub speed: f32,
+    /// Hip travel from footfall to footfall, in metres.
+    pub length: f32,
+    /// How far ahead of the hips a foot plants, in metres, and how far
+    /// behind them it lifts: the stance is symmetric about the hips. Less
+    /// than half the step, and the body flies between stances.
+    pub plant_ahead: f32,
+}
+
 /// The step the legs' gait takes on level ground at each of a set of
-/// speeds, hip travel from footfall to footfall, as `(speed, step)` in m/s
-/// and metres, speeds increasing: the game fills it from the animation,
-/// whose footfalls the plan's must be. Read linearly between speeds and
-/// held past the ends.
+/// speeds, speeds increasing: the game fills it from the animation, whose
+/// footfalls the plan's must be. Read linearly between speeds and held past
+/// the ends.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct NaturalSteps(pub Vec<(f32, f32)>);
+pub struct NaturalSteps(pub Vec<NaturalStep>);
 
 impl NaturalSteps {
-    /// The natural step at `speed`, in metres.
-    pub fn at(&self, speed: f32) -> f32 {
+    /// The natural step at `speed`.
+    pub fn at(&self, speed: f32) -> NaturalStep {
         let steps = &self.0;
-        let Some(&(first_speed, first_step)) = steps.first() else {
-            return 0.0;
+        let Some(&first) = steps.first() else {
+            return NaturalStep {
+                speed,
+                length: 0.0,
+                plant_ahead: 0.0,
+            };
         };
-        if speed <= first_speed {
-            return first_step;
+        if speed <= first.speed {
+            return NaturalStep { speed, ..first };
         }
-        steps
-            .windows(2)
-            .find(|pair| speed <= pair[1].0)
-            .map_or(steps[steps.len() - 1].1, |pair| {
-                let ((slow, short), (fast, long)) = (pair[0], pair[1]);
-                short + (long - short) * (speed - slow) / (fast - slow)
-            })
+        steps.windows(2).find(|pair| speed <= pair[1].speed).map_or(
+            NaturalStep {
+                speed,
+                ..steps[steps.len() - 1]
+            },
+            |pair| {
+                let (slow, fast) = (pair[0], pair[1]);
+                let u = (speed - slow.speed) / (fast.speed - slow.speed);
+                NaturalStep {
+                    speed,
+                    length: slow.length + (fast.length - slow.length) * u,
+                    plant_ahead: slow.plant_ahead + (fast.plant_ahead - slow.plant_ahead) * u,
+                }
+            },
+        )
     }
 }
 
@@ -217,18 +241,66 @@ impl Default for NaturalSteps {
     /// animation planned them on 2026-10-26; the game passes its own.
     fn default() -> Self {
         Self(vec![
-            (0.5, 0.083),
-            (1.0, 0.167),
-            (1.5, 0.25),
-            (2.0, 0.333),
-            (2.5, 0.416),
-            (3.0, 0.5),
-            (3.5, 0.583),
-            (4.0, 0.666),
-            (4.5, 0.73),
-            (5.0, 0.73),
-            (5.5, 0.687),
-            (6.0, 0.73),
+            NaturalStep {
+                speed: 0.5,
+                length: 0.083,
+                plant_ahead: 0.052,
+            },
+            NaturalStep {
+                speed: 1.0,
+                length: 0.167,
+                plant_ahead: 0.103,
+            },
+            NaturalStep {
+                speed: 1.5,
+                length: 0.25,
+                plant_ahead: 0.132,
+            },
+            NaturalStep {
+                speed: 2.0,
+                length: 0.333,
+                plant_ahead: 0.127,
+            },
+            NaturalStep {
+                speed: 2.5,
+                length: 0.416,
+                plant_ahead: 0.158,
+            },
+            NaturalStep {
+                speed: 3.0,
+                length: 0.5,
+                plant_ahead: 0.190,
+            },
+            NaturalStep {
+                speed: 3.5,
+                length: 0.583,
+                plant_ahead: 0.221,
+            },
+            NaturalStep {
+                speed: 4.0,
+                length: 0.666,
+                plant_ahead: 0.253,
+            },
+            NaturalStep {
+                speed: 4.5,
+                length: 0.73,
+                plant_ahead: 0.277,
+            },
+            NaturalStep {
+                speed: 5.0,
+                length: 0.73,
+                plant_ahead: 0.277,
+            },
+            NaturalStep {
+                speed: 5.5,
+                length: 0.687,
+                plant_ahead: 0.261,
+            },
+            NaturalStep {
+                speed: 6.0,
+                length: 0.73,
+                plant_ahead: 0.277,
+            },
         ])
     }
 }
@@ -274,11 +346,23 @@ impl GaitParams {
         speed * 2.0 * self.flight.max_takeoff_climb / self.gravity
     }
 
-    /// The longest step both feet stay within reach of a body midway
-    /// between them over, on ground rising `grade` metres per metre (falling,
-    /// if negative), in metres: the lower foot runs out of reach first, and
-    /// on a slope the capsule rests clear of the ground beneath it.
-    pub fn reachable_step(&self, grade: f32) -> f32 {
+    /// How far ahead of the hips a foot plants, and how far behind them it
+    /// lifts, taking steps `step` long at `speed`, in metres: the gait's
+    /// share of the step planted, whatever the ground makes of the step.
+    pub fn plant_ahead(&self, speed: f32, step: f32) -> f32 {
+        let natural = self.stride.natural.at(speed);
+        if natural.length <= 0.0 {
+            return 0.0;
+        }
+        step * natural.plant_ahead / natural.length
+    }
+
+    /// The longest step at `speed` whose stance keeps the foot within reach
+    /// of the body, on ground rising `grade` metres per metre (falling, if
+    /// negative), in metres: the foot lifts its plant-ahead share of the
+    /// step behind the hips, the lower foot runs out of reach first, and on
+    /// a slope the capsule rests clear of the ground beneath it.
+    pub fn reachable_step(&self, grade: f32, speed: f32) -> f32 {
         let grade = grade.abs();
         let slope = 1.0 + grade * grade;
         let rest_gap = self.body.radius * (slope.sqrt() - 1.0);
@@ -288,7 +372,12 @@ impl GaitParams {
         if room <= 0.0 {
             return 0.0;
         }
-        2.0 * ((room.sqrt() - hip * grade) / slope).max(0.0)
+        let half_stance = ((room.sqrt() - hip * grade) / slope).max(0.0);
+        let natural = self.stride.natural.at(speed);
+        if natural.plant_ahead <= 0.0 || natural.length <= 0.0 {
+            return 2.0 * half_stance;
+        }
+        half_stance * natural.length / natural.plant_ahead
     }
 
     /// Whether a foot at `foot` is within reach of the body with its

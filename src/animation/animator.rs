@@ -645,6 +645,7 @@ fn airborne_ctx_for(pose: &PoseState) -> Option<(AirKind, Takeoff)> {
 fn mirror_placer_into_state(state: &mut AnimationState, placer: &FootPlacer) {
     copy_placer_foot(&mut state.left, &placer.left);
     copy_placer_foot(&mut state.right, &placer.right);
+    state.feet_flown = placer.flies_to_landing();
 }
 
 fn copy_placer_foot(foot: &mut FootState, placer: &PlacerFoot) {

@@ -161,6 +161,10 @@ pub struct AnimationState {
     /// `Grounding` component — the Support Set's answer, not the probes'.
     /// Animation reads support; it no longer decides it.
     pub is_grounded: bool,
+    /// Whether the foot placer is swinging the feet through this flight
+    /// onto a plan's landing: the airborne pose then draws them where the
+    /// placer has them, not hanging from the hips.
+    pub feet_flown: bool,
 
     /// How far the physics body lies over from upright toward its facing, in
     /// radians, as measured — not as asked for. The rig is built in this
@@ -212,6 +216,7 @@ impl AnimationState {
             facing: Vector3::new(0.0, 0.0, 1.0),
 
             is_grounded: false,
+            feet_flown: false,
 
             body_pitch: 0.0,
             velocity: Vector3::zeros(),

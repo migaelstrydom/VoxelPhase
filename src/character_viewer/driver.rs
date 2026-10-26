@@ -22,6 +22,7 @@ use std::path::Path;
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use specs::{Entity, Join, World, WorldExt};
+use traversal_planner::plan::Limb;
 use traversal_planner::section::SphereCaster;
 
 use crate::animation::{CharacterAnimator, CharacterRigConfig, FootSide};
@@ -51,6 +52,12 @@ const RIDE_CAST_BELOW: f32 = 3.0;
 /// How far behind the body the second floor cast is, in metres: the
 /// traversal planner's body station spacing.
 pub const RIDE_SLOPE_RUN: f32 = 0.05;
+/// Radius of the cast that finds the floor under a planted foot, in metres:
+/// a sole's width, so a foot on a plank's edge finds the plank.
+const FOOT_CAST_RADIUS: f32 = 0.03;
+/// How soon a plan must land a foot for its footfall to be the one the foot
+/// is stepping to, in seconds: about a swing. Later, it is a step further on.
+pub const PLANNED_WITHIN: f32 = 0.2;
 
 /// How a run is played and filmed.
 #[derive(Clone, Copy, Debug)]
@@ -362,10 +369,13 @@ fn record(
         ride_floor,
         ride_floor_behind,
         asked_speed,
-        feet: [
-            foot_record(animator, FootSide::Left, animator.skeleton.left_foot),
-            foot_record(animator, FootSide::Right, animator.skeleton.right_foot),
-        ],
+        feet: [FootSide::Left, FootSide::Right].map(|side| {
+            let drawn = match side {
+                FootSide::Left => animator.skeleton.left_foot,
+                FootSide::Right => animator.skeleton.right_foot,
+            };
+            foot_record(world, &physics.world, handle, animator, side, drawn)
+        }),
     })
 }
 
@@ -394,14 +404,53 @@ fn ride_floor_at(
         .map(|hit| hit.z)
 }
 
-/// One foot as the placer holds it and the rig drew it at `drawn`.
-fn foot_record(animator: &CharacterAnimator, side: FootSide, drawn: Point3<f32>) -> FootRecord {
+/// One foot as the placer holds it and the rig drew it at `drawn`, the
+/// floor under its plant, and where the traversal plan lands it next.
+fn foot_record(
+    world: &World,
+    physics: &PhysicsWorld,
+    character: RigidBodyHandle,
+    animator: &CharacterAnimator,
+    side: FootSide,
+    drawn: Point3<f32>,
+) -> FootRecord {
     let foot = animator.locomotion.foot(side);
+    let ground = foot.is_planted().then(|| {
+        ride_floor_at(
+            world,
+            physics,
+            character,
+            foot.planted_position,
+            FOOT_CAST_RADIUS,
+        )
+        .map(|centre| centre - FOOT_CAST_RADIUS)
+    });
     FootRecord {
         planted: foot.is_planted(),
         anchor: foot.planted_position,
         position: drawn,
+        ground: ground.flatten(),
+        planned: planned_footfall(world, side),
     }
+}
+
+/// Where this frame's traversal plan lands `side` next, in the world, if it
+/// crosses (a refusal's steps are not given to the legs) and lands it within
+/// [`PLANNED_WITHIN`].
+fn planned_footfall(world: &World, side: FootSide) -> Option<Point3<f32>> {
+    let limb = match side {
+        FootSide::Left => Limb::LeftFoot,
+        FootSide::Right => Limb::RightFoot,
+    };
+    let state = world.try_fetch::<TraversalPlanState>()?;
+    let frame = state.last.as_ref().filter(|frame| frame.outcome.is_ok())?;
+    let landing = frame
+        .plan()
+        .footfalls()
+        .find(|(_, contact)| contact.limb == limb)
+        .filter(|&(time, _)| time <= PLANNED_WITHIN)
+        .map(|(_, contact)| frame.frame.world_point(contact.at));
+    landing
 }
 
 fn caption(record: &FrameRecord) -> String {

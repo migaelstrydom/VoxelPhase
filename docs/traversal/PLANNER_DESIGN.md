@@ -57,8 +57,8 @@ This design keeps three rules:
                               │                     │          │        + tentative rest)
                               ▼                     ▼          │
                         PlanTracker            FootPlacer      │ also consumed by:
-                        (traction drive        (footfalls and  │   section_svg (CLI),
-                         command, takeoffs)     their timing)  │   fixture tests, fuzzer
+                        (traction drive        (footfalls; a   │   section_svg (CLI),
+                         command, takeoffs)     flight's landing time)  fixture tests, fuzzer
                               │                                │
                               ▼                                │
                         PlanOverlay (DebugOverlays), capture key ──► scene file (RON) ──► fixtures
@@ -184,6 +184,26 @@ Contact
 A contact's `d` is where that foot actually lands, not its lane: the planner
 picks it within a window around the foot's natural offset, and the foot
 placer can still refine it on the real ground.
+
+The plan says where the feet land; the legs say when. The game hands the
+foot placer each foot's next footfall (`PlannedSteps`, through
+`LeggedLocomotion::follow`), and a foot lifts on the gait's own clock, as it
+does without a plan, and swings onto that footfall instead of where the
+capture point would put it. The one time the plan owns is a flight's
+landing: that footfall carries the time the body comes down, and a flight
+the plan lands is the landing foot's swing. The placer, suspended for the
+flight, swings that foot onto the landing footfall and plants it there as
+the body comes down, and lifts the foot it pushed off with to trail onto its
+own next footfall half a step later; the airborne pose draws the feet where
+the placer has them instead of hanging them from the hips, and the landing
+replants nothing. An unplanned fall keeps the old resume: a replant at
+stance. The plan in turn starts from the
+feet the legs have down (`traversal::Legs`: the foot planted last holds the
+body, the other lands next), so the two never argue about which foot is
+where; a last plan that does not stand on those feet is dropped rather than
+kept. Holding the plan's clock over the legs was tried first (milestone F)
+and cut the stance in half at a run: the plan's cadence can only ever
+approximate the legs', and the legs must not follow it.
 
 The plank bridge in this form, with no special cases:
 
@@ -322,7 +342,17 @@ each flight is one a foot pushes off and lands.
   table is the player's, and a game test holds the two together. The
   player's legs step 0.73 m at a walk and a sprint alike, so a sprint is
   ten steps a second, and a hop is a running leap: its step is judged by
-  the ground either side of its flight, not as an overlong stride.
+  the ground either side of its flight, not as an overlong stride. With
+  each step comes the stance it is taken with, the rig's plant-ahead
+  distance (`GaitTiming::plant_ahead`, `NaturalStep::plant_ahead`): a foot
+  plants that far ahead of the hips and lifts that far behind them, 0.28 m
+  of a 0.73 m step at 5 m/s, so a run's stance foot is off the ground
+  before the next lands. The body lands a `landing_leads` fraction of that
+  behind a footfall, and a footfall is within reach where it lands and
+  where it lifts, the lower of the two binding, which on a slope is where it
+  lifts. Judging both feet from a body midway between them, as before,
+  capped every step at 0.62 m and had the plan's cadence 15 % ahead of the
+  legs'.
 - **Legs.** Everything else about the feet is the rig's too, passed the same
   way and held to the planner's defaults by the same test: the longest step
   without a flight (0.81 m, the leg's level reach over the sprint's stance
@@ -715,7 +745,7 @@ until E.
 | C | Web tool (dropped 2026-10-26: the plan drawn in game proved the better tool) | published; you can author and tune the bridge in it |
 | D | `PathPredictor` in game, `PlanOverlay`, capture key, the drive contract checks; plan drawn but not acted on | captures of every Traversal Garden station plan the same as their authored versions; the drive contract checks pass, with `GaitParams` set from what they measured; section (five lanes) + plan under 0.5 ms per frame |
 | E | `PlanTracker`: drive and takeoffs through contacts (closed 2026-10-26, against the bare drive; four stations open, in `BASELINE.md`) | `traversal --summary` beats the baseline on every station, churn and divergence measured, rubble lane crossed |
-| F | `FootPlacer` reads footfalls and their timing from the plan | the legs alternate plank to plank; clipping and unplanted legs measured as in the baseline |
+| F | `FootPlacer` lands on the plan's footfalls, lifting on its own clock; a planned flight is the landing foot's swing; the plan starts from the legs' stance (exit check met 2026-10-26, in `BASELINE.md`) | the legs alternate plank to plank; clipping and unplanted legs measured as in the baseline |
 
 ## Open questions
 

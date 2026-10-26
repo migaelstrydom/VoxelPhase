@@ -226,3 +226,71 @@ scree_run            5/5  8.00  0.64  2.47/ 1.00 176( 1)  62/183  4.11  1.62   3
 ledge_walk           0/5  5.00  0.00     -/ 0.40 171( 1)  57/210  2.67  1.87   17.8 0.016    0.026    0  0.00
 cave_walk            0/5  5.00  0.00     -/ 2.40 288( 1)   0/330  0.06  0.02    0.4 0.035    0.068    0  0.00
 ```
+
+## Milestone F: the legs on the plan
+
+Measured on the F commit (2026-10-26), 60 Hz, five starts, the plan driving.
+Three columns are new: `off`, plants not on the floor under them, over all
+plants; `miss` and `miss_max`, the mean and worst distance of a plant from
+the plan's footfall for that foot (counted for footfalls due within 0.2 s).
+Time lost is as above. "E" is the plan driving when E closed.
+
+| Station | time E | time F | miss E | miss F | off F | | Station | time E | time F | miss E | miss F | off F |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| lip3_walk | 0.00 | 0.00 | 0.60 | 0.04 | 0 | | planks_walk | 0.00 | 0.00 | 1.28 | 0.01 | 0 |
+| lip3_run | 0.00 | 0.00 | 0.33 | 0.01 | 0 | | planks_run | 0.00 | 0.00 | 1.20 | 0.01 | 0 |
+| lip8_walk | 0.02 | 0.02 | 0.58 | 0.17 | 0 | | planks_wide_walk | 0.02 | 0.02 | 0.73 | 0.01 | 0 |
+| lip8_run | 0.03 | 0.03 | 1.00 | 0.04 | 0 | | planks_wide_run | 0.00 | 0.00 | 1.75 | 0.02 | 0 |
+| lip15_walk | 0.18 | 0.20 | 0.72 | 0.12 | 0 | | rough_walk | 0.48 | 0.27 | 0.65 | 0.04 | 0 |
+| lip15_run | 0.10 | 0.10 | 0.52 | 0.07 | 0 | | rough_run | 0.00 | 0.02 | 1.71 | 0.00 | 0 |
+| lip25_walk | 0.00 | 0.00 | 0.51 | 0.12 | 0 | | slope40_walk / run | 1.13 / 0.72 | 1.13 / 0.72 | 0.18 / 0.28 | 0.08 / 0.08 | 0 |
+| lip25_run | 0.00 | 0.00 | 0.40 | 0.13 | 0 | | slope50_walk / run | 1.78 / 1.15 | 1.78 / 1.12 | 0.45 / 0.85 | 0.09 / 0.04 | 0 |
+| lip40_walk | 0.00 | 0.00 | 0.56 | 0.11 | 0 | | scree_walk | 1.85 | 1.75 | 0.26 | 0.01 | 0 |
+| lip40_run | 0.00 | 0.02 | 0.50 | 0.09 | 0 | | scree_run | 1.47 | 1.12 | 0.30 | 0.16 | 0 |
+
+When E closed the plan's footfalls were somewhere the feet were not: the
+legs stepped on their own capture point, 0.3 to 1.75 m from the plan, and
+its hops came down with a foot replanted under the hips. Now the plan says
+where and the legs say when (`PLANNER_DESIGN.md`, *The plan*): a foot lifts
+on the gait's clock and lands on the plan's footfall, a planned flight is
+the landing foot's swing, and the plan starts from the feet the legs have
+down. Every plant is on its footing, the worst miss on the planks is 0.16 m,
+and foot slip is the bare drive's. No station lost time against E; rough_walk
+and scree gained some. The first attempt, with the plan's clock lifting the
+feet, halved the stance at a run and put both feet ahead of the torso; it
+also found the planner planning 0.62 m steps against the legs' 0.73, from a
+reach rule that judged both feet from a body midway between them.
+
+Open: at 8 m/s the legs plant only about 0.09 m ahead of the hips (the swing
+is at its 0.09 s floor), so their stance is asymmetric and the planner's
+symmetric stance model is 0.2 m off; a fresh plan from a planted foot
+beyond leg reach refuses the push-off, which a kept commitment usually
+hides.
+
+```text
+scenario           cross asked   min  time/ideal    snags     air  rise  drop rms_ay  slip slip_sum pops  best     off  miss miss_max
+lip3_walk            5/5  5.00  4.91  0.40/ 0.40   0( 0)   0/48   0.54  0.00    5.3 0.031    0.103    0  4.92    0/28  0.04     0.47
+lip3_run             5/5  8.00  7.84  0.25/ 0.25   0( 0)   8/30   0.86  0.78   13.9 0.011    0.023    0  7.89    0/26  0.01     0.10
+lip8_walk            5/5  5.00  4.48  0.42/ 0.40   0( 0)  13/49   1.40  1.27   17.7 0.048    0.192    0  4.53    0/20  0.17     0.60
+lip8_run             5/5  8.00  6.40  0.28/ 0.25   0( 0)  17/33   2.23  1.76   35.5 0.008    0.008    0  6.90    0/16  0.04     0.17
+lip15_walk           5/5  5.00  1.74  0.60/ 0.40  31( 1)  22/60   2.19  1.84   23.8 0.035    0.143    0  3.74    0/23  0.12     0.48
+lip15_run            5/5  8.00  4.85  0.35/ 0.25  26( 1)  19/38   3.47  2.25   48.9 0.049    0.122    0  5.11    0/18  0.07     0.43
+lip25_walk           5/5  5.00  4.99  0.40/ 0.40   0( 0)  18/48   1.84  0.94   10.3 0.032    0.107    0  4.99    0/21  0.12     0.48
+lip25_run            5/5  8.00  7.99  0.25/ 0.25   0( 0)   9/30   0.75  0.56    8.1 0.090    0.149    0  7.99    0/18  0.13     0.46
+lip40_walk           5/5  5.00  4.99  0.40/ 0.40   0( 0)  15/48   1.78  0.51    7.6 0.034    0.167    0  5.00    0/19  0.11     0.46
+lip40_run            5/5  8.00  7.52  0.27/ 0.25   0( 0)  25/30   1.90  1.76   36.3 0.000    0.000    0  7.99    0/18  0.09     0.49
+planks_walk          5/5  5.00  4.83  2.00/ 2.00   0( 0)  87/144  1.90  2.02   24.6 0.034    0.199    0  4.98    0/47  0.01     0.11
+planks_run           5/5  8.00  7.84  1.25/ 1.25   0( 0)  61/91   1.46  1.65   24.0 0.045    0.230    0  7.99    0/43  0.01     0.11
+planks_wide_walk     5/5  5.00  4.79  2.02/ 2.00   0( 0)  86/145  1.73  1.87   24.2 0.036    0.200    0  4.98    0/51  0.01     0.10
+planks_wide_run      5/5  8.00  7.56  1.25/ 1.25   0( 0)  64/90   2.02  2.09   30.6 0.047    0.127    0  7.98    0/34  0.02     0.16
+rough_walk           5/5  5.00  1.27  2.67/ 2.40  38( 1) 116/184  2.82  3.25   30.5 0.023    0.097    0  4.94    0/53  0.04     0.64
+rough_run            5/5  8.00  7.67  1.52/ 1.50   0( 0)  89/105  2.65  2.71   31.9 0.000    0.000    0  7.95    0/33  0.00     0.05
+slope40_walk         5/5  5.00  2.56  2.73/ 1.60 180( 1)  16/195  2.46  1.76   15.0 0.031    0.249    0  2.72   0/151  0.08     0.31
+slope40_run          5/5  8.00  3.06  1.72/ 1.00 115( 1)  13/123  4.06  1.27   27.9 0.013    0.053    0  4.35   0/112  0.08     0.15
+slope50_walk         5/5  5.00  0.10  2.98/ 1.20 207( 1)  24/225  2.55  1.71   12.7 0.010    0.109    0  1.50   0/156  0.09     0.24
+slope50_run          5/5  8.00  1.38  1.87/ 0.75 131( 1)  16/139  4.03  1.43   26.9 0.019    0.041    0  2.44   0/148  0.04     0.25
+scree_walk           5/5  5.00  0.77  3.35/ 1.60 235( 1)  92/248  2.90  2.58   26.7 0.012    0.104    0  0.90   0/129  0.01     0.05
+scree_run            5/5  8.00  1.29  2.12/ 1.00 143( 1)  46/151  4.13  1.43   42.4 0.149    0.234    0  1.48   0/108  0.16     0.41
+ledge_walk           0/5  5.00  0.00     -/ 0.40 171( 1)  57/210  2.67  1.87   17.8 0.002    0.003    0  0.00    1/96     -        -
+cave_walk            0/5  5.00  0.00     -/ 2.40 288( 1)   0/330  0.06  0.02    0.4 0.006    0.066    0  0.00   0/158     -        -
+```

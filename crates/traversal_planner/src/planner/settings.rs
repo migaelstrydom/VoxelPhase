@@ -81,8 +81,9 @@ pub struct PlannerSettings {
     /// flight worth trying instead, in metres; where the ride breaks, one
     /// always is.
     pub rough_ride: f32,
-    /// How far behind a landing foot the body lands, as fractions of the step:
-    /// `0.5` halfway between the feet, `0` over the landing foot.
+    /// How far behind a landing foot the body is as it lands, as fractions
+    /// of the gait's plant-ahead distance at that speed: `1` the gait's own
+    /// stance, `0` over the landing foot.
     pub landing_leads: Vec<f32>,
     /// How many flights the feet could not follow the body's path may be
     /// searched again without, before the planner refuses.
@@ -107,7 +108,7 @@ impl Default for PlannerSettings {
             body_step: 0.05,
             flight_step: 0.1,
             rough_ride: 0.02,
-            landing_leads: vec![0.5, 0.25, 0.0],
+            landing_leads: vec![1.0, 0.5, 0.0],
             max_vetoes: 4,
             min_flight: 0.1,
             leap_climb: 1.5,
@@ -130,6 +131,7 @@ impl PlannerSettings {
             .stride
             .natural
             .at(speed)
+            .length
             .clamp(params.stride.min_length, params.stride.max_length)
     }
 

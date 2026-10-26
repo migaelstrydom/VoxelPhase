@@ -7,7 +7,7 @@ use traversal_planner::section::{SectionQuery, StripLayout, StripQuery};
 use traversal_planner::{GaitParams, PathVec, PlannerSettings};
 use winit::keyboard::KeyCode;
 
-use crate::animation::CharacterAnimator;
+use crate::animation::{CharacterAnimator, PlannedStep, PlannedSteps};
 use crate::character::{CharacterIntent, CharacterState, LocomotionConfig};
 use crate::components::RigidBodyComponent;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
@@ -18,6 +18,7 @@ use crate::terrain::TerrainWorld;
 use crate::time::Time;
 
 use super::gait::player_gait;
+use super::legs::Legs;
 use super::marker::PlansTraversal;
 use super::plan_capture::{scene_of, write_capture};
 use super::planning::{PlanFrame, PlanningInput, TraversalPlanning};
@@ -77,7 +78,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
         WriteStorage<'a, CharacterIntent>,
         ReadStorage<'a, CharacterState>,
         ReadStorage<'a, LocomotionConfig>,
-        ReadStorage<'a, CharacterAnimator>,
+        WriteStorage<'a, CharacterAnimator>,
         Read<'a, PhysicsResource>,
         Option<Read<'a, TerrainWorld>>,
         Read<'a, InputState>,
@@ -96,7 +97,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
             mut intents,
             states,
             configs,
-            animators,
+            mut animators,
             physics,
             terrain,
             input,
@@ -127,7 +128,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
             &mut intents,
             &states,
             &configs,
-            &animators,
+            &mut animators,
         )
             .join()
             .next()
@@ -175,6 +176,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
             heading,
             target_speed,
             dt: time.delta_seconds().max(1.0e-3),
+            legs: Legs::of(animator.locomotion.placer()),
         });
 
         if let Some(frame) = &frame {
@@ -196,6 +198,9 @@ impl<'a> System<'a> for TraversalPlanSystem {
             );
             if overlay {
                 draw(frame, planning.params(), &mut overlays);
+            }
+            if tracking && frame.outcome.is_ok() {
+                animator.locomotion.follow(planned_steps(frame));
             }
             if tracking && target_speed > 0.0 {
                 // The drive keeps only `ground_speed` of what it is asked
@@ -251,6 +256,24 @@ impl<'a> System<'a> for TraversalPlanSystem {
             }
         }
         state.last = frame;
+    }
+}
+
+/// Where `frame`'s plan lands each foot next, in the world.
+fn planned_steps(frame: &PlanFrame) -> PlannedSteps {
+    let next = |limb: Limb| {
+        frame
+            .plan()
+            .footfalls()
+            .find(|(_, contact)| contact.limb == limb)
+            .map(|(time, contact)| PlannedStep {
+                at: frame.frame.world_point(contact.at),
+                landing: frame.plan().lands_a_flight(time).then_some(time),
+            })
+    };
+    PlannedSteps {
+        left: next(Limb::LeftFoot),
+        right: next(Limb::RightFoot),
     }
 }
 

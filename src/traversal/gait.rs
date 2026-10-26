@@ -1,4 +1,4 @@
-use traversal_planner::params::{BodyDims, FootDims, NaturalSteps, StrideLimits};
+use traversal_planner::params::{BodyDims, FootDims, NaturalStep, NaturalSteps, StrideLimits};
 use traversal_planner::GaitParams;
 
 use crate::animation::humanoid::Gait;
@@ -24,7 +24,11 @@ pub fn player_gait(config: &LocomotionConfig, rig: &CharacterRigConfig) -> GaitP
             } else {
                 Gait::Sprint
             };
-            (speed, rig.level_step(speed, gait))
+            NaturalStep {
+                speed,
+                length: rig.level_step(speed, gait),
+                plant_ahead: rig.level_plant_ahead(speed, gait),
+            }
         })
         .collect();
     GaitParams {
@@ -66,8 +70,16 @@ mod tests {
             let speed = index as f32 * 0.25;
             let (theirs, ours) = (player.stride.natural.at(speed), default.at(speed));
             assert!(
-                (theirs - ours).abs() < 0.005,
-                "at {speed} m/s the animation steps {theirs} m, the planner's default {ours} m"
+                (theirs.length - ours.length).abs() < 0.005,
+                "at {speed} m/s the animation steps {} m, the planner's default {} m",
+                theirs.length,
+                ours.length
+            );
+            assert!(
+                (theirs.plant_ahead - ours.plant_ahead).abs() < 0.005,
+                "at {speed} m/s the animation plants {} m ahead, the planner's default {} m",
+                theirs.plant_ahead,
+                ours.plant_ahead
             );
         }
         let close = |theirs: f32, ours: f32, what: &str| {

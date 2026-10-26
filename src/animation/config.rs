@@ -177,6 +177,19 @@ impl CharacterRigConfig {
         )
     }
 
+    /// How far ahead of the hip a foot plants at `speed` in `gait`, and
+    /// how far behind it lifts.
+    pub fn level_plant_ahead(&self, speed: f32, gait: super::humanoid::pose_state::Gait) -> f32 {
+        let dims = self.leg_dims();
+        GaitTiming::level_plant_ahead(
+            speed,
+            dims.standing_height,
+            dims.leg_length,
+            self.gait_presets.for_gait(gait).stride_gain,
+            &self.foot_placer,
+        )
+    }
+
     /// How far from the hip, horizontally, a foot plants on level ground.
     pub fn level_reach(&self) -> f32 {
         let dims = self.leg_dims();

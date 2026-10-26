@@ -59,6 +59,12 @@ pub struct FootRecord {
     pub anchor: Point3<f32>,
     /// Where the rig drew the foot.
     pub position: Point3<f32>,
+    /// Height of the floor under `anchor`, cast down from above it; `None`
+    /// over nothing within reach, or while the foot is not planted.
+    pub ground: Option<f32>,
+    /// Where the traversal plan has this foot land next, if it plans and
+    /// has it land within a swing (`PLANNED_WITHIN`).
+    pub planned: Option<Point3<f32>>,
 }
 
 impl FrameRecord {

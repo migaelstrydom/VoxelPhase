@@ -64,6 +64,83 @@ const SNAG_SHORTFALL: f32 = 0.2;
 /// plant, in metres: the placer settles an anchor onto the ground it probes.
 const POP_DISTANCE: f32 = 0.05;
 
+/// How far above or below the floor under it a foot may plant and still be
+/// on it, in metres: past this it stands on nothing, as over a gap.
+const OFF_FOOTING: f32 = 0.05;
+
+/// Where the feet landed across a station: on footing or not, and how far
+/// from where the traversal plan had them land.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FootfallSummary {
+    /// Plants made: a foot coming down after a step.
+    pub plants: usize,
+    /// Plants not on the floor under them: over a gap, or held off it.
+    pub off_footing: usize,
+    /// Plants made with a plan landing that foot, the frame before.
+    pub planned: usize,
+    /// Summed planar distance of those plants from the plan's footfall, in m.
+    pub total_miss: f32,
+    /// Largest such distance, in m.
+    pub worst_miss: f32,
+}
+
+impl FootfallSummary {
+    /// Each foot's plants among `frames`, each judged against the frame
+    /// before it.
+    fn of<'a>(frames: impl Iterator<Item = (&'a FrameRecord, &'a FrameRecord)>) -> Self {
+        let mut summary = Self::default();
+        for (frame, previous) in frames {
+            for (now, before) in frame.feet.iter().zip(&previous.feet) {
+                if !now.planted || before.planted {
+                    continue;
+                }
+                summary.plants += 1;
+                if now
+                    .ground
+                    .is_none_or(|ground| (now.anchor.y - ground).abs() > OFF_FOOTING)
+                {
+                    summary.off_footing += 1;
+                }
+                if let Some(planned) = before.planned {
+                    let miss = planar_distance(&now.anchor, &planned);
+                    summary.planned += 1;
+                    summary.total_miss += miss;
+                    summary.worst_miss = summary.worst_miss.max(miss);
+                }
+            }
+        }
+        summary
+    }
+
+    /// Both summaries together.
+    fn merged(self, other: Self) -> Self {
+        Self {
+            plants: self.plants + other.plants,
+            off_footing: self.off_footing + other.off_footing,
+            planned: self.planned + other.planned,
+            total_miss: self.total_miss + other.total_miss,
+            worst_miss: self.worst_miss.max(other.worst_miss),
+        }
+    }
+
+    /// Column headings for `columns`.
+    fn header() -> String {
+        format!("{:>7} {:>5} {:>8}", "off", "miss", "miss_max")
+    }
+
+    fn columns(&self) -> String {
+        let off = format!("{}/{}", self.off_footing, self.plants);
+        if self.planned == 0 {
+            return format!("{off:>7} {:>5} {:>8}", "-", "-");
+        }
+        format!(
+            "{off:>7} {:5.2} {:8.2}",
+            self.total_miss / self.planned as f32,
+            self.worst_miss
+        )
+    }
+}
+
 /// How the character fared across one station.
 #[derive(Clone, Copy, Debug)]
 pub struct TraversalSummary {
@@ -103,6 +180,8 @@ pub struct TraversalSummary {
     pub foot_pops: usize,
     /// Frames the summary judged.
     pub window_frames: usize,
+    /// Where the feet landed.
+    pub footfalls: FootfallSummary,
 }
 
 /// Judge `frames` across `station`.
@@ -184,6 +263,12 @@ pub fn summarise(frames: &[FrameRecord], station: &Station) -> TraversalSummary 
             }
         }
     }
+    let footfalls = FootfallSummary::of(
+        window
+            .iter()
+            .filter(|(i, _)| *i > 0)
+            .map(|&(i, frame)| (frame, &frames[i - 1])),
+    );
     let rms_vertical_accel = if accel_samples > 0 {
         (accel_squares / accel_samples as f32).sqrt()
     } else {
@@ -214,6 +299,7 @@ pub fn summarise(frames: &[FrameRecord], station: &Station) -> TraversalSummary 
         total_foot_slip,
         foot_pops,
         window_frames: window.len(),
+        footfalls,
     }
 }
 
@@ -260,9 +346,18 @@ impl TraversalSummary {
         )
     }
 
+    /// Column headings for `row`, where the feet landed included.
+    pub fn header_with_feet() -> String {
+        format!("{} {}", Self::header(), FootfallSummary::header())
+    }
+
     /// One line of the summary table, for the scenario `name`.
     pub fn row(&self, name: &str) -> String {
-        self.row_crossed(name, if self.crossed { "yes" } else { "NO" })
+        format!(
+            "{} {}",
+            self.row_crossed(name, if self.crossed { "yes" } else { "NO" }),
+            self.footfalls.columns()
+        )
     }
 
     fn row_crossed(&self, name: &str, crossed: &str) -> String {
@@ -304,6 +399,8 @@ pub struct TraversalSpread {
     pub runs: usize,
     /// The highest of the crossings' slowest speeds, in m/s.
     pub best_min_speed: f32,
+    /// Where the feet landed, over every crossing.
+    pub footfalls: FootfallSummary,
 }
 
 impl TraversalSpread {
@@ -321,13 +418,23 @@ impl TraversalSpread {
                 .iter()
                 .map(|summary| summary.min_speed)
                 .fold(f32::MIN, f32::max),
+            footfalls: summaries
+                .iter()
+                .fold(FootfallSummary::default(), |all, summary| {
+                    all.merged(summary.footfalls)
+                }),
         })
     }
 
     /// Column headings for `row`: the worst crossing's, how many crossed,
     /// and the best slowest speed.
     pub fn header() -> String {
-        format!("{} {:>5}", TraversalSummary::header(), "best")
+        format!(
+            "{} {:>5} {}",
+            TraversalSummary::header(),
+            "best",
+            FootfallSummary::header()
+        )
     }
 
     /// One line of the table, for the scenario `name`.
@@ -338,9 +445,10 @@ impl TraversalSpread {
             format!("{}/{}", self.crossed, self.runs)
         };
         format!(
-            "{} {:5.2}",
+            "{} {:5.2} {}",
             self.worst.row_crossed(name, &crossed),
-            self.best_min_speed
+            self.best_min_speed,
+            self.footfalls.columns()
         )
     }
 }
@@ -360,6 +468,8 @@ mod tests {
             planted: true,
             anchor: Point3::origin(),
             position: Point3::origin(),
+            ground: Some(0.0),
+            planned: None,
         };
         FrameRecord {
             index,

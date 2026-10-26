@@ -30,7 +30,10 @@ mod systems;
 pub use animator::{BodyReading, CharacterAnimator};
 pub use config::CharacterRigConfig;
 pub use debug_config::AnimationDebugConfig;
-pub use foot_placer::{FootPhase, FootPlacer, FootPlacerConfig, FootSide, GaitTiming, PlacerFoot};
+pub use foot_placer::{
+    FootPhase, FootPlacer, FootPlacerConfig, FootSide, GaitTiming, PlacerFoot, PlannedStep,
+    PlannedSteps,
+};
 pub use legged::{probe_tags, FootGround, LegRigDims, LeggedLocomotion, LocomotionCtx};
 pub use pose::{
     BlendPolicy, Crossfade, Cycle, CycleKind, FeetPose, HandsPose, Linear, PoseFragment,

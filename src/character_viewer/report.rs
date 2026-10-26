@@ -63,7 +63,7 @@ pub fn report(take: &Take, every: usize) -> String {
     }
     if let Some(summary) = traversal(take) {
         let _ = writeln!(out, "-- traversal");
-        let _ = writeln!(out, "  {}", TraversalSummary::header());
+        let _ = writeln!(out, "  {}", TraversalSummary::header_with_feet());
         let _ = writeln!(out, "  {}", summary.row(&take.scenario));
     }
     out

@@ -66,6 +66,26 @@ impl GaitTiming {
         Self::derive(speed, standing_height, leg_length, stride_gain, reach, cfg).trigger_threshold
     }
 
+    /// How far ahead of the hip a foot plants on level ground at `speed`,
+    /// and how far behind it lifts, for the same legs as [`Self::level_step`].
+    pub fn level_plant_ahead(
+        speed: f32,
+        standing_height: f32,
+        leg_length: f32,
+        stride_gain: f32,
+        cfg: &FootPlacerConfig,
+    ) -> f32 {
+        let reach = Self::level_reach(standing_height, leg_length, cfg);
+        Self::derive(speed, standing_height, leg_length, stride_gain, reach, cfg).plant_ahead()
+    }
+
+    /// Distance ahead of the hip a foot plants at, and behind it the foot
+    /// lifts: the half-span of a hip-symmetric stance. The stance covers
+    /// `duty` of the cycle, `2 · duty · trigger` of hip travel.
+    pub fn plant_ahead(&self) -> f32 {
+        self.duty_factor * self.trigger_threshold
+    }
+
     /// How far from the hip, horizontally, a foot plants on level ground,
     /// for legs `leg_length` long whose foot rests `standing_height` below
     /// the hip.

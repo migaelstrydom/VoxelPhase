@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use nalgebra::{Point3, Vector3};
 use traversal_planner::plan::{BodyState, Contact, Limb, Plan};
-use traversal_planner::section::{Section, StripLayout, StripQuery};
+use traversal_planner::section::{Footing, Section, SectionQuery, StripLayout, StripQuery};
 use traversal_planner::{
     GaitParams, PathVec, PlanRequest, Planned, Planner, PlannerSettings, Refusal,
 };
@@ -11,6 +11,7 @@ use crate::collision::AABB;
 
 use crate::physics::{PhysicsWorld, RigidBodyHandle, StaticGeometry};
 
+use super::legs::Legs;
 use super::path_frame::PathFrame;
 use super::physics_caster::{strip_reach, PhysicsCaster};
 use super::section_cache::SectionCache;
@@ -43,6 +44,9 @@ const SCENERY_MARGIN: f32 = 0.5;
 /// Slowest speed along the heading a plan is made for, in m/s: slower, the
 /// body is standing.
 const STANDING_SPEED: f32 = 0.3;
+/// How far from a planted foot the strip's foothold it stands on may be, in
+/// metres.
+const PLANTED_TOLERANCE: f32 = 0.05;
 
 /// What a frame's planning is given.
 pub struct PlanningInput<'a> {
@@ -61,6 +65,8 @@ pub struct PlanningInput<'a> {
     pub target_speed: f32,
     /// Seconds to the next frame.
     pub dt: f32,
+    /// The feet the legs have down, which the plan starts from.
+    pub legs: Legs,
 }
 
 /// What a frame's planning cost.
@@ -99,7 +105,7 @@ impl PlanFrame {
 
 /// Plans the body's way frame after frame along a path laid ahead of it:
 /// keeping the strip's casts and the last plan from one frame to the next,
-/// and the feet the last plan had down.
+/// and starting each plan from the feet the legs have down.
 pub struct TraversalPlanning {
     planner: Planner,
     layout: StripLayout,
@@ -119,7 +125,7 @@ pub struct TraversalPlanning {
     /// costs a few frames a little each rather than one frame a lot.
     sampled_ahead: f32,
     previous: Option<Plan>,
-    planted: Option<Contact>,
+    /// The foot that lands next when the legs do not say: the last plan's.
     lead: Limb,
 }
 
@@ -137,7 +143,6 @@ impl TraversalPlanning {
             slides: false,
             previous: None,
             sampled_ahead: 0.0,
-            planted: None,
             lead: Limb::LeftFoot,
         }
     }
@@ -207,9 +212,12 @@ impl TraversalPlanning {
         let query = StripQuery::new(&section, &self.planner.params);
         let request = PlanRequest {
             body,
-            lead: self.lead,
+            lead: input.legs.lead.unwrap_or(self.lead),
             target_speed: input.target_speed.max(STANDING_SPEED),
-            planted: self.planted,
+            planted: input
+                .legs
+                .planted
+                .map(|(limb, at)| planted_contact(&query, &frame, limb, at)),
             previous: self.previous.as_ref(),
             // A step short of the sampled reach, so the last footfall has
             // ground, but at least half of it.
@@ -226,14 +234,10 @@ impl TraversalPlanning {
             Err(refusal) => &refusal.partial,
         };
         let later = plan.after(input.dt);
-        self.planted = carried_stance(&outcome, input.dt);
-        self.lead = match self.planted {
-            Some(stance) => stance.limb.other(),
-            None => later
-                .footfalls()
-                .next()
-                .map_or(self.lead, |(_, next)| next.limb),
-        };
+        self.lead = later
+            .footfalls()
+            .next()
+            .map_or(request.lead, |(_, next)| next.limb);
         self.previous = Some(later);
 
         Some(PlanFrame {
@@ -322,65 +326,28 @@ impl TraversalPlanning {
             self.laid_at = input.position.y;
             self.slides = line.slides;
             self.previous = None;
-            self.planted = None;
         }
         fresh
     }
 }
 
-/// The foot `outcome`'s plan stands on `dt` seconds in, for the next frame's
-/// plan to start from; none under a refusal, whose partial plan holds its
-/// first foot to where it runs out however far the body has gone past it,
-/// and would be refused again from it. The next plan then stands on a foot
-/// under the body.
-fn carried_stance(outcome: &Result<Planned, Refusal>, dt: f32) -> Option<Contact> {
-    let planned = outcome.as_ref().ok()?;
-    planned.plan.stance_at(dt).copied()
-}
-
-#[cfg(test)]
-mod tests {
-    use smallvec::smallvec;
-    use traversal_planner::plan::Phase;
-    use traversal_planner::section::Footing;
-    use traversal_planner::Motion;
-
-    use super::*;
-
-    /// A plan standing on a foot through the next frame carries it on; the
-    /// same plan refused carries none.
-    #[test]
-    fn only_a_plan_that_gets_through_carries_its_stance_on() {
-        let foot = Contact {
-            limb: Limb::LeftFoot,
-            at: PathVec::new(0.0, 0.1, 0.0),
+/// The contact a `limb` planted at `at` in the world makes: where the legs
+/// have it, standing on the strip's foothold there, or on fixed level
+/// ground where the strip has none.
+fn planted_contact(query: &StripQuery, frame: &PathFrame, limb: Limb, at: Point3<f32>) -> Contact {
+    let at = frame.path_point(at);
+    match query.foothold_at(&at, PLANTED_TOLERANCE) {
+        Some(foothold) => Contact {
+            limb,
+            at: PathVec::new(at.s, at.d, foothold.at.z),
+            normal: foothold.normal,
+            footing: foothold.footing,
+        },
+        None => Contact {
+            limb,
+            at,
             normal: PathVec::UP,
             footing: Footing::Fixed,
-        };
-        let plan = Plan {
-            phases: vec![Phase {
-                start: 0.0,
-                duration: 1.0,
-                contacts: smallvec![foot],
-                motion: Motion::Grounded {
-                    from: 0.0,
-                    to: 5.0,
-                    start_speed: 5.0,
-                    end_speed: 5.0,
-                },
-            }],
-            ..Plan::default()
-        };
-        let planned = Ok(Planned {
-            plan: plan.clone(),
-            cost: 0.0,
-            diverged: false,
-        });
-        assert_eq!(carried_stance(&planned, 0.1), Some(foot));
-        let refused = Err(Refusal {
-            partial: plan,
-            diverged: false,
-        });
-        assert_eq!(carried_stance(&refused, 0.1), None);
+        },
     }
 }

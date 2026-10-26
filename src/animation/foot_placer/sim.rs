@@ -8,6 +8,7 @@ use nalgebra::{Point3, Vector2, Vector3};
 
 use super::config::FootPlacerConfig;
 use super::placer::{angle_diff, facing_from_yaw, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
+use super::planned::PlannedSteps;
 
 pub const HIP_WIDTH: f32 = 0.12;
 pub const LEG_LENGTH: f32 = 0.5;
@@ -305,6 +306,7 @@ pub fn simulate_rig(
             right_ground_normal,
             left_ground,
             right_ground,
+            planned: PlannedSteps::default(),
             config: &cfg,
         };
         placer.tick(&ctx);

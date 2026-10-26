@@ -5,6 +5,9 @@ use crate::section::SectionQuery;
 use super::body::BodyState;
 use super::phase::{flight_at, Contact, Motion, Phase};
 
+/// Slack on matching a footfall's time to a flight's end, in seconds.
+const LANDING_TOLERANCE: f32 = 1.0e-3;
+
 /// The body's phases from now to the planning horizon. A footfall that lands
 /// as a flight takes off, or at the very end, shows as a stance zero long.
 ///
@@ -35,6 +38,16 @@ impl Plan {
                 .iter()
                 .filter(|contact| before.contacts.iter().all(|held| held.limb != contact.limb))
                 .map(move |contact| (phase.start, contact))
+        })
+    }
+
+    /// Whether the footfall at `time` lands a flight, a hop or a roll-off.
+    pub fn lands_a_flight(&self, time: f32) -> bool {
+        self.phases.iter().any(|phase| match phase.motion {
+            Motion::Flight { .. } => {
+                (phase.start + phase.duration - time).abs() < LANDING_TOLERANCE
+            }
+            Motion::Grounded { .. } => false,
         })
     }
 

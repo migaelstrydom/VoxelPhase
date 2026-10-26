@@ -22,7 +22,9 @@ use nalgebra::{Point3, Vector3};
 use crate::character::Grounding;
 use crate::sensing::{ContactCandidate, Probe};
 
-use super::super::foot_placer::{FootPlacer, FootSide, PlacerCtx, PlacerFoot, PlacerRecorder};
+use super::super::foot_placer::{
+    FootPlacer, FootSide, PlacerCtx, PlacerFoot, PlacerRecorder, PlannedSteps,
+};
 use super::super::FootPlacerConfig;
 use super::dims::LegRigDims;
 use super::ground::{self, FootGround};
@@ -106,6 +108,10 @@ pub struct LeggedLocomotion {
     /// Previous-frame yaw, used to derive yaw rate for the placer.
     last_yaw: f32,
 
+    /// Where a plan of the way ahead lands each foot next, given for the
+    /// coming tick only ([`Self::follow`]).
+    planned: PlannedSteps,
+
     /// Optional input/output recorder for the foot placer (enabled via
     /// the `PLACER_REC` env var). Feeds the offline replay harness.
     recorder: Option<PlacerRecorder>,
@@ -145,6 +151,7 @@ impl LeggedLocomotion {
             body_to_pelvis,
             pelvis_drop: PelvisDrop::default(),
             last_yaw: yaw,
+            planned: PlannedSteps::default(),
             recorder: PlacerRecorder::from_env(pelvis, yaw, dims.hip_width, foot_centre_y),
         }
     }
@@ -310,6 +317,13 @@ impl LeggedLocomotion {
         self.support_velocity
     }
 
+    /// Land the feet on `steps` in the next tick, as a plan of the way ahead
+    /// has them. Given each frame it holds: a tick it is not given for steps
+    /// as the capture point has it.
+    pub fn follow(&mut self, steps: PlannedSteps) {
+        self.planned = steps;
+    }
+
     /// Advance the gait by one frame.
     pub fn tick(&mut self, ctx: &LocomotionCtx) {
         let yaw_rate = if ctx.dt > 0.0 {
@@ -343,6 +357,7 @@ impl LeggedLocomotion {
             right_ground_normal: self.right_ground.normal_or_up(),
             left_ground: self.left_ground.contact,
             right_ground: self.right_ground.contact,
+            planned: std::mem::take(&mut self.planned),
             config: &self.config,
         };
         self.placer.tick(&placer_ctx);

@@ -413,18 +413,28 @@ fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> Pose
     };
     let foot_push = forward * feet_forward;
 
-    let feet = FeetPose {
-        left: Point3::new(
-            left_hip.x + foot_push.x,
-            anim.pelvis_position.y - hang_distance,
-            left_hip.z + foot_push.z,
-        ),
-        right: Point3::new(
-            right_hip.x + foot_push.x,
-            anim.pelvis_position.y - hang_distance,
-            right_hip.z + foot_push.z,
-        ),
-        anchor: FootAnchor::Hips,
+    // Through a flight the plan lands, the placer swings the feet onto
+    // the landing and they are drawn where it has them, as on the ground.
+    let feet = if anim.feet_flown {
+        FeetPose {
+            left: anim.left.position,
+            right: anim.right.position,
+            anchor: FootAnchor::World,
+        }
+    } else {
+        FeetPose {
+            left: Point3::new(
+                left_hip.x + foot_push.x,
+                anim.pelvis_position.y - hang_distance,
+                left_hip.z + foot_push.z,
+            ),
+            right: Point3::new(
+                right_hip.x + foot_push.x,
+                anim.pelvis_position.y - hang_distance,
+                right_hip.z + foot_push.z,
+            ),
+            anchor: FootAnchor::Hips,
+        }
     };
 
     PoseFragment {

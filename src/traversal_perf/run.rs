@@ -9,7 +9,9 @@ use crate::level::load_level;
 use crate::level_check::{build_terrain, RestTrial};
 use crate::physics::PhysicsImpulse;
 use crate::section_capture::Blast;
-use crate::traversal::{PathFrame, PhysicsCaster, PlanningCost, PlanningInput, TraversalPlanning};
+use crate::traversal::{
+    Legs, PathFrame, PhysicsCaster, PlanningCost, PlanningInput, TraversalPlanning,
+};
 
 /// The game's frame, in seconds.
 const FRAME: f32 = 1.0 / 60.0;
@@ -147,6 +149,7 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
         Point3::new(spec.at.0, floor.z, spec.at.1)
     };
     let mut velocity = heading * spec.speed;
+    let mut legs = Legs::default();
 
     let mut frames = Vec::with_capacity(spec.frames);
     for _ in 0..spec.frames {
@@ -165,6 +168,7 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             heading,
             target_speed: spec.speed,
             dt: FRAME,
+            legs,
         };
         let Some(planned) = planning.update(&input) else {
             break;
@@ -200,6 +204,10 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
         };
         position = planned.frame.world_point(PathVec::new(next.s, 0.0, next.z));
         velocity = planned.frame.forward() * next.speed + Vector3::y() * next.climb;
+        legs = match &planned.outcome {
+            Ok(_) => Legs::following(planned.plan(), &planned.frame, FRAME),
+            Err(_) => Legs::default(),
+        };
     }
     Ok(PerfRun { frames })
 }

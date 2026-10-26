@@ -57,7 +57,7 @@ pub fn check_plan(plan: &Plan, query: &dyn SectionQuery, params: &GaitParams) ->
         .copied();
     for (time, contact) in plan.footfalls() {
         if let Some(last) = last {
-            let jump = lands_a_flight(plan, time);
+            let jump = plan.lands_a_flight(time);
             check_step(&last, contact, jump, params, &mut |rule, detail| {
                 broke(rule, time, detail)
             });
@@ -99,15 +99,6 @@ fn start_s(phase: &Phase) -> f32 {
         Motion::Grounded { from, .. } => from,
         Motion::Flight { takeoff, .. } => takeoff.s,
     }
-}
-
-/// Whether the footfall at `time` lands a flight, a hop or a roll-off,
-/// which no step limit holds.
-fn lands_a_flight(plan: &Plan, time: f32) -> bool {
-    plan.phases.iter().any(|phase| match phase.motion {
-        Motion::Flight { .. } => (phase.start + phase.duration - time).abs() < TOLERANCE,
-        Motion::Grounded { .. } => false,
-    })
 }
 
 /// The step from `last` to `next` against the gait's limits; its length

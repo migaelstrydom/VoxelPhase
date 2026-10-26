@@ -1,3 +1,5 @@
+use smallvec::SmallVec;
+
 use crate::params::GaitParams;
 use crate::path::PathVec;
 use crate::plan::{BodyState, Contact, Limb, Motion, Phase, Plan};
@@ -190,15 +192,18 @@ impl Planner {
 
     /// The last plan's phases up to its `footfall`th footfall (the first is
     /// the committed one), if the body is still on them and they still hold:
-    /// they clear the ground, and that footfall and every one before it are
-    /// on footholds that will hold them.
+    /// they stand on the feet the request has down, they clear the ground,
+    /// and that footfall and every one before it are on footholds that will
+    /// hold them.
     fn kept_through(
         &self,
         query: &dyn SectionQuery,
         request: &PlanRequest,
         footfall: usize,
     ) -> Option<Kept> {
-        let previous = request.previous.filter(|plan| plan.committed > 0)?;
+        let previous = request
+            .previous
+            .filter(|plan| plan.committed > 0 && stands_as_asked(plan, request))?;
         let (time, landing) = previous.footfalls().nth(footfall)?;
         let landing = *landing;
         let phase = previous.phases.iter().position(|phase| {
@@ -366,10 +371,25 @@ struct Kept {
 }
 
 impl Kept {
-    /// The kept phases, then `tail` from the footfall on.
+    /// The kept phases, then `tail` from the footfall on. A tail with
+    /// nothing in it, the footfall landing past the goal, still shows the
+    /// footfall: a stance there, for the next plan to keep it by.
     fn followed_by(self, tail: Plan) -> Plan {
         let committed = self.committed;
         let mut phases = self.phases;
+        if tail.phases.is_empty() {
+            phases.push(Phase {
+                start: self.time,
+                duration: 0.0,
+                contacts: SmallVec::from_slice(&[self.planted]),
+                motion: Motion::Grounded {
+                    from: self.body.s,
+                    to: self.body.s,
+                    start_speed: self.body.speed,
+                    end_speed: self.body.speed,
+                },
+            });
+        }
         phases.extend(tail.phases.into_iter().map(|phase| Phase {
             start: phase.start + self.time,
             ..phase
@@ -380,6 +400,26 @@ impl Kept {
             target_speed: 0.0,
         }
     }
+}
+
+/// Whether `plan` stands on the feet `request` has: the foot it lands next
+/// is the request's lead, and the foot holding the body now, where the
+/// request gives one, is that one, where it is. A plan whose feet the legs
+/// did not follow cannot be kept, however well its body path holds. A plan
+/// just into a flight stands on nothing, while the body may not have left
+/// the ground yet: the foot it pushed off from is still down, and may be.
+fn stands_as_asked(plan: &Plan, request: &PlanRequest) -> bool {
+    let leads = plan
+        .footfalls()
+        .next()
+        .is_none_or(|(_, next)| next.limb == request.lead);
+    let stands = request.planted.is_none_or(|planted| {
+        plan.stance_at(0.0).is_none_or(|stance| {
+            stance.limb == planted.limb
+                && (stance.at.s - planted.at.s).hypot(stance.at.d - planted.at.d) <= STRAY_DISTANCE
+        })
+    });
+    leads && stands
 }
 
 /// How many of the last plan's footfalls it chose knowing what lies past

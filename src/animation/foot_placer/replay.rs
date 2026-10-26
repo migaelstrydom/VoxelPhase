@@ -22,6 +22,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::config::FootPlacerConfig;
 use super::placer::{facing_from_yaw, planar_distance, FootPlacer, PlacerCtx};
+use super::planned::PlannedSteps;
 
 /// `FootPlacer::new` parameters captured by the recorder's `# init` line.
 struct InitLine {
@@ -219,6 +220,7 @@ fn replay_frames(
             right_ground_normal: fr.right_ground_normal,
             left_ground: fr.left_ground,
             right_ground: fr.right_ground,
+            planned: PlannedSteps::default(),
             config,
         };
         placer.tick(&ctx);
@@ -411,6 +413,7 @@ fn record_replay_round_trip() {
             right_ground_normal: Vector3::y(),
             left_ground,
             right_ground,
+            planned: PlannedSteps::default(),
             config: &config,
         };
         placer.tick(&ctx);
@@ -473,6 +476,7 @@ fn a_recording_holds_the_last_window_and_forgets_the_rest() {
             right_ground_normal: Vector3::y(),
             left_ground: Some(Point3::new(walked.x, 0.0, walked.z)),
             right_ground: Some(Point3::new(walked.x, 0.0, walked.z)),
+            planned: PlannedSteps::default(),
             config: &config,
         };
         placer.tick(&ctx);
