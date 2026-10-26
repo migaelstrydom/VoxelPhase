@@ -121,7 +121,7 @@ impl Default for FootDims {
     fn default() -> Self {
         Self {
             radius: 0.05,
-            stance_half_width: 0.06,
+            stance_half_width: 0.12,
             reach_out: 0.154,
             reach_in: 0.154,
             max_slope_degrees: 50.0,

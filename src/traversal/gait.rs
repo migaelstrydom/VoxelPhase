@@ -39,7 +39,7 @@ pub fn player_gait(config: &LocomotionConfig, rig: &CharacterRigConfig) -> GaitP
             ..BodyDims::default()
         },
         foot: FootDims {
-            stance_half_width: 0.5 * rig.hip_width,
+            stance_half_width: rig.hip_width,
             reach_out: 0.5 * rig.level_reach(),
             reach_in: 0.5 * rig.level_reach(),
             hip_height: rig.leg_dims().standing_height,

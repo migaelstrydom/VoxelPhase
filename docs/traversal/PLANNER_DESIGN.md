@@ -186,7 +186,7 @@ picks it within a window around the foot's natural offset, and the foot
 placer lands on it. The lanes are where the ground is sampled, not where a
 foot may go: on ground running unbroken between two lanes the query gives
 footholds on each foot's own line, between them, so on open ground the
-feet land half the hips apart rather than both drawn onto the nearest lane
+feet land under the hips rather than both drawn onto the nearest lane
 (the centre one, for these hips). Where the lanes disagree, at a plank's
 edge or on rubble, only the lanes' footholds are offered.
 
@@ -361,7 +361,7 @@ each flight is one a foot pushes off and lands.
 - **Legs.** Everything else about the feet is the rig's too, passed the same
   way and held to the planner's defaults by the same test: the longest step
   without a flight (0.81 m, the leg's level reach over the sprint's stance
-  share), the feet half the hips apart, reaching half the leg's level reach
+  share), each foot under its hip (0.12 m to its side), reaching half the leg's level reach
   to either side, and a foot in reach of the body when it is within the
   straightened leg (0.525 m) of a hip 0.425 m above the capsule's bottom.
   A flight, hop or roll-off, has a hop's feet: the last near the brow, the
