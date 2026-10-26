@@ -36,8 +36,9 @@ const PUSHED_CLIMB: f32 = 0.05;
 /// `forward`.
 ///
 /// Where the plan is speeding up the stick sets the pace ([`Pace::Asked`]);
-/// elsewhere it is the plan's speed at the frame's end. Under a `refused`
-/// plan the stick sets the pace, and the plan only takes off where it hops.
+/// elsewhere it is the plan's speed at the frame's end. A `refused` plan
+/// knows no way through, so it leaves the body to the drive: the stick sets
+/// the pace and nothing takes off, which is never worse than no plan at all.
 /// A hop is taken off on the frame whose start is nearest its own, half a
 /// frame early at most; a roll-off, which keeps its stance foot, is the body
 /// running off the edge and needs nothing asked, and so is a hop asking no
@@ -53,7 +54,7 @@ pub fn track(plan: &Plan, forward: Vector3<f32>, climb: f32, dt: f32, refused: b
     let takeoff = plan
         .phases
         .iter()
-        .take_while(|phase| phase.start < 0.5 * dt)
+        .take_while(|phase| !refused && phase.start < 0.5 * dt)
         .find_map(|phase| match phase.motion {
             // A hop's phase holds no contact; a roll-off's keeps the stance.
             Motion::Flight { takeoff, .. }
@@ -241,10 +242,10 @@ mod tests {
         assert_eq!(track(&hop, Vector3::z(), 1.5, DT, false).takeoff, None);
     }
 
-    /// A refused plan leaves the pace to the stick, even at its very end,
-    /// and still takes off where it hops.
+    /// A refused plan leaves the body to the drive, even at its very end:
+    /// the stick sets the pace and nothing takes off.
     #[test]
-    fn a_refused_plan_leaves_the_pace_to_the_stick() {
+    fn a_refused_plan_leaves_the_body_to_the_drive() {
         let at_the_edge = plan(vec![ride(0.0, 0.01, 0.0, (5.0, 5.0))]);
         assert_eq!(
             track(&at_the_edge, Vector3::x(), 0.0, DT, true).pace,
@@ -254,6 +255,7 @@ mod tests {
             ride(0.0, 0.005, 0.0, (4.0, 4.0)),
             flight(0.005, 0.02, false),
         ]);
-        assert!(track(&hop, Vector3::z(), 0.0, DT, true).takeoff.is_some());
+        assert!(track(&hop, Vector3::z(), 0.0, DT, false).takeoff.is_some());
+        assert_eq!(track(&hop, Vector3::z(), 0.0, DT, true).takeoff, None);
     }
 }
