@@ -173,3 +173,56 @@ Read the gap between `min` and `best` before any single number: a plank
 bridge crossed at a run turns from clean to a near stop on a 0.1 m shift of
 the start.
 
+
+## Milestone E closed: the plan against the bare drive
+
+Measured on `a34d8f1` (2026-10-26), 60 Hz, five starts, with the plan driving
+(`--track`) and without it. Time lost is the worst crossing's time less the
+ideal, in seconds; `-` is a station not crossed on every start.
+
+| Station | bare | plan | | Station | bare | plan |
+|---|---|---|---|---|---|---|
+| lip3_walk | 0.00 | 0.00 | | planks_walk | 0.18 | 0.00 |
+| lip3_run | 0.00 | 0.00 | | planks_run | - (4/5) | 0.00 |
+| lip8_walk | 0.00 | 0.02 | | planks_wide_walk | - (3/5) | 0.02 |
+| lip8_run | 0.02 | 0.03 | | planks_wide_run | 0.40 | 0.00 |
+| lip15_walk | 0.03 | **0.18** | | rough_walk | 0.22 | **0.48** |
+| lip15_run | 0.05 | 0.10 | | rough_run | 0.42 | 0.00 |
+| lip25_walk | 0.07 | 0.00 | | slope40_walk / run | 1.13 / 0.72 | 1.13 / 0.72 |
+| lip25_run | 0.15 | 0.00 | | slope50_walk / run | 1.77 / 1.12 | 1.78 / 1.15 |
+| lip40_walk | 0.10 | 0.00 | | scree_walk | 1.67 | **1.85** |
+| lip40_run | 0.13 | 0.00 | | scree_run | 1.08 | **1.47** |
+
+Every station the bare drive crosses, the plan crosses from every start; the
+ledge and the cave neither crosses. Known issues, left open when E closed:
+rough_walk, scree_walk, scree_run and lip15_walk lose more than the bare
+drive (in bold), and the 8 and 15 cm lips at a run a few hundredths more.
+Slopes and scree are drive-limited: the plan rides what the drive rides.
+
+```text
+scenario           cross asked   min  time/ideal    snags     air  rise  drop rms_ay  slip slip_sum pops  best
+lip3_walk            5/5  5.00  4.91  0.40/ 0.40   0( 0)   0/48   0.54  0.00    5.3 0.004    0.006    0  4.92
+lip3_run             5/5  8.00  7.85  0.25/ 0.25   0( 0)   8/30   0.86  0.78   13.9 0.005    0.006    0  7.88
+lip8_walk            5/5  5.00  4.41  0.42/ 0.40   0( 0)  13/49   1.39  1.27   17.6 0.010    0.031    1  4.53
+lip8_run             5/5  8.00  6.69  0.28/ 0.25   0( 0)  17/32   2.23  1.76   36.0 0.000    0.000    0  7.07
+lip15_walk           5/5  5.00  2.00  0.58/ 0.40  31( 1)  22/59   2.17  1.84   23.9 0.028    0.066    1  3.64
+lip15_run            5/5  8.00  5.03  0.35/ 0.25  26( 1)  20/37   3.56  2.25   50.4 0.000    0.000    0  5.50
+lip25_walk           5/5  5.00  4.99  0.40/ 0.40   0( 0)  16/48   1.52  0.94   10.1 0.096    0.118    1  5.00
+lip25_run            5/5  8.00  7.99  0.25/ 0.25   0( 0)  16/30   1.76  0.70   10.5 0.008    0.026    0  7.99
+lip40_walk           5/5  5.00  4.99  0.40/ 0.40   0( 0)  16/48   1.77  0.52    8.3 0.097    0.119    1  5.00
+lip40_run            5/5  8.00  7.86  0.25/ 0.25   0( 0)  23/30   1.12  1.27   23.9 0.000    0.000    0  8.00
+planks_walk          5/5  5.00  4.81  2.00/ 2.00   0( 0)  89/145  1.95  1.98   24.4 0.061    0.185    3  4.99
+planks_run           5/5  8.00  7.84  1.25/ 1.25   0( 0)  62/91   1.44  1.50   23.6 0.022    0.028    4  7.99
+planks_wide_walk     5/5  5.00  4.79  2.02/ 2.00   0( 0)  88/145  1.76  1.84   24.3 0.054    0.152    2  4.98
+planks_wide_run      5/5  8.00  7.84  1.25/ 1.25   0( 0)  66/90   1.97  1.96   28.7 0.073    0.079    2  7.99
+rough_walk           5/5  5.00  2.51  2.88/ 2.40  76( 3) 138/197  2.72  3.60   31.3 0.036    0.071    2  4.87
+rough_run            5/5  8.00  7.84  1.50/ 1.50   0( 0)  85/105  2.65  3.10   32.5 0.074    0.101    2  7.97
+slope40_walk         5/5  5.00  0.81  2.73/ 1.60 196( 1)  26/207  2.46  2.09   14.0 0.011    0.131    0  2.63
+slope40_run          5/5  8.00  3.06  1.72/ 1.00 114( 1)  12/122  4.06  1.10   28.0 0.013    0.033    0  4.64
+slope50_walk         5/5  5.00  0.10  2.98/ 1.20 207( 1)  24/225  2.55  1.71   12.7 0.064    0.202    0  1.22
+slope50_run          5/5  8.00  0.12  1.90/ 0.75 157( 1)  36/164  4.09  2.70   28.7 0.009    0.035    0  2.42
+scree_walk           5/5  5.00  0.82  3.45/ 1.60 221( 1)  76/236  2.87  1.49   25.0 0.015    0.105    1  0.90
+scree_run            5/5  8.00  0.64  2.47/ 1.00 176( 1)  62/183  4.11  1.62   36.7 0.033    0.114    2  1.48
+ledge_walk           0/5  5.00  0.00     -/ 0.40 171( 1)  57/210  2.67  1.87   17.8 0.016    0.026    0  0.00
+cave_walk            0/5  5.00  0.00     -/ 2.40 288( 1)   0/330  0.06  0.02    0.4 0.035    0.068    0  0.00
+```

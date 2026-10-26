@@ -714,7 +714,7 @@ until E.
 | B | Property tests, a breaking fixture for each, fuzzer | fuzz sweep clean; every property shown able to fail |
 | C | Web tool (dropped 2026-10-26: the plan drawn in game proved the better tool) | published; you can author and tune the bridge in it |
 | D | `PathPredictor` in game, `PlanOverlay`, capture key, the drive contract checks; plan drawn but not acted on | captures of every Traversal Garden station plan the same as their authored versions; the drive contract checks pass, with `GaitParams` set from what they measured; section (five lanes) + plan under 0.5 ms per frame |
-| E | `PlanTracker`: drive and takeoffs through contacts | `traversal --summary` beats the baseline on every station, churn and divergence measured, rubble lane crossed |
+| E | `PlanTracker`: drive and takeoffs through contacts (closed 2026-10-26, against the bare drive; four stations open, in `BASELINE.md`) | `traversal --summary` beats the baseline on every station, churn and divergence measured, rubble lane crossed |
 | F | `FootPlacer` reads footfalls and their timing from the plan | the legs alternate plank to plank; clipping and unplanted legs measured as in the baseline |
 
 ## Open questions
