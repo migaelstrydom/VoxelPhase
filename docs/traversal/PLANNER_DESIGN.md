@@ -225,12 +225,18 @@ flight, swings that foot onto the landing footfall and plants it there as
 the body comes down, and lifts the foot it pushed off with to trail onto its
 own next footfall half a step later; the airborne pose draws the feet where
 the placer has them instead of hanging them from the hips, and the landing
-replants nothing. An unplanned fall keeps the old resume: a replant at
-stance. The plan in turn starts from the
+replants nothing. If the plan's landing is one the body is no longer coming
+down within a leg's reach of, as when the player steers back in the air, the
+feet stop flying to it and hang as in any jump. An unplanned fall keeps the
+old resume: a replant at stance. The plan in turn starts from the
 feet the legs have down (`traversal::Legs`: the foot planted last holds the
 body, the other lands next), so the two never argue about which foot is
 where; a last plan that does not stand on those feet is dropped rather than
-kept. Holding the plan's clock over the legs was tried first (milestone F)
+kept. Between steps at a run neither foot is down, and a foot whose swing
+ends within the frame stands where it lands: the plan, a frame on, has
+taken that footfall as made, and the legs land it a frame later. Read as no
+foot down, the plan was dropped and planned afresh with that foot's next
+footfall a whole step on (a 0.45 m miss in the turning runs). Holding the plan's clock over the legs was tried first (milestone F)
 and cut the stance in half at a run: the plan's cadence can only ever
 approximate the legs', and the legs must not follow it.
 

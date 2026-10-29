@@ -176,7 +176,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
             heading,
             target_speed,
             dt: time.delta_seconds().max(1.0e-3),
-            legs: Legs::of(animator.locomotion.placer()),
+            legs: Legs::of(animator.locomotion.placer(), time.delta_seconds()),
         });
 
         if let Some(frame) = &frame {

@@ -10,7 +10,9 @@
 //! z = 61. And `climb_steep`, in the Water Park: the ramp down to the cavern
 //! courtyard at x = -33, rising 11 m from z = -12 to z = -24 (about 43°). And
 //! `contour` and `run_uphill`, on Island Sea's hillside: along it with the
-//! ground falling away on the right, and straight up it at a run.
+//! ground falling away on the right, and straight up it at a run. And
+//! `air_reverse` and `crouch_walk`, on the Traversal Garden's open ground,
+//! and `hop_reverse` at its 25 cm step.
 //!
 //! The traversal scenarios, in the Traversal Garden, are catalogued in
 //! `traversal_scenarios` and appended here, and after them the turning runs,
@@ -30,6 +32,7 @@ const GARDEN: &str = "levels/rubble_garden.level.ron";
 const PARK: &str = "levels/water_park.level.ron";
 const ISLAND: &str = "levels/island_sea.level.ron";
 const YARD: &str = "levels/wrecking_yard.level.ron";
+const TRAVERSAL_GARDEN: &str = "levels/traversal_garden.level.ron";
 
 /// Facing +x, down the beach into the sea.
 const SEAWARD: f32 = FRAC_PI_2;
@@ -259,6 +262,48 @@ pub fn catalogue() -> Vec<Scenario> {
                 )
                 .then(Beat::stand(1.0)),
             camera: CameraRig::side().with_azimuth(-2.72f32.to_degrees() + 180.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "air_reverse",
+            summary: "Traversal Garden: run, jump, and steer back the way it came in the air",
+            level: TRAVERSAL_GARDEN,
+            start: (-12.0, -15.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::walk(1.2))
+                .then(Beat::jump(0.1).named("jump"))
+                .then(Beat::walk(0.8).towards(-Vector3::x()).named("back"))
+                .then(Beat::stand(0.6)),
+            camera: CameraRig::side().with_distance(3.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "hop_reverse",
+            summary: "Traversal Garden: walk at the 25 cm step, and steer back once the hop onto it has taken off (with --track)",
+            level: TRAVERSAL_GARDEN,
+            start: (-5.0, 0.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::walk(2.3))
+                .then(Beat::walk(0.8).towards(-Vector3::x()).named("back"))
+                .then(Beat::stand(0.6)),
+            camera: CameraRig::side().with_distance(3.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "crouch_walk",
+            summary: "Traversal Garden: crouch and walk on level ground",
+            level: TRAVERSAL_GARDEN,
+            start: (-12.0, -15.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::crouch_still(0.6))
+                .then(Beat::crouch_walk(2.0))
+                .then(Beat::crouch_still(0.5)),
+            camera: CameraRig::side().with_distance(2.5).with_elevation(5.0),
             judged: Judged::Motion,
         },
     ];

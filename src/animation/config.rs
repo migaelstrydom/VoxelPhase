@@ -301,7 +301,7 @@ impl Default for CharacterRigConfig {
                     arm_swing_amplitude: 0.3 * 0.3,
                     shoulder_twist_max: 0.15 * 0.4,
                     head_bob_amplitude: 0.02 * 0.3,
-                    pelvis_crouch_offset: 0.25,
+                    pelvis_crouch_offset: 0.12,
                     torso_pitch: 0.30,
                     stride_gain: 0.7,
                 },
@@ -310,7 +310,7 @@ impl Default for CharacterRigConfig {
                     arm_swing_amplitude: 0.3 * 0.3,
                     shoulder_twist_max: 0.15 * 0.4,
                     head_bob_amplitude: 0.02 * 0.3,
-                    pelvis_crouch_offset: 0.25,
+                    pelvis_crouch_offset: 0.12,
                     torso_pitch: 0.30,
                     stride_gain: 0.7,
                 },
@@ -333,5 +333,42 @@ impl GaitPresets {
             Gait::Crouch { walking: true } => self.crouch_walk,
             Gait::Crouch { walking: false } => self.crouch_idle,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::animation::humanoid::pose_state::Gait;
+
+    /// Height above the ground of the knee of a leg whose hip is `hip` up
+    /// and whose foot is on the ground `behind` the hip, the knee bent
+    /// forward as the rig bends it.
+    fn knee_height(rig: &CharacterRigConfig, hip: f32, behind: f32) -> f32 {
+        let (upper, lower) = (rig.upper_leg_length, rig.lower_leg_length);
+        let span = hip.hypot(behind);
+        let along = (upper * upper - lower * lower + span * span) / (2.0 * span);
+        let out = (upper * upper - along * along).max(0.0).sqrt();
+        // From the hip toward the foot, then forward of that line.
+        hip - along * hip / span - out * behind / span
+    }
+
+    #[test]
+    fn a_crouched_knee_clears_the_ground_wherever_the_foot_is() {
+        let rig = CharacterRigConfig::default();
+        let gait = Gait::Crouch { walking: true };
+        let hip = rig.standing_height() - rig.gait_presets.for_gait(gait).pelvis_crouch_offset;
+        let reach = (rig.leg_length().powi(2) - hip * hip).sqrt();
+        let lowest = (1..100)
+            .map(|i| reach * i as f32 / 100.0)
+            .map(|behind| (knee_height(&rig, hip, behind), behind))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("samples");
+        assert!(
+            lowest.0 >= rig.knee_radius,
+            "knee {:.3} m up with the foot {:.2} m behind a hip {hip:.2} m up",
+            lowest.0,
+            lowest.1
+        );
     }
 }

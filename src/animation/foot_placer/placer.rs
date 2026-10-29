@@ -692,14 +692,27 @@ impl FootPlacer {
     /// lands it with swings onto the landing footfall as the body comes
     /// down, where it plants, and the foot it pushed off with trails,
     /// lifting at takeoff to land on its own next footfall half a step
-    /// later. Without such a landing the feet stay as they were.
+    /// later. Without such a landing the feet stay as they were; and a
+    /// landing the body is not coming down within a leg's reach of, as when
+    /// the player steers back in the air, is no landing for this flight: the
+    /// feet stop flying to it, and the legs hang as in any jump.
     fn fly_to_landing(&mut self, ctx: &PlacerCtx<'_>) {
         let landing = [FootSide::Left, FootSide::Right]
             .into_iter()
-            .find_map(|side| Some((side, ctx.planned.of(side)?.landing?)));
-        let Some((landing_side, landing)) = landing else {
+            .find_map(|side| {
+                let step = ctx.planned.of(side)?;
+                Some((side, step.landing?, step.at))
+            });
+        let Some((landing_side, landing, landing_at)) = landing else {
             return;
         };
+        // The hip at touchdown is as high over the landing as it stands.
+        let comes_down = ctx.pelvis + ctx.velocity * landing;
+        let touchdown_reach = reach_budget(plant_reach(ctx), ctx.standing_height);
+        if planar_distance(comes_down, landing_at) > touchdown_reach {
+            self.flew_to_landing = None;
+            return;
+        }
         let speed = Vector2::new(ctx.velocity.x, ctx.velocity.z).magnitude();
         let timing = GaitTiming::derive(
             speed,
@@ -1975,6 +1988,60 @@ mod tests {
             panic!("the push-off foot trails: {:?}", placer.left.phase);
         };
         assert!(planar_distance(to, after) < 1e-3, "trailing to {to:?}");
+    }
+
+    #[test]
+    fn a_landing_the_body_is_not_coming_down_at_is_not_flown_to() {
+        const SPEED: f32 = 4.0;
+        let config = FootPlacerConfig::default();
+        let dims = RigDims::player();
+        let gait = GaitParams::walk();
+        let pelvis = Point3::new(0.0, dims.standing_height + 0.3, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), dims.hip_width, 0.0);
+        placer.right.phase = FootPhase::Stepping {
+            from: placer.right.planted_position,
+            to: Point3::new(-0.12, 0.0, 0.6),
+            from_forward: Vector3::z(),
+            to_forward: Vector3::z(),
+            t: 0.0,
+            duration: 0.2,
+            peak_lift: gait.step_height,
+        };
+        placer.set_suspended(true);
+        // Flying on along +z, landing in 0.3 s near z = 1.2; the plan, made
+        // along a path turned back, lands it 1 m behind.
+        let lands = |at: f32| PlacerCtx {
+            dt: 1.0 / 60.0,
+            pelvis,
+            velocity: Vector3::new(0.0, 0.0, SPEED),
+            support_velocity: Vector3::zeros(),
+            intent_direction: -Vector3::z(),
+            yaw: 0.0,
+            yaw_rate: 0.0,
+            hip_width: dims.hip_width,
+            leg_length: dims.leg_length,
+            standing_height: dims.standing_height,
+            foot_y_fallback: 0.0,
+            step_height: gait.step_height,
+            stride_gain: gait.stride_gain,
+            left_ground_normal: Vector3::y(),
+            right_ground_normal: Vector3::y(),
+            left_ground: None,
+            right_ground: None,
+            planned: PlannedSteps {
+                left: None,
+                right: Some(PlannedStep {
+                    at: Point3::new(-0.12, 0.0, at),
+                    landing: Some(0.3),
+                }),
+            },
+            config: &config,
+        };
+        let mut ahead = placer.clone();
+        ahead.tick(&lands(SPEED * 0.3));
+        assert!(ahead.flies_to_landing());
+        placer.tick(&lands(-1.0));
+        assert!(!placer.flies_to_landing());
     }
 
     /// Probes are cast against the physics world as well as the terrain,
