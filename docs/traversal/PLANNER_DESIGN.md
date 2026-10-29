@@ -236,8 +236,16 @@ footfalls and doubled the miss). Feet that begin a flight hanging, or give
 up a landing, hang until touchdown: the placer still holds them where they
 left the ground, and flying them from there jumped them a metre and more.
 A swing whose landing time changes by more than a frame, as when a hop is
-planned while it swings, carries on from where the foot is; re-timed in
-place it jumped back along its arc (0.7 m). The drawn feet blend whenever
+planned while it swings or a flight takes up a foot mid-swing, carries on
+from where the foot is; re-timed in place it jumped back along its arc
+(0.7 m). Re-based, it climbs no higher than the arc it replaces: over a
+slope's crest the plan hands a leap's landing from foot to foot every
+frame, and a fresh lift each time ratcheted the feet half a metre over the
+hips. A swing onto a planned footfall aims at the footfall's height, which
+the plan sensed, not the probe's floor carried along its plane out to it
+(off a crest, half a metre over the shelf), and the swing's clearance over
+that floor fades in from the takeoff rather than lifting the foot to it at
+once. The drawn feet blend whenever
 they change between hanging and flown. An unplanned fall keeps the
 old resume: a replant at stance. The plan in turn starts from the
 feet the legs have down (`traversal::Legs`: the foot planted last holds the

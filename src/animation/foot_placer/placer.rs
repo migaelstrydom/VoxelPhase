@@ -26,7 +26,7 @@ use super::capture_point::{capture_point_xz, stance_offset, turn_in_place_offset
 use super::clock::{GaitClock, ReleaseKind};
 use super::config::FootPlacerConfig;
 use super::planned::{PlannedStep, PlannedSteps};
-use super::swing::swing_position;
+use super::swing::{rebased_lift, swing_position};
 use super::timing::{reach_budget, GaitTiming};
 
 /// Hard cap on substeps per frame, guarding against pathological dt.
@@ -755,12 +755,12 @@ impl FootPlacer {
                 };
             }
             let FootPhase::Stepping {
-                from,
+                ref mut from,
                 ref mut to,
                 to_forward,
                 ref mut t,
                 ref mut duration,
-                peak_lift,
+                ref mut peak_lift,
                 ..
             } = foot.phase
             else {
@@ -769,8 +769,15 @@ impl FootPlacer {
             if foot.side == landing_side {
                 self.flew_to_landing = Some(foot.side);
             }
+            if (*t + lands_in - *duration).abs() > ctx.dt {
+                *peak_lift = rebased_lift(*from, *to, *peak_lift, foot.position, step.at);
+                *from = foot.position;
+                *t = 0.0;
+                *duration = lands_in.max(0.0);
+            } else {
+                *duration = (*t + lands_in).max(*t);
+            }
             *to = step.at;
-            *duration = (*t + lands_in).max(*t);
             *t += ctx.dt;
             if *t >= *duration {
                 foot.phase = FootPhase::Planted;
@@ -781,7 +788,7 @@ impl FootPlacer {
                 foot.pre_lift = 0.0;
                 foot.since_plant = 0.0;
             } else {
-                foot.position = swing_position(from, *to, *t / *duration, peak_lift);
+                foot.position = swing_position(*from, *to, *t / *duration, *peak_lift);
             }
         }
     }
@@ -1042,8 +1049,8 @@ fn start_step(
 /// latest ideal (projected by remaining travel), or the plan's step for
 /// the foot where it has one, so direction changes mid-swing don't land
 /// the foot somewhere stale. The landing *height*
-/// chases the probed terrain for the whole swing — a vertical
-/// correction cannot skate, but a stale height pops at plant.
+/// chases the probed terrain, or the plan's footfall, for the whole swing —
+/// a vertical correction cannot skate, but a stale height pops at plant.
 ///
 /// A target the landing probe finds no ground under is illegal, and it
 /// takes precedence over both: the step shortens toward its takeoff
@@ -1074,10 +1081,12 @@ fn advance_stepping(
     // flight; the swing is otherwise the gait's. A swing whose landing time
     // changes by more than the frame (a flight planned while it swings)
     // carries on from where the foot is over the time now left, rather than
-    // jumping along its arc to where that much of the new swing would be.
+    // jumping along its arc to where that much of the new swing would be,
+    // and climbs no higher than it was going to.
     let planned = reachable_step(ctx, foot.side, (duration - t).max(0.0));
     let duration = match planned.and_then(|step| step.landing) {
         Some(landing) if (t + landing - duration).abs() > ctx.dt => {
+            peak_lift = rebased_lift(from, to, peak_lift, foot.position, to);
             from = foot.position;
             t = 0.0;
             landing.max(0.0)
@@ -1167,7 +1176,14 @@ fn advance_stepping(
     }
 
     let hip = hip_position(foot.side, ctx, facing);
-    if let Some((contact, normal)) = landing {
+    // A planned footfall's height is ground the plan sensed there; the probe's
+    // floor, carried along its plane out to a footfall a leap away, is not
+    // (off a slope's crest it aims the foot half a metre over the shelf).
+    let floor_y = match planned {
+        Some(step) => Some(step.at.y),
+        None => landing.map(|(contact, normal)| floor_height_at(contact, normal, to.x, to.z)),
+    };
+    if let Some(floor_y) = floor_y {
         // The swinging foot's probe aims at the landing target, so its
         // contact (extrapolated along the floor plane to the target xz)
         // is the best live estimate of the plant height. Chase it so
@@ -1181,7 +1197,7 @@ fn advance_stepping(
         // over after the horizontal stride, because at plant time the
         // hip will have travelled out to meet the target; it is a floor
         // under a runaway, not a stride budget.
-        let landing_y = floor_height_at(contact, normal, to.x, to.z).max(hip.y - reach);
+        let landing_y = floor_y.max(hip.y - reach);
         to.y += (landing_y - to.y) * alpha;
         // Stepping up: lift the apex enough to clear the higher landing
         // by a full step height, not just the lerp baseline's midpoint.
@@ -1214,14 +1230,16 @@ fn advance_stepping(
     };
     foot.position = swing_position(from, to, u, peak_lift);
     // Obstacle clearance: a riser or bump between the endpoints must
-    // push the foot over it, not let the arc cut through. Faded at the
-    // endpoints so takeoff and plant stay exactly on the surface.
+    // push the foot over it, not let the arc cut through. The whole push is
+    // faded at the endpoints, not just the clearance: the probe's floor is
+    // the target's, and carried back under a foot taking off from other
+    // ground (a slope below the shelf it steps onto) it lies well above it.
     if let Some((contact, normal)) = landing {
         let surface_y = floor_height_at(contact, normal, foot.position.x, foot.position.z);
         let bell = (std::f32::consts::PI * u).sin();
-        let min_y = surface_y + ctx.config.swing_obstacle_clearance * bell;
-        if foot.position.y < min_y {
-            foot.position.y = min_y;
+        let clear_y = surface_y + ctx.config.swing_obstacle_clearance;
+        if foot.position.y < clear_y {
+            foot.position.y += (clear_y - foot.position.y) * bell;
         }
     }
     foot.forward = swing_forward(from_forward, to_forward, u);
@@ -2139,6 +2157,110 @@ mod tests {
         advance_stepping(&mut placer.right, pelvis, &ctx, Vector3::z());
         let moved = planar_distance(placer.right.position, before);
         assert!(moved < 0.05, "the foot jumped {moved:.2} m");
+    }
+
+    #[test]
+    fn a_swing_a_flight_takes_up_carries_on_from_where_the_foot_is() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, RigDims::player().standing_height, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), 0.12, 0.0);
+        let (from, to) = (Point3::new(-0.12, 0.0, -0.3), Point3::new(-0.12, 0.0, 0.5));
+        placer.right.phase = FootPhase::Stepping {
+            from,
+            to,
+            from_forward: Vector3::z(),
+            to_forward: Vector3::z(),
+            t: 0.1,
+            duration: 0.2,
+            peak_lift: 0.05,
+        };
+        placer.right.position = swing_position(from, to, 0.5, 0.05);
+        let before = placer.right.position;
+        // The body leaves the ground half way through the swing, and the
+        // foot lands the flight 0.4 s on.
+        let planned = PlannedSteps {
+            left: None,
+            right: Some(PlannedStep {
+                at: Point3::new(-0.12, 0.0, 1.2),
+                landing: Some(0.4),
+            }),
+        };
+        let ctx = flight_ctx(&config, pelvis, Vector3::new(0.0, 0.0, 3.0), planned);
+        placer.set_suspended(true);
+        placer.fly_to_landing(&ctx);
+        let moved = planar_distance(placer.right.position, before);
+        assert!(moved < 0.05, "the foot jumped {moved:.2} m");
+    }
+
+    #[test]
+    fn a_swing_onto_a_planned_footfall_aims_at_the_plans_height() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, RigDims::player().standing_height, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), 0.12, 0.0);
+        let (from, to) = (Point3::new(-0.12, 0.0, -0.3), Point3::new(-0.12, 0.1, 0.5));
+        placer.right.phase = FootPhase::Stepping {
+            from,
+            to,
+            from_forward: Vector3::z(),
+            to_forward: Vector3::z(),
+            t: 0.05,
+            duration: 0.3,
+            peak_lift: 0.05,
+        };
+        placer.right.position = swing_position(from, to, 0.05 / 0.3, 0.05);
+        let planned = PlannedSteps {
+            left: None,
+            right: Some(PlannedStep {
+                at: Point3::new(-0.12, 0.0, 0.5),
+                landing: None,
+            }),
+        };
+        let mut ctx = flight_ctx(&config, pelvis, Vector3::new(0.0, 0.0, 1.0), planned);
+        // The probe's floor, carried out along its plane, lies half a metre
+        // above the footfall the plan sensed.
+        ctx.right_ground = Some(Point3::new(-0.12, 0.5, 0.5));
+        advance_stepping(&mut placer.right, pelvis, &ctx, Vector3::z());
+        let FootPhase::Stepping { to: aimed, .. } = placer.right.phase else {
+            panic!("the swing ended");
+        };
+        assert!(
+            aimed.y < to.y,
+            "the swing aims {:.2} m up, not at the plan's 0.0",
+            aimed.y
+        );
+    }
+
+    #[test]
+    fn a_swing_leaves_its_takeoff_however_high_the_probe_finds_the_floor() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, RigDims::player().standing_height, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), 0.12, 0.0);
+        let (from, to) = (Point3::new(-0.12, 0.0, -0.3), Point3::new(-0.12, 0.0, 0.5));
+        placer.right.phase = FootPhase::Stepping {
+            from,
+            to,
+            from_forward: Vector3::z(),
+            to_forward: Vector3::z(),
+            t: 0.0,
+            duration: 0.3,
+            peak_lift: 0.05,
+        };
+        placer.right.position = from;
+        // Lifting off a slope onto the shelf above it: the probe aims at the
+        // shelf, half a metre over the slope the foot leaves.
+        let mut ctx = flight_ctx(
+            &config,
+            pelvis,
+            Vector3::new(0.0, 0.0, 1.0),
+            PlannedSteps::default(),
+        );
+        ctx.right_ground = Some(Point3::new(-0.12, 0.5, 0.5));
+        advance_stepping(&mut placer.right, pelvis, &ctx, Vector3::z());
+        let rise = placer.right.position.y - from.y;
+        assert!(
+            rise < 0.15,
+            "the foot jumped {rise:.2} m up off its takeoff"
+        );
     }
 
     #[test]
