@@ -28,9 +28,21 @@ const CARRY_LIMIT_DEGREES: f32 = 10.0;
 /// The same while the path slides along a wall, in degrees: the wall, not
 /// the stick, sets its way, and it must not run into the wall.
 const SLIDE_TURN_LIMIT_DEGREES: f32 = 1.0;
-/// How far the body may leave the laid path's line before it is laid
-/// afresh, in metres.
+/// How far the body may be shoved off the laid path's line, the heading
+/// still along it, before the path is laid afresh, in metres: rough ground
+/// and rubble jostle the body this much and back, and each relay moves the
+/// plan's kept footfalls off the footholds it chose between the stones.
 const OFF_LINE_LIMIT: f32 = 0.2;
+/// How far the body may drift off the laid path's line along a heading
+/// turned from it, however little, before the path is laid afresh, in
+/// metres: the footfalls are planned about the line, so this is how far
+/// beside the body they land. A heading nudged by less than
+/// [`TURN_LIMIT_DEGREES`] drifts the body off the line by 1.7 cm a metre for
+/// each degree.
+const DRIFT_LIMIT: f32 = 0.02;
+/// Least turn of the heading from the laid path that drifts the body off
+/// it, in degrees: less is the same heading, read back.
+const STEERED_DEGREES: f32 = 0.01;
 /// How far the body may climb or drop from where the path was laid before
 /// it is laid afresh, in metres: the casts start and end relative to there.
 const HEIGHT_LIMIT: f32 = 1.5;
@@ -324,21 +336,15 @@ impl TraversalPlanning {
         }
         .path(input.position, input.heading);
         let laid = self.cache.frame().copied();
-        let fresh = match &laid {
-            None => true,
-            Some(frame) => {
-                let at = frame.path_point(input.position);
-                let limit = if line.slides {
-                    SLIDE_TURN_LIMIT_DEGREES
-                } else {
-                    TURN_LIMIT_DEGREES
-                };
-                let turned = frame.forward().angle(&line.frame.forward()).to_degrees() > limit;
-                turned
-                    || at.d.abs() > OFF_LINE_LIMIT
-                    || (input.position.y - self.laid_at).abs() > HEIGHT_LIMIT
-            }
-        };
+        let fresh = laid.is_none_or(|laid| {
+            strayed(
+                &laid,
+                self.laid_at,
+                &line.frame,
+                line.slides,
+                input.position,
+            )
+        });
         if fresh {
             self.previous = laid.zip(self.previous.take()).and_then(|(old, plan)| {
                 let turned = old.forward().angle(&line.frame.forward()).to_degrees();
@@ -350,6 +356,31 @@ impl TraversalPlanning {
         }
         fresh
     }
+}
+
+/// Whether the body at `position` has left the path `laid` at height
+/// `laid_at` for the way `heading` it would be laid now, sliding along a wall
+/// if `slides`: turned past the turn limit, shoved past [`OFF_LINE_LIMIT`]
+/// off its line, drifted past [`DRIFT_LIMIT`] along a heading turned from it,
+/// or climbed or dropped past [`HEIGHT_LIMIT`].
+fn strayed(
+    laid: &PathFrame,
+    laid_at: f32,
+    heading: &PathFrame,
+    slides: bool,
+    position: Point3<f32>,
+) -> bool {
+    let off = laid.path_point(position).d.abs();
+    let limit = if slides {
+        SLIDE_TURN_LIMIT_DEGREES
+    } else {
+        TURN_LIMIT_DEGREES
+    };
+    let turned = laid.forward().angle(&heading.forward()).to_degrees();
+    turned > limit
+        || off > OFF_LINE_LIMIT
+        || (off > DRIFT_LIMIT && turned > STEERED_DEGREES)
+        || (position.y - laid_at).abs() > HEIGHT_LIMIT
 }
 
 /// The contact a `limb` planted at `at` in the world makes: where the legs
@@ -370,5 +401,33 @@ fn planted_contact(query: &StripQuery, frame: &PathFrame, limb: Limb, at: Point3
             normal: PathVec::UP,
             footing: Footing::Fixed,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A path from the origin along +x, and the body `ahead` along it and
+    /// `off` to its left, heading `degrees` left of it.
+    fn strays(ahead: f32, off: f32, degrees: f32) -> bool {
+        let laid = PathFrame::new(Point3::origin(), 90.0);
+        let position = laid.world_point(PathVec::new(ahead, off, 0.0));
+        let heading = PathFrame::new(position, 90.0 - degrees);
+        strayed(&laid, 0.0, &heading, false, position)
+    }
+
+    #[test]
+    fn a_nudged_heading_relays_once_the_body_drifts_a_few_centimetres() {
+        assert!(!strays(5.0, 0.0, 1.0));
+        assert!(!strays(1.0, 0.015, 1.0));
+        assert!(strays(1.5, 0.025, 1.0));
+        assert!(strays(0.0, 0.0, 2.5));
+    }
+
+    #[test]
+    fn a_body_shoved_off_its_line_along_the_same_heading_keeps_it_longer() {
+        assert!(!strays(1.0, 0.1, 0.0));
+        assert!(strays(1.0, 0.25, 0.0));
     }
 }

@@ -6,7 +6,9 @@
 //! along the heading, so while the body turns the plan's footfalls lie along
 //! a line the body has turned away from until the path is laid afresh. The
 //! lag between the two is what the feet show as running one way while
-//! stepping another.
+//! stepping another. A nudge too small to lay the path afresh leaves the
+//! body running beside the path's line instead, the feet planned off to its
+//! side: the offset.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -19,8 +21,8 @@ use super::scenario::{CameraRig, Judged, Scenario};
 use super::traversal::FootfallSummary;
 
 const GARDEN: &str = "levels/traversal_garden.level.ron";
-/// The beat a turning run is judged over.
-const TURN_BEAT: &str = "turn";
+/// The beats a turning run is judged over.
+const JUDGED_BEAT: &str = "judged";
 
 /// A run along +x from `start` for `run_up` seconds, then turning left at
 /// `degrees_per_second` through `degrees`, then on straight.
@@ -46,7 +48,7 @@ fn turning(
                 // The pilot turns a positive rate from +x towards -z.
                 beat(degrees / degrees_per_second)
                     .turning(-degrees_per_second.to_radians())
-                    .named(TURN_BEAT),
+                    .named(JUDGED_BEAT),
             )
             .then(beat(0.5))
             .then(Beat::stand(0.5)),
@@ -55,10 +57,60 @@ fn turning(
     }
 }
 
+/// A run along +x from `start` for `run_up` seconds, then nudged 1° left,
+/// as a touch of the camera does, and on straight for `run_on` seconds.
+fn nudged(
+    name: &'static str,
+    summary: &'static str,
+    start: (f32, f32),
+    beat: fn(f32) -> Beat,
+    run_up: f32,
+    run_on: f32,
+) -> Scenario {
+    const NUDGE_DEGREES: f32 = 1.0;
+    const NUDGE_SECONDS: f32 = 0.1;
+    Scenario {
+        name,
+        summary,
+        level: GARDEN,
+        start,
+        yaw: FRAC_PI_2,
+        script: Script::new()
+            .then(Beat::stand(0.3))
+            .then(beat(run_up))
+            .then(
+                beat(NUDGE_SECONDS)
+                    .turning(-(NUDGE_DEGREES / NUDGE_SECONDS).to_radians())
+                    .named(JUDGED_BEAT),
+            )
+            .then(beat(run_on).named(JUDGED_BEAT))
+            .then(Beat::stand(0.5)),
+        camera: CameraRig::three_quarter().with_distance(6.0),
+        judged: Judged::Turn { axis: Vector3::x() },
+    }
+}
+
 /// The turning runs. Each turns 120° left within the flat ground at
-/// x -16..7, z -16..7: 6.4 m round at 5 m/s, 7.6 m at 8 m/s.
+/// x -16..7, z -16..7: 6.4 m round at 5 m/s, 7.6 m at 8 m/s. The nudged
+/// runs go straight along its south edge, short of the lips at x = 7.
 pub fn catalogue() -> Vec<Scenario> {
     vec![
+        nudged(
+            "nudge_walk",
+            "Turning: walk on after a 1° nudge on open ground",
+            (-15.5, -15.0),
+            Beat::walk,
+            1.0,
+            3.0,
+        ),
+        nudged(
+            "nudge_run",
+            "Turning: run on after a 1° nudge on open ground",
+            (-15.5, -15.0),
+            Beat::run,
+            0.8,
+            1.7,
+        ),
         turning(
             "turn_walk",
             "Turning: walk a steady 45°/s turn on open ground",
@@ -92,6 +144,10 @@ pub struct TurnSummary {
     pub total_lag: f32,
     /// Largest such angle, in degrees.
     pub worst_lag: f32,
+    /// Summed distance of the body from the plan's line over the planned
+    /// frames, and the largest, in metres.
+    pub total_offset: f32,
+    pub worst_offset: f32,
     /// Times the path was laid afresh.
     pub relays: usize,
     /// Summed planar speed over the frames judged, and the speed asked, in
@@ -110,7 +166,7 @@ impl TurnSummary {
         let judged = || {
             frames
                 .windows(2)
-                .filter(|pair| pair[1].beat == TURN_BEAT)
+                .filter(|pair| pair[1].beat == JUDGED_BEAT)
                 .map(|pair| (&pair[1], &pair[0]))
         };
         for (frame, previous) in judged() {
@@ -128,6 +184,10 @@ impl TurnSummary {
                 summary.total_lag += lag;
                 summary.worst_lag = summary.worst_lag.max(lag);
             }
+            if let Some(offset) = frame.plan_offset {
+                summary.total_offset += offset.abs();
+                summary.worst_offset = summary.worst_offset.max(offset.abs());
+            }
         }
         summary.footfalls = FootfallSummary::of(judged());
         summary
@@ -140,6 +200,8 @@ impl TurnSummary {
             planned_frames: self.planned_frames + other.planned_frames,
             total_lag: self.total_lag + other.total_lag,
             worst_lag: self.worst_lag.max(other.worst_lag),
+            total_offset: self.total_offset + other.total_offset,
+            worst_offset: self.worst_offset.max(other.worst_offset),
             relays: self.relays + other.relays,
             total_speed: self.total_speed + other.total_speed,
             total_asked: self.total_asked + other.total_asked,
@@ -158,11 +220,13 @@ impl TurnSummary {
     /// Column headings for `row`.
     pub fn header() -> String {
         format!(
-            "{:16} {:>6} {:>7} {:>7} {:>7} {:>6} {}",
+            "{:16} {:>6} {:>7} {:>7} {:>6} {:>9} {:>7} {:>6} {}",
             "scenario",
             "turn s",
             "lag",
             "lag_max",
+            "drift",
+            "drift_max",
             "relay/s",
             "speed",
             FootfallSummary::header()
@@ -170,18 +234,23 @@ impl TurnSummary {
     }
 
     /// One line of the table, for the scenario `name`: the mean and worst
-    /// lag in degrees, relays a second, and the body's speed as a share of
-    /// what was asked.
+    /// lag in degrees, the mean and worst drift off the line in metres, relays a
+    /// second, and the body's speed as a share of what was asked.
     pub fn row(&self, name: &str) -> String {
-        let lag = if self.planned_frames == 0 {
-            f32::NAN
-        } else {
-            self.total_lag / self.planned_frames as f32
+        let mean = |total: f32| {
+            if self.planned_frames == 0 {
+                f32::NAN
+            } else {
+                total / self.planned_frames as f32
+            }
         };
         format!(
-            "{name:16} {:6.2} {lag:7.2} {:7.2} {:7.2} {:6.2} {}",
+            "{name:16} {:6.2} {:7.2} {:7.2} {:6.3} {:9.3} {:7.2} {:6.2} {}",
             self.seconds,
+            mean(self.total_lag),
             self.worst_lag,
+            mean(self.total_offset),
+            self.worst_offset,
             self.relays as f32 / self.seconds.max(f32::EPSILON),
             self.total_speed / self.total_asked.max(f32::EPSILON),
             self.footfalls.columns()
@@ -227,6 +296,7 @@ mod tests {
             ride_floor_behind: Some(0.25),
             asked_speed: 5.0,
             plan_forward: Some(Vector3::new(cos, 0.0, sin)),
+            plan_offset: Some(0.01 * index as f32),
             path_laid: laid,
             feet: [foot, foot],
         }
@@ -236,8 +306,8 @@ mod tests {
     fn a_plan_off_the_travel_is_lag_only_while_turning() {
         let frames = vec![
             frame(0, "walk", 30.0, true),
-            frame(1, TURN_BEAT, 4.0, false),
-            frame(2, TURN_BEAT, 8.0, true),
+            frame(1, JUDGED_BEAT, 4.0, false),
+            frame(2, JUDGED_BEAT, 8.0, true),
             frame(3, "walk", 30.0, false),
         ];
         let summary = TurnSummary::of(&frames);
@@ -245,5 +315,6 @@ mod tests {
         assert!((summary.total_lag - 12.0).abs() < 1.0e-3);
         assert!((summary.worst_lag - 8.0).abs() < 1.0e-3);
         assert_eq!(summary.relays, 1);
+        assert!((summary.worst_offset - 0.02).abs() < 1.0e-6);
     }
 }

@@ -72,9 +72,17 @@ A `SectionFrame` maps the world to path coordinates: `s` is the distance along
 the predicted path, `d` the signed offset across it (positive to the left),
 `z` the height. The path is a straight line laid from the body along the
 heading (or along a wall the heading meets), and laid afresh once the
-heading has turned 2° from it, the body has left its line by 0.2 m, or
+heading has turned 2° from it, the body has drifted 2 cm off its line
+along a heading turned from it at all, been shoved 0.2 m off it, or
 climbed or dropped far from where it was laid. A gentle turn, the stick
-swung by the camera, relays it every few frames.
+swung by the camera, relays it every few frames; a nudge of the camera
+under 2° relays it once the body has drifted 2 cm (it drifts 1.7 cm a
+metre per degree, and the feet are planned about the line, so had stood up
+to 0.2 m beside the body on a long straight run). Rough ground and scree
+shove the body off its line and back without turning its heading; relaying
+on those 2 cm made scree relay forty times a crossing, each relay moving
+the kept footfalls off the footholds between the stones, so a shove keeps
+the line to 0.2 m.
 
 A path laid afresh carries the last plan onto it, turned with the path: each
 footfall keeps its offset across the path and the body's path is laid along

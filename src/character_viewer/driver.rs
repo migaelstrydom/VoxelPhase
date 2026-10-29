@@ -369,7 +369,8 @@ fn record(
         ride_floor,
         ride_floor_behind,
         asked_speed,
-        plan_forward: planned_path(world).map(|(forward, _)| forward),
+        plan_forward: planned_path(world).map(|(path, _)| path.forward()),
+        plan_offset: planned_path(world).map(|(path, _)| path.path_point(position).d),
         path_laid: planned_path(world).is_some_and(|(_, laid)| laid),
         feet: [FootSide::Left, FootSide::Right].map(|side| {
             let drawn = match side {
@@ -436,12 +437,12 @@ fn foot_record(
     }
 }
 
-/// The way this frame's traversal plan's path runs, and whether it was laid
-/// afresh this frame, if the character planned.
-fn planned_path(world: &World) -> Option<(Vector3<f32>, bool)> {
+/// This frame's traversal plan's path, and whether it was laid afresh this
+/// frame, if the character planned.
+fn planned_path(world: &World) -> Option<(PathFrame, bool)> {
     let state = world.try_fetch::<TraversalPlanState>()?;
     let frame = state.last.as_ref()?;
-    Some((frame.frame.forward(), frame.cost.laid_afresh))
+    Some((frame.frame, frame.cost.laid_afresh))
 }
 
 /// Where this frame's traversal plan lands `side` next, in the world, if it

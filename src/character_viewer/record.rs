@@ -49,6 +49,8 @@ pub struct FrameRecord {
     /// The way the traversal plan's path runs this frame, horizontal and unit
     /// length, if the character plans.
     pub plan_forward: Option<Vector3<f32>>,
+    /// How far the body is to the left of that path's line, in metres.
+    pub plan_offset: Option<f32>,
     /// Whether the plan's path was laid afresh this frame.
     pub path_laid: bool,
     /// The left foot and the right, as the rig drew them.

@@ -493,6 +493,7 @@ mod tests {
             ride_floor_behind: Some(0.25),
             asked_speed: asked,
             plan_forward: None,
+            plan_offset: None,
             path_laid: false,
             feet: [foot, foot],
         }
