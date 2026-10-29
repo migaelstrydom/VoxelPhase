@@ -1,6 +1,6 @@
 # TODO
 
-Tracked future work for Flipphase.
+Tracked future work for Voxel Phase.
 
 ---
 
@@ -73,3 +73,56 @@ harder to diagnose once the two are layered.
 
 Reproduce with `cargo run --bin visual_bench -- terrain_forms` and look at the
 open ground in the `slope sweep` tile.
+
+---
+
+## Sliding off an edge
+
+A body standing on an edge stays there with its centre well past it, the
+capsule's bottom sphere resting on the corner and the feet over nothing. It
+should slide off once its centre is past the edge. This is the character
+controller, not the traversal planner or the legs: it happens on main too,
+with no plan driving.
+
+### Sketch
+
+- **Detect** a body held up by its bottom sphere's contact on an edge alone,
+  whose centre lies horizontally further from that contact than a foot can
+  stand (about 0.15 m, the stance half width plus a little), with no floor
+  within step height in a short cast straight down from the centre.
+- **Respond** with a gentle outward push, horizontal and away from the
+  contact, growing with the overhang, and stop the drive holding the body
+  in place while it lasts, so it tips off.
+- **Test** with a scenario each way: the capsule's centre 0.2 m past a ledge
+  slides off within a set time; 0.05 m past, it stays.
+
+The planner already never plans a stop past an edge, so the two do not meet.
+
+---
+
+## Feet snap at a landing and a hop's launch
+
+A landing foot jumps 0.24–0.29 m relative to the pelvis in a frame
+(a swing moves about 0.13 m a frame), and a planned hop's launch pose
+0.29 m. Measured with `character_viewer` on `jump_straight`, `air_reverse`
+and `hop_reverse`, with and without `--track`: the same untracked, so not
+the planner's.
+
+The landing pop is deliberate: `lerp_feet` (`src/animation/pose.rs`) takes
+hip-anchored feet to world-placed ones in one frame, so a landing foot does
+not skate along the ground through the 0.1 s crossfade. A fix has to
+blend hanging feet onto their landing spot before touchdown rather than
+across it. The launch snap is not yet looked into.
+
+---
+
+## Crouch-walk drags the trailing foot
+
+Crouch-walking, the trailing foot lifts 0.40 m behind the hip but plants only
+0.26 m ahead, so the legs read as dragging behind (`character_viewer
+crouch_walk`, untracked). It is the foot placer's own gait at crouch. Suspected,
+unverified: a foot may not lift until the other has landed, which holds the
+trailing foot back at crouch's slow cadence. The crouch's pelvis offset
+(0.12 m, both crouch presets) is bounded by the knee clearing the ground
+(`a_crouched_knee_clears_the_ground_wherever_the_foot_is`), so the fix is in
+the gait, not the pelvis.

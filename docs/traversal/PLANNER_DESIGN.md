@@ -251,6 +251,12 @@ footfall a whole step on (a 0.45 m miss in the turning runs). Holding the plan's
 and cut the stance in half at a run: the plan's cadence can only ever
 approximate the legs', and the legs must not follow it.
 
+Three things seen in play look like the legs following the plan but happen
+untracked, and on main, alike, so they are left to their own projects
+(`docs/TODO.md`): the feet's pop at a landing and a planned hop's launch,
+the crouch-walk's trailing foot, and a body resting on an edge with its
+centre past it.
+
 The plank bridge in this form, with no special cases:
 
 ```
