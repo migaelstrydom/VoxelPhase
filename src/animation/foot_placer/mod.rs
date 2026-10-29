@@ -19,6 +19,8 @@ mod chase;
 #[cfg(test)]
 mod invariants;
 #[cfg(test)]
+mod plan_fuzz;
+#[cfg(test)]
 mod replay;
 #[cfg(test)]
 mod scenarios;
@@ -32,4 +34,5 @@ pub(crate) use placer::{floor_height_at, is_floor};
 pub use placer::{FootPhase, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
 pub use planned::{PlannedStep, PlannedSteps};
 pub use recorder::PlacerRecorder;
+pub use swing::Swing;
 pub use timing::GaitTiming;

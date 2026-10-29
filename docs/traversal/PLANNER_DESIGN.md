@@ -235,17 +235,29 @@ land it in their own time (a reach limit both ways rejected ordinary
 footfalls and doubled the miss). Feet that begin a flight hanging, or give
 up a landing, hang until touchdown: the placer still holds them where they
 left the ground, and flying them from there jumped them a metre and more.
-A swing whose landing time changes by more than a frame, as when a hop is
-planned while it swings or a flight takes up a foot mid-swing, carries on
-from where the foot is; re-timed in place it jumped back along its arc
-(0.7 m). Re-based, it climbs no higher than the arc it replaces: over a
-slope's crest the plan hands a leap's landing from foot to foot every
-frame, and a fresh lift each time ratcheted the feet half a metre over the
-hips. A swing onto a planned footfall aims at the footfall's height, which
-the plan sensed, not the probe's floor carried along its plane out to it
-(off a crest, half a metre over the shelf), and the swing's clearance over
-that floor fades in from the takeoff rather than lifting the foot to it at
-once. The drawn feet blend whenever
+A swing carries its own motion (`foot_placer::Swing`): each substep the
+foot steers from where it is, at the speed it has, onto its landing over
+the time left, along the cubic that is smoothstep for a target that holds
+still. Whatever moves the landing or its time mid-swing (a hop planned
+while it swings, a flight taking it up, a plan handing a leap's landing
+from foot to foot every frame over a slope's crest) bends the path; it
+never moves the foot, which the swing's old arc, recomputed from its
+endpoints, did by up to 0.7 m. The lift is a bell over the swing's
+progress and a retime keeps the progress, so no change of plan lifts the
+foot again; the drawn foot is kept below the hip and within the leg's
+stretch. A swing within its last frame keeps its landing: `Legs` has told
+the plan the foot stands there. A swing with nowhere it can plant is held,
+due again every substep, after a landing gathering under the hip. The
+probe's floor is taken only within 0.6 m of where it struck: carried along
+its plane to a footfall a leap away it aims the foot half a metre over a
+slope's shelf, and a probe still aimed where a replanted foot was puts the
+floor anywhere. A swing onto a planned footfall aims at the footfall's own
+height, which the plan sensed. A landing that leaves a planted foot out of
+the leg's reach replants at stance. These hold under any plan: a fuzz
+(`foot_placer::plan_fuzz`) drives the legs with plans that churn, swap
+feet, withdraw, and hand flights' landings between the feet, some steered
+back in the air, and asserts that the feet stay below the hips, within the
+leg's stretch, and move as smoothly as with no plan. The drawn feet blend whenever
 they change between hanging and flown. An unplanned fall keeps the
 old resume: a replant at stance. The plan in turn starts from the
 feet the legs have down (`traversal::Legs`: the foot planted last holds the

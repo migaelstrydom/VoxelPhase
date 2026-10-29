@@ -158,9 +158,9 @@ fn draw_foot_placer_overlay(placer: &FootPlacer, overlays: &mut DebugOverlays) {
             foot.ideal_xz,
             Colour::new(1.0, 0.0, 1.0, 1.0),
         );
-        if let FootPhase::Stepping { from, to, .. } = foot.phase {
+        if let FootPhase::Stepping(swing) = foot.phase {
             overlays.add_sphere(foot.position, 0.035, Colour::new(1.0, 0.6, 0.0, 1.0));
-            overlays.add_line(from, to, Colour::new(1.0, 0.6, 0.0, 1.0));
+            overlays.add_line(swing.from, swing.to, Colour::new(1.0, 0.6, 0.0, 1.0));
         }
     }
 }

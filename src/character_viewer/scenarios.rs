@@ -13,7 +13,7 @@
 //! ground falling away on the right, and straight up it at a run. And
 //! `air_reverse`, `jump_straight`, `run_reverse` and `crouch_walk`, on the
 //! Traversal Garden's open ground,
-//! and `hop_reverse` at its 25 cm step.
+//! `hop_reverse` at its 25 cm step, and `drop_reverse` off its 40 cm step.
 //!
 //! The traversal scenarios, in the Traversal Garden, are catalogued in
 //! `traversal_scenarios` and appended here, and after them the turning runs,
@@ -319,6 +319,20 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::stand(0.3))
                 .then(Beat::walk(2.3))
                 .then(Beat::walk(0.8).towards(-Vector3::x()).named("back"))
+                .then(Beat::stand(0.6)),
+            camera: CameraRig::side().with_distance(3.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "drop_reverse",
+            summary: "Traversal Garden: run west off the 40 cm step, and steer back east in the air",
+            level: TRAVERSAL_GARDEN,
+            start: (11.0, 4.0),
+            yaw: -SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::run(0.7).towards(-Vector3::x()))
+                .then(Beat::run(0.8).towards(Vector3::x()).named("back"))
                 .then(Beat::stand(0.6)),
             camera: CameraRig::side().with_distance(3.0),
             judged: Judged::Motion,

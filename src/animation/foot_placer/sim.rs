@@ -129,6 +129,10 @@ pub struct Frame {
     /// The cadence the placer planned this frame, which is what a
     /// measured gait has to be judged against.
     pub timing: Option<super::timing::GaitTiming>,
+    /// Whether the feet are drawn where the placer has them: on the
+    /// ground, or flown onto a plan's landing. Otherwise they hang from
+    /// the hips.
+    pub feet_placed: bool,
     pub left: PlacerFoot,
     pub right: PlacerFoot,
 }
@@ -213,9 +217,9 @@ pub fn simulate_over(
     )
 }
 
-/// The full form: a scenario over arbitrary terrain, on an arbitrary rig,
-/// under an arbitrary placer config. Everything above is this with the
-/// player's proportions filled in.
+/// A scenario over arbitrary terrain, on an arbitrary rig, under an
+/// arbitrary placer config, with no plan. Everything above is this with
+/// the player's proportions filled in.
 #[allow(clippy::too_many_arguments)]
 pub fn simulate_rig(
     dims: RigDims,
@@ -226,6 +230,34 @@ pub fn simulate_rig(
     terrain: impl Fn(f32, f32) -> Option<f32>,
     input: impl Fn(usize) -> Input,
     suspend: impl Fn(usize) -> bool,
+) -> Vec<Frame> {
+    simulate_planned(
+        dims,
+        cfg,
+        frames,
+        dt_of,
+        gait,
+        terrain,
+        input,
+        suspend,
+        |_, _, _| PlannedSteps::default(),
+    )
+}
+
+/// The full form with a plan of the way ahead: `planned` gives each
+/// frame's planned footfalls from the frame index, the pelvis and the
+/// body's velocity, as the game's traversal plan does.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_planned(
+    dims: RigDims,
+    cfg: FootPlacerConfig,
+    frames: usize,
+    dt_of: impl Fn(usize) -> f32,
+    gait: GaitParams,
+    terrain: impl Fn(f32, f32) -> Option<f32>,
+    input: impl Fn(usize) -> Input,
+    suspend: impl Fn(usize) -> bool,
+    mut planned: impl FnMut(usize, Point3<f32>, Vector3<f32>) -> PlannedSteps,
 ) -> Vec<Frame> {
     let RigDims {
         hip_width,
@@ -306,7 +338,7 @@ pub fn simulate_rig(
             right_ground_normal,
             left_ground,
             right_ground,
-            planned: PlannedSteps::default(),
+            planned: planned(f, pelvis, velocity),
             config: &cfg,
         };
         placer.tick(&ctx);
@@ -318,6 +350,7 @@ pub fn simulate_rig(
             yaw,
             gait_phase: placer.gait_phase(),
             timing: placer.timing(),
+            feet_placed: !placer.is_suspended() || placer.flies_to_landing(),
             left: placer.left.clone(),
             right: placer.right.clone(),
         });

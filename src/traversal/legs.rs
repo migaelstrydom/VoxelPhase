@@ -75,7 +75,7 @@ impl Legs {
 /// Where `foot`'s swing lands it; `None` planted.
 fn swing_target(foot: &PlacerFoot) -> Option<Point3<f32>> {
     match foot.phase {
-        FootPhase::Stepping { to, .. } => Some(to),
+        FootPhase::Stepping(swing) => Some(swing.to),
         FootPhase::Planted => None,
     }
 }
@@ -83,7 +83,7 @@ fn swing_target(foot: &PlacerFoot) -> Option<Point3<f32>> {
 /// Seconds of its swing `foot` has left; `None` planted.
 fn swing_left(foot: &PlacerFoot) -> Option<f32> {
     match foot.phase {
-        FootPhase::Stepping { t, duration, .. } => Some(duration - t),
+        FootPhase::Stepping(swing) => Some(swing.remaining()),
         FootPhase::Planted => None,
     }
 }
@@ -100,6 +100,7 @@ mod tests {
     use nalgebra::Vector3;
 
     use super::*;
+    use crate::animation::Swing;
 
     const FRAME: f32 = 1.0 / 60.0;
 
@@ -107,14 +108,18 @@ mod tests {
     /// landing at `to` and the left half a swing from landing.
     fn running(left: f32, to: Point3<f32>) -> FootPlacer {
         let mut placer = FootPlacer::new(Point3::new(0.0, 0.5, 0.0), Vector3::z(), 0.12, 0.0);
-        let swing = |from: Point3<f32>, to: Point3<f32>, t: f32| FootPhase::Stepping {
-            from,
-            to,
-            from_forward: Vector3::z(),
-            to_forward: Vector3::z(),
-            t,
-            duration: 0.2,
-            peak_lift: 0.05,
+        let swing = |from: Point3<f32>, to: Point3<f32>, t: f32| {
+            let mut swing = Swing::new(
+                from,
+                to,
+                Vector3::z(),
+                Vector3::z(),
+                0.2,
+                0.05,
+                Vector3::zeros(),
+            );
+            swing.t = t;
+            FootPhase::Stepping(swing)
         };
         placer.right.phase = swing(Point3::new(-0.12, 0.0, -0.5), to, 0.2 - left);
         placer.left.phase = swing(

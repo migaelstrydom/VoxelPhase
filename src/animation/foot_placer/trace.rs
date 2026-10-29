@@ -16,7 +16,7 @@ use super::sim::{simulate_gait, Frame};
 fn phase_label(p: &FootPhase) -> &'static str {
     match p {
         FootPhase::Planted => "PLANTED",
-        FootPhase::Stepping { .. } => "STEP   ",
+        FootPhase::Stepping(_) => "STEP   ",
     }
 }
 

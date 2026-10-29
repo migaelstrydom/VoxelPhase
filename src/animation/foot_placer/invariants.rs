@@ -467,7 +467,8 @@ fn plants_land_without_vertical_pop() {
                 &s.right
             }] {
                 let (a, b) = (foot_of(&pair[0]), foot_of(&pair[1]));
-                if let (FootPhase::Stepping { to, .. }, FootPhase::Planted) = (a.phase, b.phase) {
+                if let (FootPhase::Stepping(swing), FootPhase::Planted) = (a.phase, b.phase) {
+                    let to = swing.to;
                     let pop = (b.planted_position.y - to.y).abs();
                     assert!(
                         pop <= 0.03,

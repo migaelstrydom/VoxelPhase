@@ -46,12 +46,12 @@ const PHASE_SLEW_RATE: f32 = 35.0;
 /// whenever the gait is clean.
 pub fn phase_from_placer(placer: &FootPlacer, prev_phase: f32, dt: f32) -> f32 {
     let target = match (placer.left.phase, placer.right.phase) {
-        (FootPhase::Stepping { t, duration, .. }, _) => {
-            let u = (t / duration.max(1e-4)).clamp(0.0, 1.0);
+        (FootPhase::Stepping(swing), _) => {
+            let u = swing.progress();
             (PI + PI * u).rem_euclid(TAU)
         }
-        (_, FootPhase::Stepping { t, duration, .. }) => {
-            let u = (t / duration.max(1e-4)).clamp(0.0, 1.0);
+        (_, FootPhase::Stepping(swing)) => {
+            let u = swing.progress();
             (PI * u).rem_euclid(TAU)
         }
         _ => return prev_phase,
