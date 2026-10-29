@@ -87,7 +87,7 @@ pub struct FootfallSummary {
 impl FootfallSummary {
     /// Each foot's plants among `frames`, each judged against the frame
     /// before it.
-    fn of<'a>(frames: impl Iterator<Item = (&'a FrameRecord, &'a FrameRecord)>) -> Self {
+    pub(super) fn of<'a>(frames: impl Iterator<Item = (&'a FrameRecord, &'a FrameRecord)>) -> Self {
         let mut summary = Self::default();
         for (frame, previous) in frames {
             for (now, before) in frame.feet.iter().zip(&previous.feet) {
@@ -113,7 +113,7 @@ impl FootfallSummary {
     }
 
     /// Both summaries together.
-    fn merged(self, other: Self) -> Self {
+    pub(super) fn merged(self, other: Self) -> Self {
         Self {
             plants: self.plants + other.plants,
             off_footing: self.off_footing + other.off_footing,
@@ -124,11 +124,11 @@ impl FootfallSummary {
     }
 
     /// Column headings for `columns`.
-    fn header() -> String {
+    pub(super) fn header() -> String {
         format!("{:>7} {:>5} {:>8}", "off", "miss", "miss_max")
     }
 
-    fn columns(&self) -> String {
+    pub(super) fn columns(&self) -> String {
         let off = format!("{}/{}", self.off_footing, self.plants);
         if self.planned == 0 {
             return format!("{off:>7} {:>5} {:>8}", "-", "-");
@@ -492,6 +492,8 @@ mod tests {
             ride_floor: Some(0.25),
             ride_floor_behind: Some(0.25),
             asked_speed: asked,
+            plan_forward: None,
+            path_laid: false,
             feet: [foot, foot],
         }
     }

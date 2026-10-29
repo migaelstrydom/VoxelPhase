@@ -70,9 +70,25 @@ The planner crate does not depend on the game. The game depends on it.
 
 A `SectionFrame` maps the world to path coordinates: `s` is the distance along
 the predicted path, `d` the signed offset across it (positive to the left),
-`z` the height. In the first version the path is the arc the stick is
-steering along, from the body's position and velocity, so turns sample the
-ground the body will actually cross.
+`z` the height. The path is a straight line laid from the body along the
+heading (or along a wall the heading meets), and laid afresh once the
+heading has turned 2° from it, the body has left its line by 0.2 m, or
+climbed or dropped far from where it was laid. A gentle turn, the stick
+swung by the camera, relays it every few frames.
+
+A path laid afresh carries the last plan onto it, turned with the path: each
+footfall keeps its offset across the path and the body's path is laid along
+the new line, so commitments survive a turn. Kept where they were in the
+world, the footfalls would end up further outside the body's curve with
+every relay (they did, by 0.2 m at a 6 m radius, out of the strip); turned
+with the path, a footfall's error is the curve's offset from the line ahead,
+which shrinks to nothing as the body comes up to it. Past 10° of turn the
+plan is made anew. The strip's casts are keyed to the path, so a relay casts
+it again; one carrying a plan is cast to its full reach at once (about 3000
+casts, 3 ms), since a plan carried with less in sight refuses what it
+crossed a frame before. Only a path with no plan starts short and grows a
+metre a frame. Casting a world-fixed patch instead, which a turned path
+reads without casting, is the production answer (*Beyond one path*).
 
 The section is a **strip** of lanes at fixed offsets `d` across the path. The
 first version has five lanes over ±0.3 m: the centre lane for the body, and
@@ -641,8 +657,9 @@ holds below the asked speed or slows, the intent asks its speed one frame
 ahead, more up or down a grade by the drive contract's `ground_speed` so
 the drive delivers it. Which of the two (or a refusal's braking) sets the
 pace shows on screen as `Traversal track`. The intent is steered by the
-stick: the path is relaid only once the heading has turned
-10°, and steering along it turned the body in steps. Along a wall it slides
+stick, the path following within 2° (see *The section*): steering the
+intent along the path, which was relaid only every 10°, turned the body in
+steps. Along a wall it slides
 on, the intent follows the path. A ride changes speed at constant
 acceleration (`v² = v₀² + 2ad`, not `a·d/v` a station at a time, which from
 standing jumped to 1.6 m/s in 5 cm), and consecutive rides are one phase only

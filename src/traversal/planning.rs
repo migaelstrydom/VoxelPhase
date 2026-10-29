@@ -19,8 +19,12 @@ use super::strip_scenery::{SceneryView, StripScenery};
 use super::wall_slide::WallSlide;
 
 /// How far the heading may turn from the laid path before it is laid
-/// afresh, in degrees.
-const TURN_LIMIT_DEGREES: f32 = 10.0;
+/// afresh, in degrees: the footfalls lie along the laid path, so this is how
+/// far they may point from where the body runs.
+const TURN_LIMIT_DEGREES: f32 = 2.0;
+/// How far a path laid afresh may turn from the last one and the last plan
+/// still be kept, carried onto it, in degrees; past it the plan is made anew.
+const CARRY_LIMIT_DEGREES: f32 = 10.0;
 /// The same while the path slides along a wall, in degrees: the wall, not
 /// the stick, sets its way, and it must not run into the wall.
 const SLIDE_TURN_LIMIT_DEGREES: f32 = 1.0;
@@ -30,8 +34,10 @@ const OFF_LINE_LIMIT: f32 = 0.2;
 /// How far the body may climb or drop from where the path was laid before
 /// it is laid afresh, in metres: the casts start and end relative to there.
 const HEIGHT_LIMIT: f32 = 1.5;
-/// How far ahead the strip is sampled on the frame a path is laid, in
-/// metres: the next footfall or two.
+/// How far ahead the strip is sampled on the frame a path is laid with no
+/// plan to carry onto it, in metres: the next footfall or two. The reach
+/// then grows by [`REACH_GROWTH`] a frame, so laying a path costs a few
+/// frames a little each rather than one frame a lot.
 const LAID_REACH: f32 = 2.0;
 /// How much further it is sampled each frame after, in metres: about 300
 /// casts.
@@ -110,10 +116,9 @@ pub struct TraversalPlanning {
     planner: Planner,
     layout: StripLayout,
     cache: SectionCache,
-    /// The static geometry around the strip, fetched once for many frames.
+    /// The static geometry around the strip, fetched once for many frames
+    /// and paths.
     scenery: Option<StripScenery>,
-    /// How far along the path the fetched geometry reaches.
-    scenery_until: f32,
     /// The height the path was laid at, which the casts reach around.
     laid_at: f32,
     /// How far above and below there they reach ([`strip_reach`]).
@@ -121,8 +126,8 @@ pub struct TraversalPlanning {
     /// Whether the path was laid along a wall ([`WallSlide`]).
     slides: bool,
     /// How far ahead of the body the strip is sampled: short when a path is
-    /// laid, growing frame by frame to the layout's reach, so laying a path
-    /// costs a few frames a little each rather than one frame a lot.
+    /// laid with no plan to carry, growing frame by frame to the layout's
+    /// reach.
     sampled_ahead: f32,
     previous: Option<Plan>,
     /// The foot that lands next when the legs do not say: the last plan's.
@@ -137,7 +142,6 @@ impl TraversalPlanning {
             layout,
             cache: SectionCache::default(),
             scenery: None,
-            scenery_until: f32::MIN,
             laid_at: 0.0,
             reach,
             slides: false,
@@ -195,10 +199,13 @@ impl TraversalPlanning {
             source: input.scenery,
         };
         let caster = self.caster(input.world, &view, input.exclude);
-        self.sampled_ahead = if laid_afresh {
-            LAID_REACH
-        } else {
-            (self.sampled_ahead + REACH_GROWTH).min(self.layout.ahead)
+        self.sampled_ahead = match (laid_afresh, &self.previous) {
+            // A path laid afresh carrying the last plan is sampled to its
+            // full reach at once: the plan goes on along it, and planned on
+            // with less in sight it may refuse what it crossed a frame ago.
+            (true, Some(_)) => self.layout.ahead,
+            (true, None) => LAID_REACH,
+            (false, _) => (self.sampled_ahead + REACH_GROWTH).min(self.layout.ahead),
         };
         let layout = StripLayout {
             ahead: self.sampled_ahead,
@@ -255,17 +262,28 @@ impl TraversalPlanning {
         })
     }
 
-    /// Fetches the static geometry around the strip when there is none for
-    /// this path, the strip is nearing the end of it, or the terrain changed.
+    /// Fetches the static geometry around the strip when what was fetched
+    /// does not cover it or the terrain changed: some way further ahead than
+    /// needed, so it is fetched again only every few metres.
     fn fetch_scenery_if_needed(&mut self, input: &PlanningInput, s: f32) {
+        let from = s - self.layout.behind;
         let ahead = s + self.layout.ahead + self.params().body.radius;
-        if self.scenery.is_some() && ahead <= self.scenery_until && input.terrain_changes.is_empty()
-        {
+        let covered = self
+            .scenery
+            .as_ref()
+            .is_some_and(|scenery| scenery.covers(&self.strip_region(from, ahead)));
+        if covered && input.terrain_changes.is_empty() {
             return;
         }
-        let frame = *self.cache.frame().expect("laid");
-        let from = s - self.layout.behind - SCENERY_MARGIN;
-        let until = ahead + SCENERY_AHEAD;
+        let region = self.strip_region(from, ahead + SCENERY_AHEAD);
+        self.scenery = Some(StripScenery::fetch(input.scenery, region));
+    }
+
+    /// The world box around the strip from `from` to `until` along the laid
+    /// path, as high and low as the casts reach, with [`SCENERY_MARGIN`]
+    /// about it.
+    fn strip_region(&self, from: f32, until: f32) -> AABB {
+        let frame = self.cache.frame().expect("laid");
         let half_width = self.layout.lanes.iter().fold(0.0f32, |w, d| w.max(d.abs()))
             + self.params().body.radius
             + SCENERY_MARGIN;
@@ -274,8 +292,8 @@ impl TraversalPlanning {
             self.laid_at + self.reach.0 + SCENERY_MARGIN,
         );
         let corners = [
-            (from, -half_width),
-            (from, half_width),
+            (from - SCENERY_MARGIN, -half_width),
+            (from - SCENERY_MARGIN, half_width),
             (until, -half_width),
             (until, half_width),
         ]
@@ -290,13 +308,13 @@ impl TraversalPlanning {
             .fold(Point3::new(f32::MIN, high, f32::MIN), |m, c| {
                 Point3::new(m.x.max(c.x), high, m.z.max(c.z))
             });
-        self.scenery = Some(StripScenery::fetch(input.scenery, AABB::new(min, max)));
-        self.scenery_until = until;
+        AABB::new(min, max)
     }
 
     /// Lays the path the way the body will move ([`WallSlide`]) when there is
-    /// none, that way has turned, or the body has left its line; the last
-    /// plan goes with the old path. Whether it did.
+    /// none, that way has turned, or the body has left its line or its
+    /// height; the last plan is carried onto the new path if it turned
+    /// within [`CARRY_LIMIT_DEGREES`], and dropped if more. Whether it did.
     fn lay_path_if_needed(&mut self, input: &PlanningInput) -> bool {
         let line = WallSlide {
             world: input.world,
@@ -305,7 +323,8 @@ impl TraversalPlanning {
             body: &self.planner.params.body,
         }
         .path(input.position, input.heading);
-        let fresh = match self.cache.frame() {
+        let laid = self.cache.frame().copied();
+        let fresh = match &laid {
             None => true,
             Some(frame) => {
                 let at = frame.path_point(input.position);
@@ -321,11 +340,13 @@ impl TraversalPlanning {
             }
         };
         if fresh {
+            self.previous = laid.zip(self.previous.take()).and_then(|(old, plan)| {
+                let turned = old.forward().angle(&line.frame.forward()).to_degrees();
+                (turned <= CARRY_LIMIT_DEGREES).then(|| old.carry(&plan, &line.frame))
+            });
             self.cache.lay_path(line.frame);
-            self.scenery = None;
             self.laid_at = input.position.y;
             self.slides = line.slides;
-            self.previous = None;
         }
         fresh
     }

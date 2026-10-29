@@ -11,5 +11,7 @@
 //! ```
 
 mod run;
+#[cfg(all(test, feature = "traversal_scenarios"))]
+mod turning;
 
 pub use run::{run, FrameRecord, PerfRun, PerfSpec, StripDifference};

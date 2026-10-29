@@ -97,21 +97,54 @@ pub struct Scenario {
     pub yaw: f32,
     pub script: Script,
     pub camera: CameraRig,
-    /// What a traversal scenario crosses, for the report to judge it on.
-    pub station: Option<Station>,
+    /// What the run is judged on.
+    pub judged: Judged,
+}
+
+/// What a scenario's run is judged on, beyond its frame-by-frame report.
+#[derive(Clone, Copy, Debug)]
+pub enum Judged {
+    /// Nothing more: how the body moved.
+    Motion,
+    /// How it got across a traversal station.
+    Crossing(Station),
+    /// How the plan kept up with a steady turn ([`TurnSummary`]), the run-up
+    /// to it along `axis`, a horizontal unit direction.
+    ///
+    /// [`TurnSummary`]: super::turning::TurnSummary
+    Turn { axis: Vector3<f32> },
+}
+
+impl Judged {
+    /// The station crossed, if the run crosses one.
+    pub fn station(&self) -> Option<Station> {
+        match self {
+            Judged::Crossing(station) => Some(*station),
+            _ => None,
+        }
+    }
+
+    /// The way the run sets off, if it is judged on more than its motion.
+    fn axis(&self) -> Option<Vector3<f32>> {
+        match self {
+            Judged::Motion => None,
+            Judged::Crossing(station) => Some(station.axis),
+            Judged::Turn { axis } => Some(*axis),
+        }
+    }
 }
 
 impl Scenario {
-    /// The scenario started `back` metres further back along the way it
-    /// crosses its station, if it has one: the same crossing met at another
-    /// phase of the frames and the stride.
+    /// The scenario started `back` metres further back along the way it sets
+    /// off, if it is judged on more than its motion: the same crossing or
+    /// turn met at another phase of the frames and the stride.
     pub fn started_back(&self, back: f32) -> Scenario {
-        let Some(station) = self.station else {
+        let Some(axis) = self.judged.axis() else {
             return self.clone();
         };
         let (x, z) = self.start;
         Scenario {
-            start: (x - back * station.axis.x, z - back * station.axis.z),
+            start: (x - back * axis.x, z - back * axis.z),
             ..self.clone()
         }
     }

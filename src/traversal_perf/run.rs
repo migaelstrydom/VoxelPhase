@@ -31,6 +31,10 @@ pub struct PerfSpec {
     /// there if none.
     pub below: Option<f32>,
     pub heading_degrees: f32,
+    /// How fast the heading turns, in degrees a second, positive to the left
+    /// (anticlockwise seen from above): the stick swung steadily, as the
+    /// camera is turned while running.
+    pub turn_degrees_per_second: f32,
     pub speed: f32,
     pub frames: usize,
     /// Shoves applied after the level settles; the world is stepped every
@@ -46,6 +50,9 @@ pub struct FrameRecord {
     pub cost: PlanningCost,
     pub crosses: bool,
     pub diverged: bool,
+    /// When, in seconds from now, and where in the world the plan lands its
+    /// next footfall, the committed one, if it has one.
+    pub next_footfall: Option<(f32, Point3<f32>)>,
     /// How the kept strip differed from one sampled afresh, if checked.
     pub against_fresh: Option<StripDifference>,
 }
@@ -121,8 +128,12 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
         }
     }
 
-    let (sin, cos) = spec.heading_degrees.to_radians().sin_cos();
-    let heading = Vector3::new(sin, 0.0, cos);
+    let heading_at = |frame: usize| {
+        let degrees = spec.heading_degrees + spec.turn_degrees_per_second * frame as f32 * FRAME;
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        Vector3::new(sin, 0.0, cos)
+    };
+    let heading = heading_at(0);
     let params = GaitParams::default();
     let layout = StripLayout::default();
     let mut planning =
@@ -152,7 +163,8 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
     let mut legs = Legs::default();
 
     let mut frames = Vec::with_capacity(spec.frames);
-    for _ in 0..spec.frames {
+    for index in 0..spec.frames {
+        let heading = heading_at(index);
         if !spec.blasts.is_empty() {
             trial.settle(FRAME);
         }
@@ -194,6 +206,11 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             cost: planned.cost,
             crosses: planned.outcome.is_ok(),
             diverged,
+            next_footfall: planned
+                .plan()
+                .footfalls()
+                .next()
+                .map(|(time, contact)| (time, planned.frame.world_point(contact.at))),
             against_fresh,
         });
 

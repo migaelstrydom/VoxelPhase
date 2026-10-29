@@ -13,7 +13,8 @@
 //! ground falling away on the right, and straight up it at a run.
 //!
 //! The traversal scenarios, in the Traversal Garden, are catalogued in
-//! `traversal_scenarios` and appended here.
+//! `traversal_scenarios` and appended here, and after them the turning runs,
+//! on the garden's open ground, in `turning`.
 
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -21,8 +22,8 @@ use nalgebra::Vector3;
 
 use crate::anim_viewer::{Beat, Script};
 
-use super::scenario::{CameraRig, Scenario};
-use super::traversal_scenarios;
+use super::scenario::{CameraRig, Judged, Scenario};
+use super::{traversal_scenarios, turning};
 
 const LEVEL: &str = "levels/swim_test.level.ron";
 const GARDEN: &str = "levels/rubble_garden.level.ron";
@@ -52,7 +53,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::hop(1.2).named("pump"))
                 .then(Beat::stand(2.0).named("ride")),
             camera: CameraRig::side().with_distance(7.0).with_elevation(10.0),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "wade_in",
@@ -65,7 +66,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(4.0).named("wade"))
                 .then(Beat::stand(2.0).named("tread")),
             camera: CameraRig::side().with_distance(4.5),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "wade_stand",
@@ -80,7 +81,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(0.6).named("wade"))
                 .then(Beat::stand(1.5)),
             camera: CameraRig::three_quarter(),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "fall_in",
@@ -93,7 +94,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(1.2))
                 .then(Beat::stand(3.0).named("tread")),
             camera: CameraRig::side().with_distance(6.0).with_elevation(8.0),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "jump_in",
@@ -107,7 +108,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::jump(0.6))
                 .then(Beat::stand(3.0).named("tread")),
             camera: CameraRig::side().with_distance(7.0).with_elevation(8.0),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "tread",
@@ -117,7 +118,7 @@ pub fn catalogue() -> Vec<Scenario> {
             yaw: SEAWARD,
             script: Script::new().then(Beat::stand(4.0).named("tread")),
             camera: CameraRig::three_quarter(),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "swim",
@@ -131,7 +132,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(2.0).named("turn").turning(PI / 2.0))
                 .then(Beat::stand(2.0).named("tread")),
             camera: CameraRig::three_quarter().with_distance(5.0),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "swim_fast",
@@ -143,7 +144,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::stand(0.5).named("tread"))
                 .then(Beat::run(3.0).named("sprint")),
             camera: CameraRig::side(),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "ashore",
@@ -156,7 +157,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(9.0).named("ashore").towards(-Vector3::x()))
                 .then(Beat::stand(1.5)),
             camera: CameraRig::side().with_distance(5.0),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "climb_ramp",
@@ -169,7 +170,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::run(9.0).named("climb").towards(-Vector3::z()))
                 .then(Beat::stand(1.0)),
             camera: CameraRig::side().with_azimuth(90.0).with_distance(8.0),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "climb_steep",
@@ -182,7 +183,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(5.0).named("climb").towards(-Vector3::z()))
                 .then(Beat::stand(1.0)),
             camera: CameraRig::side().with_azimuth(90.0).with_distance(6.0),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "contour",
@@ -199,7 +200,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 )
                 .then(Beat::stand(1.0)),
             camera: CameraRig::three_quarter().with_azimuth(296.0),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "throw",
@@ -219,7 +220,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::stand(0.15).throwing().named("rapid"))
                 .then(Beat::stand(0.9).throwing().named("rapid")),
             camera: CameraRig::side().with_distance(3.0),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "throw_around",
@@ -241,7 +242,7 @@ pub fn catalogue() -> Vec<Scenario> {
                         .named("walk_behind"),
                 ),
             camera: CameraRig::side().with_distance(2.2).with_elevation(10.0),
-            station: None,
+            judged: Judged::Motion,
         },
         Scenario {
             name: "run_uphill",
@@ -258,10 +259,11 @@ pub fn catalogue() -> Vec<Scenario> {
                 )
                 .then(Beat::stand(1.0)),
             camera: CameraRig::side().with_azimuth(-2.72f32.to_degrees() + 180.0),
-            station: None,
+            judged: Judged::Motion,
         },
     ];
     scenarios.extend(traversal_scenarios::catalogue());
+    scenarios.extend(turning::catalogue());
     scenarios
 }
 

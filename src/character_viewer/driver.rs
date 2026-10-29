@@ -152,7 +152,7 @@ pub fn run(scenario: &Scenario, config: &RunConfig) -> EngineResult<Take> {
 
     Ok(Take {
         scenario: scenario.name.to_string(),
-        station: scenario.station,
+        station: scenario.judged.station(),
         frames,
         tiles,
     })
@@ -369,6 +369,8 @@ fn record(
         ride_floor,
         ride_floor_behind,
         asked_speed,
+        plan_forward: planned_path(world).map(|(forward, _)| forward),
+        path_laid: planned_path(world).is_some_and(|(_, laid)| laid),
         feet: [FootSide::Left, FootSide::Right].map(|side| {
             let drawn = match side {
                 FootSide::Left => animator.skeleton.left_foot,
@@ -432,6 +434,14 @@ fn foot_record(
         ground: ground.flatten(),
         planned: planned_footfall(world, side),
     }
+}
+
+/// The way this frame's traversal plan's path runs, and whether it was laid
+/// afresh this frame, if the character planned.
+fn planned_path(world: &World) -> Option<(Vector3<f32>, bool)> {
+    let state = world.try_fetch::<TraversalPlanState>()?;
+    let frame = state.last.as_ref()?;
+    Some((frame.frame.forward(), frame.cost.laid_afresh))
 }
 
 /// Where this frame's traversal plan lands `side` next, in the world, if it

@@ -31,7 +31,7 @@ use crate::traversal::player_gait;
 
 use super::driver::{run, RunConfig, RIDE_SLOPE_RUN};
 use super::record::FrameRecord;
-use super::scenario::{CameraRig, Scenario};
+use super::scenario::{CameraRig, Judged, Scenario};
 use super::scenarios::find;
 
 const LEVEL: &str = "levels/drive_contract.level.ron";
@@ -219,7 +219,7 @@ fn lane(name: &'static str, lane_z: f32, script: Script) -> Scenario {
         yaw: FRAC_PI_2,
         script,
         camera: CameraRig::side().with_distance(5.0),
-        station: None,
+        judged: Judged::Motion,
     }
 }
 
@@ -501,7 +501,8 @@ fn coyote(config: &RunConfig) -> EngineResult<ContractCheck> {
 fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<ContractCheck> {
     let scenario = find(name).ok_or_else(|| EngineError::InvalidState(format!("no {name}")))?;
     let station = scenario
-        .station
+        .judged
+        .station()
         .ok_or_else(|| EngineError::InvalidState(format!("{name} crosses no station")))?;
     let tracked = RunConfig {
         track: true,

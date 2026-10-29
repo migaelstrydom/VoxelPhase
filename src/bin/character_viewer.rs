@@ -11,6 +11,7 @@
 //! cargo run --release --bin character_viewer -- swim --tiles 16 --from 0.2 --to 0.6
 //! cargo run --release --bin character_viewer -- all --tiles 0      # reports only
 //! cargo run --release --bin character_viewer -- traversal --tiles 0 --summary
+//! cargo run --release --bin character_viewer -- turning --tiles 0 --summary --track --starts 5
 //! cargo run --release --bin character_viewer -- contract --tiles 0
 //! ```
 //!
@@ -28,6 +29,12 @@
 //! at the station. `--back M` starts every scenario M metres further back,
 //! to follow one of those crossings frame by frame.
 //!
+//! `turning` runs the turning runs on the garden's open ground; `--summary`
+//! prints how far the plan's path lagged the body's travel through the turn
+//! (mean and worst, in degrees), how often the path was laid afresh, the
+//! body's speed against what was asked, and the feet against the plan's
+//! footfalls, over every start.
+//!
 //! `contract` measures the traction drive against what the traversal
 //! planner's `GaitParams` claim it does (slope, takeoff, ride; see
 //! `character_viewer/contract.rs`), prints a row per check and fails if any
@@ -41,8 +48,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use voxel_phase::character_viewer::{
-    catalogue, check_contract, find, report, run, traversal, ContractCheck, RunConfig, Scenario,
-    TraversalSpread,
+    catalogue, check_contract, find, report, run, traversal, ContractCheck, Judged, RunConfig,
+    Scenario, Take, TraversalSpread, TurnSummary,
 };
 use voxel_phase::rendering::visual_bench::contact_sheet;
 
@@ -51,7 +58,7 @@ use voxel_phase::rendering::visual_bench::contact_sheet;
 const START_STAGGER: f32 = 0.11;
 
 const USAGE: &str =
-    "usage: character_viewer <scenario|all|traversal|contract> [--list] [--summary] [--starts N] [--back M] [--plan] [--track] [--tiles N]
+    "usage: character_viewer <scenario|all|traversal|turning|contract> [--list] [--summary] [--starts N] [--back M] [--plan] [--track] [--tiles N]
                         [--from F] [--to F]
                         [--fps HZ] [--width W] [--height H] [--columns C]
                         [--every N] [--out <sheet.png>]
@@ -95,22 +102,34 @@ fn main() -> ExitCode {
         return contract(&args.config);
     }
     if args.summary {
-        println!("{}", TraversalSpread::header());
-        for scenario in &args.scenarios {
-            let mut summaries = Vec::new();
-            for start in 0..args.starts {
-                let staggered = scenario.started_back(start as f32 * START_STAGGER);
-                match run(&staggered, &args.config) {
-                    Ok(take) => summaries.extend(traversal(&take)),
-                    Err(e) => {
-                        eprintln!("{}: {e}", scenario.name);
-                        return ExitCode::FAILURE;
-                    }
-                }
-            }
+        let (turns, crossings): (Vec<_>, Vec<_>) = args
+            .scenarios
+            .iter()
+            .partition(|scenario| matches!(scenario.judged, Judged::Turn { .. }));
+        if !crossings.is_empty() {
+            println!("{}", TraversalSpread::header());
+        }
+        for scenario in crossings {
+            let Some(takes) = runs(scenario, &args) else {
+                return ExitCode::FAILURE;
+            };
+            let summaries: Vec<_> = takes.iter().filter_map(traversal).collect();
             if let Some(spread) = TraversalSpread::of(&summaries) {
                 println!("{}", spread.row(scenario.name));
             }
+        }
+        if !turns.is_empty() {
+            println!("{}", TurnSummary::header());
+        }
+        for scenario in turns {
+            let Some(takes) = runs(scenario, &args) else {
+                return ExitCode::FAILURE;
+            };
+            let summaries: Vec<_> = takes
+                .iter()
+                .map(|take| TurnSummary::of(&take.frames))
+                .collect();
+            println!("{}", TurnSummary::over(&summaries).row(scenario.name));
         }
         return ExitCode::SUCCESS;
     }
@@ -145,6 +164,19 @@ fn main() -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// `scenario` run from each of the staggered starts, `None` (and the error
+/// printed) if a run failed.
+fn runs(scenario: &Scenario, args: &Args) -> Option<Vec<Take>> {
+    (0..args.starts)
+        .map(|start| {
+            let staggered = scenario.started_back(start as f32 * START_STAGGER);
+            run(&staggered, &args.config)
+                .inspect_err(|e| eprintln!("{}: {e}", scenario.name))
+                .ok()
+        })
+        .collect()
 }
 
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, String> {
@@ -195,10 +227,15 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
         Vec::new()
     } else if which == "all" {
         catalogue()
+    } else if which == "turning" {
+        catalogue()
+            .into_iter()
+            .filter(|s| matches!(s.judged, Judged::Turn { .. }))
+            .collect()
     } else if which == "traversal" {
         catalogue()
             .into_iter()
-            .filter(|s| s.station.is_some())
+            .filter(|s| s.judged.station().is_some())
             .collect()
     } else {
         vec![find(&which).ok_or(format!("no scenario '{which}' (try --list)"))?]

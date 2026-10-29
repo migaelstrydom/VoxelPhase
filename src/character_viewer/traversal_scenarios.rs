@@ -11,7 +11,7 @@ use std::f32::consts::FRAC_PI_2;
 use crate::anim_viewer::{Beat, Script};
 use crate::character::LocomotionConfig;
 
-use super::scenario::{CameraRig, Scenario};
+use super::scenario::{CameraRig, Judged, Scenario};
 use super::traversal::Station;
 
 const GARDEN: &str = "levels/traversal_garden.level.ron";
@@ -69,7 +69,7 @@ fn crossing(
             .then(gait.beat(duration))
             .then(Beat::stand(0.5)),
         camera: CameraRig::side().with_distance(5.0),
-        station: Some(Station::along_x(enter, leave)),
+        judged: Judged::Crossing(Station::along_x(enter, leave)),
     }
 }
 

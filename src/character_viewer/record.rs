@@ -46,6 +46,11 @@ pub struct FrameRecord {
     pub ride_floor_behind: Option<f32>,
     /// Planar speed the intent asked for this frame, in m/s; zero standing.
     pub asked_speed: f32,
+    /// The way the traversal plan's path runs this frame, horizontal and unit
+    /// length, if the character plans.
+    pub plan_forward: Option<Vector3<f32>>,
+    /// Whether the plan's path was laid afresh this frame.
+    pub path_laid: bool,
     /// The left foot and the right, as the rig drew them.
     pub feet: [FootRecord; 2],
 }
