@@ -419,7 +419,7 @@ fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> Pose
         FeetPose {
             left: anim.left.position,
             right: anim.right.position,
-            anchor: FootAnchor::World,
+            anchor: FootAnchor::Flown,
         }
     } else {
         FeetPose {

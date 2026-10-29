@@ -246,7 +246,29 @@ impl CharacterAnimator {
             target,
             &new_pose,
         );
+        let flown_before = self.state.feet_flown;
         mirror_placer_into_state(&mut self.state, self.locomotion.placer());
+        // Feet the placer starts or stops flying to a landing come from it
+        // or from the hips without the pose changing: blend between the two.
+        if self.state.feet_flown != flown_before {
+            let before = AnimationState {
+                feet_flown: flown_before,
+                ..self.state.clone()
+            };
+            let from = self.pose_state.sample(&SampleCtx {
+                rig: &self.config,
+                anim: &before,
+                velocity,
+            });
+            self.pose_crossfade = Some(Crossfade {
+                from,
+                from_pelvis: pelvis_position,
+                reach: self.config.leg_length(),
+                to_duration: TRANSITION_BLEND_DURATION,
+                elapsed: 0.0,
+                policy: Linear,
+            });
+        }
 
         // Stride phase is derived directly from the placer's stepping
         // state — arm swing / shoulder twist / head bob lock to real

@@ -11,7 +11,8 @@
 //! courtyard at x = -33, rising 11 m from z = -12 to z = -24 (about 43°). And
 //! `contour` and `run_uphill`, on Island Sea's hillside: along it with the
 //! ground falling away on the right, and straight up it at a run. And
-//! `air_reverse` and `crouch_walk`, on the Traversal Garden's open ground,
+//! `air_reverse`, `jump_straight`, `run_reverse` and `crouch_walk`, on the
+//! Traversal Garden's open ground,
 //! and `hop_reverse` at its 25 cm step.
 //!
 //! The traversal scenarios, in the Traversal Garden, are catalogued in
@@ -276,6 +277,35 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::jump(0.1).named("jump"))
                 .then(Beat::walk(0.8).towards(-Vector3::x()).named("back"))
                 .then(Beat::stand(0.6)),
+            camera: CameraRig::side().with_distance(3.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "jump_straight",
+            summary: "Traversal Garden: run, jump, and keep the stick ahead through the jump",
+            level: TRAVERSAL_GARDEN,
+            start: (-15.0, -15.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::walk(1.5))
+                .then(Beat::jump(0.1).named("jump"))
+                .then(Beat::walk(1.2).named("on"))
+                .then(Beat::stand(0.5)),
+            camera: CameraRig::side().with_distance(3.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "run_reverse",
+            summary: "Traversal Garden: run, then turn the stick straight back",
+            level: TRAVERSAL_GARDEN,
+            start: (-15.0, -15.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::walk(1.8))
+                .then(Beat::walk(1.2).towards(-Vector3::x()).named("back"))
+                .then(Beat::stand(0.5)),
             camera: CameraRig::side().with_distance(3.0),
             judged: Judged::Motion,
         },

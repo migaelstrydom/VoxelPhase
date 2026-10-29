@@ -225,9 +225,20 @@ flight, swings that foot onto the landing footfall and plants it there as
 the body comes down, and lifts the foot it pushed off with to trail onto its
 own next footfall half a step later; the airborne pose draws the feet where
 the placer has them instead of hanging them from the hips, and the landing
-replants nothing. If the plan's landing is one the body is no longer coming
-down within a leg's reach of, as when the player steers back in the air, the
-feet stop flying to it and hang as in any jump. An unplanned fall keeps the
+replants nothing. A planned footfall further behind the hip, along the way
+the body travels, than the leg reaches when it lands is not taken: a plan
+laid along a heading the body has not yet turned to (the stick swung back,
+on the ground or in the air) lands the feet behind a body still travelling
+the old way, and the legs then step, or hang, as with no plan. A footfall
+ahead is always taken, however far the leg stretches to it, as the legs
+land it in their own time (a reach limit both ways rejected ordinary
+footfalls and doubled the miss). Feet that begin a flight hanging, or give
+up a landing, hang until touchdown: the placer still holds them where they
+left the ground, and flying them from there jumped them a metre and more.
+A swing whose landing time changes by more than a frame, as when a hop is
+planned while it swings, carries on from where the foot is; re-timed in
+place it jumped back along its arc (0.7 m). The drawn feet blend whenever
+they change between hanging and flown. An unplanned fall keeps the
 old resume: a replant at stance. The plan in turn starts from the
 feet the legs have down (`traversal::Legs`: the foot planted last holds the
 body, the other lands next), so the two never argue about which foot is
