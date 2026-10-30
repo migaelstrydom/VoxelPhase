@@ -12,5 +12,6 @@ mod search;
 mod settings;
 
 pub use body_path::{BodyPath, BodySegment};
+pub use rules::recovery_time_lost;
 pub use search::{PlanRequest, Planned, Planner, Refusal};
 pub use settings::{CostWeights, PlannerSettings};

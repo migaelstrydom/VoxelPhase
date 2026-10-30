@@ -12,7 +12,10 @@
 //!                                                        the floor a cast finds under it
 //!   face     short faces of 20..38° met at walk and   ─▶ the speed kept along the face,
 //!            run, up to a shelf                          and the rise off its brow cut
-//!                                                        after BodyDims::rise_held
+//!                                                        after BodyDims::rise_held; the
+//!                                                        time lost, charged at least
+//!   hop      a planned hop on flat ground at walk     ─▶ the time it loses, charged at
+//!            and run, climbing 1.5 and 3 m/s             least by costs.flight
 //! ```
 //!
 //! Each check names the number it measured and the claim it holds it to, so
@@ -21,6 +24,7 @@
 use std::f32::consts::FRAC_PI_2;
 
 use traversal_planner::params::STANDARD_GRAVITY;
+use traversal_planner::planner::recovery_time_lost;
 use traversal_planner::{GaitParams, PlannerSettings};
 
 use crate::anim_viewer::{Beat, Script};
@@ -105,13 +109,17 @@ const FACE_X: f32 = 7.0;
 const FACE_SPEED_TOLERANCE: f32 = 0.05;
 /// How long a face run lasts, in seconds: well past the brow.
 const FACE_RUN: f32 = 4.0;
+/// How far past a face its crossing is timed to, in metres: past the brow
+/// and the speed regained after it.
+const FACE_TIMED: f32 = 5.0;
 /// Furthest the grounded capsule may be from the cast floor, in metres.
 const RIDE_TOLERANCE: f32 = 0.03;
 /// How long into the run a hop's cost is measured from, in seconds: up to
 /// speed by then.
 const HOP_AT: f32 = 1.5;
-/// Climb of the hop measured, in m/s: a typical planned hop's.
-const HOP_CLIMB: f32 = 1.5;
+/// Climbs of the hops measured, in m/s: a typical planned hop's, and twice
+/// it.
+const HOP_CLIMBS: [f32; 2] = [1.5, 3.0];
 /// How far past the takeoff the crossing is timed to, in metres: past the
 /// landing and the speed regained after it.
 const HOP_RUN: f32 = 5.0;
@@ -199,13 +207,16 @@ pub fn check_contract(config: &RunConfig) -> EngineResult<Vec<ContractCheck>> {
     for name in RIDES {
         checks.push(ride(config, &params, name)?);
     }
-    for (angle, lane_z) in FACES {
-        for gait in Gait::BOTH {
-            checks.extend(face(config, &params, angle, lane_z, gait)?);
+    for gait in Gait::BOTH {
+        let flat = flat_crossing(config, gait, FACE_X + FACE_TIMED)?;
+        for (angle, lane_z) in FACES {
+            checks.extend(face(config, &params, angle, lane_z, gait, flat)?);
         }
     }
     for gait in Gait::BOTH {
-        checks.push(hop(config, gait)?);
+        for climb in HOP_CLIMBS {
+            checks.push(hop(config, gait, climb)?);
+        }
     }
     Ok(checks)
 }
@@ -549,13 +560,16 @@ fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<Con
 /// A face lane at `gait`: the speed across the ground the body keeps meeting
 /// the face, against its share along the face's slope (`landed_speed` in the
 /// planner: `v·cos²θ`), and how far it rises after leaving the brow, against
-/// its climb there held for `BodyDims::rise_held` and then cut.
+/// its climb there held for `BodyDims::rise_held` and then cut. And how
+/// much later than on flat ground (`flat`) it crosses a line past the brow,
+/// against what the planner charges for the speed the face takes.
 fn face(
     config: &RunConfig,
     params: &GaitParams,
     angle: f32,
     lane_z: f32,
     gait: Gait,
+    flat: f32,
 ) -> EngineResult<Vec<ContractCheck>> {
     let script = Script::new()
         .then(Beat::stand(0.3))
@@ -595,6 +609,14 @@ fn face(
     } else {
         climb.max(0.0).powi(2) / (2.0 * gravity)
     };
+    let crossed = crossing(&frames, FACE_X + FACE_TIMED).ok_or_else(missing)?;
+    let lost = crossed - flat;
+    let (speed, weight) = (
+        before.velocity.x,
+        PlannerSettings::default().costs.landing_loss,
+    );
+    let charged = weight * (speed - claimed).powi(2)
+        + recovery_time_lost(claimed, speed, params.body.max_acceleration);
     let name = format!("face {angle}° {}", gait.name());
     Ok(vec![
         ContractCheck {
@@ -618,14 +640,31 @@ fn face(
             ),
             holds: (peak - left.bottom - claimed_rise).abs() <= ARC_TOLERANCE,
         },
+        ContractCheck {
+            name: format!("{name}: time"),
+            measured: format!("{lost:.3} s lost against flat ground"),
+            claim: format!("costs.landing_loss and regaining v·cos²θ: {charged:.3} s covers it"),
+            holds: lost <= charged,
+        },
     ])
 }
 
+/// When a run on flat ground at `gait` crosses `x`, scripted as the face
+/// runs are.
+fn flat_crossing(config: &RunConfig, gait: Gait, x: f32) -> EngineResult<f32> {
+    let script = Script::new()
+        .then(Beat::stand(0.3))
+        .then(gait.beat(FACE_RUN));
+    let frames = run(&lane("flat", FLAT_Z, script), config)?.frames;
+    crossing(&frames, x)
+        .ok_or_else(|| EngineError::InvalidState(format!("a flat run never crossed x = {x:.1}")))
+}
+
 /// What a planned hop costs on level ground: how much later a body that
-/// hops at `HOP_CLIMB` crosses a line `HOP_RUN` past its takeoff than one
+/// hops at `climb` crosses a line `HOP_RUN` past its takeoff than one
 /// that runs on. The planner prices a hop at `costs.flight` seconds, which
 /// must cover it.
-fn hop(config: &RunConfig, gait: Gait) -> EngineResult<ContractCheck> {
+fn hop(config: &RunConfig, gait: Gait, climb: f32) -> EngineResult<ContractCheck> {
     let script = |tail: Beat| {
         Script::new()
             .then(Beat::stand(0.3))
@@ -639,7 +678,7 @@ fn hop(config: &RunConfig, gait: Gait) -> EngineResult<ContractCheck> {
             FLAT_Z,
             script(
                 gait.beat(HOP_TAIL)
-                    .hopping(gait.speed(), HOP_CLIMB)
+                    .hopping(gait.speed(), climb)
                     .named("hop"),
             ),
         ),
@@ -669,9 +708,9 @@ fn hop(config: &RunConfig, gait: Gait) -> EngineResult<ContractCheck> {
     let lost = hopped - ran;
     let price = PlannerSettings::default().costs.flight;
     Ok(ContractCheck {
-        name: format!("hop {}: cost", gait.name()),
+        name: format!("hop {} {climb}: cost", gait.name()),
         measured: format!("{lost:.3} s lost over {airborne} frames in the air"),
-        claim: format!("climbing {HOP_CLIMB} m/s; costs.flight {price} s covers it"),
+        claim: format!("climbing {climb} m/s; costs.flight {price} s covers it"),
         holds: airborne > 0 && lost <= price,
     })
 }
