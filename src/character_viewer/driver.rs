@@ -372,6 +372,7 @@ fn record(
         plan_forward: planned_path(world).map(|(path, _)| path.forward()),
         plan_offset: planned_path(world).map(|(path, _)| path.path_point(position).d),
         path_laid: planned_path(world).is_some_and(|(_, laid)| laid),
+        plan_diverged: plan_diverged(world),
         feet: [FootSide::Left, FootSide::Right].map(|side| {
             let drawn = match side {
                 FootSide::Left => animator.skeleton.left_foot,
@@ -445,9 +446,23 @@ fn planned_path(world: &World) -> Option<(PathFrame, bool)> {
     Some((frame.frame, frame.cost.laid_afresh))
 }
 
+/// Whether this frame's traversal plan dropped the last one's commitment.
+fn plan_diverged(world: &World) -> bool {
+    world
+        .try_fetch::<TraversalPlanState>()
+        .and_then(|state| {
+            state.last.as_ref().map(|frame| match &frame.outcome {
+                Ok(planned) => planned.diverged,
+                Err(refusal) => refusal.diverged,
+            })
+        })
+        .unwrap_or(false)
+}
+
 /// Where this frame's traversal plan lands `side` next, in the world, if it
 /// crosses (a refusal's steps are not given to the legs) and lands it within
-/// [`PLANNED_WITHIN`].
+/// [`PLANNED_WITHIN`]: as the legs are handed it, the footfall the plan
+/// already stands on while the legs are still landing that foot there.
 fn planned_footfall(world: &World, side: FootSide) -> Option<Point3<f32>> {
     let limb = match side {
         FootSide::Left => Limb::LeftFoot,
@@ -455,13 +470,18 @@ fn planned_footfall(world: &World, side: FootSide) -> Option<Point3<f32>> {
     };
     let state = world.try_fetch::<TraversalPlanState>()?;
     let frame = state.last.as_ref().filter(|frame| frame.outcome.is_ok())?;
-    let landing = frame
-        .plan()
-        .footfalls()
-        .find(|(_, contact)| contact.limb == limb)
-        .filter(|&(time, _)| time <= PLANNED_WITHIN)
-        .map(|(_, contact)| frame.frame.world_point(contact.at));
-    landing
+    let plan = frame.plan();
+    let standing = plan
+        .stance_at(0.0)
+        .filter(|stance| stance.limb == limb && state.landing_late == Some(limb))
+        .map(|stance| stance.at);
+    let landing = standing.or_else(|| {
+        plan.footfalls()
+            .find(|(_, contact)| contact.limb == limb)
+            .filter(|&(time, _)| time <= PLANNED_WITHIN)
+            .map(|(_, contact)| contact.at)
+    });
+    landing.map(|at| frame.frame.world_point(at))
 }
 
 fn caption(record: &FrameRecord) -> String {

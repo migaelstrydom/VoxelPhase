@@ -298,6 +298,7 @@ mod tests {
             plan_forward: Some(Vector3::new(cos, 0.0, sin)),
             plan_offset: Some(0.01 * index as f32),
             path_laid: laid,
+            plan_diverged: false,
             feet: [foot, foot],
         }
     }

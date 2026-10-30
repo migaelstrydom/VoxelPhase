@@ -68,8 +68,14 @@ const POP_DISTANCE: f32 = 0.05;
 /// on it, in metres: past this it stands on nothing, as over a gap.
 const OFF_FOOTING: f32 = 0.05;
 
+/// How far a swinging foot's planned footfall may move between frames and
+/// not count as the plan changing its mind under it, in metres: a cell of
+/// the planner's lattice and the settling of a footfall onto it.
+const LATE_MOVE: f32 = 0.05;
+
 /// Where the feet landed across a station: on footing or not, and how far
-/// from where the traversal plan had them land.
+/// from where the traversal plan had them land; and how often the plan moved
+/// a footfall a foot was already swinging to.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FootfallSummary {
     /// Plants made: a foot coming down after a step.
@@ -82,6 +88,14 @@ pub struct FootfallSummary {
     pub total_miss: f32,
     /// Largest such distance, in m.
     pub worst_miss: f32,
+    /// Frames on which a swinging foot's planned footfall moved further than
+    /// `LATE_MOVE` from where the frame before had it.
+    pub late_moves: usize,
+    /// Largest such move, in m.
+    pub worst_move: f32,
+    /// Those of `late_moves` made on a frame whose plan dropped the last
+    /// one's commitment.
+    pub moves_diverged: usize,
 }
 
 impl FootfallSummary {
@@ -91,6 +105,16 @@ impl FootfallSummary {
         let mut summary = Self::default();
         for (frame, previous) in frames {
             for (now, before) in frame.feet.iter().zip(&previous.feet) {
+                if let (false, false, Some(planned), Some(was)) =
+                    (now.planted, before.planted, now.planned, before.planned)
+                {
+                    let moved = planar_distance(&planned, &was);
+                    if moved > LATE_MOVE {
+                        summary.late_moves += 1;
+                        summary.moves_diverged += usize::from(frame.plan_diverged);
+                        summary.worst_move = summary.worst_move.max(moved);
+                    }
+                }
                 if !now.planted || before.planted {
                     continue;
                 }
@@ -120,23 +144,31 @@ impl FootfallSummary {
             planned: self.planned + other.planned,
             total_miss: self.total_miss + other.total_miss,
             worst_miss: self.worst_miss.max(other.worst_miss),
+            late_moves: self.late_moves + other.late_moves,
+            worst_move: self.worst_move.max(other.worst_move),
+            moves_diverged: self.moves_diverged + other.moves_diverged,
         }
     }
 
     /// Column headings for `columns`.
     pub(super) fn header() -> String {
-        format!("{:>7} {:>5} {:>8}", "off", "miss", "miss_max")
+        format!(
+            "{:>7} {:>5} {:>8} {:>7} {:>8}",
+            "off", "miss", "miss_max", "moved", "move_max"
+        )
     }
 
     pub(super) fn columns(&self) -> String {
         let off = format!("{}/{}", self.off_footing, self.plants);
+        let moved = format!("{}/{}", self.late_moves, self.moves_diverged);
         if self.planned == 0 {
-            return format!("{off:>7} {:>5} {:>8}", "-", "-");
+            return format!("{off:>7} {:>5} {:>8} {:>7} {:>8}", "-", "-", "-", "-");
         }
         format!(
-            "{off:>7} {:5.2} {:8.2}",
+            "{off:>7} {:5.2} {:8.2} {moved:>7} {:8.2}",
             self.total_miss / self.planned as f32,
-            self.worst_miss
+            self.worst_miss,
+            self.worst_move
         )
     }
 }
@@ -495,6 +527,7 @@ mod tests {
             plan_forward: None,
             plan_offset: None,
             path_laid: false,
+            plan_diverged: false,
             feet: [foot, foot],
         }
     }
@@ -577,6 +610,25 @@ mod tests {
         assert_eq!(flat.rms_vertical_accel, 0.0);
         assert!((hopped.peak_rise - 1.5).abs() < 1e-4);
         assert!(hopped.rms_vertical_accel > 1.0);
+    }
+
+    #[test]
+    fn a_footfall_moved_under_a_swinging_foot_is_a_late_move() {
+        let swinging = |planned: Point3<f32>| FootRecord {
+            planted: false,
+            planned: Some(planned),
+            ..frame(0, 0.0, 5.0, 0.0, 5.0).feet[0]
+        };
+        let mut frames = vec![frame(0, 0.0, 5.0, 0.0, 5.0), frame(1, 0.1, 5.0, 0.0, 5.0)];
+        frames[0].feet[0] = swinging(Point3::new(1.0, 0.0, 0.0));
+        frames[1].feet[0] = swinging(Point3::new(1.0, 0.0, 0.3));
+        let summary = FootfallSummary::of(frames[1..].iter().zip(&frames));
+        assert_eq!(summary.late_moves, 1);
+        assert!((summary.worst_move - 0.3).abs() < 1e-5);
+
+        frames[1].feet[0] = swinging(Point3::new(1.0, 0.0, 0.04));
+        let settled = FootfallSummary::of(frames[1..].iter().zip(&frames));
+        assert_eq!(settled.late_moves, 0);
     }
 
     #[test]

@@ -15,6 +15,9 @@ pub struct Legs {
     /// The foot that lands next, if the legs say: `None` with neither foot
     /// stepping and neither down.
     pub lead: Option<Limb>,
+    /// Where that foot is swinging to, in the world, and the seconds until
+    /// it lands there, if it is swinging.
+    pub aim: Option<(Point3<f32>, f32)>,
 }
 
 impl Legs {
@@ -36,9 +39,11 @@ impl Legs {
             .min_by(|a, b| a.since_plant.total_cmp(&b.since_plant));
         if let Some(foot) = planted {
             let limb = limb(foot.side);
+            let other = feet.iter().find(|other| other.side != foot.side);
             return Self {
                 planted: Some((limb, foot.planted_position)),
                 lead: Some(limb.other()),
+                aim: other.and_then(aim),
             };
         }
         let landing = feet
@@ -48,14 +53,17 @@ impl Legs {
         match landing {
             Some((foot, left)) if left <= dt && !placer.is_suspended() => {
                 let limb = limb(foot.side);
+                let other = feet.iter().find(|other| other.side != foot.side);
                 Self {
                     planted: swing_target(foot).map(|at| (limb, at)),
                     lead: Some(limb.other()),
+                    aim: other.and_then(aim),
                 }
             }
             landing => Self {
                 planted: None,
                 lead: landing.map(|(foot, _)| limb(foot.side)),
+                aim: landing.and_then(|(foot, _)| aim(foot)),
             },
         }
     }
@@ -68,6 +76,35 @@ impl Legs {
                 .stance_at(dt)
                 .map(|stance| (stance.limb, frame.world_point(stance.at))),
             lead: plan.after(dt).footfalls().next().map(|(_, next)| next.limb),
+            aim: None,
+        }
+    }
+
+    /// The legs as a plan standing on `stance` (a foot, and where it stands
+    /// in the world) has them: if the foot the legs land next is swinging to
+    /// within `tolerance` of that footfall and lands within `within` seconds,
+    /// it stands there. The plan lands a footfall on its clock, the legs on
+    /// theirs, often a few frames later; a foot about to land on the plan's
+    /// own footfall is not a stance the plan must start over from.
+    pub fn caught_up(
+        self,
+        stance: Option<(Limb, Point3<f32>)>,
+        tolerance: f32,
+        within: f32,
+    ) -> Self {
+        match (stance, self.lead, self.aim) {
+            (Some((limb, at)), Some(lead), Some((aim, left)))
+                if limb == lead
+                    && left <= within
+                    && (aim.x - at.x).hypot(aim.z - at.z) <= tolerance =>
+            {
+                Self {
+                    planted: Some((limb, aim)),
+                    lead: Some(limb.other()),
+                    aim: None,
+                }
+            }
+            _ => self,
         }
     }
 }
@@ -78,6 +115,12 @@ fn swing_target(foot: &PlacerFoot) -> Option<Point3<f32>> {
         FootPhase::Stepping(swing) => Some(swing.to),
         FootPhase::Planted => None,
     }
+}
+
+/// Where `foot`'s swing lands it and the seconds until it does; `None`
+/// planted.
+fn aim(foot: &&PlacerFoot) -> Option<(Point3<f32>, f32)> {
+    swing_target(foot).zip(swing_left(foot))
 }
 
 /// Seconds of its swing `foot` has left; `None` planted.
@@ -128,6 +171,24 @@ mod tests {
             0.1,
         );
         placer
+    }
+
+    #[test]
+    fn a_foot_about_to_land_on_the_plans_stance_is_caught_up_to_it() {
+        let to = Point3::new(-0.12, 0.0, 0.3);
+        let legs = Legs::of(&running(2.0 * FRAME, to), FRAME);
+        let stance = Some((Limb::RightFoot, to));
+        let caught = legs.caught_up(stance, 0.05, 0.05);
+        assert_eq!(caught.planted, Some((Limb::RightFoot, to)));
+        assert_eq!(caught.lead, Some(Limb::LeftFoot));
+
+        // Aimed elsewhere, landing later, or the plan standing on the other
+        // foot: the legs are as they are.
+        let elsewhere = Some((Limb::RightFoot, Point3::new(-0.12, 0.0, 0.5)));
+        assert_eq!(legs.caught_up(elsewhere, 0.05, 0.05), legs);
+        assert_eq!(legs.caught_up(stance, 0.05, FRAME), legs);
+        let other = Some((Limb::LeftFoot, to));
+        assert_eq!(legs.caught_up(other, 0.05, 0.05), legs);
     }
 
     #[test]

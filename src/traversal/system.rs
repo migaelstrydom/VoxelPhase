@@ -7,7 +7,7 @@ use traversal_planner::section::{SectionQuery, StripLayout, StripQuery};
 use traversal_planner::{GaitParams, PathVec, PlannerSettings};
 use winit::keyboard::KeyCode;
 
-use crate::animation::{CharacterAnimator, PlannedStep, PlannedSteps};
+use crate::animation::{CharacterAnimator, FootPlacer, FootSide, PlannedStep, PlannedSteps};
 use crate::character::{CharacterIntent, CharacterState, LocomotionConfig};
 use crate::components::RigidBodyComponent;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
@@ -45,6 +45,10 @@ const PATH: Colour = Colour::new(0.1, 0.13, 0.16, 1.0);
 const REFUSED: Colour = Colour::new(0.77, 0.19, 0.19, 1.0);
 /// Opacity of what the plan has not committed to.
 const TENTATIVE_ALPHA: f32 = 0.45;
+/// How near the footfall the plan stands a foot on that foot's last plant
+/// may be, in metres, for the legs to have landed it there already: a
+/// plant settling onto the ground the placer probes.
+const LANDED_THERE: f32 = 0.1;
 
 /// The player's traversal planning, kept frame to frame. An ECS resource.
 #[derive(Default)]
@@ -56,6 +60,10 @@ pub struct TraversalPlanState {
     pub overlay: bool,
     /// Whether the plan drives the body: off, the plan is only drawn.
     pub tracking: bool,
+    /// The foot this frame's plan already stands on that the legs have yet
+    /// to land: they land it where the plan stands it, not on its next
+    /// footfall.
+    pub landing_late: Option<Limb>,
 }
 
 /// Plans the way across the ground ahead of the character marked
@@ -166,6 +174,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
             .map(|region| (region.min, region.max))
             .collect();
         let exclude = [body];
+        let legs = Legs::of(animator.locomotion.placer(), time.delta_seconds());
         let frame = planning.update(&PlanningInput {
             world: &physics.world,
             scenery: &*terrain,
@@ -176,8 +185,11 @@ impl<'a> System<'a> for TraversalPlanSystem {
             heading,
             target_speed,
             dt: time.delta_seconds().max(1.0e-3),
-            legs: Legs::of(animator.locomotion.placer(), time.delta_seconds()),
+            legs,
         });
+        let landing_late = frame
+            .as_ref()
+            .and_then(|frame| landing_late(frame, &legs, animator.locomotion.placer()));
 
         if let Some(frame) = &frame {
             let cost = frame.cost;
@@ -200,7 +212,9 @@ impl<'a> System<'a> for TraversalPlanSystem {
                 draw(frame, planning.params(), &mut overlays);
             }
             if tracking && frame.outcome.is_ok() {
-                animator.locomotion.follow(planned_steps(frame));
+                animator
+                    .locomotion
+                    .follow(planned_steps(frame, landing_late));
             }
             if tracking && target_speed > 0.0 {
                 // The drive keeps only `ground_speed` of what it is asked
@@ -256,20 +270,51 @@ impl<'a> System<'a> for TraversalPlanSystem {
             }
         }
         state.last = frame;
+        state.landing_late = landing_late;
     }
 }
 
-/// Where `frame`'s plan lands each foot next, in the world.
-fn planned_steps(frame: &PlanFrame) -> PlannedSteps {
+/// The foot `frame`'s plan already stands on that the legs have yet to
+/// land: the one they land next, swinging in from elsewhere. The plan lands
+/// a footfall on its clock, the legs on theirs; a foot the legs landed early
+/// and are already lifting again from that footfall is not landing late.
+fn landing_late(frame: &PlanFrame, legs: &Legs, placer: &FootPlacer) -> Option<Limb> {
+    let stance = frame.plan().stance_at(0.0)?;
+    let side = match stance.limb {
+        Limb::LeftFoot => FootSide::Left,
+        Limb::RightFoot => FootSide::Right,
+    };
+    let at = frame.frame.world_point(stance.at);
+    let foot = match side {
+        FootSide::Left => &placer.left,
+        FootSide::Right => &placer.right,
+    };
+    let left_from = foot.planted_position;
+    let elsewhere = (left_from.x - at.x).hypot(left_from.z - at.z) > LANDED_THERE;
+    (legs.lead == Some(stance.limb) && elsewhere).then_some(stance.limb)
+}
+
+/// Where `frame`'s plan lands each foot next, in the world. The foot
+/// `landing_late` lands where the plan already stands it: handing it its
+/// footfall after would turn it in mid-swing.
+fn planned_steps(frame: &PlanFrame, landing_late: Option<Limb>) -> PlannedSteps {
+    let plan = frame.plan();
     let next = |limb: Limb| {
-        frame
-            .plan()
-            .footfalls()
-            .find(|(_, contact)| contact.limb == limb)
-            .map(|(time, contact)| PlannedStep {
-                at: frame.frame.world_point(contact.at),
-                landing: frame.plan().lands_a_flight(time).then_some(time),
-            })
+        let landing = plan
+            .stance_at(0.0)
+            .filter(|stance| landing_late == Some(stance.limb) && stance.limb == limb)
+            .map(|stance| PlannedStep {
+                at: frame.frame.world_point(stance.at),
+                landing: None,
+            });
+        landing.or_else(|| {
+            plan.footfalls()
+                .find(|(_, contact)| contact.limb == limb)
+                .map(|(time, contact)| PlannedStep {
+                    at: frame.frame.world_point(contact.at),
+                    landing: plan.lands_a_flight(time).then_some(time),
+                })
+        })
     };
     PlannedSteps {
         left: next(Limb::LeftFoot),

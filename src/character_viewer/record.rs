@@ -53,6 +53,9 @@ pub struct FrameRecord {
     pub plan_offset: Option<f32>,
     /// Whether the plan's path was laid afresh this frame.
     pub path_laid: bool,
+    /// Whether this frame's plan dropped the last one's commitment and
+    /// started over from the body.
+    pub plan_diverged: bool,
     /// The left foot and the right, as the rig drew them.
     pub feet: [FootRecord; 2],
 }
