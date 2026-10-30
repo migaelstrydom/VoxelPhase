@@ -5,6 +5,7 @@ mod body_path;
 mod body_search;
 mod cheapest_first;
 mod cost;
+mod footfall_candidates;
 mod footfall_search;
 mod plan_builder;
 pub(crate) mod rules;

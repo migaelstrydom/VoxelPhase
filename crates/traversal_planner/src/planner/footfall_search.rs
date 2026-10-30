@@ -4,11 +4,12 @@ use rustc_hash::FxHashMap;
 
 use crate::params::GaitParams;
 use crate::plan::{Contact, FootfallId, Limb};
-use crate::section::{Foothold, FootholdWindow, SectionQuery};
+use crate::section::SectionQuery;
 
 use super::body_path::{BodyPath, BodySegment};
 use super::cheapest_first::Pending;
 use super::cost::FootfallCosts;
+use super::footfall_candidates::{Candidate, CandidateSpec, FootfallCandidates};
 use super::rules::{FOOT_SLACK, PUSH_OFF_TOLERANCE};
 use super::settings::PlannerSettings;
 
@@ -67,6 +68,15 @@ pub struct FootfallSearch<'a> {
     /// The footfall a foot is already swinging to, if one is: moving it
     /// costs more.
     pub swinging: Option<FootfallId>,
+}
+
+/// What every expansion of one search reads.
+struct Expansion<'a> {
+    flights: &'a [Flight],
+    body_end: f32,
+    costs: &'a FootfallCosts<'a>,
+    /// The left foot's, then the right's.
+    candidates: &'a [FootfallCandidates; 2],
 }
 
 /// A flight as the footfalls see it.
@@ -131,6 +141,20 @@ impl FootfallSearch<'_> {
             .map_or(f32::MIN, |flight| flight.landing)
             .max(body_end - 0.5 * natural);
 
+        let costs = FootfallCosts {
+            weights: &self.settings.costs,
+            swinging: self.swinging,
+        };
+        let candidates = [Limb::LeftFoot, Limb::RightFoot].map(|limb| {
+            FootfallCandidates::new(&self.candidate_spec(&costs, &flights, body_end, limb))
+        });
+        let search = Expansion {
+            flights: &flights,
+            body_end,
+            costs: &costs,
+            candidates: &candidates,
+        };
+
         let mut nodes = vec![Node {
             footfall: planted,
             count: 0,
@@ -141,7 +165,7 @@ impl FootfallSearch<'_> {
         let mut cheapest: FxHashMap<CellKey, usize> = FxHashMap::default();
         let mut pending = BinaryHeap::from([Pending { cost: 0.0, node: 0 }]);
         let mut furthest = 0;
-        let mut candidates = Vec::new();
+        let mut children = Vec::new();
 
         while let Some(Pending { node: index, .. }) = pending.pop() {
             let node = nodes[index];
@@ -159,16 +183,9 @@ impl FootfallSearch<'_> {
                 furthest = index;
             }
 
-            candidates.clear();
-            self.expand(
-                &node,
-                &flights,
-                body_end,
-                &cheapest,
-                &nodes,
-                &mut candidates,
-            );
-            for mut candidate in candidates.drain(..) {
+            children.clear();
+            self.expand(&node, &search, &cheapest, &nodes, &mut children);
+            for mut candidate in children.drain(..) {
                 candidate.parent = Some(index);
                 let key = self.cell(&candidate.footfall);
                 if cheapest
@@ -195,8 +212,7 @@ impl FootfallSearch<'_> {
     fn expand(
         &self,
         node: &Node,
-        flights: &[Flight],
-        body_end: f32,
+        search: &Expansion,
         cheapest: &FxHashMap<CellKey, usize>,
         nodes: &[Node],
         out: &mut Vec<Node>,
@@ -204,28 +220,21 @@ impl FootfallSearch<'_> {
         let params = self.params;
         let stance = node.footfall.contact;
         let limb = stance.limb.other();
-        let mut footholds = Vec::new();
-        self.query.footholds(
-            &FootholdWindow {
-                s: stance.at.s + params.stride.min_length..stance.at.s + params.stride.max_length,
-                d: params.foot.reach(limb),
-                spacing: self.spacing,
-                line: Some(params.foot.natural_offset(limb)),
-            },
-            &mut footholds,
-        );
-        let next_flight = flights.get(node.next_flight);
-        let ridden_until = next_flight.map_or(body_end, |flight| flight.takeoff);
+        let candidates = &search.candidates[usize::from(limb == Limb::RightFoot)];
+        let next_flight = search.flights.get(node.next_flight);
+        let ridden_until = next_flight.map_or(search.body_end, |flight| flight.takeoff);
         let worth = |footfall: &Footfall, cost: f32| {
             cheapest
                 .get(&self.cell(footfall))
                 .map_or(true, |&other| nodes[other].cost > cost)
         };
 
-        for foothold in &footholds {
-            let Some(base) = self.footfall_cost(node, limb, foothold, 0.0) else {
+        let stride = stance.at.s + params.stride.min_length..stance.at.s + params.stride.max_length;
+        for candidate in candidates.within(stride) {
+            let Some(base) = self.footfall_cost(node, limb, candidate, 0.0, search.costs) else {
                 continue;
             };
+            let foothold = &candidate.foothold;
             let contact = Contact {
                 limb,
                 footfall: None,
@@ -280,20 +289,11 @@ impl FootfallSearch<'_> {
         }
         let flown = landing - flight.takeoff;
         let farthest = landing + FOOT_SLACK;
-        footholds.clear();
-        self.query.footholds(
-            &FootholdWindow {
-                s: landing - TOLERANCE..farthest + TOLERANCE,
-                d: params.foot.reach(limb),
-                spacing: self.spacing,
-                line: Some(params.foot.natural_offset(limb)),
-            },
-            &mut footholds,
-        );
-        for foothold in &footholds {
-            let Some(base) = self.footfall_cost(node, limb, foothold, flown) else {
+        for candidate in candidates.within(landing - TOLERANCE..farthest + TOLERANCE) {
+            let Some(base) = self.footfall_cost(node, limb, candidate, flown, search.costs) else {
                 continue;
             };
+            let foothold = &candidate.foothold;
             let contact = Contact {
                 limb,
                 footfall: None,
@@ -336,49 +336,26 @@ impl FootfallSearch<'_> {
             .is_some_and(|body_z| self.params.foot_reaches(lifts, body_z, &contact.at))
     }
 
-    /// What a footfall on `foothold` costs after `node`, whatever the body
+    /// What a footfall on `candidate` costs after `node`, whatever the body
     /// does meanwhile, `flown` metres of the step a jump rather than a
     /// stride; `None` where no foot may land.
     fn footfall_cost(
         &self,
         node: &Node,
         limb: Limb,
-        foothold: &Foothold,
+        candidate: &Candidate,
         flown: f32,
+        costs: &FootfallCosts,
     ) -> Option<f32> {
+        let fixed = candidate.fixed?;
         let (params, weights) = (self.params, &self.settings.costs);
-        let costs = FootfallCosts {
-            weights,
-            swinging: self.swinging,
-        };
+        let foothold = &candidate.foothold;
         let stance = node.footfall.contact.at;
         let rise = foothold.at.z - stance.z;
-        if !costs.admits(foothold.footing)
-            || foothold.edge_margin < params.foot.min_edge_margin
-            || rise > params.stride.max_rise
-            || -rise > params.stride.max_drop
-        {
+        if rise > params.stride.max_rise || -rise > params.stride.max_drop {
             return None;
         }
-        let slope = self.query.floor(foothold.at.s).map_or(0.0, |floor| {
-            -floor.normal.s / floor.normal.z.max(f32::EPSILON)
-        });
-        if !params.steps_up(slope, self.target_speed) {
-            return None;
-        }
-        // The gait's step, or the longest the legs reach on this ground if
-        // that is shorter: a slope is not charged for the steps it forces.
-        let grade = -foothold.normal.s / foothold.normal.z.max(f32::EPSILON);
-        let natural = self
-            .settings
-            .natural_step(self.target_speed, params)
-            .min(params.reachable_step(grade, self.target_speed))
-            .max(params.stride.min_length);
-        let length_off = (foothold.at.s - stance.s - flown - natural) / natural;
-        let reach = params.foot.reach_in.max(params.foot.reach_out);
-        let sideways_off = (foothold.at.d - params.foot.natural_offset(limb)) / reach;
-        let near_edge = (weights.comfortable_edge_margin - foothold.edge_margin).max(0.0)
-            / weights.comfortable_edge_margin;
+        let length_off = (foothold.at.s - stance.s - flown - fixed.natural) / fixed.natural;
         let contact = Contact {
             limb,
             footfall: None,
@@ -393,11 +370,45 @@ impl FootfallSearch<'_> {
         Some(
             node.cost
                 + weights.step_length * length_off * length_off
-                + weights.sideways * sideways_off * sideways_off
-                + weights.edge * near_edge * near_edge
-                + costs.of(&contact)
+                + fixed.sideways
+                + fixed.edge
+                + fixed.footing
                 + churn,
         )
+    }
+
+    /// What the candidates for `limb`'s footfalls are read for: as far as a
+    /// footfall can land, a stride's plant-ahead past where the body rides
+    /// to, or a foot's slack past the last flight's landing.
+    fn candidate_spec<'a>(
+        &'a self,
+        costs: &'a FootfallCosts<'a>,
+        flights: &[Flight],
+        body_end: f32,
+        limb: Limb,
+    ) -> CandidateSpec<'a> {
+        let lead = self
+            .settings
+            .landing_leads
+            .iter()
+            .fold(0.0_f32, |most, &lead| most.max(lead));
+        let plant_ahead = self
+            .params
+            .plant_ahead(self.target_speed, self.params.stride.max_length);
+        let ridden = body_end + lead * plant_ahead;
+        let landed = flights
+            .last()
+            .map_or(f32::NEG_INFINITY, |flight| flight.landing + FOOT_SLACK);
+        CandidateSpec {
+            query: self.query,
+            params: self.params,
+            settings: self.settings,
+            costs,
+            target_speed: self.target_speed,
+            spacing: self.spacing,
+            limb,
+            until: ridden.max(landed) + 2.0 * TOLERANCE,
+        }
     }
 
     /// What it costs for the body at `body_s` to rest on ground neither foot
