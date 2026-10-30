@@ -33,7 +33,9 @@ pub struct CostWeights {
     /// that throw it, which a clean face's speed loss does not foresee.
     pub landing_loss: f32,
     /// Height gained and lost riding the floor, per metre: the dips and bumps
-    /// felt as snags.
+    /// felt as snags, which cost the drive no time (the plank bridges are
+    /// crossed at full speed) but read as the body jolted. A plank bridge's
+    /// 5 cm bob costs 0.2.
     pub ride_travel: f32,
     /// A footfall on loose footing as heavy as `loose_reference_mass`; a
     /// heavier body costs less, a lighter one more.
