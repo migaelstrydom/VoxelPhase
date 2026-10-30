@@ -14,7 +14,11 @@
 //! | pressed into a thin pillar       | `a_shape_pressed_into_a_thin_pillar_is_pushed_back_the_way_it_came`, and the round pillar tests |
 //! | centre just under the ground     | `a_shape_with_its_centre_under_the_ground_comes_up_on_top` |
 
-use super::super::framework::{run_scenario, BenchRunConfig, BenchRunResult};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
+
+use crate::debug::DebugLines;
+
+use super::super::framework::{run_scenario, BenchRunConfig, BenchRunResult, PhysicsBenchScenario};
 use super::super::scenarios::*;
 use super::assertions::*;
 use super::write_exports;
@@ -324,6 +328,51 @@ fn a_shape_skewered_on_a_thin_round_pillar_comes_off_it() {
                 failures.push(format!(
                     "{shape:?} started {offset} m off the axis: {failure}"
                 ));
+            }
+        }
+    }
+    assert_none(failures);
+}
+
+/// A still shape pressed against one of a round pillar's upright edges is
+/// pushed off it, level with a joint between the edge's pieces as well as
+/// between joints. Each piece left the joint to the other, so a ball beside
+/// the pillar, its centre outside it, got no contact from the pillar at all
+/// and rested inside it.
+#[test]
+fn a_shape_against_a_round_pillars_edge_is_pushed_off_it() {
+    // The capsule lies pointing at the edge, so the end it meets the edge with
+    // is past both faces beside it, as the ball is.
+    let lying = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), std::f32::consts::FRAC_PI_2);
+    let half_axis = ProbeShape::Capsule.reach().y - ProbeShape::Capsule.reach().x;
+    let mut failures = Vec::new();
+    for (shape, rotation, behind_near_end) in [
+        (ProbeShape::Sphere, UnitQuaternion::identity(), 0.0),
+        (ProbeShape::Capsule, lying, half_axis),
+    ] {
+        for height in [0.5, 0.5625] {
+            for near_end in [0.25, 0.45] {
+                let x = near_end + behind_near_end;
+                let scenario = ShapeIntoSolidScenario::round_pillar(shape, 0.0);
+                let mut world = scenario.build_world();
+                let body = scenario.setup(&mut world);
+                world.wake_body(body);
+                let rigid = world.body_mut(body).unwrap();
+                rigid.set_position(Point3::new(x, height, 0.0));
+                rigid.set_rotation(rotation);
+                let mut debug = DebugLines::default();
+                world.update_contacts(1.0 / 240.0, 4, scenario.geometry(), &[], &mut debug);
+                world.substep(1.0 / 240.0, scenario.geometry(), &[]);
+                let pushed_off = world
+                    .contact_events()
+                    .iter()
+                    .any(|contact| contact.normal.x > 0.9);
+                if !pushed_off {
+                    failures.push(format!(
+                        "{shape:?} with its near end at x = {near_end}, y = {height}: \
+                         no contact pushes it off the pillar"
+                    ));
+                }
             }
         }
     }

@@ -230,8 +230,9 @@ fn sphere_vs_face(
 }
 
 /// Test sphere against a convex crease, when the sphere is in the crease's
-/// own region. Its ends are left to the faces and the boundary fallback: a
-/// crease's end is shared with the next piece of the same crease.
+/// own region. Its far end is left to the next piece of the same crease, which
+/// starts there: a point on the joint between two pieces is its start's, or
+/// a centre level with the joint falls between them and is found by neither.
 fn sphere_vs_crease(
     center: Point3<f32>,
     expanded_radius: f32,
@@ -240,7 +241,7 @@ fn sphere_vs_crease(
     let edge = crease.edge;
     let run = edge.b - edge.a;
     let t = (center - edge.a).dot(&run) / run.magnitude_squared();
-    if t <= 0.0 || t >= 1.0 {
+    if !(0.0..1.0).contains(&t) {
         return None;
     }
     let point = edge.a + run * t;

@@ -482,11 +482,11 @@ fn sample_axis_t_vs_face(
     sample_center_vs_face(center, signed_dist, expanded_radius, face)
 }
 
-/// Test capsule against a boundary/crease edge.
 /// Test a capsule against a convex crease, when the capsule's nearest point
-/// is in the crease's own region. The crease's ends are left to the faces and
-/// the boundary fallback: a crease's end is shared with the next piece of the
-/// same crease.
+/// is in the crease's own region. Its far end is left to the next piece of the
+/// same crease, which starts there: a point on the joint between two pieces is
+/// its start's, or a capsule level with the joint falls between them and is
+/// found by neither.
 fn capsule_vs_crease(
     seg_a: Point3<f32>,
     seg_b: Point3<f32>,
@@ -496,7 +496,7 @@ fn capsule_vs_crease(
     let edge = crease.edge;
     let run = edge.b - edge.a;
     let t = crease_point_nearest_axis(seg_a, seg_b, edge.a, edge.b);
-    if t <= CAPSULE_FACE_ENDPOINT_T_EPS || t >= 1.0 - CAPSULE_FACE_ENDPOINT_T_EPS {
+    if !(0.0..1.0).contains(&t) {
         return None;
     }
     let on_edge = edge.a + run * t;
@@ -518,7 +518,7 @@ fn capsule_vs_crease(
 }
 
 /// Where along edge `a`–`b` it comes nearest the capsule's axis, from 0 at
-/// `a` to 1 at `b`.
+/// `a` to 1 at `b`, and outside that where the axis comes nearest past an end.
 ///
 /// An edge parallel to the axis is equally near all along the stretch beside
 /// the capsule, and the nearest-points solution picks an arbitrary end of
@@ -532,13 +532,17 @@ fn crease_point_nearest_axis(
     let axis = seg_b - seg_a;
     let run = b - a;
     let parallel = axis.normalize().dot(&run.normalize()).abs() > CREASE_PARALLEL_DOT;
+    // A position along the edge's line, unclamped.
+    let along = |p: Point3<f32>| (p - a).dot(&run) / run.magnitude_squared();
     if !parallel {
-        let (_, on_edge) =
+        // Where the axis's nearest point falls on the edge's line: the edge's
+        // own nearest point while that is inside the edge, and outside it
+        // when the edge's is clamped to an end.
+        let (on_axis, _) =
             crate::collision::segment::segment_segment_closest_points(seg_a, seg_b, a, b);
-        return (on_edge - a).dot(&run) / run.magnitude_squared();
+        return along(on_axis);
     }
     // The capsule axis's ends, as positions along the edge.
-    let along = |p: Point3<f32>| (p - a).dot(&run) / run.magnitude_squared();
     let (start, end) = (along(seg_a), along(seg_b));
     let (low, high) = (start.min(end).max(0.0), start.max(end).min(1.0));
     (low + high) * 0.5
