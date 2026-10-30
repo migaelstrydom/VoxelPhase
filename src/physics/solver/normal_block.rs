@@ -241,6 +241,7 @@ mod tests {
     use crate::physics::body::{RigidBody, RigidBodyDesc};
     use crate::physics::drive::TractionRow;
     use crate::physics::handle::RigidBodyHandle;
+    use crate::physics::solver::body_pair::LeverOrigins;
     use crate::physics::solver::contact_row::ContactRows;
 
     /// A unit-mass body at the origin over static ground, moving at
@@ -301,6 +302,7 @@ mod tests {
             bodies,
             &mut solver_bodies,
             std::iter::once((header, &*contacts, (1.0, 1.0))),
+            LeverOrigins::Current,
         );
         let coupling = *rows.coupling(0).expect("a block of contacts");
         let solved = solve_normal_block(
@@ -435,6 +437,7 @@ mod tests {
             &bodies,
             &mut solver_bodies,
             std::iter::once((&header, contacts.as_slice(), (1.0, 1.0))),
+            LeverOrigins::Current,
         );
         let coupling = rows.coupling(0).expect("a block of contacts");
         let largest = (0..3)

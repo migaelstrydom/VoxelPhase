@@ -16,6 +16,7 @@ use crate::physics::constraint::types::{Constraint, ConstraintRow, Enforcement, 
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::pair::SolverManifold;
 
+use super::body_pair::LeverOrigins;
 use super::closing_allowance::set_closing_allowances;
 use super::conditioning::ManifoldConditions;
 use super::island_solver::{IslandManifold, IslandSolver};
@@ -174,9 +175,10 @@ impl ConstraintSolver for PgsNgsSolver {
             .collect();
         let arena: &Arena<RigidBody> = bodies;
         let config = &self.config;
+        let origins = LeverOrigins::Generation(&self.contact_generation_positions);
         work.into_par_iter()
             .for_each(|((solver, manifolds), constraints)| {
-                solver.solve(arena, manifolds, constraints, conditions, config);
+                solver.solve(arena, manifolds, constraints, conditions, origins, config);
             });
         drop(arranged_manifolds);
         drop(arranged_constraints);

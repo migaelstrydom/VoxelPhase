@@ -26,7 +26,7 @@ use nalgebra::{Matrix3, Vector3};
 use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
-use super::body_pair::{is_kinematic_static, BodyPairState};
+use super::body_pair::{is_kinematic_static, BodyPairState, LeverOrigins};
 use super::impulse::compute_tangent_basis;
 use super::normal_block::NormalCoupling;
 use super::solver_bodies::SolverBodies;
@@ -135,8 +135,8 @@ pub(crate) struct ContactRow {
 }
 
 impl ContactRow {
-    /// Prepare a contact's rows from the bodies' current pose, gathering both
-    /// bodies into `solver_bodies`.
+    /// Prepare a contact's rows from the bodies' current pose, with lever arms
+    /// measured from `origins`, gathering both bodies into `solver_bodies`.
     ///
     /// `None` when either body is gone, in which case every row of the contact
     /// is a no-op beyond the bookkeeping its solve function does first.
@@ -146,8 +146,9 @@ impl ContactRow {
         header: &PairHeader,
         contact: &SolverContact,
         shock_scales: (f32, f32),
+        origins: LeverOrigins,
     ) -> Option<Self> {
-        let state = BodyPairState::extract(bodies, header, contact.point, shock_scales)?;
+        let state = BodyPairState::extract(bodies, header, contact.point, shock_scales, origins)?;
         let body_b = bodies.get(header.body_b.0)?;
         let point = contact.point;
         let normal = contact.normal;
@@ -254,6 +255,7 @@ impl ContactRows {
         bodies: &Arena<RigidBody>,
         solver_bodies: &mut SolverBodies,
         manifolds: impl Iterator<Item = (&'a PairHeader, &'a [SolverContact], (f32, f32))>,
+        origins: LeverOrigins,
     ) {
         self.rows.clear();
         self.pre_solve_normal_velocity.clear();
@@ -263,7 +265,14 @@ impl ContactRows {
             let start = self.rows.len();
             self.starts.push(start);
             for contact in contacts {
-                let row = ContactRow::prepare(bodies, solver_bodies, header, contact, shock_scales);
+                let row = ContactRow::prepare(
+                    bodies,
+                    solver_bodies,
+                    header,
+                    contact,
+                    shock_scales,
+                    origins,
+                );
                 let vn = row.map_or(0.0, |row| {
                     row.relative_velocity(solver_bodies).dot(&contact.normal)
                 });

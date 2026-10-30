@@ -96,7 +96,9 @@ fn boundary_column() -> Scenario {
         name: "garden_boundary_column",
         description: "garden corner: a column against the segment's edge drops like any other",
         level: GARDEN,
-        blasts: vec![grenade(1.4, 1.6, 95.0)],
+        // Far enough in from the column that the crater it leaves does not
+        // roll the boulder on over the segment's open edge.
+        blasts: vec![grenade(1.6, 1.6, 95.0)],
         known_gap: None,
         expect: |run| something_fell(run, 8),
     }

@@ -223,6 +223,7 @@ mod tests {
     use crate::physics::body::{RigidBody, RigidBodyDesc};
     use crate::physics::drive::TractionRow;
     use crate::physics::handle::RigidBodyHandle;
+    use crate::physics::solver::body_pair::LeverOrigins;
 
     /// One unit-mass body sliding along +x on static ground, touching it at
     /// its centre of mass so friction only slows it.
@@ -264,7 +265,14 @@ mod tests {
     /// written back to them.
     fn solve(bodies: &mut Arena<RigidBody>, header: &PairHeader, contact: &mut SolverContact) {
         let mut solver_bodies = SolverBodies::default();
-        let row = ContactRow::prepare(bodies, &mut solver_bodies, header, contact, (1.0, 1.0));
+        let row = ContactRow::prepare(
+            bodies,
+            &mut solver_bodies,
+            header,
+            contact,
+            (1.0, 1.0),
+            LeverOrigins::Current,
+        );
         solve_friction_impulse(&mut solver_bodies, row.as_ref(), header, contact);
         solver_bodies.scatter(bodies);
     }

@@ -1,10 +1,41 @@
 //! Body pair mass properties for preparing contact rows.
 
-use generational_arena::Arena;
+use generational_arena::{Arena, Index};
 use nalgebra::{Matrix3, Point3, Vector3};
+use rustc_hash::FxHashMap;
 
 use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::PairHeader;
+
+/// Where each body's lever arms to its contacts are measured from.
+///
+/// Contacts are generated once per frame, at the poses bodies had then.
+/// Measured from where a body is now, a lever arm drifts through the frame's
+/// substeps by however far the body has gone since: up to a frame's travel
+/// behind a rolling ball, whose floor then pushes up behind its centre and
+/// spins it on. Measured from where the body was when its contacts were
+/// generated, each arm stays what it was relative to the body, as position
+/// correction's already do.
+#[derive(Clone, Copy)]
+pub(crate) enum LeverOrigins<'a> {
+    /// The bodies' positions now: for contacts generated at them, as CCD's are.
+    Current,
+    /// Each body's position when the frame's contacts were generated; a body
+    /// missing from it is measured from where it is now.
+    Generation(&'a FxHashMap<Index, Point3<f32>>),
+}
+
+impl LeverOrigins<'_> {
+    fn of(&self, index: Index, body: &RigidBody) -> Point3<f32> {
+        match self {
+            Self::Current => body.position(),
+            Self::Generation(positions) => positions
+                .get(&index)
+                .copied()
+                .unwrap_or_else(|| body.position()),
+        }
+    }
+}
 
 /// Snapshot of both bodies' pose and mass properties for a contact pair.
 ///
@@ -37,11 +68,14 @@ impl BodyPairState {
     /// `shock_scales` applies shock propagation mass scaling: `(scale_a, scale_b)`.
     /// Inverse mass and inertia are pre-multiplied by the corresponding scale so
     /// that all downstream effective-mass computations see shock-adjusted values.
+    ///
+    /// Each body's position is its lever origin, as `origins` gives it.
     pub fn extract(
         bodies: &Arena<RigidBody>,
         header: &PairHeader,
         contact_point: Point3<f32>,
         shock_scales: (f32, f32),
+        origins: LeverOrigins,
     ) -> Option<Self> {
         let body_b = bodies.get(header.body_b.0)?;
 
@@ -49,7 +83,7 @@ impl BodyPairState {
             Some(handle) => {
                 let body_a = bodies.get(handle.0)?;
                 (
-                    body_a.position(),
+                    origins.of(handle.0, body_a),
                     body_a.inv_mass() * shock_scales.0,
                     body_a.world_inv_inertia() * shock_scales.0,
                 )
@@ -61,7 +95,7 @@ impl BodyPairState {
             pos_a,
             inv_mass_a,
             inv_inertia_a,
-            pos_b: body_b.position(),
+            pos_b: origins.of(header.body_b.0, body_b),
             inv_mass_b: body_b.inv_mass() * shock_scales.1,
             inv_inertia_b: body_b.world_inv_inertia() * shock_scales.1,
         })

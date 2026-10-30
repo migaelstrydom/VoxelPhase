@@ -25,7 +25,7 @@ PhysicsWorld orchestration:
 
 PgsNgsSolver (default solver)
 ├── PgsNgsConfig        — solver iterations, warm-start scale, position correction config
-├── contact_generation_positions — body position snapshots for stale-depth correction
+├── contact_generation_positions — body position snapshots for stale-depth correction and lever origins
 ├── islands             — SolverIslands, rows grouped by the movable bodies they share
 ├── island_solvers      — one IslandSolver per island: its own SolverBodies,
 │                         ContactRows, joint slots and IterationBudget
@@ -63,7 +63,7 @@ ShockPropagationConditioner (default conditioner)
 | `conditioning.rs` | `ManifoldConditioner` trait, `ManifoldConditions`, `IdentityConditioner` |
 | `shock_propagation/` | `ShockPropagationConditioner`: contact graph, statics gate, warm-start remap, wrench cone (`docs/SHOCK_PROPAGATION_STATICS.md`) |
 | `pgs_ngs.rs` | PGS+NGS solver: config, state, trait impl |
-| `body_pair.rs` | `BodyPairState` — pose and shock-scaled mass properties of a contact pair |
+| `body_pair.rs` | `BodyPairState` — lever origins and shock-scaled mass properties of a contact pair; `LeverOrigins` — where lever arms are measured from |
 | `contact_row.rs` | `ContactRow` — per-contact lever arms, effective masses and impulse response, prepared once per substep |
 | `normal.rs` | Normal impulse solve (restitution, accumulated clamping) |
 | `normal_block.rs` | `NormalCoupling` — a manifold's normal rows solved together, exactly |

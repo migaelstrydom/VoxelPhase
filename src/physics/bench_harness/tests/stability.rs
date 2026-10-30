@@ -4,18 +4,20 @@
 //! it settles to rest within tight tolerance. These are regression guards
 //! against solver changes that break stacking stability.
 
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 
 use crate::debug::DebugLines;
 use crate::physics::bench_harness::framework::{
     run_scenario, BenchRunConfig, PhysicsBenchScenario,
 };
+use crate::physics::bench_harness::geometry::FlatQuadGeometry;
 use crate::physics::bench_harness::scenarios::{
     BoxGridScenario, HoneycombWallScenario, JengaTowerScenario, TempleScenario,
     VoussoirArchScenario,
 };
 use crate::physics::{
-    ConstraintKind, PhysicsWorld, RigidBodyHandle, SequentialStepper, StaticGeometry, Stepper,
+    ColliderDesc, ConstraintKind, PhysicsConfig, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
+    SequentialStepper, StaticGeometry, Stepper,
 };
 
 use super::write_exports;
@@ -327,6 +329,47 @@ fn a_tower_sliding_along_the_floor_regains_no_energy() {
         worst < LIMIT,
         "a sliding tower regained {worst:.3} J/kg, as if it rose {:.1} cm on its own",
         worst / 9.81 * 100.0
+    );
+}
+
+/// A ball rolling across level ground at 30 Hz slows, and never speeds up.
+///
+/// Contacts are generated once a frame, and a contact's lever arm was
+/// measured from its frame-start point to where the body had got to: through
+/// the frame's substeps the point fell behind a rolling ball by up to a frame's
+/// travel, and the ground's push, behind the centre, spun the ball on. A
+/// 756 kg ball rolled from 0.33 to 1.11 m/s by itself.
+#[test]
+fn a_rolling_ball_does_not_speed_itself_up() {
+    const RADIUS: f32 = 0.29;
+    const SPEED: f32 = 0.5;
+    let geometry = FlatQuadGeometry::new(20.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let mut world = PhysicsWorld::new(config);
+    let ball = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(Point3::new(-5.0, RADIUS, 0.0))
+            .linear_velocity(Vector3::new(SPEED, 0.0, 0.0))
+            .angular_velocity(Vector3::new(0.0, 0.0, -SPEED / RADIUS)),
+    );
+    let _ = world.attach_collider(
+        ball,
+        ColliderDesc::sphere(RADIUS)
+            .density(7700.0)
+            .restitution(0.3)
+            .friction(0.5),
+    );
+    let mut stepper = SequentialStepper::new(1.0 / 240.0, 12);
+    let mut debug = DebugLines::default();
+    let mut fastest = 0.0f32;
+    for _ in 0..150 {
+        stepper.step(&mut world, 1.0 / 30.0, &geometry, &[], &[], &mut debug);
+        fastest = fastest.max(world.body(ball).unwrap().linear_velocity().norm());
+    }
+    assert!(
+        fastest < SPEED * 1.02,
+        "a ball rolling at {SPEED} m/s reached {fastest:.3} m/s by itself"
     );
 }
 

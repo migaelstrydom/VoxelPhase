@@ -4,6 +4,7 @@ use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::SolverManifold;
 use generational_arena::Arena;
 
+use super::body_pair::LeverOrigins;
 use super::contact_row::ContactRow;
 use super::friction::solve_friction_impulse;
 use super::normal::solve_normal_impulse;
@@ -23,7 +24,14 @@ pub(crate) fn solve_contacts(
             // Each contact sees the impulses of the ones before it, so each is
             // gathered from the arena, solved, and written back on its own.
             solver_bodies.clear();
-            let row = ContactRow::prepare(bodies, &mut solver_bodies, header, contact, no_shock);
+            let row = ContactRow::prepare(
+                bodies,
+                &mut solver_bodies,
+                header,
+                contact,
+                no_shock,
+                LeverOrigins::Current,
+            );
             let pre_solve_vn = row.map_or(0.0, |row| {
                 row.relative_velocity(&solver_bodies).dot(&contact.normal)
             });

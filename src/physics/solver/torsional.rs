@@ -104,6 +104,7 @@ mod tests {
     use crate::physics::body::{RigidBody, RigidBodyDesc};
     use crate::physics::drive::TractionRow;
     use crate::physics::handle::RigidBodyHandle;
+    use crate::physics::solver::body_pair::LeverOrigins;
 
     /// A contact on level ground carrying a full normal impulse, so the bound
     /// is decided by `μ` and `r` alone.
@@ -148,7 +149,14 @@ mod tests {
     /// written back to them.
     fn solve(bodies: &mut Arena<RigidBody>, header: &PairHeader, contact: &mut SolverContact) {
         let mut solver_bodies = SolverBodies::default();
-        let row = ContactRow::prepare(bodies, &mut solver_bodies, header, contact, (1.0, 1.0));
+        let row = ContactRow::prepare(
+            bodies,
+            &mut solver_bodies,
+            header,
+            contact,
+            (1.0, 1.0),
+            LeverOrigins::Current,
+        );
         solve_torsional_impulse(&mut solver_bodies, row.as_ref(), header, contact);
         solver_bodies.scatter(bodies);
     }

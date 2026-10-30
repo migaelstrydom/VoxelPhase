@@ -612,7 +612,7 @@ mod tests {
         /// its count here is lowered to match.
         const KNOWN_DRIFTS: &[(&str, usize)] = &[
             ("skyway.level.ron", 4),
-            ("stack_yard.level.ron", 3),
+            ("stack_yard.level.ron", 1),
             ("subsidence.level.ron", 4),
             ("test_arena.level.ron", 7),
             ("test_segments.level.ron", 5),

@@ -491,7 +491,12 @@ fn hinge_axis_no_drift_zero_gravity() {
 
 /// Two boxes connected by a breakable Fixed joint, elevated so they're in free
 /// fall. A heavy sphere dropped from above impacts one box, stressing the joint
-/// beyond its impulse limit. The joint must break cleanly.
+/// beyond its impulse limit. The joint must break cleanly, there and then.
+///
+/// Struck at one end, the welded pair spins as one bar, so the joint carries
+/// only what turning the other box takes: about 2 kg × 2.4 m/s. A limit of
+/// 5 N·s held through that, and the joint broke only when the pair hit the
+/// ground, so what the test saw was the landing.
 #[test]
 fn breakable_fixed_joint_breaks_cleanly() {
     let geometry = FlatQuadGeometry::new(10.0);
@@ -527,9 +532,7 @@ fn breakable_fixed_joint_breaks_cleanly() {
             .friction(0.5),
     );
 
-    // Fixed joint with a low impulse limit so the sphere impact breaks it.
-    // At 240 Hz substep rate, the per-substep impulse from a 20 kg sphere
-    // at ~6 m/s hitting a 2 kg box exceeds this threshold on the Y-axis row.
+    // Fixed joint with a limit below what the sphere's impact asks of it.
     let fixed_handle: ConstraintHandle = world.create_constraint(ConstraintKind::Fixed {
         body_a: Some(box_a),
         body_b: box_b,
@@ -537,7 +540,7 @@ fn breakable_fixed_joint_breaks_cleanly() {
         local_anchor_b: Vector3::new(-0.3, 0.0, 0.0),
         reference: UnitQuaternion::identity(),
         compliance: 0.0,
-        max_impulse: 5.0,
+        max_impulse: 2.0,
     });
 
     // Heavy sphere just above box_b with a large initial downward velocity.
@@ -567,6 +570,7 @@ fn breakable_fixed_joint_breaks_cleanly() {
     let mut debug_lines = DebugLines::default();
     let mut broken = false;
     let mut break_frame = 0u32;
+    let mut broke_at_height = 0.0f32;
 
     // Simulate 3 seconds — enough for sphere to fall, impact, and settle.
     for frame in 0..180 {
@@ -581,6 +585,7 @@ fn breakable_fixed_joint_breaks_cleanly() {
                 if !c.active {
                     broken = true;
                     break_frame = frame;
+                    broke_at_height = world.body(box_b).unwrap().position().y;
                     eprintln!("joint broke at frame {frame}");
                 }
             }
@@ -593,6 +598,11 @@ fn breakable_fixed_joint_breaks_cleanly() {
     );
 
     eprintln!("breakable_fixed: broke at frame {break_frame}");
+    assert!(
+        broke_at_height > box_b_pos.y - 0.5,
+        "the joint broke {broke_at_height:.2} m up, not {:.2} m up where the sphere struck it",
+        box_b_pos.y
+    );
 
     // Both boxes should have bounded speeds (no explosion).
     let speed_a = world.body(box_a).unwrap().linear_velocity().magnitude();

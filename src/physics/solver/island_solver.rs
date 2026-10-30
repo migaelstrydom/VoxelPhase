@@ -20,6 +20,7 @@ use crate::physics::body::RigidBody;
 use crate::physics::constraint::types::ConstraintRow;
 use crate::physics::pipeline::pair::SolverManifold;
 
+use super::body_pair::LeverOrigins;
 use super::conditioning::ManifoldConditions;
 use super::constraint_row::{solve_constraint_row, warm_start_constraint_row, RowSlots};
 use super::contact_row::ContactRows;
@@ -65,9 +66,10 @@ impl IslandSolver {
         manifolds: &mut [IslandManifold],
         constraint_rows: &mut [&mut ConstraintRow],
         conditions: &ManifoldConditions,
+        origins: LeverOrigins,
         config: &PgsNgsConfig,
     ) {
-        self.prepare(bodies, manifolds, constraint_rows, conditions);
+        self.prepare(bodies, manifolds, constraint_rows, conditions, origins);
         self.warm_start(manifolds, constraint_rows, config);
 
         self.budget.measure(
@@ -94,6 +96,7 @@ impl IslandSolver {
         manifolds: &[IslandManifold],
         constraint_rows: &[&mut ConstraintRow],
         conditions: &ManifoldConditions,
+        origins: LeverOrigins,
     ) {
         let solver_bodies = &mut self.solver_bodies;
         solver_bodies.clear();
@@ -107,6 +110,7 @@ impl IslandSolver {
                     conditions.shock_scales_for(*mi),
                 )
             }),
+            origins,
         );
 
         self.constraint_slots.clear();

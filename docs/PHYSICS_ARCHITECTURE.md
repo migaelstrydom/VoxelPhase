@@ -98,7 +98,10 @@ PhysicsWorld::substep(dt)                            × N
 **The central fact: contacts are generated once per frame but integrated over up to 12
 substeps.** Every safeguard against tunnelling and every contact reference has to cover the
 whole frame, not one substep. Speculative contacts, closing allowances, NGS's reference
-positions, CCD's frame gate and narrowphase ownership all exist because of this.
+positions, CCD's frame gate and narrowphase ownership all exist because of this, and so
+do contact rows' lever arms, measured from each body's position when the frame's contacts
+were made (`LeverOrigins`): from where it is now, a contact point falls behind a rolling
+body through the substeps and its push spins it on.
 
 ## Narrowphase
 
