@@ -45,9 +45,10 @@ const FLOOR_HALF_SIZE: f32 = 500.0;
 /// beyond what the walker gave it, before it is reported, in J/kg.
 ///
 /// Far above rounding and position correction, which lift a settling block by
-/// millimetres. The failures this exists for are tens of J/kg — a tower's top
-/// thrown metres into the air.
-pub const ENERGY_GAIN_LIMIT: f32 = 0.5;
+/// millimetres, and above the 0.24 J/kg the worst of 2000 seeds regains. A
+/// broken rule once threw a tower's top metres into the air, tens of J/kg, but
+/// the mechanisms behind it showed first as pops of a few tenths.
+pub const ENERGY_GAIN_LIMIT: f32 = 0.3;
 
 /// What the engine did that physics does not.
 #[derive(Clone, Debug, PartialEq)]

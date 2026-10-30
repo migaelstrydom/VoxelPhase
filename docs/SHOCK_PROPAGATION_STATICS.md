@@ -8,7 +8,8 @@ Why shock propagation made energy, the exact statement of when it does, and what
 On branch `shock-statics` (2026-10-30). `StaticsGate` and `WarmStartRemap` run in
 `ShockPropagationConditioner` after the contact graph. `physics_fuzz` over 500 seeds:
 33 failing → 0, worst unexplained gain 6.45 → 0.16 J/kg; over 2000, none fail, the worst
-0.24 J/kg (see *The last five seeds* and *The three after them*).
+0.24 J/kg (see *The last five seeds* and *The three after them*). `ENERGY_GAIN_LIMIT`
+came down from 0.5 to 0.3 J/kg to hold that.
 
 ## The problem
 
@@ -267,6 +268,5 @@ the pair hit the ground.
 ## Open
 
 - The 3D statement is measured, not proven.
-- No seed of 2000 exceeds 0.24 J/kg, so `ENERGY_GAIN_LIMIT` could come down from 0.5.
 - Switching a pair's scale still costs energy wherever the remap does not reach: it
   rescales only vertical supports. The hysteresis makes switches rare, not free.
