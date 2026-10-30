@@ -5,9 +5,9 @@ use crate::path::PathVec;
 use crate::plan::{BodyState, Contact, FootfallId, Limb, Motion, Phase, Plan};
 use crate::section::{Footing, SectionQuery};
 
-use super::body_path::BodySegment;
+use super::body_path::{BodyPath, BodySegment};
 use super::body_search::{BodySearch, FlightSpan, PreviousPath, RideSpan};
-use super::footfall_search::{Footfall, FootfallSearch};
+use super::footfall_search::{Footfall, FootfallPlan, FootfallSearch, FootfallsRefused};
 use super::plan_builder::build_plan;
 use super::settings::PlannerSettings;
 
@@ -154,15 +154,10 @@ impl Planner {
         }
 
         // Failing that, only what follows the committed footfall.
+        let kept_previous = previous.get(1..).unwrap_or_default();
         let mut kept_refusal = None;
         if let Some(kept) = self.kept_through(query, request, 0) {
-            match self.plan_from(
-                query,
-                request,
-                &kept.body,
-                kept.planted,
-                previous.get(1..).unwrap_or_default(),
-            ) {
+            match self.plan_from(query, request, &kept.body, kept.planted, kept_previous) {
                 Ok((tail, cost)) => {
                     return Ok(Planned {
                         plan: kept.followed_by(tail),
@@ -170,7 +165,7 @@ impl Planner {
                         diverged: false,
                     })
                 }
-                Err(partial) => kept_refusal = Some(kept.followed_by(partial)),
+                Err(unplanned) => kept_refusal = Some((kept, unplanned)),
             }
         }
 
@@ -190,25 +185,37 @@ impl Planner {
             .copied()
             .chain(previous.iter().copied())
             .collect();
-        let fresh = self.plan_from(
-            query,
-            request,
-            &request.body,
-            self.planted(request),
-            &fresh_previous,
-        );
+        let planted = self.planted(request);
+        let fresh = self.plan_from(query, request, &request.body, planted, &fresh_previous);
         match (fresh, kept_refusal) {
             (Ok((plan, cost)), _) => Ok(Planned {
                 plan,
                 cost,
                 diverged: wanted_commitment,
             }),
-            (Err(_), Some(partial)) => Err(Refusal {
-                partial,
-                diverged: false,
-            }),
-            (Err(partial), None) => Err(Refusal {
-                partial,
+            (Err(_), Some((kept, unplanned))) => {
+                let tail = self.partial(
+                    query,
+                    request,
+                    unplanned,
+                    &kept.body,
+                    kept.planted,
+                    kept_previous,
+                );
+                Err(Refusal {
+                    partial: kept.followed_by(tail),
+                    diverged: false,
+                })
+            }
+            (Err(unplanned), None) => Err(Refusal {
+                partial: self.partial(
+                    query,
+                    request,
+                    unplanned,
+                    &request.body,
+                    planted,
+                    &fresh_previous,
+                ),
                 diverged: wanted_commitment,
             }),
         }
@@ -258,11 +265,15 @@ impl Planner {
     }
 
     /// The cheapest plan from the body at `body` with `planted` holding it,
-    /// as asked for by `request`; or, refused, the plan as far as it got.
-    /// The goal is measured from the request's body, so a plan from its
-    /// committed footfall reaches no further than a fresh one. Each footfall
-    /// moved from `previous`, and leaving each of the last plan's near
-    /// flights, costs churn.
+    /// as asked for by `request`; or, refused, why. The goal is measured
+    /// from the request's body, so a plan from its committed footfall
+    /// reaches no further than a fresh one. Each footfall moved from
+    /// `previous`, and leaving each of the last plan's near flights, costs
+    /// churn.
+    ///
+    /// A flight the feet cannot land is vetoed and the body's path searched
+    /// again; a body path that does not reach the goal is not, since the
+    /// plan is refused whatever its feet do.
     fn plan_from(
         &self,
         query: &dyn SectionQuery,
@@ -270,7 +281,7 @@ impl Planner {
         body: &BodyState,
         planted: Contact,
         previous: &[Contact],
-    ) -> Result<(Plan, f32), Plan> {
+    ) -> Result<(Plan, f32), Unplanned> {
         let previous_path = request.previous.map(previous_path);
         let mut vetoed = Vec::new();
         loop {
@@ -284,73 +295,103 @@ impl Planner {
                 planted: planted.at.s,
                 previous: previous_path.as_ref(),
             }
-            .search(*body);
-            let (path, body_cost) = match &found {
-                Ok(plan) => (&plan.path, plan.cost),
-                Err(partial) => (partial, 0.0),
-            };
-            let feet = FootfallSearch {
-                query,
-                params: &self.params,
-                settings: &self.settings,
-                target_speed: request.target_speed,
-                spacing: self
-                    .settings
-                    .footfall_spacing(request.target_speed, &self.params),
-                body: path,
-                previous,
-                swinging: request.aim.map(|aim| aim.footfall),
-            }
-            .search(Footfall {
-                contact: planted,
-                body_s: body.s,
-            });
-
-            match (found.is_ok(), feet) {
-                (true, Ok(feet)) => {
+            .search(*body)
+            .map_err(Unplanned::Body)?;
+            let refused = match self.footfalls(query, request, &found.path, body, planted, previous)
+            {
+                Ok(feet) => {
                     return Ok((
-                        build_plan(path, &planted, &feet.footfalls),
-                        body_cost + feet.cost,
+                        build_plan(&found.path, &planted, &feet.footfalls),
+                        found.cost + feet.cost,
                     ))
                 }
-                (false, Ok(feet)) => return Err(build_plan(path, &planted, &feet.footfalls)),
-                (_, Err(refused)) => {
-                    // The feet could not land a flight: try the body's path
-                    // again without it, or refuse with what they managed.
-                    let reached = refused
-                        .footfalls
-                        .last()
-                        .map_or(body.s, |footfall| footfall.body_s);
-                    let unfollowed =
-                        path.flights()
-                            .chain(path.leap())
-                            .find_map(|flight| match *flight {
-                                BodySegment::Flight {
-                                    takeoff, landing, ..
-                                }
-                                | BodySegment::Leap {
-                                    takeoff,
-                                    until: landing,
-                                    ..
-                                } if landing > reached => Some(FlightSpan {
-                                    takeoff: takeoff.s,
-                                    landing,
-                                }),
-                                _ => None,
-                            });
-                    match unfollowed {
-                        Some(span) if vetoed.len() < self.settings.max_vetoes => vetoed.push(span),
-                        _ => {
-                            return Err(build_plan(
-                                &path.until_unlanded(reached),
-                                &planted,
-                                &refused.footfalls,
-                            ))
-                        }
+                Err(refused) => refused,
+            };
+            let reached = reached(&refused, body);
+            let unfollowed = found
+                .path
+                .flights()
+                .chain(found.path.leap())
+                .find_map(|flight| match *flight {
+                    BodySegment::Flight {
+                        takeoff, landing, ..
                     }
+                    | BodySegment::Leap {
+                        takeoff,
+                        until: landing,
+                        ..
+                    } if landing > reached => Some(FlightSpan {
+                        takeoff: takeoff.s,
+                        landing,
+                    }),
+                    _ => None,
+                });
+            match unfollowed {
+                Some(span) if vetoed.len() < self.settings.max_vetoes => vetoed.push(span),
+                _ => {
+                    return Err(Unplanned::Feet(build_plan(
+                        &found.path.until_unlanded(reached),
+                        &planted,
+                        &refused.footfalls,
+                    )))
                 }
             }
         }
+    }
+
+    /// The plan as far as it got, for a refusal `plan_from` gave with the
+    /// same arguments: a body path short of the goal has its feet placed
+    /// along it only now, since only the refusal returned needs them.
+    fn partial(
+        &self,
+        query: &dyn SectionQuery,
+        request: &PlanRequest,
+        unplanned: Unplanned,
+        body: &BodyState,
+        planted: Contact,
+        previous: &[Contact],
+    ) -> Plan {
+        let path = match unplanned {
+            Unplanned::Feet(plan) => return plan,
+            Unplanned::Body(path) => path,
+        };
+        match self.footfalls(query, request, &path, body, planted, previous) {
+            Ok(feet) => build_plan(&path, &planted, &feet.footfalls),
+            Err(refused) => build_plan(
+                &path.until_unlanded(reached(&refused, body)),
+                &planted,
+                &refused.footfalls,
+            ),
+        }
+    }
+
+    /// The cheapest footfalls carrying the body along `path` from `body`,
+    /// `planted` holding it.
+    fn footfalls(
+        &self,
+        query: &dyn SectionQuery,
+        request: &PlanRequest,
+        path: &BodyPath,
+        body: &BodyState,
+        planted: Contact,
+        previous: &[Contact],
+    ) -> Result<FootfallPlan, FootfallsRefused> {
+        FootfallSearch {
+            query,
+            params: &self.params,
+            settings: &self.settings,
+            target_speed: request.target_speed,
+            spacing: self
+                .settings
+                .footfall_spacing(request.target_speed, &self.params),
+            body: path,
+            previous,
+            swinging: request.aim.map(|aim| aim.footfall),
+        }
+        .search(Footfall {
+            contact: planted,
+            body_s: body.s,
+        })
     }
 
     /// Where along the path a plan for `request` must carry the body.
@@ -379,6 +420,23 @@ impl Planner {
             footing: Footing::Fixed,
         }
     }
+}
+
+/// Why `Planner::plan_from` found no plan.
+enum Unplanned {
+    /// The body's path does not reach the goal: as far as it got, its feet
+    /// not yet placed.
+    Body(BodyPath),
+    /// The feet cannot follow the body's path: the plan as far as they got.
+    Feet(Plan),
+}
+
+/// Where along the path refused footfalls carried the body, from `body`.
+fn reached(refused: &FootfallsRefused, body: &BodyState) -> f32 {
+    refused
+        .footfalls
+        .last()
+        .map_or(body.s, |footfall| footfall.body_s)
 }
 
 /// The last plan's phases up to one of its footfalls, kept, and where they
