@@ -1128,19 +1128,12 @@ impl PhysicsWorld {
         let lap = Instant::now();
 
         // Condition manifolds (reorder + compute shock scales) before solving
-        let gravity_dir = {
-            let len = self.config.gravity.norm();
-            if len > 1e-6 {
-                self.config.gravity / len
-            } else {
-                Vector3::new(0.0, -1.0, 0.0)
-            }
-        };
         self.conditioner.condition(
             &self.bodies,
             &self.constraints,
             &mut self.cached_active_manifolds,
-            gravity_dir,
+            self.config.gravity,
+            dt,
             &mut self.manifold_conditions,
         );
 

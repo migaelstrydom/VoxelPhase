@@ -18,6 +18,8 @@
 mod case;
 mod run;
 mod structure;
+#[cfg(all(test, feature = "physics_scenarios"))]
+mod tests;
 mod walker;
 
 pub use case::{Case, Knock, Projectile};

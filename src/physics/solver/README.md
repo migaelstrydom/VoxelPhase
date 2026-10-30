@@ -48,7 +48,10 @@ Post-solve projection (in PhysicsWorld, outside the solver):
 
 ShockPropagationConditioner (default conditioner)
 ├── ShockPropagationConfig — shock_alpha, horizontal_threshold
-└── ContactGraph (internal) — BFS depth from static geometry, reused allocations
+├── ContactGraph   — BFS depth from static geometry, top-down order, α^Δdepth scales
+├── StaticsGate    — unscales pairs whose lower body is not in static equilibrium
+│                    on feasible impulses (ContactWrenchCone, NNLS)
+└── WarmStartRemap — warm starts carried over to the frame's scales
 ```
 
 ## Files
@@ -58,7 +61,7 @@ ShockPropagationConditioner (default conditioner)
 | `constraint_solver.rs` | `ConstraintSolver` trait definition |
 | `constraint_row.rs` | `solve_constraint_row()`, `warm_start_constraint_row()`, impulse application (on `SolverBodies`) |
 | `conditioning.rs` | `ManifoldConditioner` trait, `ManifoldConditions`, `IdentityConditioner` |
-| `shock_propagation.rs` | `ShockPropagationConditioner` with BFS contact graph |
+| `shock_propagation/` | `ShockPropagationConditioner`: contact graph, statics gate, warm-start remap, wrench cone (`docs/SHOCK_PROPAGATION_STATICS.md`) |
 | `pgs_ngs.rs` | PGS+NGS solver: config, state, trait impl |
 | `body_pair.rs` | `BodyPairState` — pose and shock-scaled mass properties of a contact pair |
 | `contact_row.rs` | `ContactRow` — per-contact lever arms, effective masses and impulse response, prepared once per substep |

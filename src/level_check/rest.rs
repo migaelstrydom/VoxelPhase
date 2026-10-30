@@ -614,7 +614,7 @@ mod tests {
             ("skyway.level.ron", 4),
             ("stack_yard.level.ron", 3),
             ("subsidence.level.ron", 4),
-            ("test_arena.level.ron", 6),
+            ("test_arena.level.ron", 7),
             ("test_segments.level.ron", 5),
             ("water_park.level.ron", 4),
             ("wrecking_yard.level.ron", 3),

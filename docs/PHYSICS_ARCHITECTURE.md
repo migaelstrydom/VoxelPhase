@@ -160,19 +160,23 @@ This persistence is the single largest contributor to stable resting contact.
 ## Conditioning: shock propagation
 
 `ManifoldConditioner` (`solver/conditioning.rs`) runs once per frame on the active
-manifolds. The default is `ShockPropagationConditioner`. It runs a BFS outward from static
-geometry through the contact graph, orders manifolds top-down, and gives each manifold
-within 45° of vertical a mass scale so that the lower body appears heavier
-(`shock_alpha` 0.3). Rigid two-body joints join the graph; a spring does not
-(`ConstraintKind::stacks`): a sprung body made to look heavier stops what lands on it
+manifolds. The default is `ShockPropagationConditioner` (`solver/shock_propagation/`). It
+runs a BFS outward from static geometry through the contact network (contacts within 45°
+of vertical order it), orders manifolds top-down, and scales each pair's lower body so it
+appears heavier (`shock_alpha` 0.3). Rigid two-body joints join the graph; a spring does
+not (`ConstraintKind::stacks`): a sprung body made to look heavier stops what lands on it
 dead instead of taking it into the spring.
 
 - A single-body constraint (`KeepAttitude` on the player) does not make a body
   "ground". Only static geometry roots the BFS.
-- The scaling creates energy when a structure collapses dynamically, because scaled
-  impulses are not equal and opposite. It is kept because heavy-on-light stacks sag, creep
-  or topple without it. Fixes tried and rejected are in `docs/BOX3D_SOLVER_COMPARISON.md`
-  and in `physics_fuzz`'s history.
+- Scaled impulses are not equal and opposite, but they move bodies exactly as physical
+  impulses would that carry each withheld share down through the supports to the ground.
+  Scaling is therefore energy-free wherever those impulses are a contact solution, and
+  made energy where they were not: through a contact opening, past a support's friction,
+  or past its edge. `StaticsGate` scales a pair only when its lower body is in static
+  equilibrium on feasible impulses from its carriers, all the way down; `WarmStartRemap`
+  rescales warm starts when scales change, which otherwise pops a stack up. Derivation
+  and measurements: `docs/SHOCK_PROPAGATION_STATICS.md`.
 
 ## Solver
 

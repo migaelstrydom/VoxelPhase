@@ -1,8 +1,5 @@
-//! Shock propagation conditioner: contact graph ordering + mass scaling.
-//!
-//! Builds a BFS depth graph from static geometry outward through the contact
-//! graph, then sorts manifolds top-down and computes per-manifold mass-scaling
-//! factors so that lower bodies appear heavier during the solve.
+//! The contact graph: each body's depth above the ground, the order
+//! manifolds are solved in, and the scales that make lower bodies heavier.
 
 use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
@@ -15,91 +12,14 @@ use crate::physics::constraint::types::Constraint;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::pair::SolverManifold;
 
-use super::conditioning::{ManifoldConditioner, ManifoldConditions};
-
-/// Configuration for shock propagation.
-#[derive(Debug, Clone, Copy)]
-pub struct ShockPropagationConfig {
-    /// Decay factor controlling how much lower bodies are stabilised.
-    /// 0.0 = full propagation (lower body immovable during upper solve).
-    /// 1.0 = disabled (no mass scaling).
-    pub shock_alpha: f32,
-    /// Contacts with `|dot(normal, gravity_dir)| < horizontal_threshold` are
-    /// considered horizontal and do not create depth edges.
-    ///
-    /// Scaling takes part of a contact's push off the lower body, which is
-    /// right where that body is held up from below: the ground takes the
-    /// rest. Along a normal leaning well off vertical, the part withheld has
-    /// a sideways share nothing takes up — an arch's joints lean up to the
-    /// horizontal — and a warm start carries it into every frame. Only
-    /// contacts within 45° of vertical are scaled.
-    pub horizontal_threshold: f32,
-}
-
-impl Default for ShockPropagationConfig {
-    fn default() -> Self {
-        Self {
-            shock_alpha: 0.3,
-            horizontal_threshold: 0.7,
-        }
-    }
-}
-
-/// Shock propagation conditioner.
-///
-/// Owns a reusable `ContactGraph` whose internal allocations persist across
-/// frames.
-pub struct ShockPropagationConditioner {
-    config: ShockPropagationConfig,
-    graph: ContactGraph,
-}
-
-impl ShockPropagationConditioner {
-    pub fn new(config: ShockPropagationConfig) -> Self {
-        Self {
-            config,
-            graph: ContactGraph::new(),
-        }
-    }
-}
-
-impl Default for ShockPropagationConditioner {
-    fn default() -> Self {
-        Self::new(ShockPropagationConfig::default())
-    }
-}
-
-impl ManifoldConditioner for ShockPropagationConditioner {
-    fn condition(
-        &mut self,
-        bodies: &Arena<RigidBody>,
-        constraints: &Arena<Constraint>,
-        manifolds: &mut [SolverManifold],
-        gravity_dir: Vector3<f32>,
-        conditions: &mut ManifoldConditions,
-    ) {
-        self.graph.rebuild(
-            bodies,
-            constraints,
-            manifolds,
-            gravity_dir,
-            self.config.horizontal_threshold,
-        );
-        self.graph
-            .sort_manifolds(manifolds, self.config.shock_alpha, conditions);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Contact graph (internal)
-// ---------------------------------------------------------------------------
+use super::super::conditioning::ManifoldConditions;
 
 /// BFS depth graph from static geometry through the contact network.
 ///
 /// All internal allocations are reused across frames (clear + repopulate).
-struct ContactGraph {
+pub(super) struct ContactGraph {
     /// Depth for each body. Bodies not in the map have no contacts.
-    depth: FxHashMap<RigidBodyHandle, u32>,
+    pub(super) depth: FxHashMap<RigidBodyHandle, u32>,
     /// BFS work queue, kept allocated between frames.
     bfs_queue: VecDeque<RigidBodyHandle>,
     /// Adjacency list: for each body, which bodies does it support
@@ -108,7 +28,7 @@ struct ContactGraph {
 }
 
 impl ContactGraph {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             depth: FxHashMap::default(),
             bfs_queue: VecDeque::new(),
@@ -117,7 +37,7 @@ impl ContactGraph {
     }
 
     /// Rebuild the graph from the current manifold set and active constraints.
-    fn rebuild(
+    pub(super) fn rebuild(
         &mut self,
         bodies: &Arena<RigidBody>,
         constraints: &Arena<Constraint>,
@@ -275,7 +195,7 @@ impl ContactGraph {
     }
 
     /// Sort manifolds top-down (highest depth first) and populate conditions.
-    fn sort_manifolds(
+    pub(super) fn sort_manifolds(
         &self,
         manifolds: &mut [SolverManifold],
         shock_alpha: f32,

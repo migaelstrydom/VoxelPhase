@@ -48,13 +48,15 @@ impl ManifoldConditions {
 pub trait ManifoldConditioner: Send + Sync {
     /// Reorder `manifolds` and populate `conditions` with per-manifold data.
     ///
-    /// `gravity_dir` is the normalised gravity vector (typically `(0, -1, 0)`).
+    /// `gravity` is the world's gravity, in m/s², and `dt` the substep the
+    /// frame's solves take.
     fn condition(
         &mut self,
         bodies: &Arena<RigidBody>,
         constraints: &Arena<Constraint>,
         manifolds: &mut [SolverManifold],
-        gravity_dir: Vector3<f32>,
+        gravity: Vector3<f32>,
+        dt: f32,
         conditions: &mut ManifoldConditions,
     );
 }
@@ -68,7 +70,8 @@ impl ManifoldConditioner for IdentityConditioner {
         _bodies: &Arena<RigidBody>,
         _constraints: &Arena<Constraint>,
         manifolds: &mut [SolverManifold],
-        _gravity_dir: Vector3<f32>,
+        _gravity: Vector3<f32>,
+        _dt: f32,
         conditions: &mut ManifoldConditions,
     ) {
         conditions.fill_identity(manifolds.len());
