@@ -3296,6 +3296,85 @@ impl PhysicsBenchScenario for GrenadeSpeedWallCcdScenario {
     }
 }
 
+/// A small sphere coming down steeply onto the floor at 30 Hz.
+///
+/// It covers 0.21 m a frame, past the frame-level CCD gate of
+/// `radius * ccd_frame_coverage` = 0.15 m, so speculative contacts leave it
+/// to CCD. Each 1/240 s substep it closes on the floor by only 1.75 cm, under
+/// the 2 cm contact margin, yet over the frame it would sink 10 cm before the
+/// narrowphase next looks. It starts 3.5 cm clear of the floor at a frame
+/// boundary, outside the margin, with gravity off so that stays exact.
+#[derive(Debug, Clone)]
+pub struct SteepFloorCcdScenario {
+    pub radius: f32,
+    /// Its velocity: down and along the floor, in m/s.
+    pub velocity: Vector3<f32>,
+    geometry: FlatQuadGeometry,
+}
+
+impl SteepFloorCcdScenario {
+    pub fn new() -> Self {
+        Self {
+            radius: 0.1,
+            velocity: Vector3::new(-4.8, -4.2, 0.0),
+            geometry: FlatQuadGeometry::new(8.0),
+        }
+    }
+
+    /// Where it starts: three frames above the frame it reaches the floor in.
+    fn start_height(&self) -> f32 {
+        let frame_drop = -self.velocity.y * self.frame_dt(0);
+        self.radius + 0.035 + 3.0 * frame_drop
+    }
+}
+
+impl Default for SteepFloorCcdScenario {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PhysicsBenchScenario for SteepFloorCcdScenario {
+    fn name(&self) -> &'static str {
+        "steep_floor_ccd"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.3
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.gravity = Vector3::zeros();
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(2.0, self.start_height(), 0.0))
+                .linear_velocity(self.velocity),
+        );
+        let _ = world.attach_collider(
+            body,
+            ColliderDesc::sphere(self.radius)
+                .density(900.0)
+                .restitution(0.3)
+                .friction(0.5),
+        );
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+
+    fn frame_dt(&self, _frame_idx: u64) -> f32 {
+        8.0 / 240.0
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Scenarios: static rigid bodies
 // ═══════════════════════════════════════════════════════════════════════════

@@ -263,6 +263,8 @@ collect_candidates ──▶ static_sweep / dynamic_sweep ──▶ clamp to ear
   (`ownership.rs`). A grenade skimming the floor is still swept against the wall ahead.
 - **Grazes at t≈0 are rejected** inside the per-triangle search (`is_tunnelling_hit`), so a
   body sliding along a surface is not frozen and a floor graze cannot mask a wall behind it.
+  A graze is motion into the surface that a whole frame of would not carry past the
+  contact margin: the narrowphase will not see the surface sooner.
 - Static sweeps reuse a per-frame patch cache. Dynamic sweeps use the shared
   `SweepAndPrune` over swept bounds and `collision/continuous/` (analytic or GJK raycast).
 - A freed piece exactly flush with a static neighbour is clamped at t=0. Spawn pieces with a

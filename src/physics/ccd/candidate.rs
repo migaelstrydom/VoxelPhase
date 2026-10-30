@@ -22,8 +22,11 @@ pub(super) struct CcdCandidate {
     /// Bounding-sphere radius of the shape, the scale every CCD gate is
     /// measured against.
     pub radius: f32,
-    /// Minimum travel into a surface for a hit to count as tunnelling rather
-    /// than a graze along a surface the solver already handles.
+    /// Minimum travel into a surface over the substep for a hit to count as
+    /// tunnelling rather than a graze along a surface the solver already
+    /// handles: a frame of it carries the collider past the contact margin,
+    /// and the once-per-frame narrowphase will not see the surface before
+    /// then.
     pub min_approach: f32,
     pub shape: ColliderShape,
     pub material: ColliderMaterial,
@@ -128,7 +131,7 @@ pub(super) fn collect_candidates_into(ctx: &CcdContext<'_>, dt: f32, out: &mut V
                         body_handle: handle,
                         collider_handle: *collider_handle,
                         radius,
-                        min_approach: ctx.contact_margin,
+                        min_approach: ctx.contact_margin / ctx.substeps_per_frame.max(1) as f32,
                         shape: collider.shape().clone(),
                         material: *collider.material(),
                         pre_body_pos: pre_pos,

@@ -2,7 +2,7 @@ use super::super::framework::{run_scenario, BenchRunConfig};
 use super::super::scenarios::{
     GrazingSphereWallCcdScenario, GrenadeSpeedWallCcdScenario, HighSpeedSphereCcdScenario,
     SpeculativeBandApproachScenario, SphereIntoDynamicCornerScenario,
-    SphereThroughDynamicSlabScenario, SphereThroughTwoSlabsScenario,
+    SphereThroughDynamicSlabScenario, SphereThroughTwoSlabsScenario, SteepFloorCcdScenario,
 };
 use super::assertions::*;
 use super::write_exports;
@@ -65,6 +65,23 @@ fn grazing_sphere_is_not_frozen_by_floor_contact() {
         min_x < scenario.radius + 0.15,
         "sphere should reach the wall rather than stall on the floor: min_x={min_x}"
     );
+}
+
+/// A sphere CCD sweeps for its frame's travel closes on the floor by less
+/// than the contact margin each substep. It still strikes it: the
+/// narrowphase will not see the floor until the next frame, by when it would
+/// have sunk 10 cm.
+#[test]
+fn a_steep_sphere_strikes_the_floor_it_closes_on_slowly_per_substep() {
+    let scenario = SteepFloorCcdScenario::new();
+    let cfg = BenchRunConfig {
+        duration: 0.5,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, "steep_floor_ccd");
+
+    assert_above_floor(&run, scenario.radius - 0.03);
 }
 
 /// A grenade-speed sphere is too slow for the per-substep CCD gate but fast
