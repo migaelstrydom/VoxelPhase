@@ -102,6 +102,46 @@ fn a_jenga_tower_pushed_along_the_floor_regains_nothing() {
     assert_regains_nothing(&run(&case, RunOptions::default()));
 }
 
+/// A tall jenga tower a walker runs into and then leans on regains nothing
+/// (seed 636).
+///
+/// The walker stands on the ground, so it counted as a support of the block
+/// it leaned on, and being held up by its drive rather than by its contacts
+/// it was never grounded itself: every layer above that block lost shock
+/// propagation, the eighteen layers sank 4 mm at each joint, and rising back
+/// out of it read as 0.55 J/kg regained.
+#[test]
+fn a_tall_jenga_tower_a_walker_leans_on_regains_nothing() {
+    let mut jenga = JengaTowerScenario::new(18);
+    jenga.friction = 0.5121753;
+    let case = Case {
+        seed: 636,
+        structure: Structure::Jenga(jenga),
+        frame_dt: 1.0 / 30.0,
+        ordered_contacts: true,
+        knocks: vec![
+            Knock {
+                body: 0.11363542,
+                velocity: Vector3::new(0.6457479, 2.1202192, -0.41163182),
+            },
+            Knock {
+                body: 0.5373614,
+                velocity: Vector3::new(-1.7532771, -0.7176199, -2.7617533),
+            },
+        ],
+        projectile: None,
+        walker: Some(WalkerScript {
+            bearing: 3.3593543,
+            run_up: 3.2934012,
+            aim_across: 0.03777659,
+            sprint: true,
+            jump_from_edge: None,
+            run_seconds: 3.5319872,
+        }),
+    };
+    assert_regains_nothing(&run(&case, RunOptions::default()));
+}
+
 fn assert_regains_nothing(verdict: &Verdict) {
     assert!(
         verdict.worst_gain < ENERGY_GAIN_LIMIT,

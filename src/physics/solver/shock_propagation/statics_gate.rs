@@ -20,6 +20,10 @@ use super::wrench_cone::ContactWrenchCone;
 /// striking the body, with an impulse last frame's do not hold.
 const OPENING_SPEED: f32 = 0.05;
 
+/// Spin a drive must ask for, in rad/s, to count as moving its body: with
+/// `OPENING_SPEED` for the travel it asks for.
+const COMMANDED_SPIN: f32 = 0.1;
+
 /// How far a load may fall outside the carriers' wrench cone, as a share of
 /// its size, and still count as held. A load held only within a looser 5 %
 /// let a knocked arch creep up for as long as it was watched.
@@ -43,11 +47,14 @@ const FORGET_AFTER_FRAMES: u64 = 600;
 /// each withheld share of a push down through the supports to the ground
 /// (`docs/SHOCK_PROPAGATION_STATICS.md`). Those impulses are a contact
 /// solution only where every body they pass through can be held by its
-/// carriers: its contacts with the ground or with bodies no higher than it,
-/// none of them opening or striking it, every impulse pushing and within its
-/// friction. A body is *grounded* when its weight and the loads on it from
-/// higher bodies lie in its carriers' wrench cone, every carrier below it is
-/// grounded, and no driven body is about to strike it.
+/// carriers: its contacts with the ground or with undriven bodies no higher
+/// than it, none of them opening or striking it, every impulse pushing and
+/// within its friction. A driven body — the player — holds nothing up: it
+/// pushes as its drive asks, so its push is a load like any other, and one
+/// it makes while its drive moves it is not one last frame's predicts. A
+/// body is *grounded* when its weight and the loads on it from higher bodies
+/// lie in its carriers' wrench cone, every carrier below it is grounded, and
+/// no driven body is striking it, about to, or driving into it.
 #[derive(Default)]
 pub(super) struct StaticsGate {
     /// Each body's last solved verdict and what it was solved for.
@@ -187,7 +194,8 @@ impl StaticsGate {
     }
 
     /// The body's load and carriers, with its carriers' wrench cone left in
-    /// `self.cone`; `None` if nothing carries it, or a carrier is striking it.
+    /// `self.cone`; `None` if nothing carries it, or a carrier or a driven body
+    /// is striking it, or a driven body touching it is being driven.
     fn statics_of(
         &mut self,
         body: RigidBodyHandle,
@@ -216,27 +224,32 @@ impl StaticsGate {
                 (Some(header.body_b), -1.0)
             };
             let other_depth = other.and_then(|h| graph.depth.get(&h).copied());
-            let carries = is_ground(bodies, other) || other_depth.is_some_and(|d| d <= depth);
+            let driven = is_driven(bodies, other);
+            let carries =
+                !driven && (is_ground(bodies, other) || other_depth.is_some_and(|d| d <= depth));
             for contact in manifold.contacts.iter().filter(|c| c.gap <= 0.0) {
                 let normal = contact.normal * into_body;
                 let lever = contact.point - centre;
                 let impulse = (contact.normal * contact.warm_normal_impulse
                     + contact.warm_friction_impulse_ws)
                     * into_body;
+                let other_velocity = other
+                    .and_then(|h| bodies.get(h.0))
+                    .map_or(Vector3::zeros(), |b| b.velocity_at(contact.point));
+                let separating = (rigid.velocity_at(contact.point) - other_velocity).dot(&normal);
+                if (carries || driven) && separating < -OPENING_SPEED {
+                    return None;
+                }
+                if is_moving_itself(bodies, other) {
+                    return None;
+                }
                 if !carries {
                     statics.load.0 += impulse;
                     statics.load.1 += lever.cross(&impulse);
                     continue;
                 }
-                let other_velocity = other
-                    .and_then(|h| bodies.get(h.0))
-                    .map_or(Vector3::zeros(), |b| b.velocity_at(contact.point));
-                let separating = (rigid.velocity_at(contact.point) - other_velocity).dot(&normal);
                 if separating > OPENING_SPEED {
                     continue;
-                }
-                if separating < -OPENING_SPEED {
-                    return None;
                 }
                 self.cone.add_contact(normal, lever, header.friction);
                 statics.carriers += 1;
@@ -244,7 +257,7 @@ impl StaticsGate {
                 statics.held.0 += impulse;
                 statics.held.1 += lever.cross(&impulse);
             }
-            let lower_carrier = other.filter(|_| other_depth.is_some_and(|d| d < depth));
+            let lower_carrier = other.filter(|_| carries && other_depth.is_some_and(|d| d < depth));
             if let Some(lower) = lower_carrier.filter(|&h| !is_ground(bodies, Some(h))) {
                 statics.stands_on_grounded &= self.grounded.get(&lower).copied().unwrap_or(false);
             }
@@ -319,4 +332,15 @@ fn is_ground(bodies: &Arena<RigidBody>, body: Option<RigidBodyHandle>) -> bool {
 fn is_driven(bodies: &Arena<RigidBody>, body: Option<RigidBodyHandle>) -> bool {
     body.and_then(|h| bodies.get(h.0))
         .is_some_and(|b| b.support_drive().is_some())
+}
+
+/// Whether `body`'s drive is moving it: asking its supports for travel or
+/// spin rather than for it to stand where it is.
+fn is_moving_itself(bodies: &Arena<RigidBody>, body: Option<RigidBodyHandle>) -> bool {
+    body.and_then(|h| bodies.get(h.0))
+        .and_then(|b| b.support_drive())
+        .is_some_and(|drive| {
+            drive.linear_target.norm() > OPENING_SPEED
+                || drive.angular_target.norm() > COMMANDED_SPIN
+        })
 }

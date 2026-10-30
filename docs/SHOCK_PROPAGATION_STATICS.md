@@ -7,8 +7,8 @@ Why shock propagation made energy, the exact statement of when it does, and what
 
 On branch `shock-statics` (2026-10-30). `StaticsGate` and `WarmStartRemap` run in
 `ShockPropagationConditioner` after the contact graph. `physics_fuzz` over 500 seeds:
-33 failing → 0, worst unexplained gain 6.45 → 0.39 J/kg; over 2000, 2 fail, one of them
-not shock propagation's (see *The last five seeds* and *Open*).
+33 failing → 0, worst unexplained gain 6.45 → 0.16 J/kg; over 2000, 1 fails (see *The
+last five seeds*, *The two after them* and *Open*).
 
 ## The problem
 
@@ -66,15 +66,17 @@ measured, not proven, in 3D.
 ## `StaticsGate`
 
 A body's *carriers* are its met contacts with the ground or with bodies no higher than it
-in the graph. Its *load* is its weight over the substep plus every warm-started push from
+in the graph, other than driven bodies: the player pushes as its drive asks, so its push
+is load, not support. Its *load* is its weight over the substep plus every warm-started push from
 higher bodies, as a force and a torque about its centre of mass. A body is **grounded**
 when:
 
 - it has carriers, none counting if it separates faster than `OPENING_SPEED` (5 cm/s),
   and none closing on it that fast: a carrier striking the body brings an impulse last
   frame's do not hold;
-- no driven body (one with a support drive: the player) is closing on it through a
-  contact that has not met yet, for the same reason;
+- no driven body (one with a support drive: the player) is closing on it, through a met
+  contact or one that has not met yet, for the same reason; and none touching it is
+  being driven, travelling or turning as its drive asks, whose push can be anything;
 - its load lies in the carriers' wrench cone (`ContactWrenchCone`: each contact's
   four-sided friction pyramid, as wrenches; membership by non-negative least squares to
   `CONE_TOLERANCE`, 2 %);
@@ -122,11 +124,13 @@ remap, `a_tower_with_a_block_held_upright_regains_no_energy` regains 0.46 J/kg.
 | sideways contacts unscaled (|n·g| < 0.7) | 18 | 1.07 | 7.74 |
 | gate + remap | 5 | 0.46 | 0.79 |
 | + struck carriers, friction and CCD fixes | 0 | 0.20 | 0.48 |
-| **+ driven strikes, 2 % cone tolerance** | **0** | **0.20** | **0.39** |
+| + driven strikes, 2 % cone tolerance | 0 | 0.20 | 0.39 |
+| **+ drivers not carriers, frame-fixed lever arms** | **0** | **0.088** | **0.16** |
 
 Seeds 500–1999, which the first three rows were not tuned on: gate + remap 18 of 1500
 (99th percentile 0.52, worst 3.00); with struck carriers, friction and CCD 7 (0.25,
-1.35); with driven strikes and 2 % tolerance 2 (0.20, 0.85).
+1.35); with driven strikes and 2 % tolerance 2 (0.20, 0.85); with drivers as load and
+frame-fixed lever arms 1 (0.090, 0.53).
 Those last two changes were made looking at seeds 120, 1742 and the arch, so the fresh
 seeds are not fresh for them.
 
@@ -154,7 +158,9 @@ without the struck-carrier rule. `a_jenga_tower_pushed_along_the_floor_regains_n
 is seed 1742, which fails with either driven strikes or the 2 % tolerance undone; it is a
 sample, not a proof of either. `a_knocked_arch_regains_no_energy` fails at 5 % tolerance,
 and `a_tower_sliding_along_the_floor_regains_no_energy` guards the slipping-carrier rule
-below from coming back.
+below from coming back. `a_tall_jenga_tower_a_walker_leans_on_regains_nothing` is seed
+636, 0.51 J/kg with drivers as carriers; `a_rolling_ball_does_not_speed_itself_up` doubles
+its speed with lever arms measured from where bodies are now.
 
 ## The last five seeds
 
@@ -192,6 +198,33 @@ more:
   build it was tried in, raised the first 500 seeds' 99th percentile from 0.13 to
   0.23 J/kg, by unscaling stacks blocks were merely falling onto.
 
+## The two after them
+
+- **The player leaning on a tower** (636). The walker stands on the ground, so it counted
+  as a carrier of the block it leaned on, and held up by its drive rather than by its
+  contacts it was never grounded itself: every layer above lost scaling, the eighteen
+  layers sank 4 mm at each joint, and rising back out read as energy regained. A player
+  leaning on a tall stack sank it. Driven bodies are no longer carriers. Counting their
+  push as load let a block the player shoves along the floor pass as held, so a body
+  touched by a driven body that is being driven (asking for travel or spin) is not
+  grounded either: such a push is set by the drive, not by last frame.
+- **A rolling ball speeding itself up** (1970, and 120 at 60 Hz). Not shock propagation.
+  A contact's lever arm was its frame-start point less where the body had got to, so
+  through a frame's substeps the point fell behind a rolling ball by up to a frame's
+  travel, and the ground's push behind the centre spun it on: 0.33 to 1.11 m/s. Lever
+  arms are now measured from where each body was when the frame's contacts were made
+  (`LeverOrigins`), as position correction's always were; CCD, which makes contacts at
+  bodies' current poses, measures from those.
+
+The lever-arm fix took two tests down that had passed by its bug. A ball pressed against
+a round pillar's upright edge got no contact once its centre was outside the pillar, and
+the drifting lever arm had been nudging it free: a crease is cut into pieces, and each
+left the joint between them to the other, so a centre level with a joint was found by
+neither. The sphere's and capsule's crease tests now give a joint to the piece starting
+there. And `breakable_fixed_joint_breaks_cleanly` had never seen its sphere break the
+joint: the welded pair spins as one, which a 5 N·s limit carried, and the joint broke when
+the pair hit the ground.
+
 ## Tried on the way
 
 - **Remap alone**: scale changes on warm-started supports turned out rare (425 body-events
@@ -211,20 +244,16 @@ more:
   whose bottom block slides. The withheld shares above it are weight, which its contact
   carries straight down however it slips; the rule only switched the tower's scales as it
   stopped, which regained 0.19 J/kg.
-- **Driven bodies are not carriers.** A character pushes as its drive asks, not as a
-  support carrying load down. Principled, but over 2000 seeds it moved the 99th percentile
-  by 0.01 and fixed no seed.
+- **Driven bodies are not carriers**, on its own: over 2000 seeds it moved the 99th
+  percentile by 0.01 and fixed no seed, until seed 636 showed what it is for; with it, a
+  body a driver touches must be judged by whether the driver is being driven.
+- **A slipping carrier under a driven push ungrounds the body**, for the block shoved
+  along the floor: it fixed that and broke others; whether the driver is moving itself is
+  the test that holds.
 
 ## Open
 
-- Seed 1970 is not shock propagation (it fails unscaled too). A 756 kg ball rolling on
-  the floor at 30 Hz speeds up from 0.33 to 1.11 m/s by itself. A contact's lever arm is
-  its frame-start world point less the body's current position, so through a frame's
-  substeps the point falls behind a rolling body, up to a frame's travel: a vertical push
-  behind the centre spins it forward, and friction turns the spin into speed. Box2D keeps
-  anchors fixed relative to the body centres instead; doing that here touches how position
-  correction measures penetration.
-- Seed 636 (0.52 J/kg, an 18-layer tower) creeps slowly the whole run with scaling on, and
-  not without; tighter tolerance does not change it. Unread.
+- Seed 1008 fails at 0.53 J/kg. Unread.
 - The 3D statement is measured, not proven.
-- Once those are understood, `ENERGY_GAIN_LIMIT` can come down from 0.5.
+- The worst of the first 500 seeds is 0.16 J/kg; once 1008 is understood,
+  `ENERGY_GAIN_LIMIT` can come down from 0.5.
