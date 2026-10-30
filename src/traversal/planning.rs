@@ -65,7 +65,7 @@ const CAUGHT_UP_AIM: f32 = 0.05;
 /// How soon such a foot must land, in seconds, for the plan to take it as
 /// down: a few frames, and before the plan's next hop takes off, which
 /// pushes off that foot.
-const CAUGHT_UP_WITHIN: f32 = 0.05;
+const CAUGHT_UP_WITHIN: f32 = 0.15;
 /// Margin around the strip the fetched geometry covers, in metres.
 const SCENERY_MARGIN: f32 = 0.5;
 /// Slowest speed along the heading a plan is made for, in m/s: slower, the

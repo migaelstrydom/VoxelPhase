@@ -283,11 +283,11 @@ handed its next footfall, it turned in mid-swing, and the garden's
 summaries count that as a late move (`moved`: a swinging foot's footfall
 moving over 5 cm in a frame), up to 1.1 m on the plank bridge. And the
 plan takes such a foot as down if its swing is aimed at the plan's
-footfall and lands within 0.05 s and before the plan's next hop
+footfall and lands within a swing (0.15 s) and before the plan's next hop
 (`Legs::caught_up`): otherwise the stance disagreed, the commitment was
 dropped every frame of the lag, and nearly every late move was a fresh
-plan moving the footfall under the foot. Caught up for the whole swing,
-the plan pushed hops off feet still in the air.
+plan moving the footfall under the foot. Without the bound by the next
+hop, the plan pushed hops off feet still in the air.
 
 Three things seen in play look like the legs following the plan but happen
 untracked, and on main, alike, so they are left to their own projects
