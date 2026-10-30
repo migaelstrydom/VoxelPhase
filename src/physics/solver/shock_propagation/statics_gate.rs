@@ -27,7 +27,14 @@ const COMMANDED_SPIN: f32 = 0.1;
 /// How far a load may fall outside the carriers' wrench cone, as a share of
 /// its size, and still count as held. A load held only within a looser 5 %
 /// let a knocked arch creep up for as long as it was watched.
-const CONE_TOLERANCE: f64 = 0.02;
+const CONE_TOLERANCE: f32 = 0.02;
+
+/// The same, for a body that was not grounded last frame. A load on the edge
+/// of the cone would switch the scaling of everything above it every frame
+/// or two, and each switch costs energy: a ball under a leaning tower,
+/// twisted just past what its one contact holds, popped the tower once a
+/// second.
+const REGROUND_TOLERANCE: f32 = 0.01;
 
 /// How far a body's load may drift from the one its verdict was solved for,
 /// as a share of its size, before it is solved again.
@@ -54,7 +61,9 @@ const FORGET_AFTER_FRAMES: u64 = 600;
 /// it makes while its drive moves it is not one last frame's predicts. A
 /// body is *grounded* when its weight and the loads on it from higher bodies
 /// lie in its carriers' wrench cone, every carrier below it is grounded, and
-/// no driven body is striking it, about to, or driving into it.
+/// no driven body is striking it, about to, or driving into it. The load is
+/// held to within 2 % of the cone, or within 1 % for a body that was not
+/// grounded last frame, so that one on the edge does not switch.
 #[derive(Default)]
 pub(super) struct StaticsGate {
     /// Each body's last solved verdict and what it was solved for.
@@ -64,6 +73,8 @@ pub(super) struct StaticsGate {
     struck: FxHashSet<RigidBodyHandle>,
     /// This frame's grounded bodies.
     grounded: FxHashMap<RigidBodyHandle, bool>,
+    /// Last frame's grounded bodies.
+    was_grounded: FxHashSet<RigidBodyHandle>,
     /// This frame's met manifolds touching each body with a depth.
     touching: FxHashMap<RigidBodyHandle, SmallVec<[usize; 8]>>,
     /// Bodies in order of depth, lowest first.
@@ -81,7 +92,8 @@ struct Verdict {
     /// Carrying contacts, and the sum of their lever arms.
     carriers: usize,
     levers: Vector3<f32>,
-    holds: bool,
+    /// How far outside the cone the load lay, as a share of its size.
+    shortfall: f64,
     /// Frame last used.
     seen: u64,
 }
@@ -115,8 +127,13 @@ impl StaticsGate {
         for i in 0..self.order.len() {
             let body = self.order[i];
             let statics = self.statics_of(body, bodies, manifolds, graph, gravity * dt);
+            let tolerance = if self.was_grounded.contains(&body) {
+                CONE_TOLERANCE
+            } else {
+                REGROUND_TOLERANCE
+            };
             let grounded = !self.struck.contains(&body)
-                && statics.is_some_and(|s| s.stands_on_grounded && self.holds(body, &s));
+                && statics.is_some_and(|s| s.stands_on_grounded && self.holds(body, &s, tolerance));
             self.grounded.insert(body, grounded);
         }
 
@@ -135,6 +152,9 @@ impl StaticsGate {
             }
         }
 
+        self.was_grounded.clear();
+        self.was_grounded
+            .extend(self.grounded.iter().filter(|(_, &g)| g).map(|(&b, _)| b));
         let frame = self.frame;
         if frame % 120 == 0 {
             self.verdicts
@@ -265,11 +285,11 @@ impl StaticsGate {
         (statics.carriers > 0).then_some(statics)
     }
 
-    /// Whether the carriers in `self.cone` hold the body's load: certified by
-    /// last frame's impulses, reused from a verdict on the same load, or
-    /// solved.
-    fn holds(&mut self, body: RigidBodyHandle, statics: &Statics) -> bool {
-        if self.certified(statics) {
+    /// Whether the carriers in `self.cone` hold the body's load to within
+    /// `tolerance` of its size: certified by last frame's impulses, reused
+    /// from a verdict on the same load, or solved.
+    fn holds(&mut self, body: RigidBodyHandle, statics: &Statics, tolerance: f32) -> bool {
+        if self.certified(statics, tolerance) {
             return true;
         }
         let (force, torque) = statics.load;
@@ -282,17 +302,18 @@ impl StaticsGate {
                     <= REUSE_POINT_DRIFT * statics.carriers as f32
             {
                 verdict.seen = self.frame;
-                return verdict.holds;
+                return verdict.shortfall <= tolerance as f64;
             }
         }
-        let holds = self.cone.contains(-force, -torque, CONE_TOLERANCE);
+        let shortfall = self.cone.shortfall(-force, -torque);
+        let holds = shortfall <= tolerance as f64;
         self.verdicts.insert(
             body,
             Verdict {
                 load: statics.load,
                 carriers: statics.carriers,
                 levers: statics.levers,
-                holds,
+                shortfall,
                 seen: self.frame,
             },
         );
@@ -304,7 +325,7 @@ impl StaticsGate {
     /// any positive multiple of them does too: if one balances the load, it
     /// lies in the cone. Under scaling the carriers held the body's weight
     /// and only part of the loads above it, hence a multiple.
-    fn certified(&self, statics: &Statics) -> bool {
+    fn certified(&self, statics: &Statics, tolerance: f32) -> bool {
         let reach = self.cone.reach();
         let held = (statics.held.0, statics.held.1 / reach);
         let load = (statics.load.0, statics.load.1 / reach);
@@ -318,7 +339,6 @@ impl StaticsGate {
         }
         let multiple = (-dot(&held, &load) / held_size).max(0.0);
         let residual = (held.0 * multiple + load.0, held.1 * multiple + load.1);
-        let tolerance = CONE_TOLERANCE as f32;
         dot(&residual, &residual) <= tolerance * tolerance * load_size
     }
 }

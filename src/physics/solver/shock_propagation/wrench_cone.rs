@@ -52,15 +52,10 @@ impl ContactWrenchCone {
         self.reach.max(MIN_REACH)
     }
 
-    /// Whether the cone holds `force` and `torque` to within `tolerance` of
-    /// their size: whether the contacts can balance a load of the opposite
-    /// wrench.
-    pub(super) fn contains(
-        &self,
-        force: Vector3<f32>,
-        torque: Vector3<f32>,
-        tolerance: f64,
-    ) -> bool {
+    /// How far `force` and `torque` lie outside the cone, as a share of their
+    /// size: 0 for a wrench inside it, 1 when there are no contacts. The
+    /// contacts can balance a load of the opposite wrench to within it.
+    pub(super) fn shortfall(&self, force: Vector3<f32>, torque: Vector3<f32>) -> f64 {
         let reach = self.reach() as f64;
         let wrench = |f: Vector3<f32>, t: Vector3<f32>| -> [f64; 6] {
             [
@@ -75,10 +70,10 @@ impl ContactWrenchCone {
         let target = wrench(force, torque);
         let size = dot(&target, &target).sqrt();
         if size < 1e-9 {
-            return true;
+            return 0.0;
         }
         if self.edges.is_empty() {
-            return false;
+            return 1.0;
         }
         let columns: SmallVec<[[f64; 6]; 64]> = self
             .edges
@@ -92,7 +87,7 @@ impl ContactWrenchCone {
                 residual[r] += edge[r] * xj;
             }
         }
-        dot(&residual, &residual).sqrt() <= tolerance * size
+        dot(&residual, &residual).sqrt() / size
     }
 }
 
@@ -220,7 +215,7 @@ mod tests {
     fn holds(cone: &ContactWrenchCone, weight: f32, side: f32, x: f32, z: f32) -> bool {
         let load = Vector3::new(side, -weight, 0.0);
         let torque = Vector3::new(x, 0.5, z).cross(&load);
-        cone.contains(-load, -torque, 0.05)
+        cone.shortfall(-load, -torque) <= 0.05
     }
 
     #[test]
@@ -254,7 +249,7 @@ mod tests {
     #[test]
     fn nothing_holds_a_load_without_contacts() {
         let cone = ContactWrenchCone::default();
-        assert!(!cone.contains(Vector3::y(), Vector3::zeros(), 0.05));
-        assert!(cone.contains(Vector3::zeros(), Vector3::zeros(), 0.05));
+        assert_eq!(cone.shortfall(Vector3::y(), Vector3::zeros()), 1.0);
+        assert_eq!(cone.shortfall(Vector3::zeros(), Vector3::zeros()), 0.0);
     }
 }

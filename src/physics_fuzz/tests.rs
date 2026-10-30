@@ -142,6 +142,51 @@ fn a_tall_jenga_tower_a_walker_leans_on_regains_nothing() {
     assert_regains_nothing(&run(&case, RunOptions::default()));
 }
 
+/// A jenga tower leaning on a heavy ball regains nothing (seed 1008).
+///
+/// The ball, struck low into the tower, came to rest under it on its one
+/// floor contact, twisted by the blocks on it just about as far as that
+/// contact holds. Held one frame and not the next, it switched the scaling of
+/// the whole tower above it on and off once a second, and each switch popped
+/// the tower: 0.53 J/kg.
+#[test]
+fn a_jenga_tower_leaning_on_a_heavy_ball_regains_nothing() {
+    let mut jenga = JengaTowerScenario::new(16);
+    jenga.friction = 0.45320433;
+    let case = Case {
+        seed: 1008,
+        structure: Structure::Jenga(jenga),
+        frame_dt: 1.0 / 30.0,
+        ordered_contacts: true,
+        knocks: vec![
+            Knock {
+                body: 0.7211708,
+                velocity: Vector3::new(1.1099329, 1.9363685, -1.9391685),
+            },
+            Knock {
+                body: 0.6841581,
+                velocity: Vector3::new(-0.46197867, 1.7550225, -2.0646493),
+            },
+        ],
+        projectile: Some(Projectile {
+            radius: 0.29440504,
+            density: 6870.762,
+            bearing: 0.26471955,
+            height: 0.103061676,
+            speed: 10.327961,
+        }),
+        walker: Some(WalkerScript {
+            bearing: 0.4752734,
+            run_up: 3.1087484,
+            aim_across: -0.41251433,
+            sprint: false,
+            jump_from_edge: Some(1.5642242),
+            run_seconds: 1.7867144,
+        }),
+    };
+    assert_regains_nothing(&run(&case, RunOptions::default()));
+}
+
 fn assert_regains_nothing(verdict: &Verdict) {
     assert!(
         verdict.worst_gain < ENERGY_GAIN_LIMIT,

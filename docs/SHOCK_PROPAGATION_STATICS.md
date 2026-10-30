@@ -7,8 +7,8 @@ Why shock propagation made energy, the exact statement of when it does, and what
 
 On branch `shock-statics` (2026-10-30). `StaticsGate` and `WarmStartRemap` run in
 `ShockPropagationConditioner` after the contact graph. `physics_fuzz` over 500 seeds:
-33 failing → 0, worst unexplained gain 6.45 → 0.16 J/kg; over 2000, 1 fails (see *The
-last five seeds*, *The two after them* and *Open*).
+33 failing → 0, worst unexplained gain 6.45 → 0.16 J/kg; over 2000, none fail, the worst
+0.24 J/kg (see *The last five seeds* and *The three after them*).
 
 ## The problem
 
@@ -79,7 +79,8 @@ when:
   being driven, travelling or turning as its drive asks, whose push can be anything;
 - its load lies in the carriers' wrench cone (`ContactWrenchCone`: each contact's
   four-sided friction pyramid, as wrenches; membership by non-negative least squares to
-  `CONE_TOLERANCE`, 2 %);
+  `CONE_TOLERANCE`, 2 %, or `REGROUND_TOLERANCE`, 1 %, for a body that was not grounded
+  last frame, so that one on the edge of the cone does not switch every frame or two);
 - every dynamic carrier lower than it is grounded.
 
 Bodies are judged lowest first. A scaled pair whose lower body is not grounded is
@@ -125,12 +126,13 @@ remap, `a_tower_with_a_block_held_upright_regains_no_energy` regains 0.46 J/kg.
 | gate + remap | 5 | 0.46 | 0.79 |
 | + struck carriers, friction and CCD fixes | 0 | 0.20 | 0.48 |
 | + driven strikes, 2 % cone tolerance | 0 | 0.20 | 0.39 |
-| **+ drivers not carriers, frame-fixed lever arms** | **0** | **0.088** | **0.16** |
+| + drivers not carriers, frame-fixed lever arms | 0 | 0.088 | 0.16 |
+| **+ 1 % to be grounded again** | **0** | **0.088** | **0.16** |
 
 Seeds 500–1999, which the first three rows were not tuned on: gate + remap 18 of 1500
 (99th percentile 0.52, worst 3.00); with struck carriers, friction and CCD 7 (0.25,
 1.35); with driven strikes and 2 % tolerance 2 (0.20, 0.85); with drivers as load and
-frame-fixed lever arms 1 (0.090, 0.53).
+frame-fixed lever arms 1 (0.090, 0.53); with 1 % to be grounded again 0 (0.088, 0.24).
 Those last two changes were made looking at seeds 120, 1742 and the arch, so the fresh
 seeds are not fresh for them.
 
@@ -161,6 +163,8 @@ and `a_tower_sliding_along_the_floor_regains_no_energy` guards the slipping-carr
 below from coming back. `a_tall_jenga_tower_a_walker_leans_on_regains_nothing` is seed
 636, 0.51 J/kg with drivers as carriers; `a_rolling_ball_does_not_speed_itself_up` doubles
 its speed with lever arms measured from where bodies are now.
+`a_jenga_tower_leaning_on_a_heavy_ball_regains_nothing` is seed 1008, 0.53 J/kg with one
+tolerance for both.
 
 ## The last five seeds
 
@@ -198,7 +202,7 @@ more:
   build it was tried in, raised the first 500 seeds' 99th percentile from 0.13 to
   0.23 J/kg, by unscaling stacks blocks were merely falling onto.
 
-## The two after them
+## The three after them
 
 - **The player leaning on a tower** (636). The walker stands on the ground, so it counted
   as a carrier of the block it leaned on, and held up by its drive rather than by its
@@ -215,6 +219,15 @@ more:
   arms are now measured from where each body was when the frame's contacts were made
   (`LeverOrigins`), as position correction's always were; CCD, which makes contacts at
   bodies' current poses, measures from those.
+
+- **A body on the edge of its cone** (1008). A heavy ball ended up under a jenga tower on
+  its one floor contact, twisted by the blocks leaning on it just about as far as that
+  contact holds. The tolerance is a share of the whole load, which the ball's weight
+  dominates, and its shortfall sat on the line: held one frame, not the next, it switched
+  the scaling of the whole tower above it on and off once a second, and each switch-on
+  frame regained 0.25 J/kg. A body not grounded last frame must now be held to 1 % to be
+  grounded again; one that was stays grounded to 2 %. Asking for ten frames held in a row
+  instead fixed 1008 too, but broke another seed, its stacks sagging while they waited.
 
 The lever-arm fix took two tests down that had passed by its bug. A ball pressed against
 a round pillar's upright edge got no contact once its centre was outside the pillar, and
@@ -253,7 +266,7 @@ the pair hit the ground.
 
 ## Open
 
-- Seed 1008 fails at 0.53 J/kg. Unread.
 - The 3D statement is measured, not proven.
-- The worst of the first 500 seeds is 0.16 J/kg; once 1008 is understood,
-  `ENERGY_GAIN_LIMIT` can come down from 0.5.
+- No seed of 2000 exceeds 0.24 J/kg, so `ENERGY_GAIN_LIMIT` could come down from 0.5.
+- Switching a pair's scale still costs energy wherever the remap does not reach: it
+  rescales only vertical supports. The hysteresis makes switches rare, not free.
