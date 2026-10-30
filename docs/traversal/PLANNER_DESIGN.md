@@ -864,10 +864,15 @@ until E.
 
 ## Open questions
 
-- **Planning cost:** a cold plan takes up to 4.5 ms on the fixtures, and
-  1.2 ms median on fuzzed courses, against D's 0.5 ms for section and plan
-  together. In game, last frame's plan bounds
-  the search (warm start), which is still to be built and measured there.
+- **Planning cost:** settled (2026-10-30) at the cost measured in the
+  game's world by `traversal_perf` over the garden: a plan's median is
+  0.3–0.5 ms on ordinary ground, its worst about 2–3 ms (lips, planks,
+  rough ground, crates), 5.5 ms on the scree, which the game will rarely
+  ask for; the strip adds 0.1 ms, 0.6 ms at worst. D's 0.5 ms was given up
+  as a worst case. Nearly all of it is the footfall search's breadth (some
+  1,200 expansions on the scree); fewer states, such as one body lead per
+  foothold, is what would cut it further, at the price of re-baselining
+  every plan.
 - **Coupling of the two stages:** the body search asks the feet only coarse
   questions (a foothold near a station, behind a takeoff, past a landing).
   Where those pass but no footfalls follow, a veto and a fresh body search
