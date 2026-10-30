@@ -137,3 +137,18 @@ lost (0.28 s for a 1.5 m/s hop, 0.6 s at 3 m/s). The planner charges each
 second in the air for it (`CostWeights::airborne`), which keeps hops short,
 but cannot remove it. Proposed: a jump pressed within about 0.1 s of a
 planned hop's takeoff turns the hop into that jump.
+
+---
+
+## A run over loose crates flies high and lands hard
+
+On `crates_run` the body flies crate to crate with an apex about 0.8 m over
+its standing height, loses speed along the path in the air (5.0 to 3.4 m/s
+in one flight) and lands at 3–4.4 m/s downward. An 11 kg crate takes the
+landing, is thrown out from under the body with spin, and throws the body
+back up at about 3 m/s; the landing foot pushes off where the crate was for
+2–3 frames. `traversal --summary` counts those plants off footing, since it
+reads the floor after the frame's physics. Why the plan chooses such high
+flights over light footing, or whether the drive flies higher than planned,
+is not known. One `crates_uneven_run` start in 30 does not get across; not
+looked at.
