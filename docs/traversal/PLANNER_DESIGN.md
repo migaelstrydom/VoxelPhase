@@ -467,15 +467,22 @@ each flight is one a foot pushes off and lands.
   slower than the drive presses for there (`rules::time_lost`), and, for a
   plan that ends slow, the time still to lose regaining speed at the
   drive's acceleration, which is also the search's lower bound on what is
-  left. A hop costs no time (the contract's `hop: cost` rows measure it), so
-  the rest are preferences: the jolt of meeting a face or landing on one,
+  left. A hop costs no time and a face or a bump little (the contract's
+  `hop: cost` and `face: time` rows measure them), so the rest are
+  preferences, priced in seconds: the jolt of meeting a face or landing on one,
   bumps ridden, flights and their climb, steps off the reachable step (the
   gait's, or the longest the legs reach on that ground if shorter, so a
   slope is not charged for the short steps it forces), feet off their
   natural offset, edges, and footing: `Static` is cheapest, then heavy
-  sleeping bodies, then light awake ones. Their weights are still to be put
-  in seconds against the hop; a sweep of the hop's price over the garden
-  kept 0.3, cheaper hops costing time on the plank bridges.
+  sleeping bodies, then light awake ones. A flight costs 0.3 for being one,
+  its takeoff and landing (a sweep over the garden kept 0.3: cheaper, and
+  the plan skims plank gaps the legs then miss), 0.5 a second in the air,
+  where the player cannot jump, and 0.1 per (m/s)² of climb, since a high
+  hop reads as a deliberate jump and lands harder (without it a walk leapt
+  crate to crate and stalled on one that moved). A typical 1.5 m/s hop costs
+  0.68, a 3 m/s one 1.5. A leap off a brow into what is out of sight is
+  charged the airtime it is known to fly, rising and falling back to its
+  own height, so where it leaves does not change its price.
   Plus a **churn cost**: diverging from what the previous plan settled,
   its next tentative footfall and the flights landing on its first two
   footfalls, and only where it chose them knowing what lay past them: a

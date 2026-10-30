@@ -2,8 +2,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::params::GaitParams;
 
-/// What the planner weighs. Every cost is unitless, so the weights say how
-/// much one kind of awkwardness is worth against another.
+/// What the planner weighs, in seconds. Time lost running slow is charged as
+/// itself (`rules::time_lost`); everything here costs the body little or no
+/// time (the drive contract measures what it does), so each weight is a
+/// preference: what avoiding that awkwardness is worth in seconds lost. The
+/// footfall search weighs `step_length`, `sideways`, `edge`, `loose` and
+/// `unheld_body` only against each other.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CostWeights {
@@ -13,9 +17,14 @@ pub struct CostWeights {
     /// A foot off its natural offset across the path, per squared fraction of
     /// its reach.
     pub sideways: f32,
-    /// Each flight.
+    /// Each flight, however short: a takeoff and a landing, each a frame's
+    /// timing and a handover of the legs.
     pub flight: f32,
-    /// Upward speed at takeoff, per (m/s)².
+    /// Each second in the air: a flight costs no time, but the player cannot
+    /// jump through it, and steers it only as any flight.
+    pub airborne: f32,
+    /// Upward speed at takeoff, per (m/s)²: a high hop reads as a deliberate
+    /// jump rather than a running leap, and lands harder.
     pub takeoff_climb: f32,
     /// Speed along the path a landing loses to the floor's face, per
     /// (m/s)²: the jolt of meeting a rise rather than landing on it.
@@ -46,6 +55,7 @@ impl Default for CostWeights {
             step_length: 1.0,
             sideways: 0.5,
             flight: 0.3,
+            airborne: 0.5,
             takeoff_climb: 0.1,
             landing_loss: 0.3,
             ride_travel: 4.0,

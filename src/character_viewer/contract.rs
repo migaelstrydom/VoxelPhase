@@ -15,7 +15,8 @@
 //!                                                        after BodyDims::rise_held; the
 //!                                                        time lost, charged at least
 //!   hop      a planned hop on flat ground at walk     ─▶ the time it loses, charged at
-//!            and run, climbing 1.5 and 3 m/s             least by costs.flight
+//!            and run, climbing 1.5 and 3 m/s             least by costs.flight, airborne
+//!                                                        and takeoff_climb
 //! ```
 //!
 //! Each check names the number it measured and the claim it holds it to, so
@@ -662,8 +663,9 @@ fn flat_crossing(config: &RunConfig, gait: Gait, x: f32) -> EngineResult<f32> {
 
 /// What a planned hop costs on level ground: how much later a body that
 /// hops at `climb` crosses a line `HOP_RUN` past its takeoff than one
-/// that runs on. The planner prices a hop at `costs.flight` seconds, which
-/// must cover it.
+/// that runs on. The planner prices a hop at `costs.flight`, `costs.airborne`
+/// a second in the air and `costs.takeoff_climb` for its climb, which must
+/// cover it.
 fn hop(config: &RunConfig, gait: Gait, climb: f32) -> EngineResult<ContractCheck> {
     let script = |tail: Beat| {
         Script::new()
@@ -706,11 +708,17 @@ fn hop(config: &RunConfig, gait: Gait, climb: f32) -> EngineResult<ContractCheck
         )));
     };
     let lost = hopped - ran;
-    let price = PlannerSettings::default().costs.flight;
+    let costs = PlannerSettings::default().costs;
+    let frame_time = 1.0 / config.frame_rate;
+    let price = costs.flight
+        + costs.airborne * airborne as f32 * frame_time
+        + costs.takeoff_climb * climb * climb;
     Ok(ContractCheck {
         name: format!("hop {} {climb}: cost", gait.name()),
         measured: format!("{lost:.3} s lost over {airborne} frames in the air"),
-        claim: format!("climbing {climb} m/s; costs.flight {price} s covers it"),
+        claim: format!(
+            "climbing {climb} m/s; flight, airborne and takeoff_climb {price:.2} s cover it"
+        ),
         holds: airborne > 0 && lost <= price,
     })
 }

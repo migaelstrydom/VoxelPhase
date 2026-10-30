@@ -423,11 +423,13 @@ fn a_steep_bevel_underfoot_is_walked_down_not_hopped() {
 /// Running at the end of the cave roof, the body leaves it at the edge,
 /// walking and running: when the edge comes within its plan the landing
 /// lies out of sight, and the plan leaps into it rather than off before it,
-/// onto what it sees.
+/// onto what it sees. At the edge is as near as takeoffs are tried, a
+/// flight step apart, and a frame's travel.
 #[test]
 fn an_edge_whose_landing_is_out_of_sight_is_leapt_off_at_the_edge() {
     const EDGE: f32 = 5.55;
     let mut scene = fixture("garden_roof_edge");
+    let flight_step = PlannerSettings::default().flight_step;
     for speed in [8.0, 5.0] {
         scene.body.speed = speed;
         scene.intent.speed = speed;
@@ -435,7 +437,7 @@ fn an_edge_whose_landing_is_out_of_sight_is_leapt_off_at_the_edge() {
         assert_eq!(flights.len(), 1, "at {speed} m/s");
         let takeoff = flights[0].takeoff.s;
         assert!(
-            (takeoff - EDGE).abs() < 0.1,
+            (takeoff - EDGE).abs() < flight_step + speed * FRAME,
             "at {speed} m/s: takes off at s {takeoff}"
         );
     }

@@ -90,6 +90,7 @@ impl BodySearch<'_> {
         }
         // Unheld as in any flight, though nothing pushed it.
         let cost = settings.costs.flight
+            + settings.costs.airborne * duration
             + settings.costs.ride_travel * (start.z - floor.z).abs()
             + self.flight_churn(from, landing)
             + time_lost(speed, speed, landing - from, self.target_speed);
@@ -179,6 +180,7 @@ impl BodySearch<'_> {
                 },
             };
             let cost = settings.costs.flight
+                + settings.costs.airborne * duration
                 + settings.costs.takeoff_climb * climb * climb
                 + self.flight_churn(from, landing)
                 + time_lost(speed, speed, landing - from, self.target_speed);
@@ -331,8 +333,14 @@ impl BodySearch<'_> {
         if !self.query.clears(&phase) {
             return;
         }
-        // Its climb is set, not chosen: it is not traded against a hop's.
-        let cost = settings.costs.flight + self.flight_churn(from, until);
+        // Its climb is set, not chosen: it is not traded against a hop's. Its
+        // landing is out of sight, so it is charged the time it is known to
+        // spend in the air, rising and falling back to where it left, wherever
+        // it leaves from.
+        let known_airborne = 2.0 * climb / gravity;
+        let cost = settings.costs.flight
+            + settings.costs.airborne * known_airborne
+            + self.flight_churn(from, until);
         out.push(Edge {
             station: last,
             speed,

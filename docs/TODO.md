@@ -126,3 +126,14 @@ trailing foot back at crouch's slow cadence. The crouch's pelvis offset
 (0.12 m, both crouch presets) is bounded by the knee clearing the ground
 (`a_crouched_knee_clears_the_ground_wherever_the_foot_is`), so the fix is in
 the gait, not the pelvis.
+
+---
+
+## Jump is lost through a planned hop
+
+A planned hop leaves the ground on its own, and while it is in the air the
+jump button does nothing: on a plank bridge, a press that falls in a hop is
+lost (0.28 s for a 1.5 m/s hop, 0.6 s at 3 m/s). The planner charges each
+second in the air for it (`CostWeights::airborne`), which keeps hops short,
+but cannot remove it. Proposed: a jump pressed within about 0.1 s of a
+planned hop's takeoff turns the hop into that jump.
