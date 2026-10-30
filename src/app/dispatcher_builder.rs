@@ -64,7 +64,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(SwimmerLocomotionSystem, "swimmer_locomotion", &["brain"])
         // The player's way across the ground ahead, planned on the world as
         // last stepped and from the player's intent; drawn on F6, captured on
-        // F7, and with tracking on (F8) rewriting that intent to follow it.
+        // F7, and rewriting that intent to follow it unless F8 turns tracking
+        // off.
         .with(TraversalPlanSystem, "traversal_plan", &["player_input"])
         .with(
             CharacterControlSystem,

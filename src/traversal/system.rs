@@ -47,14 +47,14 @@ const REFUSED: Colour = Colour::new(0.77, 0.19, 0.19, 1.0);
 const TENTATIVE_ALPHA: f32 = 0.45;
 
 /// The player's traversal planning, kept frame to frame. An ECS resource.
-#[derive(Default)]
 pub struct TraversalPlanState {
     planning: Option<TraversalPlanning>,
     /// This frame's plan, when the player is moving.
     pub last: Option<PlanFrame>,
     /// Whether the plan is drawn in the world.
     pub overlay: bool,
-    /// Whether the plan drives the body: off, the plan is only drawn.
+    /// Whether the plan drives the body: off, the plan is only drawn. On
+    /// unless switched off ([`TRACK_KEY`]).
     pub tracking: bool,
     /// The foot this frame's plan already stands on that the legs have yet
     /// to land: they land it where the plan stands it, not on its next
@@ -62,12 +62,24 @@ pub struct TraversalPlanState {
     pub landing_late: Option<Limb>,
 }
 
+impl Default for TraversalPlanState {
+    fn default() -> Self {
+        Self {
+            planning: None,
+            last: None,
+            overlay: false,
+            tracking: true,
+            landing_late: None,
+        }
+    }
+}
+
 /// Plans the way across the ground ahead of the character marked
 /// [`PlansTraversal`] every frame and, on
 /// [`OVERLAY_KEY`], draws it; on [`CAPTURE_KEY`], writes it to a scene file
 /// the planner's tools load.
 ///
-/// With tracking on ([`TRACK_KEY`]) the plan drives the body: it runs between
+/// With tracking on, as it is unless [`TRACK_KEY`] switches it off, the plan drives the body: it runs between
 /// the player's input and `CharacterControlSystem`, plans from the player's
 /// intent, and rewrites that intent to follow the plan ([`track`]): at the
 /// plan's speed, steered by the stick (along the path where it slides on a

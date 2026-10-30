@@ -735,7 +735,7 @@ pieces in flight are not ground, and are seen again where they slow, which
 keeps a blast's first second to 0.4 ms of sampling a frame (median; 1.6 ms
 at the 99th percentile) instead of 4.
 
-**Tracking (E, first version), F8, off by default.** The plan system runs
+**Tracking (E, first version), on by default, F8 toggles it.** The plan system runs
 between the player's input and `CharacterControlSystem`: it plans from the
 player's intent, then rewrites that intent (`tracking.rs`). On the ground
 the plan only holds the body back: where it is speeding up the stick sets
