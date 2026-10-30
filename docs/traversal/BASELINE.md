@@ -34,6 +34,8 @@ x = 7 (bridges at x = 3), run-out to x = 35. The level file's header has the map
 | 50 | 35° scree: the slope strewn with rocks | 7..15 |
 | 58 | a 0.7 m ledge (no mantle yet) | 7..9 |
 | 66 | a cave lip: a roof 0.9 m up, 10 cm below the capsule's top | 7..19 |
+| 74 | light crates (0.6 m, 11 kg), loose, 0.3 m apart | 3.3..13.8 |
+| 82 | the same crates 0.15-0.6 m apart | 3.3..14.25 |
 
 The bridges lie on the ground between decks level with their planks (0.56 m), so
 the lane is flush; the gap from deck to first plank is about 0.7 m on both. A plank
@@ -293,4 +295,20 @@ scree_walk           5/5  5.00  0.77  3.35/ 1.60 235( 1)  92/248  2.90  2.58   2
 scree_run            5/5  8.00  1.29  2.12/ 1.00 143( 1)  46/151  4.13  1.43   42.4 0.149    0.234    0  1.48   0/108  0.16     0.41
 ledge_walk           0/5  5.00  0.00     -/ 0.40 171( 1)  57/210  2.67  1.87   17.8 0.002    0.003    0  0.00    1/96     -        -
 cave_walk            0/5  5.00  0.00     -/ 2.40 288( 1)   0/330  0.06  0.02    0.4 0.006    0.066    0  0.00   0/158     -        -
+```
+
+## Light crates
+
+Two lanes of loose crates, for play testing a floor the feet shove: tops flush
+with decks either side, as the bridges lie. They are not captured (a capture sees
+bodies asleep where they were placed, not where a foot has pushed them). First
+measured on 64b3dea with `--track --starts 5`: every crossing gets across, the
+even run at half its ideal pace. Why it is slow is not yet looked into.
+
+```
+scenario           cross asked   min  time/ideal    snags     air  rise  drop rms_ay  slip slip_sum pops  best     off  miss miss_max
+crates_walk          5/5  5.00  1.08  2.35/ 2.10  48( 3) 142/177  2.43  2.28   30.3 0.008    0.021    0  4.40    1/35  0.03     0.25
+crates_run           5/5  8.00  0.71  2.70/ 1.31 184( 2) 186/200  4.69  4.63   44.2 0.000    0.000    1  7.49    2/25  0.03     0.23
+crates_uneven_walk   5/5  5.00  2.79  2.47/ 2.19  30( 4) 140/174  2.36  2.43   32.2 0.022    0.101    0  4.52    2/39  0.01     0.23
+crates_uneven_run    5/5  8.00  5.03  1.48/ 1.37  14( 2)  91/107  2.71  1.93   38.9 0.000    0.000    0  7.54    0/15  0.02     0.19
 ```

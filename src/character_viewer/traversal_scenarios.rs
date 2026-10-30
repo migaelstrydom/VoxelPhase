@@ -2,7 +2,7 @@
 //! `levels/traversal_garden.level.ron`, walked and run where speed matters.
 //!
 //! Every lane runs along +x. The character starts at x = -5, has 12 m to come
-//! up to speed, meets its station at x = 7 (the bridges at x = 3) and is
+//! up to speed, meets its station at x = 7 (the bridges and crate runs at x = 3) and is
 //! given enough script to run out several metres past it. The level file's
 //! header draws the lanes.
 
@@ -210,5 +210,37 @@ pub fn catalogue() -> Vec<Scenario> {
                 Walk,
             )
         },
+        crossing(
+            "crates_walk",
+            "Traversal: walk the light crates set evenly apart",
+            74.0,
+            3.3,
+            13.8,
+            Walk,
+        ),
+        crossing(
+            "crates_run",
+            "Traversal: run the light crates set evenly apart",
+            74.0,
+            3.3,
+            13.8,
+            Run,
+        ),
+        crossing(
+            "crates_uneven_walk",
+            "Traversal: walk the light crates set unevenly apart",
+            82.0,
+            3.3,
+            14.25,
+            Walk,
+        ),
+        crossing(
+            "crates_uneven_run",
+            "Traversal: run the light crates set unevenly apart",
+            82.0,
+            3.3,
+            14.25,
+            Run,
+        ),
     ]
 }
