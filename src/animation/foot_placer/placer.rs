@@ -25,7 +25,7 @@ use nalgebra::{Point3, Vector2, Vector3};
 use super::capture_point::{capture_point_xz, stance_offset, turn_in_place_offset};
 use super::clock::{GaitClock, ReleaseKind};
 use super::config::FootPlacerConfig;
-use super::planned::{PlannedStep, PlannedSteps};
+use super::planned::{PlannedStep, PlannedSteps, StepId};
 use super::swing::Swing;
 use super::timing::{reach_budget, GaitTiming};
 
@@ -35,6 +35,11 @@ const PROBE_REACH: f32 = 0.6;
 
 /// Hard cap on substeps per frame, guarding against pathological dt.
 const MAX_SUBSTEPS: f32 = 64.0;
+
+/// How near its planned step a foot must plant to stand on it, in metres:
+/// a swing steered onto a step lands on it; one the plan moved too late
+/// for it to follow, or that found nowhere to land there, does not.
+const ON_STEP: f32 = 0.1;
 
 /// Least `normal.y` of a face a foot may stand on: about 66° from level.
 ///
@@ -115,6 +120,9 @@ pub struct PlacerFoot {
     /// the probe can find, and chasing the ideal outward again would
     /// oscillate the foot across that edge every frame.
     pub landing_shortened: bool,
+    /// The planned step this foot stands on, if it landed on one or a plan
+    /// has since named where it stands.
+    pub stands_on: Option<StepId>,
 }
 
 impl PlacerFoot {
@@ -132,7 +140,29 @@ impl PlacerFoot {
             pre_lift: 0.0,
             since_plant: LONG_AGO,
             landing_shortened: false,
+            stands_on: None,
         }
+    }
+
+    /// Plant the foot at `at` from its swing, toes as the swing turned them:
+    /// on the planned step the swing steered onto, if it lands on it.
+    fn plant(&mut self, at: Point3<f32>, swing: &Swing, planned: &PlannedSteps) {
+        self.phase = FootPhase::Planted;
+        self.position = at;
+        self.planted_position = at;
+        self.forward = swing.to_forward;
+        // The turn-trigger reference must be the orientation the foot
+        // actually landed with, not the yaw at takeoff — during a fast turn
+        // the body sweeps a large angle mid-swing, and a stale reference
+        // would re-release the foot on the next substep.
+        self.planted_yaw = yaw_from_facing(swing.to_forward);
+        self.pre_lift = 0.0;
+        self.since_plant = 0.0;
+        self.stands_on = planned
+            .of(self.side)
+            .filter(|step| step.id.is_some() && step.id == swing.footfall)
+            .filter(|step| planar_distance(step.at, at) <= ON_STEP)
+            .and_then(|step| step.id);
     }
 
     /// Whether this foot is currently planted.
@@ -334,6 +364,18 @@ impl FootPlacer {
             .into_iter()
             .find(|foot| foot.is_planted() && self.clock.pending(foot.side).is_some())
             .map(|foot| foot.side)
+    }
+
+    /// Take `id` as the planned step the planted `side` stands on, where it
+    /// landed on none: the plan has named where the foot stands.
+    pub fn name_plant(&mut self, side: FootSide, id: StepId) {
+        let foot = match side {
+            FootSide::Left => &mut self.left,
+            FootSide::Right => &mut self.right,
+        };
+        if foot.is_planted() && foot.stands_on.is_none() {
+            foot.stands_on = Some(id);
+        }
     }
 
     /// Gait phase in `[0, 1)`, for debug output.
@@ -765,6 +807,7 @@ impl FootPlacer {
                 foot.takeoff_up = foot.up;
                 foot.pre_lift = 0.0;
                 foot.landing_shortened = false;
+                foot.stands_on = None;
                 // The foot leaves the ground with the body, at its speed.
                 foot.phase = FootPhase::Stepping(Swing::new(
                     foot.planted_position,
@@ -783,6 +826,7 @@ impl FootPlacer {
                 self.flew_to_landing = Some(foot.side);
             }
             swing.to = step.at;
+            swing.footfall = step.id;
             swing.retime(lands_in, ctx.config.min_step_duration);
             fly_swing(foot, ctx);
         }
@@ -830,6 +874,7 @@ impl FootPlacer {
             };
             if let FootPhase::Stepping(swing) = &mut foot.phase {
                 swing.to = step.at;
+                swing.footfall = step.id;
             }
         }
     }
@@ -888,9 +933,11 @@ impl FootPlacer {
             let along = if side == front { forward } else { -forward };
             position.x += along.x;
             position.z += along.y;
-            if let Some((_, step)) = landing.filter(|&(landed, _)| landed == side) {
+            let planned = landing.filter(|&(landed, _)| landed == side);
+            if let Some((_, step)) = planned {
                 position = step.at;
             }
+            foot.stands_on = planned.and_then(|(_, step)| step.id);
             foot.phase = FootPhase::Planted;
             foot.position = position;
             foot.planted_position = position;
@@ -1007,7 +1054,8 @@ fn start_step(
     ctx: &PlacerCtx<'_>,
     facing: Vector3<f32>,
 ) {
-    let (to, duration) = match reachable_step(ctx, foot.side, timing.swing_duration) {
+    let planned = reachable_step(ctx, foot.side, timing.swing_duration);
+    let (to, duration) = match planned {
         Some(step) => (
             step.at,
             step.landing.map_or(timing.swing_duration, |landing| {
@@ -1026,7 +1074,8 @@ fn start_step(
     foot.takeoff_up = foot.up;
     foot.pre_lift = 0.0;
     foot.landing_shortened = false;
-    foot.phase = FootPhase::Stepping(Swing::new(
+    foot.stands_on = None;
+    let mut swing = Swing::new(
         foot.planted_position,
         to,
         foot.forward,
@@ -1034,7 +1083,9 @@ fn start_step(
         duration,
         ctx.step_height,
         Vector3::zeros(),
-    ));
+    );
+    swing.footfall = planned.and_then(|step| step.id);
+    foot.phase = FootPhase::Stepping(swing);
 }
 
 /// Advance a mid-swing foot along its swing; plant it when the swing
@@ -1092,20 +1143,7 @@ fn advance_stepping(
     if swing.remaining() <= ctx.dt {
         swing.advance(ctx.dt, chase);
         match plantable(swing.to, landing, ctx, foot.side, facing) {
-            Some(plant_at) => {
-                foot.phase = FootPhase::Planted;
-                foot.position = plant_at;
-                foot.planted_position = plant_at;
-                foot.forward = swing.to_forward;
-                // The turn-trigger reference must be the orientation the
-                // foot actually landed with, not the yaw at takeoff —
-                // during a fast turn the body sweeps a large angle
-                // mid-swing, and a stale reference would re-release the
-                // foot on the next substep.
-                foot.planted_yaw = yaw_from_facing(swing.to_forward);
-                foot.pre_lift = 0.0;
-                foot.since_plant = 0.0;
-            }
+            Some(plant_at) => foot.plant(plant_at, &swing, &ctx.planned),
             None => hold_swing(foot, swing, under_hip, hip, ctx),
         }
         return;
@@ -1128,6 +1166,7 @@ fn advance_stepping(
         // held swing, which found nowhere to land, gathers there too.
         let retreat = 1.0 - (-ctx.config.unsupported_retreat_rate * ctx.dt).exp();
         swing.to = lerp_point(swing.to, under_hip, retreat);
+        swing.footfall = None;
         foot.landing_shortened = true;
     } else if !foot.landing_shortened
         && u < ctx.config.swing_retarget_until_fraction
@@ -1143,6 +1182,7 @@ fn advance_stepping(
             ),
         };
         swing.to = lerp_point(swing.to, desired_to, chase);
+        swing.footfall = planned.and_then(|step| step.id);
     }
     if u < ctx.config.swing_retarget_until_fraction {
         swing.to_forward = swing_forward(swing.to_forward, normalise_facing(facing), chase);
@@ -1221,14 +1261,8 @@ fn fly_swing(foot: &mut PlacerFoot, ctx: &PlacerCtx<'_>) {
     if swing.remaining() > 0.0 {
         foot.position = within_leg(swing, hip, reach);
     } else if (swing.to - hip).norm() <= reach {
-        let (to, to_forward) = (swing.to, swing.to_forward);
-        foot.phase = FootPhase::Planted;
-        foot.position = to;
-        foot.planted_position = to;
-        foot.forward = to_forward;
-        foot.planted_yaw = yaw_from_facing(to_forward);
-        foot.pre_lift = 0.0;
-        foot.since_plant = 0.0;
+        let swing = *swing;
+        foot.plant(swing.to, &swing, &ctx.planned);
     } else {
         let under_hip = foot_position_from_stance(
             ctx.pelvis,
@@ -1387,6 +1421,7 @@ fn hold_swing(
     swing.to = lerp_point(swing.to, under_hip, retreat);
     swing.peak_lift = 0.0;
     swing.held = true;
+    swing.footfall = None;
     swing.retime(ctx.dt, ctx.dt);
     foot.position = within_leg(&swing, hip, max_leg_extension(ctx));
     foot.phase = FootPhase::Stepping(swing);
@@ -1957,7 +1992,11 @@ mod tests {
                 .find(|&n| footfall(foot.side, n).z > foot.planted_position.z + 0.05)
                 .unwrap();
             let at = footfall(foot.side, n);
-            PlannedStep { at, landing: None }
+            PlannedStep {
+                id: None,
+                at,
+                landing: None,
+            }
         };
         let velocity = Vector3::new(0.0, 0.0, SPEED);
         let mut pelvis = Point3::new(0.0, dims.standing_height, 0.0);
@@ -2068,10 +2107,12 @@ mod tests {
                 let steps = if planned {
                     PlannedSteps {
                         left: Some(PlannedStep {
+                            id: None,
                             at: after,
                             landing: None,
                         }),
                         right: Some(PlannedStep {
+                            id: None,
                             at: landing,
                             landing: Some(FLIGHT - t),
                         }),
@@ -2144,6 +2185,7 @@ mod tests {
             planned: PlannedSteps {
                 left: None,
                 right: Some(PlannedStep {
+                    id: None,
                     at: Point3::new(-0.12, 0.0, at),
                     landing: Some(0.3),
                 }),
@@ -2205,6 +2247,7 @@ mod tests {
         let planned = PlannedSteps {
             left: None,
             right: Some(PlannedStep {
+                id: None,
                 at: to,
                 landing: Some(0.4),
             }),
@@ -2234,6 +2277,7 @@ mod tests {
         let planned = PlannedSteps {
             left: None,
             right: Some(PlannedStep {
+                id: None,
                 at: Point3::new(-0.12, 0.0, 1.2),
                 landing: Some(0.4),
             }),
@@ -2261,6 +2305,7 @@ mod tests {
         let planned = PlannedSteps {
             left: None,
             right: Some(PlannedStep {
+                id: None,
                 at: Point3::new(-0.12, 0.0, 0.5),
                 landing: None,
             }),
@@ -2331,6 +2376,7 @@ mod tests {
         let landing = PlannedSteps {
             left: None,
             right: Some(PlannedStep {
+                id: None,
                 at: Point3::new(-0.12, 0.0, 1.2),
                 landing: Some(0.3),
             }),

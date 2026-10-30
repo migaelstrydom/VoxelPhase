@@ -142,6 +142,7 @@ mod tests {
     /// 0.12 to the left.
     fn ride() -> Plan {
         let foot = Contact {
+            footfall: None,
             limb: Limb::LeftFoot,
             at: PathVec::new(1.5, 0.12, 0.0),
             normal: PathVec::new(0.0, 0.0, 1.0),

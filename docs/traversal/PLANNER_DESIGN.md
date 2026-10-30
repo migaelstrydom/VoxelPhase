@@ -268,26 +268,36 @@ feet the legs have down (`traversal::Legs`: the foot planted last holds the
 body, the other lands next), so the two never argue about which foot is
 where; a last plan that does not stand on those feet is dropped rather than
 kept. Between steps at a run neither foot is down, and a foot whose swing
-ends within the frame stands where it lands: the plan, a frame on, has
-taken that footfall as made, and the legs land it a frame later. Read as no
-foot down, the plan was dropped and planned afresh with that foot's next
+ends within the frame lands now: the plan, a frame on, has taken that
+footfall as made, and the legs land it a frame later. Read as no foot
+down, the plan was dropped and planned afresh with that foot's next
 footfall a whole step on (a 0.45 m miss in the turning runs). Holding the plan's clock over the legs was tried first (milestone F)
 and cut the stance in half at a run: the plan's cadence can only ever
 approximate the legs', and the legs must not follow it.
 
-The legs often land a footfall a few frames after the plan's clock has
-passed it, and the two must agree through that lag both ways. A foot the
-plan already stands on that the legs are still swinging in from elsewhere
-lands where the plan stands it (`landing_late` in `traversal::system`):
-handed its next footfall, it turned in mid-swing, and the garden's
-summaries count that as a late move (`moved`: a swinging foot's footfall
-moving over 5 cm in a frame), up to 1.1 m on the plank bridge. And the
-plan takes such a foot as down if its swing is aimed at the plan's
-footfall and lands within a swing (0.15 s) and before the plan's next hop
-(`Legs::caught_up`): otherwise the stance disagreed, the commitment was
-dropped every frame of the lag, and nearly every late move was a fresh
-plan moving the footfall under the foot. Without the bound by the next
-hop, the plan pushed hops off feet still in the air.
+**The footshake.** The legs land a footfall on their clock and the plan on
+its own, a few frames apart either way, and the two agree on which
+footfall a foot is on by name rather than by where the foot is. Every
+footfall of a plan carries an id (`Contact::footfall`), kept while the
+plan keeps the footfall and new for each the planner makes, numbered past
+every id the last plan and the legs hold. The legs are handed each step
+with its id; a swing remembers the step it steers onto, and a foot that
+plants within 10 cm of it stands on it (`PlacerFoot::stands_on`). The
+legs report the planted foot's footfall and the lead foot's aim, its id
+and the seconds until it lands (`traversal::Legs`). A last plan is kept
+while the legs stand on its stance footfall, or are ahead (they have
+landed its next one), or behind (the foot they land next swings onto its
+stance footfall and is down before the plan's next hop pushes off it). A
+foot the plan has landed that the legs have not is handed the stance
+footfall, not its next one, which turned it in mid-swing. A foot the legs
+put down where no plan had it is named by the next plan that stands on
+it. Matched by position and time instead, the two disagreed for every
+frame of the lag, and each disagreement dropped the commitment and
+planned afresh, moving the footfall under a swinging foot: up to 1.1 m on
+the plank bridge, counted by the garden's summaries as a late move
+(`moved`: a swinging foot's footfall moving over 5 cm in a frame). A fresh
+plan still made weighs moving the footfall a foot swings onto at
+`swinging_churn`, five times a tentative footfall's.
 
 Three things seen in play look like the legs following the plan but happen
 untracked, and on main, alike, so they are left to their own projects

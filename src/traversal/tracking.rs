@@ -114,6 +114,7 @@ mod tests {
 
     fn stance() -> Contact {
         Contact {
+            footfall: None,
             limb: Limb::LeftFoot,
             at: PathVec::new(0.0, 0.1, 0.0),
             normal: PathVec::UP,

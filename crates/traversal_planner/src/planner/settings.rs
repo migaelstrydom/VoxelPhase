@@ -52,6 +52,9 @@ pub struct CostWeights {
     pub unheld_body: f32,
     /// A tentative footfall moved from where the last plan had it, per metre.
     pub churn: f32,
+    /// A footfall a foot is already swinging to, moved, per metre: the foot
+    /// turns in mid-swing.
+    pub swinging_churn: f32,
 }
 
 impl Default for CostWeights {
@@ -70,6 +73,7 @@ impl Default for CostWeights {
             comfortable_edge_margin: 0.1,
             unheld_body: 1.0,
             churn: 2.0,
+            swinging_churn: 10.0,
         }
     }
 }

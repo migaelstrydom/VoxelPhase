@@ -4,14 +4,14 @@ use nalgebra::{Point3, Vector3};
 use traversal_planner::plan::{BodyState, Contact, Limb, Plan};
 use traversal_planner::section::{Footing, Section, SectionQuery, StripLayout, StripQuery};
 use traversal_planner::{
-    GaitParams, Motion, PathVec, PlanRequest, Planned, Planner, PlannerSettings, Refusal,
+    GaitParams, PathVec, PlanRequest, Planned, Planner, PlannerSettings, Refusal,
 };
 
 use crate::collision::AABB;
 
 use crate::physics::{PhysicsWorld, RigidBodyHandle, StaticGeometry};
 
-use super::legs::Legs;
+use super::legs::{footfall_id, Legs, Planted};
 use super::path_frame::PathFrame;
 use super::physics_caster::{strip_reach, PhysicsCaster};
 use super::section_cache::SectionCache;
@@ -57,15 +57,6 @@ const REACH_GROWTH: f32 = 1.0;
 /// How far past the strip's reach ahead the fetched geometry goes, in
 /// metres, so it is fetched again only every few metres.
 const SCENERY_AHEAD: f32 = 5.0;
-/// How near the footfall the last plan stands on a foot the legs are still
-/// swinging must be aimed, in metres, for the plan to take it as down: the
-/// legs steer a swing onto the plan's footfall, so it is aimed there unless
-/// the swing is held or the plan moved it.
-const CAUGHT_UP_AIM: f32 = 0.05;
-/// How soon such a foot must land, in seconds, for the plan to take it as
-/// down: a few frames, and before the plan's next hop takes off, which
-/// pushes off that foot.
-const CAUGHT_UP_WITHIN: f32 = 0.15;
 /// Margin around the strip the fetched geometry covers, in metres.
 const SCENERY_MARGIN: f32 = 0.5;
 /// Slowest speed along the heading a plan is made for, in m/s: slower, the
@@ -238,26 +229,15 @@ impl TraversalPlanning {
         let sampled = Instant::now();
 
         let query = StripQuery::new(&section, &self.planner.params);
-        let stance = self
-            .previous
-            .as_ref()
-            .and_then(|plan| plan.stance_at(0.0))
-            .map(|stance| (stance.limb, frame.world_point(stance.at)));
-        let takeoff = self
-            .previous
-            .as_ref()
-            .and_then(next_hop)
-            .unwrap_or(f32::INFINITY);
-        let legs = input
-            .legs
-            .caught_up(stance, CAUGHT_UP_AIM, CAUGHT_UP_WITHIN.min(takeoff));
+        let legs = input.legs;
         let request = PlanRequest {
             body,
             lead: legs.lead.unwrap_or(self.lead),
             target_speed: input.target_speed.max(STANDING_SPEED),
             planted: legs
                 .planted
-                .map(|(limb, at)| planted_contact(&query, &frame, limb, at)),
+                .map(|planted| planted_contact(&query, &frame, planted)),
+            aim: legs.planner_aim(),
             previous: self.previous.as_ref(),
             // A step short of the sampled reach, so the last footfall has
             // ground, but at least half of it.
@@ -404,29 +384,23 @@ fn strayed(
         || (position.y - laid_at).abs() > HEIGHT_LIMIT
 }
 
-/// Seconds until `plan`'s next hop takes off: a flight pushed off the
-/// ground, which holds no contact, unlike a roll-off's.
-fn next_hop(plan: &Plan) -> Option<f32> {
-    plan.phases
-        .iter()
-        .find(|phase| matches!(phase.motion, Motion::Flight { .. }) && phase.contacts.is_empty())
-        .map(|phase| phase.start)
-}
-
-/// The contact a `limb` planted at `at` in the world makes: where the legs
-/// have it, standing on the strip's foothold there, or on fixed level
-/// ground where the strip has none.
-fn planted_contact(query: &StripQuery, frame: &PathFrame, limb: Limb, at: Point3<f32>) -> Contact {
-    let at = frame.path_point(at);
+/// The contact a `planted` foot makes: where the legs have it, standing on
+/// the strip's foothold there, or on fixed level ground where the strip has
+/// none, and on the plan's footfall the legs say it stands on.
+fn planted_contact(query: &StripQuery, frame: &PathFrame, planted: Planted) -> Contact {
+    let (limb, footfall) = (planted.limb, planted.footfall.map(footfall_id));
+    let at = frame.path_point(planted.at);
     match query.foothold_at(&at, PLANTED_TOLERANCE) {
         Some(foothold) => Contact {
             limb,
+            footfall,
             at: PathVec::new(at.s, at.d, foothold.at.z),
             normal: foothold.normal,
             footing: foothold.footing,
         },
         None => Contact {
             limb,
+            footfall,
             at,
             normal: PathVec::UP,
             footing: Footing::Fixed,

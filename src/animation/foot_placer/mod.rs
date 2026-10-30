@@ -32,7 +32,7 @@ mod trace;
 pub use config::FootPlacerConfig;
 pub(crate) use placer::{floor_height_at, is_floor};
 pub use placer::{FootPhase, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
-pub use planned::{PlannedStep, PlannedSteps};
+pub use planned::{PlannedStep, PlannedSteps, StepId};
 pub use recorder::PlacerRecorder;
 pub use swing::Swing;
 pub use timing::GaitTiming;

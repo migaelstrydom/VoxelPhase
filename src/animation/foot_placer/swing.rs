@@ -11,6 +11,8 @@
 
 use nalgebra::{Point3, Vector3};
 
+use super::planned::StepId;
+
 /// Least fraction of a swing left that a retime spreads its time over,
 /// so a swing retimed at its very end keeps a finite duration.
 const MIN_LEFT: f32 = 1.0e-3;
@@ -51,6 +53,8 @@ pub struct Swing {
     /// Whether the swing found nowhere to land when it was due, and goes on
     /// after a target gathering under the hip.
     pub held: bool,
+    /// The planned step `to` steers onto, if it steers onto one.
+    pub footfall: Option<StepId>,
 }
 
 impl Swing {
@@ -78,6 +82,7 @@ impl Swing {
             clearance: 0.0,
             clearance_wanted: 0.0,
             held: false,
+            footfall: None,
         }
     }
 

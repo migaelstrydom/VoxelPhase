@@ -219,7 +219,13 @@ impl Planner {
             }
             self.landing_foot = (self.rng.next() < 0.5) as usize;
         }
-        let step = |at: Point3<f32>| Some(PlannedStep { at, landing: None });
+        let step = |at: Point3<f32>| {
+            Some(PlannedStep {
+                id: None,
+                at,
+                landing: None,
+            })
+        };
         match window.mode {
             Mode::Unplanned => PlannedSteps::default(),
             Mode::Steady => PlannedSteps {
@@ -252,6 +258,7 @@ impl Planner {
                 let lands_in = (window.lands - f) as f32 / FPS;
                 let mut steps = [step(self.fixed[0]), step(self.fixed[1])];
                 steps[self.landing_foot] = Some(PlannedStep {
+                    id: None,
                     at: self.fixed[self.landing_foot],
                     landing: Some(lands_in),
                 });

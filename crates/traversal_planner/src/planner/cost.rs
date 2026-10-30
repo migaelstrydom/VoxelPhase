@@ -1,4 +1,4 @@
-use crate::plan::Contact;
+use crate::plan::{Contact, FootfallId};
 use crate::section::Footing;
 
 use super::settings::CostWeights;
@@ -6,6 +6,8 @@ use super::settings::CostWeights;
 /// The costs every footfall carries whatever model proposed it.
 pub struct FootfallCosts<'a> {
     pub weights: &'a CostWeights,
+    /// The footfall a foot is already swinging to, if one is.
+    pub swinging: Option<FootfallId>,
 }
 
 impl FootfallCosts<'_> {
@@ -30,12 +32,18 @@ impl FootfallCosts<'_> {
     }
 
     /// What moving a tentative footfall from where the last plan had it
-    /// costs.
+    /// costs: more for one a foot is already swinging to.
     pub fn churn(&self, contact: &Contact, before: &Contact) -> f32 {
+        let swinging = before.footfall.is_some() && before.footfall == self.swinging;
+        let weight = if swinging {
+            self.weights.swinging_churn
+        } else {
+            self.weights.churn
+        };
         if contact.limb != before.limb {
-            return self.weights.churn;
+            return weight;
         }
         let moved = contact.at - before.at;
-        self.weights.churn * (moved.s * moved.s + moved.d * moved.d).sqrt()
+        weight * (moved.s * moved.s + moved.d * moved.d).sqrt()
     }
 }

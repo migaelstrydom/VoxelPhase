@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 
 use crate::params::GaitParams;
 use crate::path::PathVec;
-use crate::plan::{BodyState, Contact, Limb, Motion, Phase, Plan};
+use crate::plan::{BodyState, Contact, FootfallId, Limb, Motion, Phase, Plan};
 use crate::section::{Footing, SectionQuery};
 
 use super::body_path::BodySegment;
@@ -35,6 +35,9 @@ pub struct PlanRequest<'a> {
     pub planted: Option<Contact>,
     /// The speed along the path the player asks for, in m/s.
     pub target_speed: f32,
+    /// Where the lead foot is swinging to, if onto one of the last plan's
+    /// footfalls.
+    pub aim: Option<Aim>,
     /// The last frame's plan in this frame's path coordinates, its landed
     /// footfalls dropped: its committed footfall is kept if it still can be,
     /// and moving its tentative ones costs churn.
@@ -43,6 +46,14 @@ pub struct PlanRequest<'a> {
     /// its usual goal: the strip is not yet sampled further. `None` for the
     /// usual goal.
     pub reach_limit: Option<f32>,
+}
+
+/// The lead foot's swing onto a plan's footfall: which one, and the seconds
+/// until it lands there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Aim {
+    pub footfall: FootfallId,
+    pub lands_in: f32,
 }
 
 /// A plan that carries the body to the goal: `min_footfalls` natural steps
@@ -103,6 +114,7 @@ impl Planner {
             Err(refusal) => &mut refusal.partial,
         };
         plan.target_speed = request.target_speed;
+        plan.number_footfalls(first_free_id(request));
         outcome
     }
 
@@ -165,13 +177,25 @@ impl Planner {
         // No commitment to keep, or none the way on from it: plan afresh. A
         // fresh plan where the commitment's had none means dropping it; where
         // neither has one, the refusal is about the way ahead, and the
-        // commitment stands.
+        // commitment stands. Its first footfall is the lead foot's, which may
+        // be swinging onto the last plan's stance footfall.
+        let landing_late = request
+            .previous
+            .and_then(|plan| plan.stance_at(0.0))
+            .filter(|stance| {
+                stance.footfall.is_some() && stance.footfall == request.aim.map(|aim| aim.footfall)
+            });
+        let fresh_previous: Vec<Contact> = landing_late
+            .into_iter()
+            .copied()
+            .chain(previous.iter().copied())
+            .collect();
         let fresh = self.plan_from(
             query,
             request,
             &request.body,
             self.planted(request),
-            &previous,
+            &fresh_previous,
         );
         match (fresh, kept_refusal) {
             (Ok((plan, cost)), _) => Ok(Planned {
@@ -275,6 +299,7 @@ impl Planner {
                     .footfall_spacing(request.target_speed, &self.params),
                 body: path,
                 previous,
+                swinging: request.aim.map(|aim| aim.footfall),
             }
             .search(Footfall {
                 contact: planted,
@@ -344,6 +369,7 @@ impl Planner {
         let limb = request.lead.other();
         Contact {
             limb,
+            footfall: None,
             at: PathVec::new(
                 request.body.s,
                 self.params.foot.natural_offset(limb),
@@ -402,24 +428,57 @@ impl Kept {
     }
 }
 
-/// Whether `plan` stands on the feet `request` has: the foot it lands next
-/// is the request's lead, and the foot holding the body now, where the
-/// request gives one, is that one, where it is. A plan whose feet the legs
-/// did not follow cannot be kept, however well its body path holds. A plan
-/// just into a flight stands on nothing, while the body may not have left
-/// the ground yet: the foot it pushed off from is still down, and may be.
+/// Whether `plan` stands on the feet `request` has, so it can be kept. The
+/// legs land footfalls on their clock, the plan on its own, and the two
+/// agree on footfalls by name:
+///
+/// - the foot holding the body is the plan's stance footfall, and the foot
+///   the plan lands next is the one the legs do;
+/// - or the legs are ahead: they have landed the plan's next footfall, and
+///   the foot the plan lands after it is the one they land next;
+/// - or the legs are behind: the foot they land next swings onto the plan's
+///   stance footfall, and is down before the plan's next hop pushes off it;
+/// - or no foot is down, between strides at a run, or the plan is just into
+///   a flight, and the foot the plan lands next is the one the legs do.
+///
+/// A plan whose feet the legs did not follow cannot be kept, however well
+/// its body path holds.
 fn stands_as_asked(plan: &Plan, request: &PlanRequest) -> bool {
-    let leads = plan
-        .footfalls()
-        .next()
-        .is_none_or(|(_, next)| next.limb == request.lead);
-    let stands = request.planted.is_none_or(|planted| {
-        plan.stance_at(0.0).is_none_or(|stance| {
-            stance.limb == planted.limb
-                && (stance.at.s - planted.at.s).hypot(stance.at.d - planted.at.d) <= STRAY_DISTANCE
-        })
-    });
-    leads && stands
+    let mut footfalls = plan.footfalls().map(|(_, contact)| contact);
+    let (next, after) = (footfalls.next(), footfalls.next());
+    let lands_next = |contact: Option<&Contact>| contact.is_none_or(|c| c.limb == request.lead);
+    let on = |contact: Option<&Contact>| {
+        let footfall = contact.and_then(|contact| contact.footfall);
+        footfall.is_some() && request.planted.and_then(|p| p.footfall) == footfall
+    };
+    let Some(stance) = plan.stance_at(0.0) else {
+        return lands_next(next);
+    };
+    if on(Some(stance)) {
+        return lands_next(next);
+    }
+    if on(next) {
+        return lands_next(after);
+    }
+    let pushed_off = plan.next_hop().unwrap_or(f32::INFINITY);
+    let behind = request
+        .aim
+        .is_some_and(|aim| stance.footfall == Some(aim.footfall) && aim.lands_in <= pushed_off);
+    behind || (request.planted.is_none() && lands_next(next))
+}
+
+/// The first footfall id a plan for `request` may give a new footfall: past
+/// every one the last plan and the legs hold.
+fn first_free_id(request: &PlanRequest) -> FootfallId {
+    let held = [
+        request.previous.and_then(Plan::last_footfall_id),
+        request.planted.and_then(|planted| planted.footfall),
+        request.aim.map(|aim| aim.footfall),
+    ];
+    held.into_iter()
+        .flatten()
+        .max()
+        .map_or(FootfallId(1), |last| FootfallId(last.0 + 1))
 }
 
 /// How many of the last plan's footfalls it chose knowing what lies past

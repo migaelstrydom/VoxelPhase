@@ -5,6 +5,9 @@ use super::placer::FootSide;
 /// Where a plan of the way ahead has one foot land next.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlannedStep {
+    /// The plan's name for this footfall, which the legs hand back when a
+    /// foot lands on it; `None` for a step no plan names.
+    pub id: Option<StepId>,
     /// The landing, in the world: the sole's contact point.
     pub at: Point3<f32>,
     /// Seconds from the start of the frame until the body comes down on
@@ -12,6 +15,11 @@ pub struct PlannedStep {
     /// `None` where the legs step onto it on their own clock.
     pub landing: Option<f32>,
 }
+
+/// A plan's name for one of its footfalls: opaque to the legs, which only
+/// carry it from the step they were handed to the foot that lands on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StepId(pub u32);
 
 /// Where a plan has each foot land next. A foot with a planned step lands
 /// on it rather than where the capture point would put it, lifting on the

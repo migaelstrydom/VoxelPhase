@@ -9,6 +9,7 @@ use traversal_planner::plan::{BodyState, Contact, Limb, Plan};
 
 /// A frame at the game's 60 Hz, in seconds.
 const FRAME: f32 = 1.0 / 60.0;
+use traversal_planner::planner::Aim;
 use traversal_planner::properties::{check_plan, check_replan};
 use traversal_planner::scene::Outcome;
 use traversal_planner::section::{SectionQuery, StripQuery};
@@ -221,8 +222,8 @@ fn a_committed_footfall_that_has_gone_is_dropped() {
 }
 
 /// A last plan whose feet the legs did not follow is not kept: replanned
-/// with the other foot landing next, or the planted foot somewhere else, the
-/// plan starts over from the feet the body has.
+/// with the other foot landing next, or the planted foot down where no plan
+/// had it, the plan starts over from the feet the body has.
 #[test]
 fn a_plan_the_legs_did_not_follow_is_not_kept() {
     let scene = fixture("zigzag_stones");
@@ -255,9 +256,68 @@ fn a_plan_the_legs_did_not_follow_is_not_kept() {
     );
     let moved = Contact {
         at: PathVec::new(stance.at.s - 0.2, stance.at.d, stance.at.z),
+        footfall: None,
         ..stance
     };
     assert!(replanned(scene.lead, moved), "planted 20 cm back");
+}
+
+/// The footshake: the plan and the legs land footfalls on their own clocks
+/// and agree on them by name. A plan whose clock has passed its next
+/// footfall is kept while the foot the legs land next swings onto it, and a
+/// plan whose next footfall the legs have already landed is kept too; a
+/// foot swinging onto some other footfall is not the plan's.
+#[test]
+fn the_legs_may_land_a_footfall_before_or_after_the_plan_does() {
+    let scene = fixture("zigzag_stones");
+    let section = scene.section();
+    let query = StripQuery::new(&section, &scene.params);
+    let planner = planner(&scene);
+    let first = planner
+        .plan(&query, &scene.request())
+        .expect("crosses")
+        .plan;
+    let stance = *first.stance_at(0.0).expect("a planted foot");
+    let mut footfalls = first.footfalls();
+    let (landed_at, next) = footfalls.next().map(|(t, c)| (t, *c)).expect("a footfall");
+    let after = footfalls.next().map(|(_, c)| c.limb).expect("one after it");
+    let diverged = |previous: &Plan, at: f32, lead: Limb, planted: Contact, aim: Option<Aim>| {
+        let request = PlanRequest {
+            body: previous.body_at(at, &query).expect("on the plan"),
+            lead,
+            planted: Some(planted),
+            aim,
+            previous: Some(previous),
+            reach_limit: None,
+            ..scene.request()
+        };
+        planner
+            .plan(&query, &request)
+            .map_or_else(|refusal| refusal.diverged, |planned| planned.diverged)
+    };
+
+    // Behind: the plan has landed `next`, the legs still stand on `stance`.
+    let later = first.after(landed_at + FRAME);
+    let swinging = |footfall| {
+        Some(Aim {
+            footfall,
+            lands_in: FRAME,
+        })
+    };
+    let landing = swinging(next.footfall.expect("named"));
+    assert!(
+        !diverged(&later, 0.0, next.limb, stance, landing),
+        "landing late"
+    );
+    let elsewhere = swinging(traversal_planner::FootfallId(u32::MAX));
+    assert!(
+        diverged(&later, 0.0, next.limb, stance, elsewhere),
+        "aimed elsewhere"
+    );
+
+    // Ahead: the legs have landed `next` before the plan's clock reaches it.
+    let ahead = first.after(FRAME);
+    assert!(!diverged(&ahead, 0.0, after, next, None), "landed early");
 }
 
 /// A committed hop is kept through its takeoff: by the plan's clock the body

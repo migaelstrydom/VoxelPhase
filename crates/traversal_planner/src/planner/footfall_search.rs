@@ -3,7 +3,7 @@ use std::collections::BinaryHeap;
 use rustc_hash::FxHashMap;
 
 use crate::params::GaitParams;
-use crate::plan::{Contact, Limb};
+use crate::plan::{Contact, FootfallId, Limb};
 use crate::section::{Foothold, FootholdWindow, SectionQuery};
 
 use super::body_path::{BodyPath, BodySegment};
@@ -64,6 +64,9 @@ pub struct FootfallSearch<'a> {
     /// The last plan's footfalls after the planted foot, in order: moving
     /// one costs churn.
     pub previous: &'a [Contact],
+    /// The footfall a foot is already swinging to, if one is: moving it
+    /// costs more.
+    pub swinging: Option<FootfallId>,
 }
 
 /// A flight as the footfalls see it.
@@ -225,6 +228,7 @@ impl FootfallSearch<'_> {
             };
             let contact = Contact {
                 limb,
+                footfall: None,
                 at: foothold.at,
                 normal: foothold.normal,
                 footing: foothold.footing,
@@ -292,6 +296,7 @@ impl FootfallSearch<'_> {
             };
             let contact = Contact {
                 limb,
+                footfall: None,
                 at: foothold.at,
                 normal: foothold.normal,
                 footing: foothold.footing,
@@ -342,7 +347,10 @@ impl FootfallSearch<'_> {
         flown: f32,
     ) -> Option<f32> {
         let (params, weights) = (self.params, &self.settings.costs);
-        let costs = FootfallCosts { weights };
+        let costs = FootfallCosts {
+            weights,
+            swinging: self.swinging,
+        };
         let stance = node.footfall.contact.at;
         let rise = foothold.at.z - stance.z;
         if !costs.admits(foothold.footing)
@@ -373,6 +381,7 @@ impl FootfallSearch<'_> {
             / weights.comfortable_edge_margin;
         let contact = Contact {
             limb,
+            footfall: None,
             at: foothold.at,
             normal: foothold.normal,
             footing: foothold.footing,

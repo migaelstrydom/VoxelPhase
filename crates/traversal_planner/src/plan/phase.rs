@@ -24,10 +24,21 @@ impl Limb {
     }
 }
 
+/// A plan's own name for one of its footfalls, kept while the plan keeps
+/// the footfall: the legs hand it back when they land on it, so the plan
+/// and the legs agree on which footfall a foot is on without comparing
+/// where the foot is with where the plan has it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FootfallId(pub u32);
+
 /// A limb holding something for the length of a phase.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Contact {
     pub limb: Limb,
+    /// Which of a plan's footfalls this is; `None` for a foot the legs put
+    /// down where no plan had it, and for a footfall not yet numbered.
+    #[serde(default)]
+    pub footfall: Option<FootfallId>,
     /// Where it holds, in path coordinates: for a foot, the sole's contact
     /// point, at its own `d`.
     pub at: PathVec,

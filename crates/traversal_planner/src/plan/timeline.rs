@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::section::SectionQuery;
 
 use super::body::BodyState;
-use super::phase::{flight_at, Contact, Motion, Phase};
+use super::phase::{flight_at, Contact, FootfallId, Motion, Phase};
 
 /// Slack on matching a footfall's time to a flight's end, in seconds.
 const LANDING_TOLERANCE: f32 = 1.0e-3;
@@ -27,6 +27,47 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Seconds until the plan's next hop takes off: a flight pushed off the
+    /// ground, which holds no contact, unlike a roll-off's.
+    pub fn next_hop(&self) -> Option<f32> {
+        self.phases
+            .iter()
+            .find(|phase| {
+                matches!(phase.motion, Motion::Flight { .. }) && phase.contacts.is_empty()
+            })
+            .map(|phase| phase.start)
+    }
+
+    /// The highest footfall id the plan holds.
+    pub fn last_footfall_id(&self) -> Option<FootfallId> {
+        self.phases
+            .iter()
+            .flat_map(|phase| &phase.contacts)
+            .filter_map(|contact| contact.footfall)
+            .max()
+    }
+
+    /// Number every footfall that has no id yet, from `next` on: one id per
+    /// footfall, however many phases it holds the body through.
+    pub fn number_footfalls(&mut self, mut next: FootfallId) {
+        let mut named: Vec<(Contact, FootfallId)> = Vec::new();
+        for contact in self.phases.iter_mut().flat_map(|phase| &mut phase.contacts) {
+            if contact.footfall.is_some() {
+                continue;
+            }
+            let id = match named.iter().find(|(seen, _)| seen == contact) {
+                Some(&(_, id)) => id,
+                None => {
+                    let id = next;
+                    named.push((*contact, id));
+                    next = FootfallId(next.0 + 1);
+                    id
+                }
+            };
+            contact.footfall = Some(id);
+        }
+    }
+
     /// Every footfall with the time it lands: a contact whose limb did not
     /// hold the body in the phase before. The first phase's contacts were
     /// planted before the plan began.

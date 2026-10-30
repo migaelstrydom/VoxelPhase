@@ -32,7 +32,7 @@ pub use config::CharacterRigConfig;
 pub use debug_config::AnimationDebugConfig;
 pub use foot_placer::{
     FootPhase, FootPlacer, FootPlacerConfig, FootSide, GaitTiming, PlacerFoot, PlannedStep,
-    PlannedSteps, Swing,
+    PlannedSteps, StepId, Swing,
 };
 pub use legged::{probe_tags, FootGround, LegRigDims, LeggedLocomotion, LocomotionCtx};
 pub use pose::{

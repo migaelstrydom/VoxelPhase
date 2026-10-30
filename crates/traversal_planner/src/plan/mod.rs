@@ -6,5 +6,5 @@ mod phase;
 mod timeline;
 
 pub use body::BodyState;
-pub use phase::{climb_reaching, flight_at, Contact, Limb, Motion, Phase};
+pub use phase::{climb_reaching, flight_at, Contact, FootfallId, Limb, Motion, Phase};
 pub use timeline::Plan;

@@ -23,7 +23,7 @@ use crate::character::Grounding;
 use crate::sensing::{ContactCandidate, Probe};
 
 use super::super::foot_placer::{
-    FootPlacer, FootSide, PlacerCtx, PlacerFoot, PlacerRecorder, PlannedSteps,
+    FootPlacer, FootSide, PlacerCtx, PlacerFoot, PlacerRecorder, PlannedSteps, StepId,
 };
 use super::super::FootPlacerConfig;
 use super::dims::LegRigDims;
@@ -322,6 +322,12 @@ impl LeggedLocomotion {
     /// as the capture point has it.
     pub fn follow(&mut self, steps: PlannedSteps) {
         self.planned = steps;
+    }
+
+    /// Take `id` as the planned step the planted `side` stands on, where it
+    /// landed on none ([`FootPlacer::name_plant`]).
+    pub fn name_plant(&mut self, side: FootSide, id: StepId) {
+        self.placer.name_plant(side, id);
     }
 
     /// Advance the gait by one frame.

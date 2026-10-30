@@ -24,7 +24,7 @@ pub mod svg;
 
 pub use params::GaitParams;
 pub use path::PathVec;
-pub use plan::{BodyState, Contact, Limb, Motion, Phase, Plan};
+pub use plan::{BodyState, Contact, FootfallId, Limb, Motion, Phase, Plan};
 pub use planner::{PlanRequest, Planned, Planner, PlannerSettings, Refusal};
 pub use scene::TraversalScene;
 pub use section::{Section, SectionQuery};
