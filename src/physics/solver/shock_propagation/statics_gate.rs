@@ -1,7 +1,7 @@
 //! Which bodies shock propagation may scale through: those in static
 //! equilibrium on what holds them up.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use generational_arena::Arena;
@@ -16,12 +16,14 @@ use super::contact_graph::ContactGraph;
 use super::wrench_cone::ContactWrenchCone;
 
 /// Speed at which a carrying contact counts as opening, in m/s: it carries
-/// nothing however hard it was pressed last frame.
+/// nothing however hard it was pressed last frame. Closing as fast, it is
+/// striking the body, with an impulse last frame's do not hold.
 const OPENING_SPEED: f32 = 0.05;
 
 /// How far a load may fall outside the carriers' wrench cone, as a share of
-/// its size, and still count as held.
-const CONE_TOLERANCE: f64 = 0.05;
+/// its size, and still count as held. A load held only within a looser 5 %
+/// let a knocked arch creep up for as long as it was watched.
+const CONE_TOLERANCE: f64 = 0.02;
 
 /// How far a body's load may drift from the one its verdict was solved for,
 /// as a share of its size, before it is solved again.
@@ -42,13 +44,17 @@ const FORGET_AFTER_FRAMES: u64 = 600;
 /// (`docs/SHOCK_PROPAGATION_STATICS.md`). Those impulses are a contact
 /// solution only where every body they pass through can be held by its
 /// carriers: its contacts with the ground or with bodies no higher than it,
-/// none of them opening, every impulse pushing and within its friction. A
-/// body is *grounded* when its weight and the loads on it from higher bodies
-/// lie in its carriers' wrench cone and every carrier below it is grounded.
+/// none of them opening or striking it, every impulse pushing and within its
+/// friction. A body is *grounded* when its weight and the loads on it from
+/// higher bodies lie in its carriers' wrench cone, every carrier below it is
+/// grounded, and no driven body is about to strike it.
 #[derive(Default)]
 pub(super) struct StaticsGate {
     /// Each body's last solved verdict and what it was solved for.
     verdicts: FxHashMap<RigidBodyHandle, Verdict>,
+    /// Bodies a driven body will strike this frame through a contact that has
+    /// not met yet.
+    struck: FxHashSet<RigidBodyHandle>,
     /// This frame's grounded bodies.
     grounded: FxHashMap<RigidBodyHandle, bool>,
     /// This frame's met manifolds touching each body with a depth.
@@ -102,7 +108,8 @@ impl StaticsGate {
         for i in 0..self.order.len() {
             let body = self.order[i];
             let statics = self.statics_of(body, bodies, manifolds, graph, gravity * dt);
-            let grounded = statics.is_some_and(|s| s.stands_on_grounded && self.holds(body, &s));
+            let grounded = !self.struck.contains(&body)
+                && statics.is_some_and(|s| s.stands_on_grounded && self.holds(body, &s));
             self.grounded.insert(body, grounded);
         }
 
@@ -129,7 +136,8 @@ impl StaticsGate {
     }
 
     /// Every met manifold, under each dynamic body the graph gave a depth,
-    /// and those bodies lowest first.
+    /// and those bodies lowest first; and the bodies a driven body is about
+    /// to strike.
     fn collect_touching(
         &mut self,
         bodies: &Arena<RigidBody>,
@@ -138,8 +146,10 @@ impl StaticsGate {
     ) {
         self.touching.clear();
         self.grounded.clear();
+        self.struck.clear();
         for (index, manifold) in manifolds.iter().enumerate() {
             if !manifold.has_met() {
+                self.collect_struck(bodies, manifold);
                 continue;
             }
             let header = &manifold.header;
@@ -154,8 +164,30 @@ impl StaticsGate {
         self.order.sort_by_key(|body| graph.depth[body]);
     }
 
+    /// Both bodies of a pair that has not met, if one of them is driven and
+    /// they are closing: the impulse the strike brings is in no warm start.
+    fn collect_struck(&mut self, bodies: &Arena<RigidBody>, manifold: &SolverManifold) {
+        let header = &manifold.header;
+        if !is_driven(bodies, header.body_a) && !is_driven(bodies, Some(header.body_b)) {
+            return;
+        }
+        let velocity_at = |body: Option<RigidBodyHandle>, point| {
+            body.and_then(|h| bodies.get(h.0))
+                .map_or(Vector3::zeros(), |b| b.velocity_at(point))
+        };
+        let closing = manifold.contacts.iter().any(|c| {
+            let relative =
+                velocity_at(Some(header.body_b), c.point) - velocity_at(header.body_a, c.point);
+            relative.dot(&c.normal) < -OPENING_SPEED
+        });
+        if closing {
+            self.struck
+                .extend([header.body_a, Some(header.body_b)].into_iter().flatten());
+        }
+    }
+
     /// The body's load and carriers, with its carriers' wrench cone left in
-    /// `self.cone`; `None` if nothing carries it.
+    /// `self.cone`; `None` if nothing carries it, or a carrier is striking it.
     fn statics_of(
         &mut self,
         body: RigidBodyHandle,
@@ -199,9 +231,12 @@ impl StaticsGate {
                 let other_velocity = other
                     .and_then(|h| bodies.get(h.0))
                     .map_or(Vector3::zeros(), |b| b.velocity_at(contact.point));
-                if (rigid.velocity_at(contact.point) - other_velocity).dot(&normal) > OPENING_SPEED
-                {
+                let separating = (rigid.velocity_at(contact.point) - other_velocity).dot(&normal);
+                if separating > OPENING_SPEED {
                     continue;
+                }
+                if separating < -OPENING_SPEED {
+                    return None;
                 }
                 self.cone.add_contact(normal, lever, header.friction);
                 statics.carriers += 1;
@@ -278,4 +313,10 @@ impl StaticsGate {
 /// Whether `body` is immovable: static geometry, or a body that is not dynamic.
 fn is_ground(bodies: &Arena<RigidBody>, body: Option<RigidBodyHandle>) -> bool {
     body.is_none_or(|h| bodies.get(h.0).is_none_or(|b| !b.is_dynamic()))
+}
+
+/// Whether `body` drives itself through its supports, as a character does.
+fn is_driven(bodies: &Arena<RigidBody>, body: Option<RigidBodyHandle>) -> bool {
+    body.and_then(|h| bodies.get(h.0))
+        .is_some_and(|b| b.support_drive().is_some())
 }

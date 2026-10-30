@@ -308,6 +308,28 @@ fn a_knocked_arch_regains_no_energy() {
     );
 }
 
+/// A tower sliding along the floor as one regains nothing. Scaling withholds
+/// only weight above it, which its bottom layer carries straight down to the
+/// floor however it slips: a gate that unscaled a slipping body regained
+/// 0.19 J/kg here, from switching the tower's scales as it came to a stop.
+#[test]
+fn a_tower_sliding_along_the_floor_regains_no_energy() {
+    const LIMIT: f32 = 0.1;
+    let scenario = JengaTowerScenario::new(10);
+    let worst = [2.0, 4.0]
+        .into_iter()
+        .flat_map(|speed| [false, true].map(|ordered| (speed, ordered)))
+        .map(|(speed, ordered)| {
+            energy_regained_after_shove(&scenario, Vector3::new(speed, 0.0, 0.0), ordered)
+        })
+        .fold(0.0, f32::max);
+    assert!(
+        worst < LIMIT,
+        "a sliding tower regained {worst:.3} J/kg, as if it rose {:.1} cm on its own",
+        worst / 9.81 * 100.0
+    );
+}
+
 /// A body held upright is not ground. Shock propagation counted any body with
 /// a constraint of its own as resting on the world, so a block held upright in
 /// the middle of a tower was depth zero, and the tower above it was ordered
@@ -423,6 +445,51 @@ fn energy_regained_after_knock(
             &[],
             &mut debug,
         );
+        let energy = energy_per_kg(&world, &blocks);
+        lowest = lowest.min(energy);
+        regained = regained.max(energy - lowest);
+    }
+    regained
+}
+
+/// Settle `scenario`, set every dynamic body moving at `velocity`, and
+/// return the most energy per kilogram they regained over the next eight
+/// seconds above the least they had had.
+fn energy_regained_after_shove(
+    scenario: &dyn PhysicsBenchScenario,
+    velocity: Vector3<f32>,
+    ordered_contacts: bool,
+) -> f32 {
+    const FRAME_DT: f32 = 1.0 / 60.0;
+    let mut config = scenario.build_world().config().clone();
+    config.deterministic_contact_ordering = ordered_contacts;
+    let mut world = PhysicsWorld::new(config);
+    scenario.setup(&mut world);
+    let blocks: Vec<RigidBodyHandle> = world
+        .bodies()
+        .iter()
+        .filter(|(_, body)| body.is_dynamic())
+        .map(|(index, _)| RigidBodyHandle(index))
+        .collect();
+    for &block in &blocks {
+        world.wake_body(block);
+    }
+    let mut stepper = SequentialStepper::new(1.0 / 240.0, 12);
+    let mut debug = DebugLines::default();
+    let mut step = |world: &mut PhysicsWorld| {
+        stepper.step(world, FRAME_DT, scenario.geometry(), &[], &[], &mut debug);
+    };
+    for _ in 0..180 {
+        step(&mut world);
+    }
+
+    for &block in &blocks {
+        world.body_mut(block).unwrap().set_linear_velocity(velocity);
+    }
+    let mut lowest = energy_per_kg(&world, &blocks);
+    let mut regained = 0.0f32;
+    for _ in 0..480 {
+        step(&mut world);
         let energy = energy_per_kg(&world, &blocks);
         lowest = lowest.min(energy);
         regained = regained.max(energy - lowest);

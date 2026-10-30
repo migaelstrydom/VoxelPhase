@@ -1,6 +1,10 @@
-use crate::physics::bench_harness::scenarios::HoneycombWallScenario;
+use nalgebra::Vector3;
 
-use super::{run, Case, Projectile, RunOptions, Structure, ENERGY_GAIN_LIMIT};
+use crate::physics::bench_harness::scenarios::{HoneycombWallScenario, JengaTowerScenario};
+
+use super::{
+    run, Case, Knock, Projectile, RunOptions, Structure, Verdict, WalkerScript, ENERGY_GAIN_LIMIT,
+};
 
 /// A honeycomb wall struck low by a steel ball regains nothing (seed 495).
 ///
@@ -30,10 +34,78 @@ fn a_honeycomb_wall_struck_low_by_a_steel_ball_regains_nothing() {
         }),
         walker: None,
     };
-    let verdict = run(&case, RunOptions::default());
+    assert_regains_nothing(&run(&case, RunOptions::default()));
+}
+
+/// A honeycomb wall shoved at its foot by a sprinting walker regains nothing
+/// (seed 253).
+///
+/// The walker stands on the ground, so it is one of the carriers of the
+/// block it strikes. Last frame's impulses held that block, but this frame
+/// the walker's push does not fit them, and the blocks above it were scaled
+/// against it as it was driven into them: the wall regained 1.9 J/kg.
+#[test]
+fn a_honeycomb_wall_shoved_by_a_sprinting_walker_regains_nothing() {
+    let mut wall = HoneycombWallScenario::new();
+    wall.columns = 6;
+    wall.rows = 7;
+    let case = Case {
+        seed: 253,
+        structure: Structure::HoneycombWall(wall),
+        frame_dt: 1.0 / 60.0,
+        ordered_contacts: true,
+        knocks: vec![Knock {
+            body: 0.9636215,
+            velocity: Vector3::new(-2.352112, 0.41167784, 1.9072752),
+        }],
+        projectile: None,
+        walker: Some(WalkerScript {
+            bearing: 0.3049738,
+            run_up: 5.19283,
+            aim_across: 0.11963093,
+            sprint: true,
+            jump_from_edge: Some(1.1728119),
+            run_seconds: 3.8936193,
+        }),
+    };
+    assert_regains_nothing(&run(&case, RunOptions::default()));
+}
+
+/// A jenga tower pushed along the floor by a sprinting walker regains
+/// nothing (seed 1742).
+///
+/// Its bottom block slid under the walker's push with the tower above it
+/// scaled, and every joint up the tower pushed it along: 1.35 J/kg. It
+/// passes now that a driven body about to strike a block ungrounds it and the
+/// cone's tolerance is 2 %, but it fails with either undone, so it is kept as
+/// a sample of the collapse rather than a proof of one rule.
+#[test]
+fn a_jenga_tower_pushed_along_the_floor_regains_nothing() {
+    let mut jenga = JengaTowerScenario::new(9);
+    jenga.friction = 0.38659745;
+    let case = Case {
+        seed: 1742,
+        structure: Structure::Jenga(jenga),
+        frame_dt: 1.0 / 60.0,
+        ordered_contacts: true,
+        knocks: Vec::new(),
+        projectile: None,
+        walker: Some(WalkerScript {
+            bearing: 5.9622855,
+            run_up: 4.262816,
+            aim_across: -0.027383685,
+            sprint: true,
+            jump_from_edge: None,
+            run_seconds: 3.8659787,
+        }),
+    };
+    assert_regains_nothing(&run(&case, RunOptions::default()));
+}
+
+fn assert_regains_nothing(verdict: &Verdict) {
     assert!(
         verdict.worst_gain < ENERGY_GAIN_LIMIT,
-        "the wall regained {:.2} J/kg, as if it rose {:.0} cm on its own",
+        "the structure regained {:.2} J/kg, as if it rose {:.0} cm on its own",
         verdict.worst_gain,
         verdict.worst_gain / 9.81 * 100.0
     );

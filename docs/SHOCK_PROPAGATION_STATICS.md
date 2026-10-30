@@ -7,7 +7,8 @@ Why shock propagation made energy, the exact statement of when it does, and what
 
 On branch `shock-statics` (2026-10-30). `StaticsGate` and `WarmStartRemap` run in
 `ShockPropagationConditioner` after the contact graph. `physics_fuzz` over 500 seeds:
-33 failing → 5, worst unexplained gain 6.45 → 0.79 J/kg.
+33 failing → 0, worst unexplained gain 6.45 → 0.39 J/kg; over 2000, 2 fail, one of them
+not shock propagation's (see *The last five seeds* and *Open*).
 
 ## The problem
 
@@ -69,10 +70,14 @@ in the graph. Its *load* is its weight over the substep plus every warm-started 
 higher bodies, as a force and a torque about its centre of mass. A body is **grounded**
 when:
 
-- it has carriers, none counting if it separates faster than `OPENING_SPEED` (5 cm/s);
+- it has carriers, none counting if it separates faster than `OPENING_SPEED` (5 cm/s),
+  and none closing on it that fast: a carrier striking the body brings an impulse last
+  frame's do not hold;
+- no driven body (one with a support drive: the player) is closing on it through a
+  contact that has not met yet, for the same reason;
 - its load lies in the carriers' wrench cone (`ContactWrenchCone`: each contact's
   four-sided friction pyramid, as wrenches; membership by non-negative least squares to
-  `CONE_TOLERANCE`, 5 %);
+  `CONE_TOLERANCE`, 2 %);
 - every dynamic carrier lower than it is grounded.
 
 Bodies are judged lowest first. A scaled pair whose lower body is not grounded is
@@ -115,7 +120,15 @@ remap, `a_tower_with_a_block_held_upright_regains_no_energy` regains 0.46 J/kg.
 | main | 33 | 2.18 J/kg | 6.45 J/kg |
 | remap alone | 28 | 2.43 | 6.18 |
 | sideways contacts unscaled (|n·g| < 0.7) | 18 | 1.07 | 7.74 |
-| **gate + remap** | **5** | **0.46** | **0.79** |
+| gate + remap | 5 | 0.46 | 0.79 |
+| + struck carriers, friction and CCD fixes | 0 | 0.20 | 0.48 |
+| **+ driven strikes, 2 % cone tolerance** | **0** | **0.20** | **0.39** |
+
+Seeds 500–1999, which the first three rows were not tuned on: gate + remap 18 of 1500
+(99th percentile 0.52, worst 3.00); with struck carriers, friction and CCD 7 (0.25,
+1.35); with driven strikes and 2 % tolerance 2 (0.20, 0.85).
+Those last two changes were made looking at seeds 120, 1742 and the arch, so the fresh
+seeds are not fresh for them.
 
 `physics_perf`, mean frame wall clock (conditioning stage), the same build with the gate
 and remap switched off and on:
@@ -125,6 +138,9 @@ and remap switched off and on:
 | igloo blast, 88 bodies | 0.41 ms (0.009) | 0.52 ms (0.056) |
 | 20-layer crate pyramid kept awake, 210 bodies | 9.9 ms (0.35) | 10.5 ms (0.70) |
 
+At 2 % tolerance the certificate passes fewer bodies and more are solved: the pyramid's
+conditioning went from 0.73 to 0.89 ms on a later run, the frame as a whole no slower.
+
 The igloo's frame grows by more than its conditioning: the collapse it computes is a
 different one, and the rest of the step follows it.
 
@@ -133,6 +149,48 @@ A naive version (SVD least squares, every body every frame) cost the pyramid 13.
 All `physics_scenarios` tests pass, including `mass_ratio_sweep` and the arch and tower
 energy tests. `physics_fuzz::tests::a_honeycomb_wall_struck_low_by_a_steel_ball_regains_nothing`
 is seed 495 replayed: 2.90 J/kg on main.
+`a_honeycomb_wall_shoved_by_a_sprinting_walker_regains_nothing` is seed 253: 1.88 J/kg
+without the struck-carrier rule. `a_jenga_tower_pushed_along_the_floor_regains_nothing`
+is seed 1742, which fails with either driven strikes or the 2 % tolerance undone; it is a
+sample, not a proof of either. `a_knocked_arch_regains_no_energy` fails at 5 % tolerance,
+and `a_tower_sliding_along_the_floor_regains_no_energy` guards the slipping-carrier rule
+below from coming back.
+
+## The last five seeds
+
+Each failed only with scaling on (`shock_alpha` 1 passed them all), but only one of the
+causes was in the gate:
+
+- **A carrier striking the body** (97, 200, and 253 once the others were fixed). The
+  walker stands on the ground, so the wall block it runs into counts it as a carrier. Last
+  frame's impulses held the block; this frame the walker drives it into the blocks above,
+  which are scaled against it. Contacts inside the wall made 3.7 kJ in one frame. A carrier
+  closing faster than `OPENING_SPEED` now ungrounds the body.
+- **Friction that outlived its contact** (314, 424). A ball came off the tower spinning
+  and landed hard. The next substep warm-started the landing's friction, the ball bounced
+  clear, and `solve_friction_impulse` zeroed the unloaded contact's accumulator without
+  taking back what it had applied: 3.5 kJ of spin in a frame. The row now takes it back,
+  and so does the torsional row.
+- **CCD treating a steep landing as a graze** (358). A 10 cm ball covering 21 cm a frame
+  is CCD's, not the speculative band's, but it closed on the floor by 1.85 cm a substep,
+  under the 2 cm margin `is_tunnelling_hit` asked for. It sank 11 cm before the next
+  narrowphase. The approach is now asked of the frame, the margin over the frame's
+  substeps.
+
+Reading the fresh seeds and the arch test the struck-carrier rule broke turned up two
+more:
+
+- **Loads held only within 5 %.** A knocked arch left skewed out of its plane crept up,
+  crown rising 2 cm/s for as long as it was watched, with the scales steady frame to frame.
+  Unscaled from the start it settles and sleeps; at 2 % or 0.5 % tolerance it settles
+  scaled. A load just outside the cone is a contact solution that pulls a little, every
+  frame.
+- **The player landing on a scaled tower** (120). Its contact had not met when the frame's
+  scales were set, so the gate never saw it, and its impulse is in no warm start: the layers
+  under it popped up 1 m/s. A driven body closing on a pair that has not met now ungrounds
+  both. Only driven bodies: counting every closing pair fixed no more seeds and, in the
+  build it was tried in, raised the first 500 seeds' 99th percentile from 0.13 to
+  0.23 J/kg, by unscaling stacks blocks were merely falling onto.
 
 ## Tried on the way
 
@@ -144,10 +202,29 @@ is seed 495 replayed: 2.90 J/kg on main.
 - **A separate friction-cone gate** on top of the wrench cone: redundant, and slightly worse.
 - **Warm impulse as "loaded"**: a woken body has none, so a resting tower lost its scaling
   for a frame and sank 3.4 mm. Opening is a separating velocity, not a missing impulse.
+- **Withheld shares as load.** Below a scaled contact the physical impulses carry the
+  `(1−s)·λ` the scaled solve withheld, which in an arch leans further than the warm
+  impulse. Passing those shares down top-down, as force at each lower carrier's contact
+  points, is right by the theorem, but once the tolerance was 2 % it changed no measured
+  result, so it is not in.
+- **A slipping carrier ungrounds the body.** Meant for a tower pushed along the floor,
+  whose bottom block slides. The withheld shares above it are weight, which its contact
+  carries straight down however it slips; the rule only switched the tower's scales as it
+  stopped, which regained 0.19 J/kg.
+- **Driven bodies are not carriers.** A character pushes as its drive asks, not as a
+  support carrying load down. Principled, but over 2000 seeds it moved the 99th percentile
+  by 0.01 and fixed no seed.
 
 ## Open
 
-- Five seeds still fail (97, 200, 314, 358, 424), all under 0.8 J/kg. Each should be checked
-  for a body that only just passes the gate.
+- Seed 1970 is not shock propagation (it fails unscaled too). A 756 kg ball rolling on
+  the floor at 30 Hz speeds up from 0.33 to 1.11 m/s by itself. A contact's lever arm is
+  its frame-start world point less the body's current position, so through a frame's
+  substeps the point falls behind a rolling body, up to a frame's travel: a vertical push
+  behind the centre spins it forward, and friction turns the spin into speed. Box2D keeps
+  anchors fixed relative to the body centres instead; doing that here touches how position
+  correction measures penetration.
+- Seed 636 (0.52 J/kg, an 18-layer tower) creeps slowly the whole run with scaling on, and
+  not without; tighter tolerance does not change it. Unread.
 - The 3D statement is measured, not proven.
-- Once the remaining seeds are understood, `ENERGY_GAIN_LIMIT` can come down from 0.5.
+- Once those are understood, `ENERGY_GAIN_LIMIT` can come down from 0.5.
