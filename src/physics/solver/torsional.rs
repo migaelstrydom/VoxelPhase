@@ -57,13 +57,14 @@ pub(crate) fn solve_torsional_impulse(
     contact: &mut SolverContact,
 ) {
     let radius = contact.traction.patch_radius;
-    if radius <= 0.0 || contact.accumulated_normal_impulse <= 0.0 {
-        contact.accumulated_torsional_impulse = 0.0;
-        return;
-    }
     let mu = header.friction * contact.tangential_scale * contact.traction.gain;
-    if mu <= 0.0 {
+    if radius <= 0.0 || mu <= 0.0 || contact.accumulated_normal_impulse <= 0.0 {
+        // No budget left: take back whatever the row had applied.
+        let applied = contact.accumulated_torsional_impulse;
         contact.accumulated_torsional_impulse = 0.0;
+        if let Some(row) = row.filter(|_| applied.abs() > 1e-10) {
+            row.apply_angular_impulse(bodies, contact.normal * -applied);
+        }
         return;
     }
 
@@ -199,6 +200,24 @@ mod tests {
         // μ·N·r = 0.5 · 10 · 0.5 = 2.5 N·m·s, into a unit inertia.
         assert!((spin(&bodies, &header) - 2.5).abs() < 1e-4);
         assert!((contact.accumulated_torsional_impulse - 2.5).abs() < 1e-4);
+    }
+
+    /// A contact that stops carrying gives back the spin it applied.
+    #[test]
+    fn a_contact_that_stops_carrying_takes_its_spin_back() {
+        let (mut bodies, header) = ground_pair();
+        let mut contact = contact(TractionRow {
+            target_spin: 1.0,
+            patch_radius: 0.5,
+            ..Default::default()
+        });
+        solve(&mut bodies, &header, &mut contact);
+        assert!(spin(&bodies, &header) > 0.5);
+
+        contact.accumulated_normal_impulse = 0.0;
+        solve(&mut bodies, &header, &mut contact);
+        assert!(spin(&bodies, &header).abs() < 1e-6);
+        assert_eq!(contact.accumulated_torsional_impulse, 0.0);
     }
 
     /// With no target it is torsional friction: a spinning body is slowed by

@@ -105,9 +105,15 @@ pub(crate) fn solve_friction_impulse(
     let target_relative_velocity = &contact.traction.target;
     let mu = tangential_coefficient(header, contact);
     if contact.accumulated_normal_impulse <= 0.0 || mu <= 0.0 {
+        // The budget is gone, so whatever the row had applied is taken back:
+        // the accumulator says what this contact has done to the bodies.
+        let applied = contact.accumulated_friction_impulse_ws;
         contact.accumulated_friction_impulse_ws = Vector3::zeros();
         contact.traction.borrowed_impulse = 0.0;
         contact.traction.saturated = false;
+        if let Some(row) = row.filter(|_| applied.magnitude_squared() > 1e-20) {
+            row.apply_impulse(bodies, -applied);
+        }
         return;
     }
 
@@ -209,9 +215,79 @@ pub(crate) fn manifold_friction_projection(
 
 #[cfg(test)]
 mod tests {
-    use nalgebra::Vector3;
+    use generational_arena::Arena;
+    use nalgebra::{Matrix3, Point3, Vector3};
 
-    use super::tangential_error;
+    use super::*;
+    use crate::collision::contact::FeatureId;
+    use crate::physics::body::{RigidBody, RigidBodyDesc};
+    use crate::physics::drive::TractionRow;
+    use crate::physics::handle::RigidBodyHandle;
+
+    /// One unit-mass body sliding along +x on static ground, touching it at
+    /// its centre of mass so friction only slows it.
+    fn sliding_on_ground() -> (Arena<RigidBody>, PairHeader, SolverContact) {
+        let mut bodies = Arena::new();
+        let mut body = RigidBody::new(RigidBodyDesc::dynamic());
+        body.set_mass_properties(1.0, Matrix3::identity());
+        body.set_linear_velocity(Vector3::new(1.0, 0.0, 0.0));
+        let index = bodies.insert(body);
+        let header = PairHeader {
+            body_a: None,
+            body_b: RigidBodyHandle(index),
+            collider_a: None,
+            collider_b: None,
+            restitution: 0.0,
+            friction: 0.5,
+        };
+        let contact = SolverContact {
+            point: Point3::origin(),
+            normal: Vector3::y(),
+            raw_normal: Vector3::y(),
+            depth: 0.0,
+            raw_depth: 0.0,
+            gap: 0.0,
+            closing_allowance: 0.0,
+            feature_id: FeatureId(0),
+            warm_normal_impulse: 0.0,
+            warm_friction_impulse_ws: Vector3::zeros(),
+            accumulated_normal_impulse: 10.0,
+            accumulated_friction_impulse_ws: Vector3::zeros(),
+            accumulated_torsional_impulse: 0.0,
+            tangential_scale: 1.0,
+            traction: TractionRow::default(),
+        };
+        (bodies, header, contact)
+    }
+
+    /// One solve of the row, prepared from the bodies as they are now and
+    /// written back to them.
+    fn solve(bodies: &mut Arena<RigidBody>, header: &PairHeader, contact: &mut SolverContact) {
+        let mut solver_bodies = SolverBodies::default();
+        let row = ContactRow::prepare(bodies, &mut solver_bodies, header, contact, (1.0, 1.0));
+        solve_friction_impulse(&mut solver_bodies, row.as_ref(), header, contact);
+        solver_bodies.scatter(bodies);
+    }
+
+    fn velocity(bodies: &Arena<RigidBody>, header: &PairHeader) -> Vector3<f32> {
+        bodies.get(header.body_b.0).unwrap().linear_velocity()
+    }
+
+    /// A contact that stops carrying gives back the friction it applied: a
+    /// friction impulse at a contact with no normal impulse is energy from
+    /// nowhere. A ball warm-started with the friction of a hard landing,
+    /// bouncing clear in the same substep, spun up by tens of rad/s on it.
+    #[test]
+    fn a_contact_that_stops_carrying_takes_its_friction_back() {
+        let (mut bodies, header, mut contact) = sliding_on_ground();
+        solve(&mut bodies, &header, &mut contact);
+        assert!(velocity(&bodies, &header).norm() < 1e-5);
+
+        contact.accumulated_normal_impulse = 0.0;
+        solve(&mut bodies, &header, &mut contact);
+        assert!((velocity(&bodies, &header) - Vector3::new(1.0, 0.0, 0.0)).norm() < 1e-5);
+        assert_eq!(contact.accumulated_friction_impulse_ws, Vector3::zeros());
+    }
 
     /// With a zero target the row must be the plain friction row it replaced,
     /// bit for bit — `to_bits` rather than `==`, so a result that drifts by one
