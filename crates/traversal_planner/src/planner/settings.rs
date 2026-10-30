@@ -27,7 +27,10 @@ pub struct CostWeights {
     /// jump rather than a running leap, and lands harder.
     pub takeoff_climb: f32,
     /// Speed along the path a landing loses to the floor's face, per
-    /// (m/s)²: the jolt of meeting a rise rather than landing on it.
+    /// (m/s)²: the jolt of meeting a rise rather than landing on it, a
+    /// stumble and a change of pace the player did not ask for. A 38° face
+    /// met at a run costs about a high hop; less, and a run rides into rocks
+    /// that throw it, which a clean face's speed loss does not foresee.
     pub landing_loss: f32,
     /// Height gained and lost riding the floor, per metre: the dips and bumps
     /// felt as snags.
@@ -57,7 +60,7 @@ impl Default for CostWeights {
             flight: 0.3,
             airborne: 0.5,
             takeoff_climb: 0.1,
-            landing_loss: 0.3,
+            landing_loss: 0.15,
             ride_travel: 4.0,
             loose: 0.5,
             loose_reference_mass: 100.0,

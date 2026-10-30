@@ -482,7 +482,10 @@ each flight is one a foot pushes off and lands.
   crate to crate and stalled on one that moved). A typical 1.5 m/s hop costs
   0.68, a 3 m/s one 1.5. A leap off a brow into what is out of sight is
   charged the airtime it is known to fly, rising and falling back to its
-  own height, so where it leaves does not change its price.
+  own height, so where it leaves does not change its price. Meeting a face
+  costs 0.15 per (m/s)² of speed it takes, the jolt: a 38° face at a run
+  about a high hop (1.4 with its time), though a clean face loses only
+  0.13 s; at 0.08 a run rode into the rough field's rocks, which threw it.
   Plus a **churn cost**: diverging from what the previous plan settled,
   its next tentative footfall and the flights landing on its first two
   footfalls, and only where it chose them knowing what lay past them: a
