@@ -235,7 +235,11 @@ land it in their own time (a reach limit both ways rejected ordinary
 footfalls and doubled the miss). Feet that begin a flight hanging, or give
 up a landing, hang until touchdown: the placer still holds them where they
 left the ground, and flying them from there jumped them a metre and more.
-A swing carries its own motion (`foot_placer::Swing`): each substep the
+A flight the plan stops landing part way (a long drop's plan going quiet)
+flies on to the landing it last had: left where the placer last put them,
+the feet hung in the world as the body fell past them, up to 2.5 m over
+the pelvis, and dropping the flight on a plan quiet for a frame missed
+landings it then came back to. A swing carries its own motion (`foot_placer::Swing`): each substep the
 foot steers from where it is, at the speed it has, onto its landing over
 the time left, along the cubic that is smoothstep for a target that holds
 still. Whatever moves the landing or its time mid-swing (a hop planned
@@ -255,8 +259,8 @@ floor anywhere. A swing onto a planned footfall aims at the footfall's own
 height, which the plan sensed. A landing that leaves a planted foot out of
 the leg's reach replants at stance. These hold under any plan: a fuzz
 (`foot_placer::plan_fuzz`) drives the legs with plans that churn, swap
-feet, withdraw, and hand flights' landings between the feet, some steered
-back in the air, and asserts that the feet stay below the hips, within the
+feet, withdraw, and hand flights' landings between the feet or drop them,
+some steered back in the air, and asserts that the feet stay below the hips, within the
 leg's stretch, and move as smoothly as with no plan. The drawn feet blend whenever
 they change between hanging and flown. An unplanned fall keeps the
 old resume: a replant at stance. The plan in turn starts from the

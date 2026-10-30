@@ -13,7 +13,8 @@
 //! ground falling away on the right, and straight up it at a run. And
 //! `air_reverse`, `jump_straight`, `run_reverse` and `crouch_walk`, on the
 //! Traversal Garden's open ground,
-//! `hop_reverse` at its 25 cm step, and `drop_reverse` off its 40 cm step.
+//! `hop_reverse` at its 25 cm step, `drop_reverse` off its 40 cm step, and
+//! `shelf_sprint_off` and `shelf_dither` at the side of its scree's shelf.
 //!
 //! The traversal scenarios, in the Traversal Garden, are catalogued in
 //! `traversal_scenarios` and appended here, and after them the turning runs,
@@ -335,6 +336,39 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::run(0.8).towards(Vector3::x()).named("back"))
                 .then(Beat::stand(0.6)),
             camera: CameraRig::side().with_distance(3.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "shelf_sprint_off",
+            summary: "Traversal Garden: sprint off the side of the scree's 5.6 m shelf and land",
+            level: TRAVERSAL_GARDEN,
+            start: (17.0, 50.0),
+            yaw: 0.0,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::run(1.8).towards(Vector3::z()))
+                .then(Beat::run(0.8).towards(Vector3::z()).named("landed"))
+                .then(Beat::stand(0.6)),
+            camera: CameraRig::side().with_distance(4.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "shelf_dither",
+            summary: "Traversal Garden: run back and forth at the side of the scree's 5.6 m shelf, then off it",
+            level: TRAVERSAL_GARDEN,
+            start: (17.0, 50.5),
+            yaw: 0.0,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::run(0.5).towards(Vector3::z()))
+                .then(Beat::run(0.35).towards(-Vector3::z()).named("back"))
+                .then(Beat::run(0.35).towards(Vector3::z()).named("forth"))
+                .then(Beat::run(0.3).towards(-Vector3::z()).named("back"))
+                .then(Beat::run(0.3).towards(Vector3::z()).named("forth"))
+                .then(Beat::run(0.25).towards(-Vector3::z()).named("back"))
+                .then(Beat::run(1.5).towards(Vector3::z()).named("off"))
+                .then(Beat::stand(0.6)),
+            camera: CameraRig::side().with_distance(4.0),
             judged: Judged::Motion,
         },
         Scenario {

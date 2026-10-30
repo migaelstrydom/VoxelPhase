@@ -716,16 +716,21 @@ impl FootPlacer {
     /// lands it with swings onto the landing footfall as the body comes
     /// down, where it plants, and the foot it pushed off with trails,
     /// lifting at takeoff to land on its own next footfall half a step
-    /// later. Without such a landing the feet stay as they were; and a
-    /// landing the body is not coming down within a leg's reach of, as when
-    /// the player steers back in the air, is no landing for this flight: the
-    /// feet stop flying to it, and the legs hang as in any jump. Nor is one
-    /// on the foot still down, which stays down.
+    /// later. A flight without such a landing, or with one the body is not
+    /// coming down within a leg's reach of (as when the player steers back
+    /// in the air), is not flown: the legs hang as in any jump. Nor is a
+    /// landing on the foot still down, which stays down. A flight the plan
+    /// stops landing part way flies on to the landing it last had.
     fn fly_to_landing(&mut self, ctx: &PlacerCtx<'_>) {
         let planned = [FootSide::Left, FootSide::Right]
             .into_iter()
             .find_map(|side| Some((side, ctx.planned.of(side)?.landing?)));
         let Some((landing_side, landing)) = planned else {
+            if self.flew_to_landing.is_some() {
+                for foot in [&mut self.left, &mut self.right] {
+                    fly_swing(foot, ctx);
+                }
+            }
             return;
         };
         if reachable_step(ctx, landing_side, landing).is_none() {
@@ -779,32 +784,7 @@ impl FootPlacer {
             }
             swing.to = step.at;
             swing.retime(lands_in, ctx.config.min_step_duration);
-            swing.advance(ctx.dt, retarget_chase(ctx));
-            let facing = facing_from_yaw(ctx.yaw);
-            let hip = hip_position(foot.side, ctx, facing);
-            let reach = max_leg_extension(ctx);
-            if swing.remaining() > 0.0 {
-                foot.position = within_leg(swing, hip, reach);
-            } else if (swing.to - hip).norm() <= reach {
-                let (to, to_forward) = (swing.to, swing.to_forward);
-                foot.phase = FootPhase::Planted;
-                foot.position = to;
-                foot.planted_position = to;
-                foot.forward = to_forward;
-                foot.planted_yaw = yaw_from_facing(to_forward);
-                foot.pre_lift = 0.0;
-                foot.since_plant = 0.0;
-            } else {
-                let under_hip = foot_position_from_stance(
-                    ctx.pelvis,
-                    facing,
-                    ctx.hip_width,
-                    ctx.foot_y_fallback,
-                    foot.side,
-                );
-                let swing = *swing;
-                hold_swing(foot, swing, under_hip, hip, ctx);
-            }
+            fly_swing(foot, ctx);
         }
     }
 
@@ -1225,6 +1205,41 @@ fn advance_stepping(
 /// substep.
 fn retarget_chase(ctx: &PlacerCtx<'_>) -> f32 {
     1.0 - (-ctx.config.swing_retarget_rate * ctx.dt).exp()
+}
+
+/// Carry a foot's swing through a flight by a substep: on, while it has
+/// time left; planted at its end, if the leg reaches; held, gathering
+/// under the hip, if not. A planted foot stays planted.
+fn fly_swing(foot: &mut PlacerFoot, ctx: &PlacerCtx<'_>) {
+    let FootPhase::Stepping(ref mut swing) = foot.phase else {
+        return;
+    };
+    swing.advance(ctx.dt, retarget_chase(ctx));
+    let facing = facing_from_yaw(ctx.yaw);
+    let hip = hip_position(foot.side, ctx, facing);
+    let reach = max_leg_extension(ctx);
+    if swing.remaining() > 0.0 {
+        foot.position = within_leg(swing, hip, reach);
+    } else if (swing.to - hip).norm() <= reach {
+        let (to, to_forward) = (swing.to, swing.to_forward);
+        foot.phase = FootPhase::Planted;
+        foot.position = to;
+        foot.planted_position = to;
+        foot.forward = to_forward;
+        foot.planted_yaw = yaw_from_facing(to_forward);
+        foot.pre_lift = 0.0;
+        foot.since_plant = 0.0;
+    } else {
+        let under_hip = foot_position_from_stance(
+            ctx.pelvis,
+            facing,
+            ctx.hip_width,
+            ctx.foot_y_fallback,
+            foot.side,
+        );
+        let swing = *swing;
+        hold_swing(foot, swing, under_hip, hip, ctx);
+    }
 }
 
 /// Where a swinging foot is drawn: kept to its leg, no higher than the hip

@@ -1,8 +1,8 @@
 //! The placer under a random plan of the way ahead: footfalls that hold,
 //! churn, swap feet, withdraw, and flights whose landing passes from foot
-//! to foot, some of them steered back in the air. Whatever the plan does,
-//! the drawn feet must keep to the leg's envelope and move as smoothly as
-//! they do with no plan at all.
+//! to foot or drops out of the plan, some of them steered back in the air.
+//! Whatever the plan does, the drawn feet must keep to the leg's envelope
+//! and move as smoothly as they do with no plan at all.
 //!
 //! Test-only module (`#[cfg(test)]` in `mod.rs`).
 
@@ -47,7 +47,8 @@ enum Mode {
     Churn,
     /// Each foot given the other's footfall.
     Swapped,
-    /// The body in the air, its landing handed between the feet.
+    /// The body in the air, its landing handed between the feet, or gone
+    /// from the plan before it comes down.
     Flight,
 }
 
@@ -178,6 +179,8 @@ struct Planner {
     window_start: Option<usize>,
     fixed: [Point3<f32>; 2],
     landing_foot: usize,
+    /// Whether the plan has stopped landing this window's flight.
+    withdrawn: bool,
 }
 
 impl Planner {
@@ -187,6 +190,7 @@ impl Planner {
             window_start: None,
             fixed: [Point3::origin(); 2],
             landing_foot: 0,
+            withdrawn: false,
         }
     }
 
@@ -195,6 +199,7 @@ impl Planner {
         let on_ground = |p: Point3<f32>| Point3::new(p.x, scenarios::rough(p.x, p.z), p.z);
         if self.window_start != Some(window.start) {
             self.window_start = Some(window.start);
+            self.withdrawn = false;
             let facing = facing_from_yaw(window.yaw);
             let forward = Vector3::new(facing.x, 0.0, facing.y);
             let side = Vector3::new(forward.z, 0.0, -forward.x);
@@ -237,6 +242,10 @@ impl Planner {
                 }
             }
             Mode::Flight => {
+                self.withdrawn |= self.rng.next() < 0.05;
+                if self.withdrawn {
+                    return PlannedSteps::default();
+                }
                 if self.rng.next() < 0.5 {
                     self.landing_foot = 1 - self.landing_foot;
                 }
