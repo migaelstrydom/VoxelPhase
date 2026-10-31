@@ -31,7 +31,7 @@ use crate::collision::contact::{ContactManifold, ContactPoint};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::discrete::clipping::{clip_polygon, obb_face, ClipPolygon, ObbFace};
 use crate::collision::mesh::crease_contacts::{crease_edge_contacts, SolidPlane};
-use crate::collision::mesh::crease_edges::{ridges_of, Ridge};
+use crate::collision::mesh::crease_edges::{PatchRidges, Ridge};
 use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
 use crate::collision::mesh::solid_side::pushing_faces;
 use crate::collision::obb::Obb;
@@ -64,6 +64,7 @@ pub fn obb_patch_manifold(
         |normal| obb.project_half_extent(normal),
         contact_margin,
     );
+    let patch_ridges = PatchRidges::of(patch);
 
     // Collect contacts from ALL overlapping faces (individual triangles).
     // Each triangle is always convex so clipping is always correct.
@@ -76,7 +77,7 @@ pub fn obb_patch_manifold(
         };
 
         let normal = overlap.normal;
-        let ridges: SmallVec<[Ridge; 3]> = ridges_of(patch, face).collect();
+        let ridges: SmallVec<[Ridge; 3]> = patch_ridges.of_face(face).collect();
         if let Some(own) = OwnFacePush::shortest(obb, face, &ridges) {
             if own.depth + OWN_AXIS_PREFERENCE < overlap.depth {
                 own.contacts_from_face(face, contact_margin, &mut all_points);
@@ -238,6 +239,9 @@ impl OwnFacePush {
     /// pillar's upright edges come in short pieces, and a box skewered on one
     /// climbed it a piece at a time.
     fn shortest(obb: &Obb, face: &ContactFace, ridges: &[Ridge]) -> Option<Self> {
+        if ridges.is_empty() {
+            return None;
+        }
         let leaves = |push: Vector3<f32>| {
             push.dot(&face.normal) >= -RIDGE_TOLERANCE
                 && ridges

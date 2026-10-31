@@ -17,6 +17,7 @@
 //! whatever rests in it.
 
 use nalgebra::{Point3, Vector3};
+use smallvec::SmallVec;
 
 use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
 
@@ -59,21 +60,51 @@ pub struct Ridge {
     pub run: [Point3<f32>; 2],
 }
 
-/// `face`'s convex creases.
-pub fn ridges_of<'a>(
+/// A patch's convex creases, from both sides, gathered once so that each
+/// face's ridges are looked up among them rather than among every edge.
+///
+/// Most edges of a patch are not ridges: under a slab on flat ground every
+/// edge is the patch's rim, and a face has none.
+pub struct PatchRidges<'a> {
+    /// The patch the creases are edges of.
     patch: &'a FilteredPatch,
-    face: &'a ContactFace,
-) -> impl Iterator<Item = Ridge> + 'a {
-    patch.boundary_edges.iter().filter_map(move |edge| {
-        let normal_b = edge.normal_b?;
-        let owned = face.vertices.contains(&edge.a)
-            && face.vertices.contains(&edge.b)
-            && edge.normal_a.dot(&face.normal) > OWN_SIDE_DOT;
-        (owned && is_convex(edge, &normal_b)).then(|| Ridge {
-            normal_b,
-            run: straight_run(patch, edge),
-        })
-    })
+    /// Every convex crease edge, each side of a crease listed as its own
+    /// face's edge.
+    creases: SmallVec<[ConvexCrease<'a>; 8]>,
+}
+
+impl<'a> PatchRidges<'a> {
+    /// The convex creases of `patch`.
+    pub fn of(patch: &'a FilteredPatch) -> Self {
+        let creases = patch
+            .boundary_edges
+            .iter()
+            .filter_map(|edge| {
+                let normal_b = edge.normal_b?;
+                is_convex(edge, &normal_b).then_some(ConvexCrease { edge, normal_b })
+            })
+            .collect();
+        Self { patch, creases }
+    }
+
+    /// `face`'s convex creases.
+    pub fn of_face<'s>(&'s self, face: &'s ContactFace) -> impl Iterator<Item = Ridge> + 's {
+        self.creases
+            .iter()
+            .filter(move |crease| owns_edge(face, crease.edge))
+            .map(|crease| Ridge {
+                normal_b: crease.normal_b,
+                run: straight_run(self.patch, crease.edge),
+            })
+    }
+}
+
+/// Whether `edge` is `face`'s side of its crease: both ends are the face's,
+/// and the edge was walked in the face's plane rather than its neighbour's.
+fn owns_edge(face: &ContactFace, edge: &ContactEdge) -> bool {
+    face.vertices.contains(&edge.a)
+        && face.vertices.contains(&edge.b)
+        && edge.normal_a.dot(&face.normal) > OWN_SIDE_DOT
 }
 
 /// The ends of the straight crease `edge` is one piece of: on through every
