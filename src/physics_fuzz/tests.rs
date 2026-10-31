@@ -2,9 +2,12 @@ use nalgebra::Vector3;
 
 use crate::physics::bench_harness::scenarios::{HoneycombWallScenario, JengaTowerScenario};
 
-use super::{
-    run, Case, Knock, Projectile, RunOptions, Structure, Verdict, WalkerScript, ENERGY_GAIN_LIMIT,
-};
+use super::{run, Case, Knock, Projectile, RunOptions, Structure, Verdict, WalkerScript};
+
+/// The most energy per kilogram each case here may regain. Tighter than the
+/// sweep's `ENERGY_GAIN_LIMIT`: every case regained 0.53 J/kg or more while
+/// the rule it holds was broken.
+const REGAINS_NOTHING: f32 = 0.3;
 
 /// A honeycomb wall struck low by a steel ball regains nothing (seed 495).
 ///
@@ -189,7 +192,7 @@ fn a_jenga_tower_leaning_on_a_heavy_ball_regains_nothing() {
 
 fn assert_regains_nothing(verdict: &Verdict) {
     assert!(
-        verdict.worst_gain < ENERGY_GAIN_LIMIT,
+        verdict.worst_gain < REGAINS_NOTHING,
         "the structure regained {:.2} J/kg, as if it rose {:.0} cm on its own",
         verdict.worst_gain,
         verdict.worst_gain / 9.81 * 100.0
