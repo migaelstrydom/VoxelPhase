@@ -137,16 +137,30 @@ frame-fixed lever arms 1 (0.090, 0.53); with 1 % to be grounded again 0 (0.088, 
 Those last two changes were made looking at seeds 120, 1742 and the arch, so the fresh
 seeds are not fresh for them.
 
-`physics_perf`, mean frame wall clock (conditioning stage), the same build with the gate
-and remap switched off and on:
+Frame wall clock (conditioning stage), from `physics_perf` and, for the jenga, physics
+time in the second after the blast from `render_perf`:
 
-| | main | gate + remap |
+| | before the gate | gate + remap |
 |---|---|---|
-| igloo blast, 88 bodies | 0.41 ms (0.009) | 0.52 ms (0.056) |
-| 20-layer crate pyramid kept awake, 210 bodies | 9.9 ms (0.35) | 10.5 ms (0.70) |
+| igloo blast, 88 bodies, mean | 0.44 ms (0.009) | 0.44 ms (0.029) |
+| 20-layer crate pyramid kept awake, 210 bodies, mean | 9.6 ms (0.33) | 9.6 ms (0.50) |
+| the same, its first 0.3 s awake | 10.3 ms (0.33) | 10.7 ms (0.74) |
+| stack_yard's 30-layer jenga blown down | 3.2 ms | 5.0 ms |
 
-At 2 % tolerance the certificate passes fewer bodies and more are solved: the pyramid's
-conditioning went from 0.73 to 0.89 ms on a later run, the frame as a whole no slower.
+**Waking.** The loads from above build up in the warm starts over some 30 frames, each
+frame past the 2 % a verdict is reused for, so nearly every body is solved every frame.
+Each solve starts from the pyramid edges the body's last one leaned on and stops once the
+residual is a billionth of the load; that took the pyramid's first frames from 1.9 to
+0.75 ms of conditioning. A start that fills the passive set before it converges begins
+again from none: eight edges along one row of contacts, kept from a load over the row,
+stalled at a 20 % shortfall for a load the contact off the row holds, and ungrounded
+bodies that were not.
+
+**Collapses.** The jenga costs more because its collapse is a different one. With scaling
+off entirely it costs the same, 5.0 ms, and its pile keeps as many contacts (the blown
+pyramid: 696 a frame in the quarter second after, 694 with the gate, 306 scaled
+everywhere). Scaled everywhere, the pile kept half as many and was still awake 5 s on; the
+gate's sleeps by then.
 
 The igloo's frame grows by more than its conditioning: the collapse it computes is a
 different one, and the rest of the step follows it.

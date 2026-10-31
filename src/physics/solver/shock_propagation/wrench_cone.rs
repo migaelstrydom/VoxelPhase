@@ -7,9 +7,22 @@ use smallvec::SmallVec;
 /// so a body held at a single point still weighs force against torque.
 const MIN_REACH: f32 = 0.1;
 
+/// Columns a least-squares solve over the passive set may hold. A solution
+/// in six dimensions needs at most six (Carathéodory); two more absorb
+/// degenerate ties.
+const MAX_PASSIVE: usize = 8;
+
+/// Residual, as a share of the wrench, at which a solve has balanced it.
+/// Columns past that point only trade rounding, and fill the passive set.
+const SOLVED: f64 = 1e-9;
+
+/// The pyramid edges a solution leans on, by their order of adding.
+pub(super) type Support = SmallVec<[usize; MAX_PASSIVE]>;
+
 /// The cone of wrenches (force and torque about a body's centre of mass) a
 /// set of contacts can give the body with impulses that push (normal ≥ 0)
-/// and stay within their friction (a four-sided pyramid inside each cone).
+/// and stay within their friction (a four-sided pyramid inside each cone,
+/// spanned by its four edges: the normal is their mean).
 #[derive(Default)]
 pub(super) struct ContactWrenchCone {
     /// Each pyramid edge with the lever arm it pushes at.
@@ -27,6 +40,11 @@ impl ContactWrenchCone {
     /// Adds a contact at `lever` from the centre of mass, pushing along
     /// `normal` with friction coefficient `friction`.
     pub(super) fn add_contact(&mut self, normal: Vector3<f32>, lever: Vector3<f32>, friction: f32) {
+        self.reach = self.reach.max(lever.norm());
+        if friction <= 0.0 {
+            self.edges.push((lever, normal));
+            return;
+        }
         let seed = if normal.x.abs() < 0.9 {
             Vector3::x()
         } else {
@@ -35,7 +53,6 @@ impl ContactWrenchCone {
         let t1 = (seed - normal * seed.dot(&normal)).normalize();
         let t2 = normal.cross(&t1);
         for edge in [
-            normal,
             normal + t1 * friction,
             normal - t1 * friction,
             normal + t2 * friction,
@@ -43,7 +60,6 @@ impl ContactWrenchCone {
         ] {
             self.edges.push((lever, edge));
         }
-        self.reach = self.reach.max(lever.norm());
     }
 
     /// The longest lever arm, at least `MIN_REACH`: the length torques are
@@ -55,7 +71,17 @@ impl ContactWrenchCone {
     /// How far `force` and `torque` lie outside the cone, as a share of their
     /// size: 0 for a wrench inside it, 1 when there are no contacts. The
     /// contacts can balance a load of the opposite wrench to within it.
-    pub(super) fn shortfall(&self, force: Vector3<f32>, torque: Vector3<f32>) -> f64 {
+    ///
+    /// `support` holds the edges a solution for a nearby wrench leaned on,
+    /// which the solve starts from, and is left holding this one's. A load
+    /// that has shifted a little is mostly held by the same edges, so the
+    /// solve then takes one step instead of one per edge.
+    pub(super) fn shortfall(
+        &self,
+        force: Vector3<f32>,
+        torque: Vector3<f32>,
+        support: &mut Support,
+    ) -> f64 {
         let reach = self.reach() as f64;
         let wrench = |f: Vector3<f32>, t: Vector3<f32>| -> [f64; 6] {
             [
@@ -80,7 +106,7 @@ impl ContactWrenchCone {
             .iter()
             .map(|&(lever, edge)| wrench(edge, lever.cross(&edge)))
             .collect();
-        let x = nnls(&columns, &target);
+        let x = nnls(&columns, &target, support);
         let mut residual = target.map(|v| -v);
         for (edge, &xj) in columns.iter().zip(&x) {
             for r in 0..6 {
@@ -94,11 +120,6 @@ impl ContactWrenchCone {
 fn dot(a: &[f64; 6], b: &[f64; 6]) -> f64 {
     (0..6).map(|r| a[r] * b[r]).sum()
 }
-
-/// Columns a least-squares solve over the passive set may hold. A solution
-/// in six dimensions needs at most six (Carathéodory); two more absorb
-/// degenerate ties.
-const MAX_PASSIVE: usize = 8;
 
 /// Least squares over the columns in `set`, by Cholesky on the normal
 /// equations, with a ridge far below any real column for degenerate sets.
@@ -139,29 +160,68 @@ fn least_squares(a: &[[f64; 6]], b: &[f64; 6], set: &[usize]) -> SmallVec<[f64; 
 }
 
 /// Non-negative least squares (Lawson–Hanson): `x ≥ 0` minimising `|a·x − b|`.
-fn nnls(a: &[[f64; 6]], b: &[f64; 6]) -> SmallVec<[f64; 64]> {
+///
+/// Starts from the columns in `support`, less those least squares over them
+/// would push with a pull, as the passive set the method would hold there;
+/// leaves the final passive set in it. A start that fills the passive set
+/// before the method converges is abandoned for one from no columns.
+fn nnls(a: &[[f64; 6]], b: &[f64; 6], support: &mut Support) -> SmallVec<[f64; 64]> {
     let n = a.len();
     let mut x: SmallVec<[f64; 64]> = SmallVec::from_elem(0.0, n);
-    let mut set: SmallVec<[usize; MAX_PASSIVE]> = SmallVec::new();
+    let mut set: Support = support.iter().copied().filter(|&j| j < n).collect();
+    while !set.is_empty() {
+        let z = least_squares(a, b, &set);
+        if z.iter().all(|&v| v > 0.0) {
+            for (c, &j) in set.iter().enumerate() {
+                x[j] = z[c];
+            }
+            break;
+        }
+        let mut c = 0;
+        set.retain(|_| {
+            c += 1;
+            z[c - 1] > 0.0
+        });
+    }
+    let started_warm = !set.is_empty();
+    if !lawson_hanson(a, b, &mut x, &mut set) && started_warm {
+        x.fill(0.0);
+        set.clear();
+        lawson_hanson(a, b, &mut x, &mut set);
+    }
+    *support = set;
+    x
+}
+
+/// Lawson–Hanson's iterations from the passive set `set`, over which `x` is
+/// the positive least-squares solution and zero elsewhere. Whether they
+/// converged, rather than stopped with the passive set full.
+fn lawson_hanson(a: &[[f64; 6]], b: &[f64; 6], x: &mut [f64], set: &mut Support) -> bool {
+    let n = a.len();
     for _ in 0..3 * n + 6 {
         let mut residual = *b;
-        for &j in &set {
+        for &j in set.iter() {
             for r in 0..6 {
                 residual[r] -= a[j][r] * x[j];
             }
+        }
+        if dot(&residual, &residual) <= SOLVED * SOLVED * dot(b, b) {
+            return true;
         }
         let entering = (0..n)
             .filter(|j| !set.contains(j))
             .map(|j| (j, dot(&a[j], &residual)))
             .filter(|&(_, gain)| gain > 1e-12)
             .max_by(|p, q| p.1.total_cmp(&q.1));
-        let Some((j, _)) = entering else { break };
+        let Some((j, _)) = entering else {
+            return true;
+        };
         if set.len() == MAX_PASSIVE {
-            break;
+            return false;
         }
         set.push(j);
         for _ in 0..3 * n + 6 {
-            let z = least_squares(a, b, &set);
+            let z = least_squares(a, b, set);
             if z.iter().all(|&v| v > 0.0) {
                 for (c, &j) in set.iter().enumerate() {
                     x[j] = z[c];
@@ -192,14 +252,14 @@ fn nnls(a: &[[f64; 6]], b: &[f64; 6]) -> SmallVec<[f64; 64]> {
             }
         }
     }
-    x
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use nalgebra::Vector3;
 
-    use super::ContactWrenchCone;
+    use super::{ContactWrenchCone, Support};
 
     /// A unit box resting on its four bottom corners.
     fn box_on_corners(friction: f32) -> ContactWrenchCone {
@@ -215,7 +275,7 @@ mod tests {
     fn holds(cone: &ContactWrenchCone, weight: f32, side: f32, x: f32, z: f32) -> bool {
         let load = Vector3::new(side, -weight, 0.0);
         let torque = Vector3::new(x, 0.5, z).cross(&load);
-        cone.shortfall(-load, -torque) <= 0.05
+        cone.shortfall(-load, -torque, &mut Support::new()) <= 0.05
     }
 
     #[test]
@@ -249,7 +309,60 @@ mod tests {
     #[test]
     fn nothing_holds_a_load_without_contacts() {
         let cone = ContactWrenchCone::default();
-        assert_eq!(cone.shortfall(Vector3::y(), Vector3::zeros()), 1.0);
-        assert_eq!(cone.shortfall(Vector3::zeros(), Vector3::zeros()), 0.0);
+        assert_eq!(
+            cone.shortfall(Vector3::y(), Vector3::zeros(), &mut Support::new()),
+            1.0
+        );
+        assert_eq!(
+            cone.shortfall(Vector3::zeros(), Vector3::zeros(), &mut Support::new()),
+            0.0
+        );
+    }
+
+    /// Started from the edges that held one load, the solve finds the same
+    /// shortfall for the next as it does from none, whether that load is
+    /// held or not.
+    #[test]
+    fn a_solve_from_a_support_finds_what_one_from_none_does() {
+        let cone = box_on_corners(0.5);
+        let mut support = Support::new();
+        let first = Vector3::new(0.1, -1.0, 0.0);
+        cone.shortfall(
+            -first,
+            -Vector3::new(0.2, 0.5, 0.0).cross(&first),
+            &mut support,
+        );
+        assert!(!support.is_empty());
+        for (side, x) in [(0.12, 0.25), (0.45, 0.4), (0.8, 0.0), (0.0, 0.9)] {
+            let load = Vector3::new(side, -1.0, 0.0);
+            let torque = Vector3::new(x, 0.5, 0.0).cross(&load);
+            let warm = cone.shortfall(-load, -torque, &mut support.clone());
+            let cold = cone.shortfall(-load, -torque, &mut Support::new());
+            assert!(
+                (warm - cold).abs() < 1e-9,
+                "{side}, {x}: {warm} from the support, {cold} from none"
+            );
+        }
+    }
+
+    /// Edges along one row of contacts cannot balance a twist across it.
+    /// Started from eight of them, the four at each end of the row, which
+    /// fill the passive set, the solve must still reach the contact off it.
+    #[test]
+    fn a_start_from_a_full_support_finds_what_one_from_none_does() {
+        let mut cone = ContactWrenchCone::default();
+        for x in [-0.5, 0.0, 0.5] {
+            cone.add_contact(Vector3::y(), Vector3::new(x, -0.5, -0.5), 0.5);
+        }
+        cone.add_contact(Vector3::y(), Vector3::new(0.0, -0.5, 0.5), 0.5);
+        let load = Vector3::new(0.0, -1.0, 0.0);
+        let torque = Vector3::new(0.0, 0.5, 0.0).cross(&load);
+        let mut ends: Support = [0, 1, 2, 3, 8, 9, 10, 11].into_iter().collect();
+        let warm = cone.shortfall(-load, -torque, &mut ends);
+        let cold = cone.shortfall(-load, -torque, &mut Support::new());
+        assert!(
+            (warm - cold).abs() < 1e-9,
+            "{warm} from the row's ends, {cold} from none"
+        );
     }
 }

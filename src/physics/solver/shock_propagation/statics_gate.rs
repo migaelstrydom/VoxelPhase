@@ -13,7 +13,7 @@ use crate::physics::pipeline::pair::SolverManifold;
 
 use super::super::conditioning::ManifoldConditions;
 use super::contact_graph::ContactGraph;
-use super::wrench_cone::ContactWrenchCone;
+use super::wrench_cone::{ContactWrenchCone, Support};
 
 /// Speed at which a carrying contact counts as opening, in m/s: it carries
 /// nothing however hard it was pressed last frame. Closing as fast, it is
@@ -94,6 +94,8 @@ struct Verdict {
     levers: Vector3<f32>,
     /// How far outside the cone the load lay, as a share of its size.
     shortfall: f64,
+    /// The pyramid edges the solve leaned on, which the next one starts from.
+    support: Support,
     /// Frame last used.
     seen: u64,
 }
@@ -294,6 +296,7 @@ impl StaticsGate {
         }
         let (force, torque) = statics.load;
         let size = force.norm() + torque.norm();
+        let mut support = Support::new();
         if let Some(verdict) = self.verdicts.get_mut(&body) {
             let drift = (verdict.load.0 - force).norm() + (verdict.load.1 - torque).norm();
             if verdict.carriers == statics.carriers
@@ -304,8 +307,9 @@ impl StaticsGate {
                 verdict.seen = self.frame;
                 return verdict.shortfall <= tolerance as f64;
             }
+            support = std::mem::take(&mut verdict.support);
         }
-        let shortfall = self.cone.shortfall(-force, -torque);
+        let shortfall = self.cone.shortfall(-force, -torque, &mut support);
         let holds = shortfall <= tolerance as f64;
         self.verdicts.insert(
             body,
@@ -314,6 +318,7 @@ impl StaticsGate {
                 carriers: statics.carriers,
                 levers: statics.levers,
                 shortfall,
+                support,
                 seen: self.frame,
             },
         );
