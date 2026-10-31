@@ -30,8 +30,8 @@ pub struct DebugConfig {
 impl Default for DebugConfig {
     fn default() -> Self {
         Self {
-            show_fps: true,
-            show_cpu_ms: false,
+            show_fps: false,
+            show_cpu_ms: true,
             show_gpu_ms: false,
         }
     }
