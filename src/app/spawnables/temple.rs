@@ -1,7 +1,9 @@
 //! Greek temple spawnable — classical Doric peristyle temple with columns,
 //! entablature, pediments, and pitched roof. Golden-ratio proportions
 //! throughout, except the pediment, which is Doric-shallow instead — see
-//! [`DORIC_PEDIMENT_RATIO`]. Every piece is an independent rigid body.
+//! [`DORIC_PEDIMENT_RATIO`]. Every piece above the stylobate is an independent
+//! rigid body; the stylobate is static, and stands on a `Foundation` the level
+//! authors under it.
 
 use std::sync::Arc;
 
@@ -17,7 +19,6 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
@@ -337,7 +338,10 @@ impl Spawnable for TempleDef {
         };
 
         // =================================================================
-        // Stylobate — three stepped platforms as a compound body
+        // Stylobate — three stepped platforms as one static compound body.
+        // It doesn't move, so nothing that rests on it or leans on it is held
+        // awake by it. A level puts a `Foundation` of bedrock under it, so no
+        // blast can leave it hanging.
         // =================================================================
 
         let top_step_hw = lay.half_w + lay.col_base_r + lay.step_margin;
@@ -361,12 +365,9 @@ impl Spawnable for TempleDef {
 
         let stylobate_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
-            let bh = physics.world.create_body(
-                RigidBodyDesc::dynamic()
-                    .position(stylobate_pos)
-                    .linear_damping(0.01)
-                    .angular_damping(0.005),
-            );
+            let bh = physics
+                .world
+                .create_body(RigidBodyDesc::static_body().position(stylobate_pos));
             for &(ref he, ref offset) in &step_boxes {
                 physics.world.attach_collider(
                     bh,
@@ -377,23 +378,6 @@ impl Spawnable for TempleDef {
             }
             bh
         };
-
-        let stylobate_fracture = CompoundFracture::boxes(
-            vec![
-                FractureJoint {
-                    child_a: 0,
-                    child_b: 1,
-                    threshold: 50000.0,
-                },
-                FractureJoint {
-                    child_a: 1,
-                    child_b: 2,
-                    threshold: 50000.0,
-                },
-            ],
-            3,
-            stone,
-        );
 
         entities.push(
             world
@@ -408,7 +392,6 @@ impl Spawnable for TempleDef {
                 .with(RigidBodyComponent(stylobate_handle))
                 .with(ModelInstance::new(stylobate_model))
                 .with(Renderable)
-                .with(stylobate_fracture)
                 .build(),
         );
 

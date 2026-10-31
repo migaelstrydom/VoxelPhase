@@ -597,6 +597,7 @@ After the heightfield is filled, volumetric features directly set or clear voxel
 | **Arch** | Curved bridge between two 3D points | from/to (xyz), radius, thickness |
 | **Pillar** | Vertical column rising from the heightfield surface | center (xz), height, radius |
 | **Tunnel** | Horizontal bore that carves through existing terrain | center (xz), direction, length, radius, depth |
+| **Foundation** | Turns the ground inside a box to indestructible bedrock, leaving its shape alone; goes under a static building (the temple's stylobate) so no blast can leave it hanging. Keep it a voxel or so inside the footprint, since bedrock is dark | center (xyz, y = top), half_extents (x, z), depth |
 
 ### Pass 2b: Traversal primitives
 

@@ -16,7 +16,8 @@ use nalgebra::Point3;
 use super::chunk::{ChunkCoord, CHUNK_VOXELS};
 use super::chunk_grid::ChunkGrid;
 use super::csg::{
-    carve_with_sdf, debias_height, index_range, sample_range, union_solid, SURFACE_BAND,
+    carve_with_sdf, debias_height, index_range, paint_solid, sample_range, union_solid,
+    SURFACE_BAND,
 };
 use super::landform::{Basin, Channel, Landmass};
 use super::traversal::{excavate, rasterise, route_plan, RoutePart};
@@ -684,6 +685,14 @@ fn apply_volume(
             );
         }
 
+        VolumeFeature::Foundation {
+            center: (cx, cy, cz),
+            half_extents: (hx, hz),
+            depth,
+        } => {
+            apply_foundation(grid, cx, cy, cz, hx, hz, depth, bounds, step);
+        }
+
         // Traversal primitives are handled above, before the match.
         VolumeFeature::Path { .. }
         | VolumeFeature::Platform { .. }
@@ -799,6 +808,45 @@ fn apply_pillar(
             z += step;
         }
         x += step;
+    }
+}
+
+/// Turn the ground inside a box, top at `top_y`, to bedrock.
+///
+/// Only the material changes. The shape is the ground's own, so the block adds
+/// no surface: a top authored a few centimetres above uneven ground would
+/// otherwise lay a sliver of solid over it, and marching cubes meshes such a
+/// sliver badly.
+fn apply_foundation(
+    grid: &mut ChunkGrid,
+    cx: f32,
+    top_y: f32,
+    cz: f32,
+    hx: f32,
+    hz: f32,
+    depth: f32,
+    bounds: &AABB,
+    step: f32,
+) {
+    let span = |lo: f32, hi: f32, clip_lo: f32, clip_hi: f32| {
+        index_range(lo.max(clip_lo), hi.min(clip_hi), step)
+    };
+    let (x0, x1) = span(cx - hx, cx + hx, bounds.min.x, bounds.max.x);
+    let (y0, y1) = span(top_y - depth, top_y, bounds.min.y, bounds.max.y);
+    let (z0, z1) = span(cz - hz, cz + hz, bounds.min.z, bounds.max.z);
+
+    for ix in x0..=x1 {
+        for iz in z0..=z1 {
+            for iy in y0..=y1 {
+                let p = Point3::new(ix as f32, iy as f32, iz as f32) * step;
+                let inside = (p.x - cx).abs() <= hx
+                    && (p.z - cz).abs() <= hz
+                    && (top_y - depth..=top_y).contains(&p.y);
+                if inside {
+                    paint_solid(grid, p, VoxelMaterial::Bedrock);
+                }
+            }
+        }
     }
 }
 
@@ -1607,6 +1655,66 @@ mod tests {
         assert_eq!(
             bared, 0,
             "{bared} of {soil} buried soil voxels open onto a cliff"
+        );
+    }
+
+    /// A foundation turns the ground inside it to bedrock, however deep, and
+    /// changes nothing else: no density anywhere, so no surface, and no
+    /// material outside it. Its top is authored above the ground's, as an
+    /// author placing it under a building on uneven ground would.
+    #[test]
+    fn a_foundation_turns_ground_to_bedrock_and_changes_no_shape() {
+        let voxel_size = 0.5;
+        let flat = Terrain {
+            features: Vec::new(),
+            ..cliffed_plateau(voxel_size)
+        };
+        let with_foundation = Terrain {
+            features: Vec::new(),
+            volumes: vec![VolumeFeature::Foundation {
+                center: (0.0, 2.2, 0.0),
+                half_extents: (3.0, 2.0),
+                depth: 1.7,
+            }],
+            ..cliffed_plateau(voxel_size)
+        };
+        let bounds = AABB::new(Point3::new(-8.0, 0.0, -8.0), Point3::new(8.0, 10.0, 8.0));
+        let generate = |terrain: &Terrain| {
+            let mut grid = ChunkGrid::new(voxel_size);
+            generate_terrain(&mut grid, terrain, &bounds);
+            grid
+        };
+        let (before, after) = (generate(&flat), generate(&with_foundation));
+
+        let n = (8.0 / voxel_size) as i32;
+        let (mut painted, mut reshaped, mut changed_outside) = (0, 0, 0);
+        for ix in -n + 1..n {
+            for iz in -n + 1..n {
+                for iy in 1..(10.0 / voxel_size) as i32 {
+                    let p = Point3::new(ix as f32, iy as f32, iz as f32) * voxel_size;
+                    let in_block =
+                        p.x.abs() <= 3.0 && p.z.abs() <= 2.0 && (0.5..=2.2).contains(&p.y);
+                    let (old, new) = (before.get(p), after.get(p));
+                    if old.density != new.density {
+                        reshaped += 1;
+                    }
+                    if in_block && old.density > 0.0 {
+                        painted += 1;
+                        assert_eq!(new.material, VoxelMaterial::Bedrock, "{p:?} isn't bedrock");
+                    } else if old.material != new.material {
+                        changed_outside += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            painted > 0,
+            "no ground fell inside the block, so the check proves nothing"
+        );
+        assert_eq!(reshaped, 0, "{reshaped} samples changed density");
+        assert_eq!(
+            changed_outside, 0,
+            "{changed_outside} samples outside the ground in the block changed material"
         );
     }
 

@@ -119,6 +119,21 @@ pub(super) fn union_solid(
     );
 }
 
+/// Give a solid sample `material`, leaving its density, and so the surface,
+/// as it was. An air sample is left alone.
+pub(super) fn paint_solid(grid: &mut ChunkGrid, pos: Point3<f32>, material: VoxelMaterial) {
+    let existing = grid.get(pos);
+    if existing.density > 0.0 {
+        grid.set(
+            pos,
+            Voxel {
+                density: existing.density,
+                material,
+            },
+        );
+    }
+}
+
 /// Density a sample takes from a carve surface `sdf_carve` away from it,
 /// negative inside the region being removed.
 ///

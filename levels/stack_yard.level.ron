@@ -81,6 +81,13 @@ Level(
                     Plateau(min: (97.0, 51.0), max: (103.0, 57.0), height: 4.5),
                     Plateau(min: (109.0, 51.0), max: (115.0, 57.0), height: 4.0),
                 ],
+                volumes: [
+                    // Bedrock under the temple, a metre inside its bottom
+                    // step: the stylobate is static, so no blast may leave it
+                    // hanging. Blast the yard around it and it stands on an
+                    // island.
+                    Foundation(center: (30.0, 4.0, 80.0), half_extents: (8.4, 13.0), depth: 3.0),
+                ],
             ),
 
             objects: [

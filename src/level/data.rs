@@ -595,6 +595,23 @@ pub enum VolumeFeature {
         noise_seed: u32,
     },
 
+    /// A block of bedrock under a building, so that no blast can undermine
+    /// it. The ground inside the block becomes bedrock; its shape is left as
+    /// it was, so the block adds no ground where there was none, and terrain
+    /// above its top keeps its own material. Blast the ground around it away
+    /// and the building stands on an island.
+    Foundation {
+        /// Centre of the block's top face; its `y` is the ground the building
+        /// stands on.
+        center: (f32, f32, f32),
+        /// Half-extents of the block along x and z. Keep them a voxel or so
+        /// inside the building's footprint: bedrock is dark, and an edge left
+        /// uncovered shows.
+        half_extents: (f32, f32),
+        /// How far the block reaches below its top.
+        depth: f32,
+    },
+
     // --- Traversal primitives ---------------------------------------------
     //
     // Everything above shapes landscape. Everything below shapes a *route*:

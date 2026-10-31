@@ -76,6 +76,9 @@ Level(
                         direction: (0.0, 1.0),
                         noise: 1.5,
                     ),
+                    // Bedrock under the temple's static stylobate, a metre
+                    // inside its bottom step.
+                    Foundation(center: (30.0, 0.0, -30.0), half_extents: (8.4, 13.0), depth: 3.0),
                 ],
             ),
 
