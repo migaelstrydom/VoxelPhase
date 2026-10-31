@@ -11,7 +11,8 @@
 //! courtyard at x = -33, rising 11 m from z = -12 to z = -24 (about 43°). And
 //! `contour` and `run_uphill`, on Island Sea's hillside: along it with the
 //! ground falling away on the right, and straight up it at a run. And
-//! `air_reverse`, `jump_straight`, `run_reverse` and `crouch_walk`, on the
+//! `air_reverse`, `jump_straight`, `jump_standing`, `run_reverse` and
+//! `crouch_walk`, on the
 //! Traversal Garden's open ground,
 //! `hop_reverse` at its 25 cm step, `drop_reverse` off its 40 cm step, and
 //! `shelf_sprint_off` and `shelf_dither` at the side of its scree's shelf.
@@ -296,6 +297,19 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(1.2).named("on"))
                 .then(Beat::stand(0.5)),
             camera: CameraRig::side().with_distance(3.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "jump_standing",
+            summary: "Traversal Garden: jump from standing, the stick ahead through the jump",
+            level: TRAVERSAL_GARDEN,
+            start: (-15.0, -15.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::jump(1.5).named("jump"))
+                .then(Beat::stand(0.5)),
+            camera: CameraRig::side().with_distance(6.0),
             judged: Judged::Motion,
         },
         Scenario {

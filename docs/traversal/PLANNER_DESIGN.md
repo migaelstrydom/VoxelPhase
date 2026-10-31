@@ -773,7 +773,9 @@ run held there became one slow ramp, and the body tracked the ramp. A hop starti
 `PlannedTakeoff` on the intent, which the locomotion state machine launches
 as a leap: the plan's climb, its air speed capped at the plan's, no cutoff,
 and the stick steering as in any flight, so a hop stays responsive; steered
-off the plan's arc, the body is replanned from where it goes. A roll-off
+off the plan's arc, the body is replanned from where it goes. In flight the
+stick sets the pace too: a plan's flight holds its takeoff speed, and pacing
+the flight at it kept a jump from standing at 0.3 m/s. A roll-off
 asks for nothing (the body runs off the edge). A refused plan knows no way
 through, so it leaves the body to the drive: the stick sets the pace and
 nothing takes off, which is never worse than no plan (on the garden's

@@ -312,3 +312,31 @@ crates_run           5/5  8.00  0.71  2.70/ 1.31 184( 2) 186/200  4.69  4.63   4
 crates_uneven_walk   5/5  5.00  2.79  2.47/ 2.19  30( 4) 140/174  2.36  2.43   32.2 0.022    0.101    0  4.52    2/39  0.01     0.23
 crates_uneven_run    5/5  8.00  5.03  1.48/ 1.37  14( 2)  91/107  2.71  1.93   38.9 0.000    0.000    0  7.54    0/15  0.02     0.19
 ```
+
+## In flight, the stick sets the pace
+
+Tracking paced a flight at the plan's speed, and a plan's flight holds its
+takeoff speed, so air steering could never speed the body up: a jump from
+standing flew at 0.3 m/s and carried 0.43 m where untracked it carries 5.6
+(`character_viewer jump_standing --track`). In flight the stick now sets the
+pace; a hop's air speed is still capped at its launch. Measured against
+`7444cda`, `--track --starts 5`, the rows that moved (worst crossing's
+slowest speed, snag frames, and the rest as in the tables above):
+
+| Station | cross | min | snags | other |
+|---|---|---|---|---|
+| crates_walk | 4/5 → 5/5 | 0.01 → 1.89 | 242 → 16 | time 2.15 / 2.10 ideal |
+| crates_run | 4/5 → 5/5 | 0.01 → 4.03 | 177 → 39 | pops 6 → 0 |
+| crates_uneven_walk | 5/5 | 0.02 → 4.52 | 75 → 0 | |
+| crates_uneven_run | 5/5 | 4.82 → 6.45 | 29 → 0 | |
+| rough_walk | 5/5 | 3.04 → 4.08 | 26 → 0 | |
+| lip15_run | 5/5 | 4.52 → 5.03 | 28 → 7 | |
+| lip8_run | 5/5 | 6.14 → 6.84 | 2 → 0 | |
+| slope50_walk | 5/5 | 0.10 → 0.97 | | |
+| planks_walk | 5/5 | 4.69 → **4.11** | | air frames 82 → 93, rms_ay 23 → 30 |
+| lip15_walk | 5/5 | 3.40 | 22 → 8 | miss_max 0.17 → **0.56** m |
+| scree_run | 5/5 | 1.12 | 168 → 160 | slip 0.015 → **0.065**, slip_sum 0.09 → 0.20 |
+| slope50_run | 5/5 | 1.39 | | slip 0.020 → **0.090** |
+
+The ledge and the cave are refused before and after. The bold rows are worse
+and not yet looked into.

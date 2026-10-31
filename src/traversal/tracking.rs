@@ -1,6 +1,6 @@
 use nalgebra::Vector3;
 use traversal_planner::section::Profile;
-use traversal_planner::{Motion, Plan};
+use traversal_planner::{Motion, Phase, Plan};
 
 use crate::character::PlannedTakeoff;
 
@@ -16,8 +16,9 @@ pub struct Tracking {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Pace {
     /// As the stick asks: the plan is speeding up, and the drive speeds up
-    /// as fast as it does untracked. The plan's acceleration is the drive's
-    /// mean from standing, which its first frames on firm ground outrun.
+    /// as fast as it does untracked (the plan's acceleration is the drive's
+    /// mean from standing, which its first frames on firm ground outrun);
+    /// or the body is in flight, where it steers as it does untracked.
     Asked,
     /// At the plan's speed, in m/s: it holds the body below the asked speed
     /// or slows it, to meet a hop or for a slope.
@@ -36,7 +37,12 @@ const PUSHED_CLIMB: f32 = 0.05;
 /// `forward`.
 ///
 /// Where the plan is speeding up the stick sets the pace ([`Pace::Asked`]);
-/// elsewhere it is the plan's speed at the frame's end. A `refused` plan
+/// elsewhere it is the plan's speed at the frame's end. In flight the stick
+/// sets it too: a plan's flight holds its takeoff speed, so pacing a flight
+/// at the plan's speed would hold the body at whatever it took off with
+/// (0.3 m/s, jumping from standing) and air steering could never speed it
+/// up. A hop's air speed is capped at its launch instead, and a body
+/// steered off the plan's arc is replanned from where it goes. A `refused` plan
 /// knows no way through, so it leaves the body to the drive: the stick sets
 /// the pace and nothing takes off, which is never worse than no plan at all.
 /// A hop is taken off on the frame whose start is nearest its own, half a
@@ -46,7 +52,7 @@ const PUSHED_CLIMB: f32 = 0.05;
 /// a landing, starts with the flight the body is already on.
 pub fn track(plan: &Plan, forward: Vector3<f32>, climb: f32, dt: f32, refused: bool) -> Tracking {
     let (now, next) = (speed_at(plan, 0.0), speed_at(plan, dt));
-    let pace = if refused || next > now + SPEEDING_UP {
+    let pace = if refused || flying_at(plan, 0.0) || next > now + SPEEDING_UP {
         Pace::Asked
     } else {
         Pace::Planned(next)
@@ -95,10 +101,19 @@ pub fn floor_grade(floor: &Profile, s: f32) -> f32 {
 
 /// The plan's speed along the path `t` seconds in; nothing past its end.
 fn speed_at(plan: &Plan, t: f32) -> f32 {
+    phase_at(plan, t).map_or(0.0, |phase| phase.progress((t - phase.start).max(0.0)).1)
+}
+
+/// Whether the plan is in flight `t` seconds in.
+fn flying_at(plan: &Plan, t: f32) -> bool {
+    phase_at(plan, t).is_some_and(|phase| matches!(phase.motion, Motion::Flight { .. }))
+}
+
+/// The plan's phase `t` seconds in; nothing past its end.
+fn phase_at(plan: &Plan, t: f32) -> Option<&Phase> {
     plan.phases
         .iter()
         .find(|phase| t < phase.start + phase.duration)
-        .map_or(0.0, |phase| phase.progress((t - phase.start).max(0.0)).1)
 }
 
 #[cfg(test)]
@@ -210,6 +225,36 @@ mod tests {
         assert_eq!(
             track(&speeding_up, Vector3::x(), 0.0, DT, false).pace,
             Pace::Asked
+        );
+    }
+
+    /// In flight the stick sets the pace, though the plan's flight holds
+    /// its speed: holding it would keep the body at its takeoff speed, and
+    /// air steering could never speed it up. Into a flight that starts
+    /// later in the frame, the plan still sets it.
+    #[test]
+    fn in_flight_the_stick_sets_the_pace() {
+        let arc = plan(vec![
+            flight(0.0, 0.0, false),
+            ride(0.3, 1.0, 1.2, (4.0, 2.0)),
+        ]);
+        assert_eq!(track(&arc, Vector3::x(), -1.0, DT, false).pace, Pace::Asked);
+        let landing = plan(vec![
+            flight(-0.29, 0.0, false),
+            ride(0.01, 1.0, 1.2, (4.0, 2.0)),
+        ]);
+        assert_eq!(
+            track(&landing, Vector3::x(), -1.0, DT, false).pace,
+            Pace::Asked,
+            "the frame it lands in"
+        );
+        let to_a_hop = plan(vec![
+            ride(0.0, 0.01, 0.0, (4.0, 4.0)),
+            flight(0.01, 0.04, false),
+        ]);
+        assert_eq!(
+            track(&to_a_hop, Vector3::x(), 0.0, DT, false).pace,
+            Pace::Planned(4.0)
         );
     }
 
