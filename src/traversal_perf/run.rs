@@ -146,6 +146,7 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             scenery: &*terrain,
             frame: PathFrame::along(Point3::new(spec.at.0, 0.0, spec.at.1), heading),
             exclude: &[],
+            carriers: &[],
             top: SKY,
             bottom: -SKY,
         };
@@ -174,6 +175,7 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             world: &physics.world,
             scenery: &*terrain,
             exclude: &[],
+            carriers: &[],
             terrain_changes: &[],
             position,
             velocity,
@@ -186,7 +188,7 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             break;
         };
         let against_fresh = spec.verify.then(|| {
-            let caster = planning.caster(&physics.world, &*terrain, &[]);
+            let caster = planning.caster(&physics.world, &*terrain, &[], &[]);
             StripDifference::between(
                 &planned.section,
                 &sample_section(

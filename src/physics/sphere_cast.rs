@@ -38,20 +38,24 @@ pub struct SphereCast<'a> {
     /// what lies below the start.
     pub solid_bodies: bool,
     /// What the sphere can touch.
-    pub obstacles: CastObstacles,
+    pub obstacles: CastObstacles<'a>,
 }
 
 /// What a [`SphereCast`] can touch besides the static geometry.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CastObstacles {
+pub enum CastObstacles<'a> {
     /// Every body not excluded.
     Everything,
     /// Static bodies only: the level's fixed pieces, not what moves through
     /// it.
     Scenery,
     /// Every body not excluded but dynamic ones whose surface moves faster
-    /// than `fastest` m/s: what stands, not what flies.
-    Settled { fastest: f32 },
+    /// than `fastest` m/s: what stands, not what flies. The bodies in `seen`
+    /// are touched however fast they move: what carries, not what flies.
+    Settled {
+        fastest: f32,
+        seen: &'a [RigidBodyHandle],
+    },
 }
 
 impl SphereCast<'_> {

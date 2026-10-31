@@ -25,7 +25,8 @@ struct Pose {
     reach: f32,
     /// Whether the strip's casts see it: not in flight.
     settled: bool,
-    /// Whether its casts read it as resting footing.
+    /// Whether its casts read it as footing to stand on: resting, or a
+    /// carrier.
     resting: bool,
 }
 
@@ -145,12 +146,14 @@ impl SectionCache {
     /// that. A body in flight ([`IN_FLIGHT_SPEED`]) is not seen by the casts:
     /// it is forgotten around where it took off and where it slows again,
     /// not on the way. One that comes to rest or starts moving is forgotten
-    /// around, as the casts' footing says which it is. A body that was
-    /// removed gets a last look.
+    /// around, as the casts' footing says which it is. A carrier is always
+    /// seen and always firm, so only its moving makes casts stale. A body
+    /// that was removed gets a last look.
     pub fn forget_what_moved(
         &mut self,
         world: &PhysicsWorld,
         ignore: &[RigidBodyHandle],
+        carriers: &[RigidBodyHandle],
         terrain_changes: &[(Point3<f32>, Point3<f32>)],
     ) {
         let mut stale: Vec<(Point3<f32>, f32)> = Vec::new();
@@ -165,12 +168,13 @@ impl SectionCache {
                 continue;
             }
             seen.push(handle);
+            let carrier = carriers.contains(&handle);
             let now = Pose {
                 position: body.position(),
                 rotation: body.rotation(),
                 reach: world.reach(handle),
-                settled: !awake || world.surface_speed(handle) <= IN_FLIGHT_SPEED,
-                resting: is_resting(world, handle),
+                settled: carrier || !awake || world.surface_speed(handle) <= IN_FLIGHT_SPEED,
+                resting: carrier || is_resting(world, handle),
             };
             match self.poses.get(&handle) {
                 None => {

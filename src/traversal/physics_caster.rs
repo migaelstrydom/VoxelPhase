@@ -41,7 +41,9 @@ pub fn is_resting(world: &PhysicsWorld, handle: RigidBodyHandle) -> bool {
 }
 
 /// The planner's sphere casts in the physics world: the terrain and every
-/// body, rubble and spawnables included, but those in flight.
+/// body, rubble and spawnables included, but those in flight. A carrier
+/// (`super::carriers`) is seen however fast it moves, and read as fixed
+/// ground where it stands.
 ///
 /// Casts reach from `bottom` to `top`: one asked to start beyond either
 /// starts there.
@@ -51,6 +53,8 @@ pub struct PhysicsCaster<'a> {
     pub frame: PathFrame,
     /// Bodies the casts pass through: the player's own.
     pub exclude: &'a [RigidBodyHandle],
+    /// Bodies that carry what stands on them.
+    pub carriers: &'a [RigidBodyHandle],
     /// World height casts up give up at, in metres, and casts down start
     /// from at most.
     pub top: f32,
@@ -76,6 +80,7 @@ impl PhysicsCaster<'_> {
             solid_bodies: false,
             obstacles: CastObstacles::Settled {
                 fastest: IN_FLIGHT_SPEED,
+                seen: self.carriers,
             },
         };
         let hit = self.world.cast_sphere(self.scenery, &cast)?;
@@ -93,7 +98,7 @@ impl PhysicsCaster<'_> {
 
     fn footing(&self, handle: RigidBodyHandle) -> Footing {
         match self.world.body(handle) {
-            Some(body) if body.is_dynamic() => Footing::Loose {
+            Some(body) if body.is_dynamic() && !self.carriers.contains(&handle) => Footing::Loose {
                 mass: body.mass(),
                 resting: is_resting(self.world, handle),
             },
@@ -146,9 +151,10 @@ mod tests {
 
     use super::*;
 
-    /// The footing a cast down onto a dynamic box reads: resting asleep, and
-    /// awake but still, as whatever the player stands on is; not sliding.
-    fn footing_of_box(awake: bool, speed: f32) -> Footing {
+    /// The footing a cast down onto a dynamic box reads, if it sees it:
+    /// resting asleep, and awake but still, as whatever the player stands on
+    /// is; not sliding; fixed if it is a carrier.
+    fn footing_of_box(awake: bool, speed: f32, carrier: bool) -> Option<Footing> {
         let mut world = PhysicsWorld::new(PhysicsConfig::default());
         let slab = world.create_body(
             RigidBodyDesc::dynamic()
@@ -159,25 +165,45 @@ mod tests {
         if awake {
             world.wake_body(slab);
         }
+        let carriers = [slab];
         let caster = PhysicsCaster {
             world: &world,
             scenery: &EmptyGeometry,
             frame: PathFrame::new(Point3::origin(), 0.0),
             exclude: &[],
+            carriers: if carrier { &carriers } else { &[] },
             top: 5.0,
             bottom: -5.0,
         };
         caster
             .cast_down(0.0, 0.0, 0.25, f32::INFINITY)
-            .expect("the box under the cast")
-            .footing
+            .map(|hit| hit.footing)
     }
 
     #[test]
     fn a_still_body_is_resting_footing_awake_or_asleep() {
-        let resting = |footing| matches!(footing, Footing::Loose { resting, .. } if resting);
-        assert!(resting(footing_of_box(false, 0.0)), "asleep");
-        assert!(resting(footing_of_box(true, 0.0)), "awake and still");
-        assert!(!resting(footing_of_box(true, 0.5)), "sliding");
+        let resting = |footing| matches!(footing, Some(Footing::Loose { resting, .. }) if resting);
+        assert!(resting(footing_of_box(false, 0.0, false)), "asleep");
+        assert!(resting(footing_of_box(true, 0.0, false)), "awake and still");
+        assert!(!resting(footing_of_box(true, 0.5, false)), "sliding");
+    }
+
+    /// A carrier is fixed ground however fast it moves, where a loose body
+    /// as fast is in flight and passed through, and one slower is footing in
+    /// motion.
+    #[test]
+    fn a_carrier_is_fixed_ground_at_any_speed() {
+        for speed in [0.0, 0.5, IN_FLIGHT_SPEED, 2.5, 4.0] {
+            assert_eq!(
+                footing_of_box(true, speed, true),
+                Some(Footing::Fixed),
+                "a carrier at {speed} m/s"
+            );
+        }
+        assert_eq!(footing_of_box(true, 2.5, false), None, "in flight");
+        assert!(matches!(
+            footing_of_box(true, 1.0, false),
+            Some(Footing::Loose { resting: false, .. })
+        ));
     }
 }

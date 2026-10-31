@@ -144,6 +144,7 @@ impl CaptureWorld {
             scenery: &*terrain,
             frame,
             exclude: &[],
+            carriers: &[],
             top: SKY,
             bottom: -SKY,
         };

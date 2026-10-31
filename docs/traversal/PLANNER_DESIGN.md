@@ -735,6 +735,21 @@ pieces in flight are not ground, and are seen again where they slow, which
 keeps a blast's first second to 0.4 ms of sampling a frame (median; 1.6 ms
 at the 99th percentile) instead of 4.
 
+Carriers (`src/traversal/carriers.rs`: moving platforms, which cruise at 2
+to 2.5 m/s) are a stopgap until the planner knows footing that moves. Read
+as loose bodies, a deck straddled both thresholds as it tipped and turned: over 2 m/s the
+casts passed through it and the plan fell through the deck; under, it was
+footing in motion and the plan refused. The strip now always sees a carrier and reads it as
+fixed ground where it stands this frame. While the player rides one, from
+standing on it until standing on other ground, the air between included,
+there is no plan: the body's speed is the world's, which made a body
+standing on a deck plan a walk along the patrol and the legs follow its
+footfalls, splaying them (feet 0.17 m out from the body against 0.12 at rest,
+`character_viewer ride_platform --track`). Untracked, the drive and the legs
+step in the support's frame. Planning on a carrier, boarding one and leaving
+it is a milestone of its own: footing whose place is known over time, its
+footfalls predicted where the deck will be.
+
 **Tracking (E, first version), on by default, F8 toggles it.** The plan system runs
 between the player's input and `CharacterControlSystem`: it plans from the
 player's intent, then rewrites that intent (`tracking.rs`). On the ground

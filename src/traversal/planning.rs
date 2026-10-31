@@ -72,6 +72,9 @@ pub struct PlanningInput<'a> {
     pub scenery: &'a dyn StaticGeometry,
     /// The player's own body, which the casts pass through.
     pub exclude: &'a [RigidBodyHandle],
+    /// Bodies that carry what stands on them, read as fixed ground where
+    /// they stand ([`super::carriers`]).
+    pub carriers: &'a [RigidBodyHandle],
     /// World boxes of terrain that changed since last frame.
     pub terrain_changes: &'a [(Point3<f32>, Point3<f32>)],
     /// The capsule's bottom-sphere centre.
@@ -174,15 +177,23 @@ impl TraversalPlanning {
         world: &'a PhysicsWorld,
         scenery: &'a dyn StaticGeometry,
         exclude: &'a [RigidBodyHandle],
+        carriers: &'a [RigidBodyHandle],
     ) -> PhysicsCaster<'a> {
         PhysicsCaster {
             world,
             scenery,
             frame: *self.cache.frame().expect("a laid path"),
             exclude,
+            carriers,
             top: self.laid_at + self.reach.0,
             bottom: self.laid_at - self.reach.1,
         }
+    }
+
+    /// Forgets the last plan, for a frame the body is not planned for: the
+    /// next plan starts afresh from the feet.
+    pub fn stand_aside(&mut self) {
+        self.previous = None;
     }
 
     /// Plans this frame; `None` while the body stands still.
@@ -203,14 +214,18 @@ impl TraversalPlanning {
             climb: input.velocity.y,
         };
 
-        self.cache
-            .forget_what_moved(input.world, input.exclude, input.terrain_changes);
+        self.cache.forget_what_moved(
+            input.world,
+            input.exclude,
+            input.carriers,
+            input.terrain_changes,
+        );
         self.fetch_scenery_if_needed(input, body.s);
         let view = SceneryView {
             strip: self.scenery.as_ref().expect("fetched"),
             source: input.scenery,
         };
-        let caster = self.caster(input.world, &view, input.exclude);
+        let caster = self.caster(input.world, &view, input.exclude, input.carriers);
         self.sampled_ahead = match (laid_afresh, &self.previous) {
             // A path laid afresh carrying the last plan is sampled to its
             // full reach at once: the plan goes on along it, and planned on

@@ -381,6 +381,8 @@ pub struct BodySweep<'a> {
     /// Fastest a dynamic body's surface may move, in m/s, for it to be an
     /// obstacle: faster, it is passed through.
     fastest: f32,
+    /// Dynamic bodies that are obstacles however fast they move.
+    seen: &'a [RigidBodyHandle],
 }
 
 impl<'a> BodySweep<'a> {
@@ -391,6 +393,7 @@ impl<'a> BodySweep<'a> {
             solid_bodies: false,
             scenery_only: false,
             fastest: f32::INFINITY,
+            seen: &[],
         }
     }
 
@@ -398,6 +401,13 @@ impl<'a> BodySweep<'a> {
     /// passed through: what flies, not what stands.
     pub fn slower_than(mut self, fastest: f32) -> Self {
         self.fastest = fastest;
+        self
+    }
+
+    /// The bodies in `seen` are obstacles however fast they move, past
+    /// [`Self::slower_than`]: what carries, not what flies.
+    pub fn seeing(mut self, seen: &'a [RigidBodyHandle]) -> Self {
+        self.seen = seen;
         self
     }
 
@@ -540,6 +550,7 @@ impl<'a> BodySweep<'a> {
                 && (!self.scenery_only || world.body(*body).is_some_and(|b| b.is_static()))
                 && (self.fastest == f32::INFINITY
                     || world.body(*body).is_some_and(|b| !b.is_dynamic())
+                    || self.seen.contains(body)
                     || world.surface_speed(*body) <= self.fastest)
         });
         near
@@ -748,6 +759,34 @@ mod tests {
         assert!(meets(moving(1.0)), "moving slower than 2 m/s");
         assert!(!meets(moving(3.0)), "in flight");
         assert!(meets(RigidBodyDesc::static_body()), "static");
+    }
+
+    /// A body the sweep is told it sees is met however fast it moves.
+    #[test]
+    fn seeing_meets_a_fast_body() {
+        let sphere = ColliderShape::Sphere { radius: 0.1 };
+        let view = ShapeView {
+            center: Point3::new(0.0, 3.0, 0.0),
+            rotation: nalgebra::UnitQuaternion::identity(),
+            shape: &sphere,
+        };
+        let mut world = world();
+        let deck = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(0.0, 0.5, 0.0))
+                .linear_velocity(Vector3::x() * 3.0),
+        );
+        world.attach_collider(deck, ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5)));
+        let meets = |seen: &[RigidBodyHandle]| {
+            BodySweep::new(&world)
+                .slower_than(2.0)
+                .seeing(seen)
+                .cast_shape(&view, down(3.0), &[])
+                .is_some()
+        };
+
+        assert!(!meets(&[]), "in flight");
+        assert!(meets(&[deck]), "seen");
     }
 
     /// A sphere touching a ball from below passes out of it unseen moving

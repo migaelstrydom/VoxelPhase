@@ -37,7 +37,7 @@ use crate::player::Player;
 use crate::render_perf::GameHarness;
 use crate::systems::{resolve_ground_speed, PhysicsResource};
 use crate::terrain::TerrainWorld;
-use crate::traversal::{PathFrame, PhysicsCaster, TraversalPlanState};
+use crate::traversal::{carriers, PathFrame, PhysicsCaster, TraversalPlanState};
 use crate::water::WaterWorld;
 
 use super::pilot::Pilot;
@@ -395,11 +395,13 @@ fn ride_floor_at(
 ) -> Option<f32> {
     let terrain = world.try_fetch::<TerrainWorld>()?;
     let exclude = [character];
+    let carriers = carriers(&world.read_storage(), &world.read_storage());
     let caster = PhysicsCaster {
         world: physics,
         scenery: &*terrain,
         frame: PathFrame::new(bottom, 0.0),
         exclude: &exclude,
+        carriers: &carriers,
         top: bottom.y + RIDE_CAST_ABOVE,
         bottom: bottom.y - RIDE_CAST_BELOW,
     };

@@ -552,7 +552,9 @@ impl PhysicsWorld {
         match cast.obstacles {
             CastObstacles::Everything => {}
             CastObstacles::Scenery => sweep = sweep.scenery_only(),
-            CastObstacles::Settled { fastest } => sweep = sweep.slower_than(fastest),
+            CastObstacles::Settled { fastest, seen } => {
+                sweep = sweep.slower_than(fastest).seeing(seen)
+            }
         }
         let hit = sweep.cast_shape(&view, cast.direction * cast.length, cast.exclude)?;
         Some(SphereCastHit {

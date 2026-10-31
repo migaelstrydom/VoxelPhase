@@ -12,11 +12,13 @@ use crate::character::{CharacterIntent, CharacterState, LocomotionConfig};
 use crate::components::RigidBodyComponent;
 use crate::debug::{DebugLog, DebugOverlays};
 use crate::input::InputState;
+use crate::platform::MovingPlatform;
 use crate::rendering::Colour;
 use crate::systems::{resolve_ground_speed, PhysicsResource};
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
 
+use super::carriers::{carriers, Riding, StandsOn};
 use super::gait::player_gait;
 use super::legs::{footfall_id, step_id, Legs};
 use super::marker::PlansTraversal;
@@ -58,6 +60,8 @@ pub struct TraversalPlanState {
     /// to land: they land it where the plan stands it, not on its next
     /// footfall.
     pub landing_late: Option<Limb>,
+    /// Whether the player rides a carrier, which the plan stands aside for.
+    pub riding: Riding,
 }
 
 impl Default for TraversalPlanState {
@@ -68,6 +72,7 @@ impl Default for TraversalPlanState {
             overlay: false,
             tracking: true,
             landing_late: None,
+            riding: Riding::default(),
         }
     }
 }
@@ -83,12 +88,17 @@ impl Default for TraversalPlanState {
 /// plan's speed, steered by the stick (along the path where it slides on a
 /// wall), and taking off where it hops. The stick sets a refused plan's
 /// pace. A jump the player presses still jumps.
+///
+/// While the player rides a carrier ([`Riding`]) there is no plan: the
+/// planner's ground holds still, and the drive and the legs step in the
+/// carrier's frame on their own.
 pub struct TraversalPlanSystem;
 
 impl<'a> System<'a> for TraversalPlanSystem {
     type SystemData = (
         ReadStorage<'a, PlansTraversal>,
         ReadStorage<'a, RigidBodyComponent>,
+        ReadStorage<'a, MovingPlatform>,
         WriteStorage<'a, CharacterIntent>,
         ReadStorage<'a, CharacterState>,
         ReadStorage<'a, LocomotionConfig>,
@@ -107,6 +117,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
         (
             planned,
             bodies,
+            platforms,
             mut intents,
             states,
             configs,
@@ -153,6 +164,19 @@ impl<'a> System<'a> for TraversalPlanSystem {
         let Some(rigid) = physics.world.body(body) else {
             return;
         };
+        let carriers = carriers(&platforms, &bodies);
+        if state
+            .riding
+            .update(StandsOn::of(&physics.world, body, &carriers))
+        {
+            if let Some(planning) = state.planning.as_mut() {
+                planning.stand_aside();
+            }
+            log.add("Traversal/Plan", "stands aside: riding a carrier");
+            state.last = None;
+            state.landing_late = None;
+            return;
+        }
 
         let planning = state.planning.get_or_insert_with(|| {
             TraversalPlanning::new(
@@ -183,6 +207,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
             world: &physics.world,
             scenery: &*terrain,
             exclude: &exclude,
+            carriers: &carriers,
             terrain_changes: &changes,
             position,
             velocity,

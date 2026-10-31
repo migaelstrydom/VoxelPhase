@@ -1,7 +1,9 @@
 //! The game's side of traversal planning: the physics world read into the
 //! planner's path coordinates (`crates/traversal_planner`), planned over
-//! frame by frame for the player, drawn and captured.
+//! frame by frame for the player, drawn and captured. The plan stands aside
+//! while the player rides a carrier (a moving platform).
 
+mod carriers;
 mod gait;
 mod legs;
 mod marker;
@@ -15,6 +17,7 @@ mod system;
 mod tracking;
 mod wall_slide;
 
+pub use carriers::{carriers, Riding, StandsOn};
 pub use gait::player_gait;
 pub use legs::Legs;
 pub use marker::PlansTraversal;
