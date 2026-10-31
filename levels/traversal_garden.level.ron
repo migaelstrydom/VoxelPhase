@@ -15,6 +15,7 @@
 //   z  58               a 0.7 m ledge: a wall with a top to mantle onto
 //   z  66               a cave lip: a roof 0.9 m up between two walls
 //   z  74 82            light crates in a row, evenly and unevenly spaced
+//   z  90               a ferry: a moving platform shuttling between two decks
 //
 // A plank bridge lays its planks out from a hash of its position, so the one
 // at z = 10 stands where the Test Arena's does, (8, 0, 10), turned to run
@@ -23,6 +24,8 @@
 // planks (0.56 m), so the lane is flush from deck to bridge to deck. The
 // crate runs lie the same way, from x = 3.3, their decks level with the
 // crate tops (0.6 m); the crates are loose, and shove under a running foot.
+// The ferry's deck is level with its decks too (0.6 m), and shuttles at
+// 2 m/s from x = 3..7 to x = 11..15, 0.1 m short of each deck's edge.
 //
 // Fine voxels, so a 3 cm lip is a lip and not a ramp. The player's capsule is
 // 1 m tall and 0.5 m across.
@@ -35,7 +38,7 @@ Level(
 
             terrain: Terrain(
                 voxel_size: 0.25,
-                bounds: (min: (-16.0, -8.0, -16.0), max: (40.0, 16.0, 88.0)),
+                bounds: (min: (-16.0, -8.0, -16.0), max: (40.0, 16.0, 96.0)),
                 base_height: 0.0,
                 material_layers: [
                     (depth: 1.0,  material: Grass),
@@ -146,6 +149,10 @@ Level(
                     Platform(center: (24.550, 0.6, 74.0), half_extents: (10.450, 2.0), thickness: 1.0),
                     Platform(center: (-3.15, 0.6, 82.0), half_extents: (5.85, 2.0), thickness: 1.0),
                     Platform(center: (24.775, 0.6, 82.0), half_extents: (10.225, 2.0), thickness: 1.0),
+
+                    // Decks either side of the ferry, level with its deck.
+                    Platform(center: (-3.05, 0.6, 90.0), half_extents: (5.95, 2.0), thickness: 1.0),
+                    Platform(center: (25.05, 0.6, 90.0), half_extents: (9.95, 2.0), thickness: 1.0),
                 ],
             ),
 
@@ -179,6 +186,15 @@ Level(
                 Crate(pos: (12.00, 0.3, 82.0), size: 0.3),
                 Crate(pos: (13.15, 0.3, 82.0), size: 0.3),
                 Crate(pos: (13.95, 0.3, 82.0), size: 0.3),
+
+                // The ferry, its deck 0.2 m thick with its top at 0.6 m.
+                MovingPlatform(
+                    waypoints: [
+                        (5.0, 0.4, 90.0),
+                        (13.0, 0.4, 90.0),
+                    ],
+                    speed: 2.0,
+                ),
             ],
         ),
     ],

@@ -744,8 +744,9 @@ fixed ground where it stands this frame. While the player rides one, from
 standing on it until standing on other ground, the air between included,
 there is no plan: the body's speed is the world's, which made a body
 standing on a deck plan a walk along the patrol and the legs follow its
-footfalls, splaying them (feet 0.17 m out from the body against 0.12 at rest,
-`character_viewer ride_platform --track`). Untracked, the drive and the legs
+footfalls, splaying them (riding the Traversal Garden's ferry, the feet
+0.25 m out from the body on average against 0.12 with the plan aside,
+`character_viewer ride_ferry --track`). Untracked, the drive and the legs
 step in the support's frame. Planning on a carrier, boarding one and leaving
 it is a milestone of its own: footing whose place is known over time, its
 footfalls predicted where the deck will be.

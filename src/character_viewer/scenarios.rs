@@ -15,8 +15,8 @@
 //! Traversal Garden's open ground,
 //! `hop_reverse` at its 25 cm step, `drop_reverse` off its 40 cm step, and
 //! `shelf_sprint_off` and `shelf_dither` at the side of its scree's shelf.
-//! And `ride_platform`, in the Test Arena: onto its first moving platform,
-//! which shuttles along z = -18 from x = -4 to -14 at 2 m/s.
+//! And `ride_ferry`, on the Traversal Garden's ferry: a moving platform
+//! shuttling along z = 90 between two decks level with it.
 //!
 //! The traversal scenarios, in the Traversal Garden, are catalogued in
 //! `traversal_scenarios` and appended here, and after them the turning runs,
@@ -37,7 +37,6 @@ const PARK: &str = "levels/water_park.level.ron";
 const ISLAND: &str = "levels/island_sea.level.ron";
 const YARD: &str = "levels/wrecking_yard.level.ron";
 const TRAVERSAL_GARDEN: &str = "levels/traversal_garden.level.ron";
-const TEST_ARENA: &str = "levels/test_arena.level.ron";
 
 /// Facing +x, down the beach into the sea.
 const SEAWARD: f32 = FRAC_PI_2;
@@ -388,17 +387,17 @@ pub fn catalogue() -> Vec<Scenario> {
             judged: Judged::Motion,
         },
         Scenario {
-            name: "ride_platform",
-            summary: "Test Arena: jump onto the first moving platform, ride it, walk across it",
-            level: TEST_ARENA,
-            start: (-1.5, -18.0),
-            yaw: -SEAWARD,
+            name: "ride_ferry",
+            summary: "Traversal Garden: walk onto the ferry, ride it across, walk off",
+            level: TRAVERSAL_GARDEN,
+            start: (2.4, 90.0),
+            yaw: SEAWARD,
             script: Script::new()
-                .then(Beat::stand(0.3))
-                .then(Beat::jump(0.6).towards(-Vector3::x()).named("on"))
-                .then(Beat::stand(3.0).named("ride"))
-                .then(Beat::walk(0.3).towards(Vector3::z()).named("cross"))
-                .then(Beat::stand(2.0).named("ride")),
+                .then(Beat::stand(0.1))
+                .then(Beat::walk(0.4).named("board"))
+                .then(Beat::stand(3.8).named("ride"))
+                .then(Beat::walk(1.2).named("alight"))
+                .then(Beat::stand(1.0)),
             camera: CameraRig::side().with_distance(6.0).with_elevation(20.0),
             judged: Judged::Motion,
         },
