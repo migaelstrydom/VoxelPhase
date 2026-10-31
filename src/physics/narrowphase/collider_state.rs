@@ -39,8 +39,8 @@ impl ColliderState {
 
     /// World-space AABB of this collider, expanded by `margin`.
     ///
-    /// Delegates to [`ShapeView::query_aabb`], which bounds boxes and capsules
-    /// by their actual oriented extents rather than by `bounding_radius`. The
+    /// Delegates to [`ShapeView::query_aabb`], which bounds boxes, capsules and
+    /// hulls by their actual oriented extents rather than by `bounding_radius`. The
     /// distinction matters for elongated shapes: a 2.0 x 0.12 x 0.12 slab has a
     /// bounding radius of ~1.0, so a radius-derived box is some two orders of
     /// magnitude larger in volume than the shape it stands for, and the
@@ -167,6 +167,28 @@ mod tests {
         let bounds = slab().bounds(0.02);
         assert!((bounds.max.y - 0.08).abs() < 1e-5);
         assert!((bounds.min.y + 0.08).abs() < 1e-5);
+    }
+
+    /// A temple column: a tall, thin hull standing off its own origin must be
+    /// bounded by its box, not by an 8 m cube round its bounding radius.
+    #[test]
+    fn hull_bounds_are_oriented_not_spherical() {
+        let column = crate::collision::convex_hull::prism_hull(20, 0.7, 4.0)
+            .translated(Vector3::new(0.0, 4.0, 0.0));
+        let state = ColliderState {
+            shape: ColliderShape::ConvexHull {
+                hull: std::sync::Arc::new(column),
+            },
+            ..slab()
+        };
+        let bounds = state.bounds(0.0);
+        assert!((bounds.min.y - 0.0).abs() < 1e-5, "{bounds:?}");
+        assert!((bounds.max.y - 8.0).abs() < 1e-5, "{bounds:?}");
+        assert!(
+            bounds.max.x <= 0.7 + 1e-5 && bounds.min.x >= -0.7 - 1e-5,
+            "{bounds:?}"
+        );
+        assert!(bounds.max.x < state.shape.bounding_radius());
     }
 
     /// Rotating a slab 90 degrees about Z swaps which axis is long.

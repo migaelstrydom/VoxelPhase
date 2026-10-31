@@ -53,11 +53,14 @@ impl ShapeView<'_> {
                 AABB::new(aabb_min - margin_vec, aabb_max + margin_vec)
             }
             ColliderShape::ConvexHull { hull } => {
-                let r = hull.bounding_radius + margin;
-                AABB::new(
-                    Point3::new(self.center.x - r, self.center.y - r, self.center.z - r),
-                    Point3::new(self.center.x + r, self.center.y + r, self.center.z + r),
-                )
+                let obb = Obb::new(
+                    self.center + self.rotation * hull.box_center,
+                    self.rotation,
+                    hull.box_half_extents,
+                );
+                let (aabb_min, aabb_max) = obb.enclosing_aabb();
+                let margin_vec = Vector3::new(margin, margin, margin);
+                AABB::new(aabb_min - margin_vec, aabb_max + margin_vec)
             }
         }
     }

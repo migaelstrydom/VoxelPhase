@@ -58,6 +58,12 @@ pub struct ConvexHull {
     pub edges: Vec<HullEdgeAdj>,
     /// Precomputed bounding radius (max vertex distance from origin).
     pub bounding_radius: f32,
+    /// Centre of the smallest box, in hull space, that holds every vertex.
+    pub box_center: Vector3<f32>,
+    /// Half-extents of that box. A tall, thin hull is bounded by it far more
+    /// tightly than by its bounding radius: a column 8 m tall and 0.7 m
+    /// across is an 8 m cube by radius.
+    pub box_half_extents: Vector3<f32>,
 }
 
 impl ConvexHull {
@@ -104,6 +110,8 @@ impl ConvexHull {
             faces: canonical_faces,
             edges,
             bounding_radius,
+            box_center: (min_v + max_v) / 2.0,
+            box_half_extents: extent / 2.0,
         }
     }
 
@@ -223,6 +231,8 @@ impl ConvexHull {
                 })
                 .collect(),
             bounding_radius: self.bounding_radius * factor,
+            box_center: self.box_center * factor,
+            box_half_extents: self.box_half_extents * factor,
         }
     }
 
