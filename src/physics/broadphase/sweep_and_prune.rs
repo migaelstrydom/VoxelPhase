@@ -25,9 +25,13 @@ impl SweepAndPrune {
 
     /// Append every overlapping pair of `bounds` to `pairs` as index pairs.
     ///
-    /// Each unordered pair appears at most once. The order within a pair
-    /// follows the sweep, not the caller's indexing, and carries no meaning —
-    /// callers that need a canonical A/B side must impose it themselves.
+    /// Each unordered pair appears once, as (lower index, higher index), and
+    /// the pairs come in ascending order. What overlaps decides the output,
+    /// never where anything else is: the sweep's order does depend on every
+    /// bound (its axis is the widest spread, and a stack of boxes ties on the
+    /// other two), and a solver given a stack's contacts in another order
+    /// settles it differently. A heavy box on a column of crates fell over
+    /// when something across the level changed shape.
     ///
     /// `is_mobile` reports whether an entry can move over the interval the
     /// bounds describe. A pair in which neither side can move cannot produce a
@@ -44,6 +48,7 @@ impl SweepAndPrune {
         if bounds.is_empty() {
             return;
         }
+        let first_new = pairs.len();
 
         let axis = pick_sweep_axis(bounds);
 
@@ -69,10 +74,11 @@ impl SweepAndPrune {
                 }
 
                 if bounds[i].intersects(&bounds[j]) {
-                    pairs.push((i, j));
+                    pairs.push((i.min(j), i.max(j)));
                 }
             }
         }
+        pairs[first_new..].sort_unstable();
     }
 }
 
@@ -121,13 +127,39 @@ mod tests {
     fn pairs_of(bounds: &[AABB]) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
         SweepAndPrune::new().pairs_into(bounds, all_mobile, &mut out);
-        for pair in out.iter_mut() {
-            if pair.0 > pair.1 {
-                *pair = (pair.1, pair.0);
-            }
-        }
-        out.sort_unstable();
         out
+    }
+
+    /// A column of boxes ties on the two axes it isn't stacked along, so the
+    /// sweep orders it by whatever else is in the world. Its pairs must come
+    /// out the same, sides and order, however much else there is and wherever
+    /// it lies. Enough else that the sort is not a small, stable one.
+    #[test]
+    fn a_stack_pairs_the_same_whatever_else_there_is() {
+        let column: Vec<AABB> = (0..8)
+            .map(|i| cube(Point3::new(0.0, i as f32 * 0.99, 0.0), 0.5))
+            .collect();
+        let alone = pairs_of(&column);
+        assert_eq!(alone.len(), 7, "the column's neighbours should pair");
+        for scatter in [16, 64, 200] {
+            let mut world = column.clone();
+            world.extend((0..scatter).map(|k| {
+                let k = k as f32;
+                cube(
+                    Point3::new(
+                        20.0 + (k * 7.3) % 90.0,
+                        (k * 3.1) % 5.0,
+                        (k * 11.7) % 70.0 - 35.0,
+                    ),
+                    0.5,
+                )
+            }));
+            let column_pairs: Vec<(usize, usize)> = pairs_of(&world)
+                .into_iter()
+                .filter(|&(a, b)| a < column.len() && b < column.len())
+                .collect();
+            assert_eq!(column_pairs, alone, "with {scatter} boxes elsewhere");
+        }
     }
 
     #[test]
