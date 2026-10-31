@@ -10,7 +10,7 @@ use winit::keyboard::KeyCode;
 use crate::animation::{CharacterAnimator, FootSide, PlannedStep, PlannedSteps};
 use crate::character::{CharacterIntent, CharacterState, LocomotionConfig};
 use crate::components::RigidBodyComponent;
-use crate::debug::{DebugLines, DebugLog, DebugOverlays};
+use crate::debug::{DebugLog, DebugOverlays};
 use crate::input::InputState;
 use crate::rendering::Colour;
 use crate::systems::{resolve_ground_speed, PhysicsResource};
@@ -30,8 +30,6 @@ const OVERLAY_KEY: KeyCode = KeyCode::F6;
 const CAPTURE_KEY: KeyCode = KeyCode::F7;
 /// Key that turns the plan driving the body on and off.
 const TRACK_KEY: KeyCode = KeyCode::F8;
-/// The on-screen line saying, while tracking, what sets the body's pace.
-const TRACK_LINE: &str = "Traversal track";
 /// Where captures are written, relative to the working directory.
 const CAPTURE_DIR: &str = "scratch/captures";
 /// Spacing along the path at which the body's planned path is drawn, in
@@ -102,7 +100,6 @@ impl<'a> System<'a> for TraversalPlanSystem {
         Write<'a, TraversalPlanState>,
         Write<'a, DebugOverlays>,
         Write<'a, DebugLog>,
-        Write<'a, DebugLines>,
     );
 
     fn run(
@@ -121,7 +118,6 @@ impl<'a> System<'a> for TraversalPlanSystem {
             mut state,
             mut overlays,
             mut log,
-            mut lines,
         ): Self::SystemData,
     ) {
         if input.is_key_just_pressed(OVERLAY_KEY) {
@@ -250,22 +246,6 @@ impl<'a> System<'a> for TraversalPlanSystem {
                 };
                 intent.direction = steer * share;
                 intent.takeoff = tracked.takeoff;
-                lines.add(
-                    TRACK_LINE,
-                    format!(
-                        "{}{}",
-                        match tracked.pace {
-                            Pace::Asked => format!("as asked, {target_speed:.1} m/s"),
-                            Pace::Planned(speed) =>
-                                format!("plan {speed:.1} of {target_speed:.1} m/s"),
-                        },
-                        if tracked.takeoff.is_some() {
-                            ", hop"
-                        } else {
-                            ""
-                        }
-                    ),
-                );
             }
             if input.is_key_just_pressed(CAPTURE_KEY) {
                 let scene = scene_of(frame, planning.params(), target_speed);
