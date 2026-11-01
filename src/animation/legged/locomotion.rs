@@ -42,6 +42,15 @@ use super::pelvis_drop::PelvisDrop;
 /// world within a few frames.
 const SUPPORT_MEMORY: f32 = 0.15;
 
+/// How far from its hip a foot probe may be aimed, in metres.
+///
+/// Every point the legs aim at lies within a few metres of the hip: a
+/// stride, a leap's landing, a drop the traversal strip sees. An aim further
+/// off is a foot the body has left behind, such as an anchor a long fall has
+/// carried the body away from, and a probe sized to reach it would ask the
+/// terrain for a region the length of the fall.
+const MAX_AIM_DISTANCE: f32 = 20.0;
+
 /// Per-frame inputs to [`LeggedLocomotion::tick`].
 ///
 /// `velocity` is expected support-relative — call
@@ -266,7 +275,8 @@ impl LeggedLocomotion {
     }
 
     /// A ray from the hip through the aim point, falling back to straight
-    /// down when the aim point is degenerate (at the hip itself).
+    /// down, `probe_length` long, when the aim point is degenerate (at the
+    /// hip itself) or further than [`MAX_AIM_DISTANCE`] from it.
     ///
     /// A probe must always outreach the point it is aimed at. The placer
     /// reads "no ground under the landing target" as "that target is
@@ -279,18 +289,27 @@ impl LeggedLocomotion {
     /// falls away below it.
     fn foot_probe(&self, tag: u32, hip: Point3<f32>, aim: Point3<f32>) -> Probe {
         let to_aim = aim - hip;
-        let direction = to_aim
+        let distance = to_aim.magnitude();
+        let aimed = to_aim
             .try_normalize(1e-4)
-            .unwrap_or_else(|| Vector3::new(0.0, -1.0, 0.0));
+            .filter(|_| distance <= MAX_AIM_DISTANCE);
 
-        Probe {
-            tag,
-            origin: hip,
-            direction,
-            length: self
-                .dims
-                .probe_length
-                .max(to_aim.magnitude() + self.dims.standing_height),
+        match aimed {
+            Some(direction) => Probe {
+                tag,
+                origin: hip,
+                direction,
+                length: self
+                    .dims
+                    .probe_length
+                    .max(distance + self.dims.standing_height),
+            },
+            None => Probe {
+                tag,
+                origin: hip,
+                direction: -Vector3::y(),
+                length: self.dims.probe_length,
+            },
         }
     }
 
@@ -504,5 +523,30 @@ mod tests {
             "a probe aimed 4m out must reach past it, got {}",
             probe.length
         );
+    }
+
+    /// A foot left 400 m above a falling body, the case that asked the
+    /// terrain for a region the height of the fall, is no aim: the probe
+    /// looks straight down from the hip for its usual length.
+    #[test]
+    fn an_aim_left_far_behind_is_probed_straight_down() {
+        let dims = dims();
+        let legs = LeggedLocomotion::new(
+            dims,
+            FootPlacerConfig::default(),
+            Point3::origin(),
+            0.5,
+            0.0,
+        );
+        let hip = Point3::new(27.0, -410.0, 57.0);
+        let left_behind = Point3::new(29.4, -1.4, 29.2);
+
+        let probe = legs.foot_probe(0, hip, left_behind);
+        assert_eq!(probe.direction, -Vector3::y());
+        assert_eq!(probe.length, dims.probe_length);
+
+        let within = Point3::new(27.0, -410.0, 57.0 + 0.9 * MAX_AIM_DISTANCE);
+        let probe = legs.foot_probe(0, hip, within);
+        assert!(probe.length > 0.9 * MAX_AIM_DISTANCE);
     }
 }
