@@ -7,6 +7,7 @@
 use nalgebra::{Point3, Vector2, Vector3};
 
 use super::config::FootPlacerConfig;
+use super::mode::{FlightLanding, LegMode};
 use super::placer::{angle_diff, facing_from_yaw, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
 use super::planned::PlannedSteps;
 
@@ -317,7 +318,12 @@ pub fn simulate_planned(
         let (left_ground, left_ground_normal) = probe(placer.left.probe_anchor());
         let (right_ground, right_ground_normal) = probe(placer.right.probe_anchor());
 
-        placer.set_suspended(suspend(f));
+        let planned = planned(f, pelvis, velocity);
+        placer.set_mode(if suspend(f) {
+            flight_mode(&planned)
+        } else {
+            LegMode::Step
+        });
 
         let ctx = PlacerCtx {
             dt,
@@ -338,7 +344,7 @@ pub fn simulate_planned(
             right_ground_normal,
             left_ground,
             right_ground,
-            planned: planned(f, pelvis, velocity),
+            planned,
             config: &cfg,
         };
         placer.tick(&ctx);
@@ -384,4 +390,21 @@ pub fn takeoffs(frames: &[Frame]) -> Vec<(FootSide, usize)> {
         }
     }
     events
+}
+
+/// The legs' mode a suspended frame is in: a flight onto the planned step
+/// that lands one, as a Hop flies onto its landing, or off.
+fn flight_mode(planned: &PlannedSteps) -> LegMode {
+    [FootSide::Left, FootSide::Right]
+        .into_iter()
+        .find_map(|side| {
+            let step = planned.of(side)?;
+            Some(FlightLanding {
+                side,
+                at: step.at,
+                in_seconds: step.landing?,
+                footfall: step.id,
+            })
+        })
+        .map_or(LegMode::Off, |landing| LegMode::Fly(Some(landing)))
 }

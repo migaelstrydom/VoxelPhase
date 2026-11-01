@@ -388,7 +388,7 @@ Stages 1 and 2 are landed. The placer owns foot xz for all grounded states; the 
 
 **Integration (`src/animation/animator.rs`):**
 - `update()` flow: `process_contacts` → compute `next_pose` → `tick_foot_placer(next_pose)` → `mirror_placer_into_state` → sample pose/upper with placer output already baked into `AnimationState.left/right.position` → blend crossfades → apply to skeleton.
-- `FootPlacer::set_suspended(true)` while `next_pose` is `Launching` / `Airborne`. On the resume edge (`true → false`) the next tick calls `replant_at_stance`, snapping both feet to neutral stance under the current pelvis. Without this, airborne→grounded resumes from pre-takeoff foot positions.
+- `FootPlacer::set_mode(LegMode)`, mapped from the locomotion state (`docs/LOCOMOTION_STATES.md`): `Step` on foot, `Fly` in a planned Hop, `Off` in a jump, a fall or the water. Back from `Off`, feet still within the leg's stretch of the hip are kept and the others planted at stance under the current pelvis; down from `Fly`, the flown feet land as they are.
 - `stride_gain` comes from `gait_preset_for(next_pose)`; airborne-adjacent states fall back to the walk preset (placer is suspended there anyway).
 
 **Debug overlay (`src/animation/systems.rs::draw_foot_placer_overlay`):**

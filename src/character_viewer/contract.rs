@@ -10,9 +10,9 @@
 //!                                                        no bend, no lost climb
 //!   ride     the garden's lips and plank bridges      ─▶ the capsule's height against
 //!                                                        the floor a cast finds under it
-//!   face     short faces of 20..38° met at walk and   ─▶ the speed kept along the face,
-//!            run, up to a shelf                          and the rise off its brow cut
-//!                                                        after BodyDims::rise_held; the
+//!   face     short faces of 20..38° met at walk and   ─▶ the speed kept along the face;
+//!            run, up to a shelf; the brow rolled off     the rise off its brow cut
+//!            with the plan driving                       after BodyDims::rise_held; the
 //!                                                        time lost, charged at least
 //!   hop      a planned hop on flat ground at walk     ─▶ the time it loses, charged at
 //!            and run, climbing 1.5 and 3 m/s             least by costs.flight, airborne
@@ -541,7 +541,7 @@ fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<Con
             continue;
         }
         rolling = false;
-        if !frame.grounded || frame.locomotion != "grounded" || floor - behind > greatest_rise {
+        if !frame.grounded || frame.locomotion != "on_foot" || floor - behind > greatest_rise {
             continue;
         }
         above = above.max(frame.bottom - floor);
@@ -561,7 +561,8 @@ fn ride(config: &RunConfig, params: &GaitParams, name: &str) -> EngineResult<Con
 /// A face lane at `gait`: the speed across the ground the body keeps meeting
 /// the face, against its share along the face's slope (`landed_speed` in the
 /// planner: `v·cos²θ`), and how far it rises after leaving the brow, against
-/// its climb there held for `BodyDims::rise_held` and then cut. And how
+/// its climb there held for `BodyDims::rise_held` and then cut, with the plan
+/// driving, which rolls it off as a Hop. And how
 /// much later than on flat ground (`flat`) it crosses a line past the brow,
 /// against what the planner charges for the speed the face takes.
 fn face(
@@ -575,34 +576,46 @@ fn face(
     let script = Script::new()
         .then(Beat::stand(0.3))
         .then(gait.beat(FACE_RUN));
-    let frames = run(&lane("face", lane_z, script), config)?.frames;
+    let frames = run(&lane("face", lane_z, script.clone()), config)?.frames;
     let missing = || EngineError::InvalidState(format!("face {angle}° {}: no", gait.name()));
     let before = frames
         .iter()
         .rev()
         .find(|frame| frame.body.x < FACE_X - 0.5 && frame.grounded)
         .ok_or_else(missing)?;
-    let met_at = frames
-        .iter()
-        .position(|frame| frame.body.x > FACE_X - 0.5 && frame.velocity.y > 0.1 * before.velocity.x)
-        .ok_or_else(missing)?;
-    let met = &frames[met_at];
+    let meets = |frames: &[FrameRecord]| {
+        frames
+            .iter()
+            .position(|frame| {
+                frame.body.x > FACE_X - 0.5 && frame.velocity.y > 0.1 * before.velocity.x
+            })
+            .ok_or_else(missing)
+    };
+    let met = &frames[meets(&frames)?];
     let cos = angle.to_radians().cos();
     let claimed = before.velocity.x * cos * cos;
+    // Off the brow the plan drives, as it does in game: it rolls the body
+    // off, and the rise it keeps is the roll-off's.
+    let tracked = RunConfig {
+        track: true,
+        ..*config
+    };
+    let rolled = run(&lane("face_brow", lane_z, script), &tracked)?.frames;
+    let met_at = meets(&rolled)?;
     let left_at = met_at
-        + frames[met_at..]
+        + rolled[met_at..]
             .iter()
             .position(|frame| !frame.grounded)
             .ok_or_else(missing)?;
-    let left = &frames[left_at];
-    let peak = frames[left_at..]
+    let left = &rolled[left_at];
+    let peak = rolled[left_at..]
         .iter()
         .take_while(|frame| frame.velocity.y > -1.0)
         .map(|frame| frame.bottom)
         .fold(left.bottom, f32::max);
     // Contact was lost on average half a frame before the first frame that
     // reports it: that much of the held rise is already spent there.
-    let frame_time = left.time - frames[left_at - 1].time;
+    let frame_time = left.time - rolled[left_at - 1].time;
     let held = params.body.rise_held - 0.5 * frame_time;
     let (climb, gravity) = (left.velocity.y, params.gravity);
     let claimed_rise = if climb - gravity * held > 0.0 {

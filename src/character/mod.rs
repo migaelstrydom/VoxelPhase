@@ -22,14 +22,12 @@ mod grounding;
 mod grounding_system;
 mod immersion;
 mod immersion_system;
+pub mod locomotion;
 mod swim;
 mod throws;
 
 pub use attitude::{approach, AttitudeControl};
-pub use components::{
-    AirSteering, ArmState, CharacterIntent, CharacterState, LaunchKind, LocomotionInput,
-    LocomotionOutcome, LocomotionState, MovementRule, PlannedTakeoff, RuleSpeeds, Timer,
-};
+pub use components::{ArmState, CharacterIntent, CharacterState};
 pub use config::LocomotionConfig;
 pub use facing::facing_from_rotation;
 pub use forgiveness::GroundForgiveness;
@@ -37,5 +35,9 @@ pub use grounding::Grounding;
 pub use grounding_system::ContactGroundingSystem;
 pub use immersion::{Immersion, WaterAtBody};
 pub use immersion_system::ImmersionSystem;
+pub use locomotion::{
+    AirSteering, Conditioning, EntryEffects, Facts, Foot, LocomotionInput, LocomotionState,
+    MovementRule, PlannedLanding, PlannedTakeoff, Requests, RuleSpeeds,
+};
 pub use swim::SwimConfig;
 pub use throws::{ThrowStroke, ThrowingHand, Throws};

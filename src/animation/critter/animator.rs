@@ -16,7 +16,7 @@ use nalgebra::{Point3, Vector3};
 use specs::{Component, VecStorage};
 
 use crate::animation::rig::right_vector;
-use crate::animation::{FootSide, LeggedLocomotion, LocomotionCtx};
+use crate::animation::{FootSide, LegMode, LeggedLocomotion, LocomotionCtx};
 use crate::character::{CharacterIntent, Grounding};
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
@@ -90,11 +90,7 @@ impl CritterAnimator {
     /// suspended it has no anchors to offer, so they aim at the feet
     /// currently being drawn.
     pub fn configure_probes(&self, pelvis: Point3<f32>, yaw: f32) -> Vec<Probe> {
-        self.locomotion.configure_probes(
-            pelvis,
-            yaw,
-            [self.skeleton.legs[0].foot, self.skeleton.legs[1].foot],
-        )
+        self.locomotion.configure_probes(pelvis, yaw)
     }
 
     /// Advance one frame.
@@ -124,7 +120,11 @@ impl CritterAnimator {
             velocity,
             support_velocity,
             intent_direction: intent.direction,
-            airborne,
+            mode: if airborne {
+                LegMode::Off
+            } else {
+                LegMode::Step
+            },
             step_height: self.config.step_height,
             stride_gain: self.config.stride_gain,
             pose_tag: if airborne { "airborne" } else { "grounded" },

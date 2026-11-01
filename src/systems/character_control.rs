@@ -1,7 +1,7 @@
 use crate::character::grab::{self, GrabConfig, ReachFrame};
 use crate::character::{
     approach, facing_from_rotation, ArmState, AttitudeControl, CharacterIntent, CharacterState,
-    Grounding, Immersion, LocomotionConfig, LocomotionInput, LocomotionState, MovementRule,
+    Facts, Grounding, Immersion, LocomotionConfig, LocomotionInput, LocomotionState, MovementRule,
     RuleSpeeds, Throws,
 };
 use crate::components::{Position, RigidBodyComponent, Rotation};
@@ -23,14 +23,9 @@ use specs::{Join, LendJoin, Read, ReadExpect, ReadStorage, System, Write, WriteS
 /// them go through exactly the same FSM, coyote time, jump buffering and
 /// grabbing. Whoever fills the intent decides the behaviour.
 ///
-/// Locomotion FSM:
-///   Grounded ──(jump)──────────► Launching ──(!is_grounded)──► Airborne
-///   Grounded ──(!is_grounded)──► CoyoteTime ──(timer expired)──► Airborne
-///   CoyoteTime ──(jump)──────────────────────────────────────► Airborne
-///   CoyoteTime ──(is_grounded)──► Grounded
-///   Airborne ──(is_grounded)────► Grounded
-///   any but Launching ──(too deep to stand)──► Swimming
-///   Swimming ──(shallow, or out of the water)──► Grounded | Airborne
+/// The locomotion state machine is `LocomotionState`'s own: this system
+/// conditions the intent and the contacts into its facts and requests, ticks
+/// it, and applies what entering a state does.
 ///
 /// A swimmer lies over to stroke and stands up to tread or come ashore: the
 /// pitch is eased here and handed to the body's `AttitudeControl`.
@@ -125,67 +120,38 @@ impl<'a> System<'a> for CharacterControlSystem {
             // contact set chatters where a probe's reach did not: a walking
             // capsule leaves the floor between footfalls. The forgiveness
             // window is where that leniency now lives, named and tunable.
-            let support =
-                state
-                    .ground_forgiveness
-                    .observe(grounding, dt, config.ground_forgiveness_window);
+            let support = state.conditioning.support(grounding, dt, config);
             let is_grounded = support.is_grounded;
             let move_dir = target.direction;
             let character_body = rb.0;
 
-            let horizontal_speed = motion.speed_across(&up);
-
-            // Tick all input-grace timers once per frame before use.
-            state.jump_buffer.tick(dt);
-            state.crouch_buffer.tick(dt);
-            state.crouch_lockout.tick(dt);
-            if target.jump {
-                state.jump_buffer.arm(config.jump_buffer_window);
-            }
-            if target.crouch_just_pressed {
-                state.crouch_buffer.arm(config.crouch_buffer_window);
-            }
-
-            // Snapshot "was in a committed maneuver" before the tick overwrites state.
-            let was_committed = state.locomotion.is_committed();
-
             // --- Locomotion state transition ---
-            let outcome = state.locomotion.tick(&LocomotionInput {
+            let requests = state.conditioning.requests(target, dt, config);
+            target.takeoff = None;
+            target.landing = None;
+            let input = LocomotionInput {
                 dt,
-                is_grounded,
-                jump_pressed: state.jump_buffer.active(),
-                horizontal_speed,
-                move_dir,
-                long_jump_armed: state.crouch_buffer.active(),
-                takeoff: target.takeoff.take(),
-                immersion,
-                body_y: pos.0.y,
+                facts: Facts {
+                    grounded: is_grounded,
+                    immersion,
+                    position: Point3::from(pos.0),
+                    velocity: motion.linear,
+                    since_contact: state.conditioning.since_contact(),
+                },
+                requests,
                 config,
-            });
-            state.locomotion = outcome.next_state;
-            if let Some(vy) = outcome.set_vy {
+            };
+            let (next, effects) = state.locomotion.advance(&input);
+            state.locomotion = next;
+            state.conditioning.apply(&effects, config);
+            if let Some(vy) = effects.vertical_speed {
                 drive.jump(vy);
             }
-            if let Some(air) = outcome.set_air_speed {
+            if let Some(air) = effects.air_speed {
                 state.air_speed = air;
             }
-            // Landing from a committed maneuver (long jump) arms the crouch
-            // lockout so a still-held Ctrl doesn't instantly slow the player.
-            if was_committed && matches!(state.locomotion, LocomotionState::Grounded) {
-                state.crouch_lockout.arm(config.long_jump_crouch_lockout);
-            }
-
-            if outcome.consumed_jump {
-                state.jump_buffer.clear();
-                // Leaving the ground on purpose is not a loss of support to
-                // forgive. Left armed, the window would report the takeoff
-                // contact into the air.
-                state.ground_forgiveness.cancel();
-                // Tap-then-land (buffered jump, button already released): apply
-                // cutoff up-front so the hop is short. Skip committed maneuvers.
-                if !target.jump_held && state.locomotion.allows_jump_cutoff() {
-                    drive.cut_rise(config.jump_cutoff_factor);
-                }
+            if effects.cut_rise {
+                drive.cut_rise(config.jump_cutoff_factor);
             }
 
             // Variable-height jump: cut upward velocity on early release. The
@@ -195,9 +161,10 @@ impl<'a> System<'a> for CharacterControlSystem {
                 drive.cut_rise(config.jump_cutoff_factor);
             }
 
-            // Compute ground speed AFTER lockout tick + landing so a long-jump
-            // landing frame already sees crouch suppressed.
-            let ground_speed = resolve_ground_speed(target, config, &state.crouch_lockout);
+            // Ground speed is resolved after entering the state, so a long
+            // jump's landing frame already sees crouch suppressed.
+            let ground_speed =
+                resolve_ground_speed(target, config, state.conditioning.crouch_locked());
 
             // --- Yaw drive (physics body → Rotation, input → angular velocity) ---
             // Read against the pitch the body is being held at: a swimmer's
@@ -246,7 +213,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             // walker on a platform is in that window at every footfall, and
             // aiming him at a world standstill for it drags him off the back
             // a few centimetres at a time.
-            let swimming = matches!(state.locomotion, LocomotionState::Swimming);
+            let swimming = matches!(state.locomotion, LocomotionState::Swim(_));
             let mut rule = state.locomotion.movement_rule(
                 move_dir,
                 &RuleSpeeds {
@@ -269,7 +236,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             // left. `support` has let go by the time a walk-off clamps, so the
             // ground left is asked for by name.
             let left_still_ground =
-                state.ground_forgiveness.departed().surface_velocity.norm() <= STILL_GROUND;
+                state.conditioning.departed().surface_velocity.norm() <= STILL_GROUND;
             apply_movement_rule(drive, rule, left_still_ground);
 
             // --- Attitude: lie over to stroke, stand up to tread or wade ---
@@ -495,9 +462,9 @@ fn draw_grab_debug(
 pub fn resolve_ground_speed(
     target: &CharacterIntent,
     config: &LocomotionConfig,
-    crouch_lockout: &crate::character::Timer,
+    crouch_locked: bool,
 ) -> f32 {
-    let crouch_active = target.crouch && !crouch_lockout.active();
+    let crouch_active = target.crouch && !crouch_locked;
     let mul = if crouch_active {
         config.crouch_speed_mul
     } else if target.sprint {
@@ -574,6 +541,7 @@ fn wrap_angle(angle: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::character::locomotion::{Jump, TakeoffPhase};
     use crate::character::Grounding;
     use crate::components::Orientation;
     use crate::physics::RigidBodyDesc;
@@ -855,7 +823,7 @@ mod tests {
 
         CharacterControlSystem.run_now(&world);
 
-        assert_eq!(locomotion_of(&world, entity), LocomotionState::Grounded);
+        assert_eq!(locomotion_of(&world, entity), LocomotionState::default());
     }
 
     #[test]
@@ -869,22 +837,22 @@ mod tests {
 
         CharacterControlSystem.run_now(&world);
 
-        assert!(matches!(
-            locomotion_of(&world, entity),
-            LocomotionState::CoyoteTime(_)
-        ));
+        assert_eq!(locomotion_of(&world, entity).tag(), "grace");
     }
 
     #[test]
     fn a_jump_spends_no_forgiveness_on_the_way_up() {
         // Leaving on purpose is not a loss of support: the window must not
-        // hold a jump in `Launching`, or report ground once it is airborne.
+        // hold a jump in its launch, or report ground once it is in flight.
         let (world, entity) = character_world(true);
         press_jump(&world, entity);
         CharacterControlSystem.run_now(&world);
         assert!(matches!(
             locomotion_of(&world, entity),
-            LocomotionState::Launching { .. }
+            LocomotionState::Jump(Jump {
+                phase: TakeoffPhase::Launch { .. },
+                ..
+            })
         ));
 
         set_grounding(&world, entity, Grounding::airborne());
@@ -892,7 +860,10 @@ mod tests {
 
         assert!(matches!(
             locomotion_of(&world, entity),
-            LocomotionState::Airborne { .. }
+            LocomotionState::Jump(Jump {
+                phase: TakeoffPhase::Flight,
+                ..
+            })
         ));
     }
 

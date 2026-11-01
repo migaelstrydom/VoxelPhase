@@ -1,15 +1,18 @@
-use nalgebra::Vector3;
+use traversal_planner::plan::Limb;
 use traversal_planner::section::Profile;
-use traversal_planner::{Motion, Phase, Plan};
+use traversal_planner::{GaitParams, Motion, Phase, Plan};
 
-use crate::character::PlannedTakeoff;
+use super::path_frame::PathFrame;
+use crate::character::{Foot, PlannedLanding, PlannedTakeoff};
 
-/// What a plan asks of the body over the next frame: how fast to drive, and
-/// the takeoff to leave with if one falls in it.
+/// What a plan asks of the body over the next frame: how fast to drive, the
+/// takeoff to leave with if one falls in it, and where a flight under way
+/// comes down.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Tracking {
     pub pace: Pace,
     pub takeoff: Option<PlannedTakeoff>,
+    pub landing: Option<PlannedLanding>,
 }
 
 /// How fast a tracked body is driven along the path.
@@ -33,8 +36,9 @@ const SPEEDING_UP: f32 = 1.0e-3;
 const PUSHED_CLIMB: f32 = 0.05;
 
 /// Follows `plan`, made from where the body is now, rising at `climb` m/s,
-/// through the frame of `dt` seconds ahead, along the path's horizontal unit
-/// `forward`.
+/// through the frame of `dt` seconds ahead, along `frame`'s path; `reach` is
+/// how far a landing may lie from where the body comes down
+/// ([`landing_reach`]).
 ///
 /// Where the plan is speeding up the stick sets the pace ([`Pace::Asked`]);
 /// elsewhere it is the plan's speed at the frame's end. In flight the stick
@@ -45,34 +49,77 @@ const PUSHED_CLIMB: f32 = 0.05;
 /// steered off the plan's arc is replanned from where it goes. A `refused` plan
 /// knows no way through, so it leaves the body to the drive: the stick sets
 /// the pace and nothing takes off, which is never worse than no plan at all.
-/// A hop is taken off on the frame whose start is nearest its own, half a
-/// frame early at most; a roll-off, which keeps its stance foot, is the body
-/// running off the edge and needs nothing asked, and so is a hop asking no
-/// more climb than the body has: a plan made in the air, or in a bounce off
-/// a landing, starts with the flight the body is already on.
-pub fn track(plan: &Plan, forward: Vector3<f32>, climb: f32, dt: f32, refused: bool) -> Tracking {
+///
+/// A flight is taken off on the frame whose start is nearest its own, half a
+/// frame early at most. A hop asks for the climb it needs over the body's
+/// own; a roll-off, which keeps its stance foot, asks for none, and keeps
+/// its rise for `BodyDims::rise_held`. A hop asking no more climb than the
+/// body has asks for nothing: a plan made in the air, or in a bounce off a
+/// landing, starts with the flight the body is already on. A flight under
+/// way asks for its landing every frame.
+pub fn track(
+    plan: &Plan,
+    frame: &PathFrame,
+    climb: f32,
+    dt: f32,
+    refused: bool,
+    reach: f32,
+) -> Tracking {
     let (now, next) = (speed_at(plan, 0.0), speed_at(plan, dt));
     let pace = if refused || flying_at(plan, 0.0) || next > now + SPEEDING_UP {
         Pace::Asked
     } else {
         Pace::Planned(next)
     };
+    let landing_of = |flight: &Phase| landing(plan, flight, frame, reach);
     let takeoff = plan
         .phases
         .iter()
         .take_while(|phase| !refused && phase.start < 0.5 * dt)
         .find_map(|phase| match phase.motion {
-            // A hop's phase holds no contact; a roll-off's keeps the stance.
-            Motion::Flight { takeoff, .. }
-                if phase.contacts.is_empty() && takeoff.climb > climb + PUSHED_CLIMB =>
-            {
-                Some(PlannedTakeoff {
-                    velocity: forward * takeoff.speed + Vector3::y() * takeoff.climb,
+            Motion::Flight { takeoff, .. } => {
+                // A hop's phase holds no contact; a roll-off's keeps the stance.
+                let rolls_off = !phase.contacts.is_empty();
+                (rolls_off || takeoff.climb > climb + PUSHED_CLIMB).then(|| PlannedTakeoff {
+                    planar: frame.forward() * takeoff.speed,
+                    climb: (!rolls_off).then_some(takeoff.climb),
+                    landing: landing_of(phase),
                 })
             }
-            _ => None,
+            Motion::Grounded { .. } => None,
         });
-    Tracking { pace, takeoff }
+    let landing = phase_at(plan, 0.0)
+        .filter(|phase| !refused && matches!(phase.motion, Motion::Flight { .. }))
+        .and_then(landing_of);
+    Tracking {
+        pace,
+        takeoff,
+        landing,
+    }
+}
+
+/// How far a landing may lie from where the body's centre comes down and
+/// still be stood on, in metres: a leg's reach below the hip, and the hip's
+/// offset from the centre.
+pub fn landing_reach(params: &GaitParams) -> f32 {
+    params.foot.leg_reach + (0.5 * params.body.height - params.foot.hip_height).abs()
+}
+
+/// Where `flight`, a phase of `plan`, comes down: the first footfall after it
+/// starts that lands a flight.
+fn landing(plan: &Plan, flight: &Phase, frame: &PathFrame, reach: f32) -> Option<PlannedLanding> {
+    plan.footfalls()
+        .find(|(time, _)| *time > flight.start && plan.lands_a_flight(*time))
+        .map(|(time, contact)| PlannedLanding {
+            foot: match contact.limb {
+                Limb::LeftFoot => Foot::Left,
+                Limb::RightFoot => Foot::Right,
+            },
+            at: frame.world_point(contact.at),
+            in_seconds: time,
+            footfall: contact.footfall.map(|id| id.0),
+            reach,
+        })
 }
 
 /// How far ahead the floor's grade under the body is read, in metres: a
@@ -123,9 +170,21 @@ mod tests {
     use traversal_planner::section::{Footing, Surface, SurfacePoint};
     use traversal_planner::{BodyState, PathVec};
 
+    use nalgebra::{Point3, Vector3};
+
     use super::*;
 
     const DT: f32 = 1.0 / 60.0;
+    const REACH: f32 = 0.8;
+
+    /// A path along +Z from the origin.
+    fn along_z() -> PathFrame {
+        PathFrame::new(Point3::origin(), 0.0)
+    }
+
+    fn track_z(plan: &Plan, climb: f32, refused: bool) -> Tracking {
+        track(plan, &along_z(), climb, DT, refused, REACH)
+    }
 
     fn stance() -> Contact {
         Contact {
@@ -210,22 +269,16 @@ mod tests {
     #[test]
     fn the_speed_is_the_plans_at_the_end_of_the_frame() {
         let slowing_down = plan(vec![ride(0.0, 1.0, 0.0, (5.0, 3.0))]);
-        let tracked = track(&slowing_down, Vector3::x(), 0.0, DT, false);
+        let tracked = track_z(&slowing_down, 0.0, false);
         let Pace::Planned(speed) = tracked.pace else {
             panic!("{tracked:?}");
         };
         assert!((speed - (5.0 - 2.0 * DT)).abs() < 1.0e-5, "{tracked:?}");
         assert_eq!(tracked.takeoff, None);
         let holding = plan(vec![ride(0.0, 1.0, 0.0, (3.0, 3.0))]);
-        assert_eq!(
-            track(&holding, Vector3::x(), 0.0, DT, false).pace,
-            Pace::Planned(3.0)
-        );
+        assert_eq!(track_z(&holding, 0.0, false).pace, Pace::Planned(3.0));
         let speeding_up = plan(vec![ride(0.0, 1.0, 0.0, (3.0, 5.0))]);
-        assert_eq!(
-            track(&speeding_up, Vector3::x(), 0.0, DT, false).pace,
-            Pace::Asked
-        );
+        assert_eq!(track_z(&speeding_up, 0.0, false).pace, Pace::Asked);
     }
 
     /// In flight the stick sets the pace, though the plan's flight holds
@@ -238,13 +291,13 @@ mod tests {
             flight(0.0, 0.0, false),
             ride(0.3, 1.0, 1.2, (4.0, 2.0)),
         ]);
-        assert_eq!(track(&arc, Vector3::x(), -1.0, DT, false).pace, Pace::Asked);
+        assert_eq!(track_z(&arc, -1.0, false).pace, Pace::Asked);
         let landing = plan(vec![
             flight(-0.29, 0.0, false),
             ride(0.01, 1.0, 1.2, (4.0, 2.0)),
         ]);
         assert_eq!(
-            track(&landing, Vector3::x(), -1.0, DT, false).pace,
+            track_z(&landing, -1.0, false).pace,
             Pace::Asked,
             "the frame it lands in"
         );
@@ -252,38 +305,60 @@ mod tests {
             ride(0.0, 0.01, 0.0, (4.0, 4.0)),
             flight(0.01, 0.04, false),
         ]);
-        assert_eq!(
-            track(&to_a_hop, Vector3::x(), 0.0, DT, false).pace,
-            Pace::Planned(4.0)
-        );
+        assert_eq!(track_z(&to_a_hop, 0.0, false).pace, Pace::Planned(4.0));
     }
 
     #[test]
-    fn a_hop_is_taken_off_on_the_nearest_frame_and_a_roll_off_or_an_arc_under_way_is_not() {
+    fn a_flight_is_taken_off_on_the_nearest_frame_and_an_arc_under_way_is_not() {
         let hop = plan(vec![flight(0.0, 0.0, false)]);
-        let tracked = track(&hop, Vector3::z(), 0.0, DT, false);
         assert_eq!(
-            tracked.takeoff,
+            track_z(&hop, 0.0, false).takeoff,
             Some(PlannedTakeoff {
-                velocity: Vector3::new(0.0, 1.5, 4.0),
+                planar: Vector3::new(0.0, 0.0, 4.0),
+                climb: Some(1.5),
+                landing: None,
             })
         );
 
+        // A roll-off leaves on the climb the body has.
         let roll_off = plan(vec![
             ride(0.0, 0.005, 0.0, (4.0, 4.0)),
             flight(0.005, 0.02, true),
         ]);
-        assert_eq!(track(&roll_off, Vector3::z(), 0.0, DT, false).takeoff, None);
+        let rolled = track_z(&roll_off, 0.0, false).takeoff.expect("a roll-off");
+        assert_eq!(rolled.climb, None);
 
         // Nearer the next frame's start than this one's: taken off then.
         let later = plan(vec![
             ride(0.0, 0.012, 0.0, (4.0, 4.0)),
             flight(0.012, 0.05, false),
         ]);
-        assert_eq!(track(&later, Vector3::z(), 0.0, DT, false).takeoff, None);
+        assert_eq!(track_z(&later, 0.0, false).takeoff, None);
 
         // Already rising as fast as the hop leaves: in the air, or bouncing.
-        assert_eq!(track(&hop, Vector3::z(), 1.5, DT, false).takeoff, None);
+        assert_eq!(track_z(&hop, 1.5, false).takeoff, None);
+    }
+
+    /// A takeoff carries where its flight comes down, and a flight under way
+    /// asks for it every frame; a plan on the ground asks for none.
+    #[test]
+    fn a_flight_names_its_landing() {
+        let hop = plan(vec![
+            flight(0.0, 0.0, false),
+            ride(0.3, 1.0, 1.2, (4.0, 2.0)),
+        ]);
+        let landing = track_z(&hop, 0.0, false)
+            .takeoff
+            .and_then(|takeoff| takeoff.landing)
+            .expect("a landing");
+        assert_eq!(landing.foot, Foot::Left);
+        assert!((landing.in_seconds - 0.3).abs() < 1.0e-6);
+        assert_eq!(landing.at, along_z().world_point(stance().at));
+        assert_eq!(landing.reach, REACH);
+        assert_eq!(track_z(&hop, 1.5, false).landing, Some(landing));
+
+        let walking = plan(vec![ride(0.0, 1.0, 0.0, (4.0, 4.0))]);
+        assert_eq!(track_z(&walking, 0.0, false).landing, None);
     }
 
     /// A refused plan leaves the body to the drive, even at its very end:
@@ -291,15 +366,12 @@ mod tests {
     #[test]
     fn a_refused_plan_leaves_the_body_to_the_drive() {
         let at_the_edge = plan(vec![ride(0.0, 0.01, 0.0, (5.0, 5.0))]);
-        assert_eq!(
-            track(&at_the_edge, Vector3::x(), 0.0, DT, true).pace,
-            Pace::Asked
-        );
+        assert_eq!(track_z(&at_the_edge, 0.0, true).pace, Pace::Asked);
         let hop = plan(vec![
             ride(0.0, 0.005, 0.0, (4.0, 4.0)),
             flight(0.005, 0.02, false),
         ]);
-        assert!(track(&hop, Vector3::z(), 0.0, DT, false).takeoff.is_some());
-        assert_eq!(track(&hop, Vector3::z(), 0.0, DT, true).takeoff, None);
+        assert!(track_z(&hop, 0.0, false).takeoff.is_some());
+        assert_eq!(track_z(&hop, 0.0, true).takeoff, None);
     }
 }

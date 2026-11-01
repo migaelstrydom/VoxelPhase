@@ -25,6 +25,7 @@ use nalgebra::{Point3, Vector2, Vector3};
 use super::capture_point::{capture_point_xz, stance_offset, turn_in_place_offset};
 use super::clock::{GaitClock, ReleaseKind};
 use super::config::FootPlacerConfig;
+use super::mode::{FlightLanding, LegMode};
 use super::planned::{PlannedStep, PlannedSteps, StepId};
 use super::swing::Swing;
 use super::timing::{reach_budget, GaitTiming};
@@ -75,33 +76,6 @@ pub enum FootPhase {
     Planted,
     /// In the air on its swing.
     Stepping(Swing),
-}
-
-/// Where the feet are in a flight. While the body is in the air `tick`
-/// steps nothing: the feet are flown onto the plan's landing, or hang; as
-/// it comes down they land, from the flight or afresh under the body.
-///
-/// ```text
-///   Grounded ──up──► Flying ──no landing to fly to──► Hanging
-///      ▲               │                                 │
-///      │               └──down──► TouchedDown ◄──down────┘
-///      └─────────next tick───────────┘
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Flight {
-    /// On the ground, stepping.
-    Grounded,
-    /// In the air, the feet flown onto the plan's landing: `landing` is the
-    /// foot swinging onto it, once one is.
-    Flying { landing: Option<FootSide> },
-    /// In the air, the feet hanging until touchdown: the flight had no
-    /// landing to fly them to, or gave it up. They are drawn from the hips,
-    /// while the placer still holds them where they left the ground, so
-    /// they do not take up a landing again until the body comes down.
-    Hanging,
-    /// Down again, the feet landing on the next tick: `flew` is the foot
-    /// that swung onto the plan's landing, if one did.
-    TouchedDown { flew: Option<FootSide> },
 }
 
 /// State for one foot.
@@ -280,9 +254,12 @@ pub struct PlacerCtx<'a> {
 pub struct FootPlacer {
     pub left: PlacerFoot,
     pub right: PlacerFoot,
-    /// Where the feet are in a flight: stepping on the ground, flown onto
-    /// the plan's landing or hung through the air, or just come down.
-    flight: Flight,
+    /// What the legs do, as last set ([`Self::set_mode`]).
+    mode: LegMode,
+    /// The mode left since the last tick, which the next tick enters from.
+    entered_from: Option<LegMode>,
+    /// In a flight, the foot swinging onto its landing, once one is.
+    flown: Option<FootSide>,
     /// Shared phase clock. Schedules releases half a cycle apart so the
     /// feet stay phase-locked.
     clock: GaitClock,
@@ -321,7 +298,9 @@ impl FootPlacer {
         Self {
             left: PlacerFoot::new(FootSide::Left, left, facing),
             right: PlacerFoot::new(FootSide::Right, right, facing),
-            flight: Flight::Grounded,
+            mode: LegMode::Step,
+            entered_from: None,
+            flown: None,
             clock: GaitClock::new(),
             since_takeoff: LONG_AGO,
             was_moving: false,
@@ -332,40 +311,35 @@ impl FootPlacer {
         }
     }
 
-    /// Freeze step state. Called while the character is airborne so
-    /// feet don't try to step against a body that isn't on the ground.
-    /// On the resume edge, the next `tick` re-plants feet at neutral
-    /// stance under the current pelvis — resuming from the pre-takeoff
-    /// pose would snap visible feet backward when the pelvis has moved.
-    pub fn set_suspended(&mut self, suspended: bool) {
-        self.flight = match (self.flight, suspended) {
-            (Flight::Grounded | Flight::TouchedDown { .. }, true) => {
-                Flight::Flying { landing: None }
-            }
-            (Flight::Flying { landing }, false) => Flight::TouchedDown { flew: landing },
-            (Flight::Hanging, false) => Flight::TouchedDown { flew: None },
-            (flight, _) => flight,
-        };
+    /// Set what the legs do from the next tick on. A change of mode is
+    /// entered there ([`Self::enter`]), where the frame's context is.
+    pub fn set_mode(&mut self, mode: LegMode) {
+        if !self.mode.same_as(&mode) && self.entered_from.is_none() {
+            self.entered_from = Some(self.mode);
+        }
+        self.mode = mode;
     }
 
-    /// Whether a planted foot is further from its hip than the leg reaches.
-    fn left_behind(&self, ctx: &PlacerCtx<'_>) -> bool {
-        let facing = facing_from_yaw(ctx.yaw);
-        [&self.left, &self.right].into_iter().any(|foot| {
-            foot.is_planted()
-                && (foot.planted_position - hip_position(foot.side, ctx, facing)).norm()
-                    > max_leg_extension(ctx)
-        })
+    /// What the legs do.
+    pub fn mode(&self) -> LegMode {
+        self.mode
     }
 
+    /// Whether the legs are off the gait: flying or off.
     pub fn is_suspended(&self) -> bool {
-        matches!(self.flight, Flight::Flying { .. } | Flight::Hanging)
+        match self.mode {
+            LegMode::Step => false,
+            LegMode::Fly(_) | LegMode::Off => true,
+        }
     }
 
-    /// Whether the feet are being swung through a flight onto a plan's
-    /// landing ([`Self::fly_to_landing`]).
+    /// Whether the feet are being flown onto a flight's landing, rather than
+    /// drawn by the pose: in a flight, with a foot swinging onto it.
     pub fn flies_to_landing(&self) -> bool {
-        matches!(self.flight, Flight::Flying { landing: Some(_) })
+        match self.mode {
+            LegMode::Fly(_) => self.flown.is_some(),
+            LegMode::Step | LegMode::Off => false,
+        }
     }
 
     /// The planted foot the gait clock has released, which lifts next: on
@@ -407,26 +381,20 @@ impl FootPlacer {
     /// into equal substeps no longer than `config.max_substep_dt`, so
     /// plant/lift sequencing cannot alias inside a long display frame.
     pub fn tick(&mut self, ctx: &PlacerCtx<'_>) {
-        match self.flight {
-            Flight::Hanging => {
+        if let Some(from) = self.entered_from.take() {
+            self.enter(from, ctx);
+        }
+        match self.mode {
+            LegMode::Off | LegMode::Fly(None) => {
                 self.relax_feet_toward_body(ctx);
                 return;
             }
-            Flight::Flying { landing } => {
+            LegMode::Fly(Some(landing)) => {
                 self.relax_feet_toward_body(ctx);
-                self.flight = match self.fly_to_landing(ctx, landing) {
-                    Some(landing) => Flight::Flying {
-                        landing: Some(landing),
-                    },
-                    None => Flight::Hanging,
-                };
+                self.fly_to_landing(ctx, landing);
                 return;
             }
-            Flight::Grounded => {}
-            Flight::TouchedDown { flew } => {
-                self.flight = Flight::Grounded;
-                self.touch_down(ctx, flew);
-            }
+            LegMode::Step => {}
         }
 
         self.frame_dt = ctx.dt;
@@ -757,60 +725,94 @@ impl FootPlacer {
         }
     }
 
-    /// Land the feet as the body comes down, `flew` the foot swung onto the
-    /// plan's landing, if one was. `prev_pelvis` is frozen in the air, so it
-    /// still holds the pelvis at takeoff. A short airborne blip
-    /// (terrain-seam contact loss, a tiny hop) leaves the planted feet
-    /// valid — replanting would teleport them and seed a feet-together
-    /// catch-up storm. Only replant when the body travelled beyond what a
-    /// normal step can recover, or left a foot down further from its hip
-    /// than the leg reaches.
-    fn touch_down(&mut self, ctx: &PlacerCtx<'_>, flew: Option<FootSide>) {
-        if let Some(landed) = flew {
-            self.land_from_flight(ctx, landed);
-        } else if planar_distance(ctx.pelvis, self.prev_pelvis) > horizontal_reach_budget(ctx)
-            || self.left_behind(ctx)
-        {
-            self.replant_at_stance(ctx);
-        } else {
-            self.prev_pelvis = ctx.pelvis;
-            self.prev_yaw = ctx.yaw;
-            self.retarget_landing(ctx);
+    /// Take the legs from mode `from` into the mode now set: the one place
+    /// a change of mode keeps or drops what the feet carry across frames.
+    ///
+    /// Down from a flight, the flown feet land as they are. Back from off,
+    /// each foot still within its leg's stretch of its hip, planted or held
+    /// where its swing was, is kept, and the others plant at stance, so a short drop or a creature's grounding flickering moves
+    /// no foot still under the body. Going off drops every footfall the
+    /// feet stand on or swing to: a plan named them, and is gone. The swings
+    /// themselves are kept, frozen, to be judged on the way back.
+    fn enter(&mut self, from: LegMode, ctx: &PlacerCtx<'_>) {
+        match (from, self.mode) {
+            (LegMode::Step, LegMode::Step) => {}
+            (LegMode::Fly(_), LegMode::Step) => match self.flown.take() {
+                Some(landed) => self.land_from_flight(ctx, landed),
+                None => self.land_under_body(ctx),
+            },
+            (LegMode::Off, LegMode::Step) => self.land_under_body(ctx),
+            (_, LegMode::Fly(_)) => self.flown = None,
+            (_, LegMode::Off) => {
+                self.flown = None;
+                for foot in [&mut self.left, &mut self.right] {
+                    foot.stands_on = None;
+                    if let FootPhase::Stepping(swing) = &mut foot.phase {
+                        swing.footfall = None;
+                    }
+                }
+            }
         }
     }
 
-    /// Swing the feet through a flight the plan lands: the foot the plan
-    /// lands it with swings onto the landing footfall as the body comes
-    /// down, where it plants, and the foot it pushed off with trails,
-    /// lifting at takeoff to land on its own next footfall half a step
-    /// later. A flight without such a landing, or with one the body is not
-    /// coming down within a leg's reach of (as when the player steers back
-    /// in the air), is not flown: the legs hang as in any jump. Nor is a
-    /// landing on the foot still down, which stays down. A flight the plan
-    /// stops landing part way flies on to the landing it last had, until the
-    /// foot swinging onto it is due with the landing out of its leg's reach
-    /// (the body fell on past it): with nowhere to land, the legs hang.
-    ///
-    /// `flying` is the foot already swinging onto the landing, if one is;
-    /// returns the one swinging onto it now, or `None` for the legs to hang.
-    fn fly_to_landing(
-        &mut self,
-        ctx: &PlacerCtx<'_>,
-        flying: Option<FootSide>,
-    ) -> Option<FootSide> {
-        let planned = [FootSide::Left, FootSide::Right]
-            .into_iter()
-            .find_map(|side| Some((side, ctx.planned.of(side)?.landing?)));
-        let Some((landing_side, landing)) = planned else {
-            if flying.is_some() {
-                for foot in [&mut self.left, &mut self.right] {
-                    fly_swing(foot, ctx);
-                }
-            }
-            return flying.filter(|&side| self.swings_onto_footfall(side));
+    /// Come down under the body: keep each foot still within its leg's
+    /// stretch of its hip, and plant the others at stance. Where the foot is
+    /// is judged, not its swing's landing, which at speed lies a swing's
+    /// travel ahead.
+    fn land_under_body(&mut self, ctx: &PlacerCtx<'_>) {
+        let facing = facing_from_yaw(ctx.yaw);
+        let reach = max_leg_extension(ctx);
+        let reaches = |foot: &PlacerFoot| {
+            (foot.position - hip_position(foot.side, ctx, facing)).norm() <= reach
         };
-        reachable_step(ctx, landing_side, landing)?;
-        let mut flown = flying;
+        match (reaches(&self.left), reaches(&self.right)) {
+            (true, true) => {
+                self.prev_pelvis = ctx.pelvis;
+                self.prev_yaw = ctx.yaw;
+            }
+            (false, false) => self.replant_at_stance(ctx),
+            (left, _) => {
+                let side = if left {
+                    FootSide::Right
+                } else {
+                    FootSide::Left
+                };
+                let position = foot_position_from_stance(
+                    ctx.pelvis,
+                    facing,
+                    ctx.hip_width,
+                    ctx.foot_y_fallback,
+                    side,
+                );
+                let foot = match side {
+                    FootSide::Left => &mut self.left,
+                    FootSide::Right => &mut self.right,
+                };
+                plant_at_stance(foot, position, None, ctx.yaw, facing);
+                self.prev_pelvis = ctx.pelvis;
+                self.prev_yaw = ctx.yaw;
+            }
+        }
+    }
+
+    /// Swing the feet through a flight onto its `landing`: the landing foot
+    /// swings onto it as the body comes down, where it plants, and the foot
+    /// it pushed off with trails, lifting at takeoff to land on its own next
+    /// planned footfall half a step later. A landing on the foot still down
+    /// stays down. A landing the body is not coming down within a leg's
+    /// reach of (as when the player steers back in the air) is not flown to
+    /// while it is not: no foot is flown, and the pose draws the legs.
+    fn fly_to_landing(&mut self, ctx: &PlacerCtx<'_>, landing: FlightLanding) {
+        let landing_step = PlannedStep {
+            id: landing.footfall,
+            at: landing.at,
+            landing: Some(landing.in_seconds),
+        };
+        if !reachable(ctx, &landing_step, landing.in_seconds) {
+            self.flown = None;
+            return;
+        }
+        let mut flown = self.flown;
         let speed = Vector2::new(ctx.velocity.x, ctx.velocity.z).magnitude();
         let timing = GaitTiming::derive(
             speed,
@@ -820,19 +822,25 @@ impl FootPlacer {
             horizontal_reach_budget(ctx),
             ctx.config,
         );
-        let trail =
-            landing + (0.25 * timing.cycle_distance / speed.max(1.0e-3)).min(timing.swing_duration);
+        let trail = landing.in_seconds
+            + (0.25 * timing.cycle_distance / speed.max(1.0e-3)).min(timing.swing_duration);
         for foot in [&mut self.left, &mut self.right] {
-            let Some(step) = ctx.planned.of(foot.side) else {
+            let lands_here = foot.side == landing.side;
+            let step = if lands_here {
+                Some(landing_step)
+            } else {
+                ctx.planned.of(foot.side)
+            };
+            let Some(step) = step else {
                 continue;
             };
-            let lands_in = if foot.side == landing_side {
-                landing
+            let lands_in = if lands_here {
+                landing.in_seconds
             } else {
                 trail
             };
             if foot.is_planted() {
-                if foot.side == landing_side {
+                if lands_here {
                     continue;
                 }
                 let facing = facing_from_yaw(ctx.yaw);
@@ -854,7 +862,7 @@ impl FootPlacer {
             let FootPhase::Stepping(ref mut swing) = foot.phase else {
                 continue;
             };
-            if foot.side == landing_side {
+            if lands_here {
                 flown = Some(foot.side);
             }
             swing.to = step.at;
@@ -862,17 +870,7 @@ impl FootPlacer {
             swing.retime(lands_in, ctx.config.min_step_duration);
             fly_swing(foot, ctx);
         }
-        flown.filter(|&side| self.swings_onto_footfall(side))
-    }
-
-    /// Whether `side`'s foot is swinging onto a footfall, rather than held
-    /// with nowhere to land.
-    fn swings_onto_footfall(&self, side: FootSide) -> bool {
-        let foot = match side {
-            FootSide::Left => &self.left,
-            FootSide::Right => &self.right,
-        };
-        matches!(foot.phase, FootPhase::Stepping(swing) if !swing.held)
+        self.flown = flown;
     }
 
     /// The body has come down from a flight `landed` swung through: that
@@ -897,29 +895,6 @@ impl FootPlacer {
         self.since_takeoff = LONG_AGO;
         self.prev_pelvis = ctx.pelvis;
         self.prev_yaw = ctx.yaw;
-    }
-
-    /// Turn a swing the body took into the air onto the plan's landing,
-    /// if the plan lands that foot with the body within a swing of now: the
-    /// hop came down where the plan had it, not where the swing was going
-    /// when it left.
-    fn retarget_landing(&mut self, ctx: &PlacerCtx<'_>) {
-        let swing = self
-            .last_timing
-            .map_or(ctx.config.max_step_duration, |t| t.swing_duration);
-        for foot in [&mut self.left, &mut self.right] {
-            let Some(step) = ctx
-                .planned
-                .of(foot.side)
-                .filter(|step| step.landing.is_some_and(|landing| landing <= swing))
-            else {
-                continue;
-            };
-            if let FootPhase::Stepping(swing) = &mut foot.phase {
-                swing.to = step.at;
-                swing.footfall = step.id;
-            }
-        }
     }
 
     /// Snap both feet to stance under the current pelvis. Used on the
@@ -980,18 +955,8 @@ impl FootPlacer {
             if let Some((_, step)) = planned {
                 position = step.at;
             }
-            foot.stands_on = planned.and_then(|(_, step)| step.id);
-            foot.phase = FootPhase::Planted;
-            foot.position = position;
-            foot.planted_position = position;
-            foot.planted_yaw = ctx.yaw;
-            foot.up = Vector3::y();
-            foot.forward = normalise_facing(facing);
-            foot.takeoff_up = Vector3::y();
-            foot.pre_lift = 0.0;
-            // Old: feet must be immediately eligible for the post-landing
-            // catch-up step, not held to the fresh-plant stance gate.
-            foot.since_plant = LONG_AGO;
+            let id = planned.and_then(|(_, step)| step.id);
+            plant_at_stance(foot, position, id, ctx.yaw, facing);
         }
         // Seed rather than plain-reset: the back (right) foot releases
         // immediately and the front foot exactly half a cycle later. A
@@ -1293,7 +1258,7 @@ fn retarget_chase(ctx: &PlacerCtx<'_>) -> f32 {
 /// Carry a foot's swing through a flight by a substep: on, while it has
 /// time left; at its end, held on its footfall while the leg reaches it,
 /// and gathering under the hip once it does not. The foot plants when the
-/// body comes down ([`FootPlacer::touch_down`]), not when its swing runs
+/// body comes down ([`FootPlacer::set_mode`]), not when its swing runs
 /// out: a body that falls on past its landing leaves no foot on it. A
 /// planted foot stays planted.
 fn fly_swing(foot: &mut PlacerFoot, ctx: &PlacerCtx<'_>) {
@@ -1518,14 +1483,41 @@ fn max_leg_extension(ctx: &PlacerCtx<'_>) -> f32 {
 /// far the leg stretches to it: the legs land it in their own time.
 fn reachable_step(ctx: &PlacerCtx<'_>, side: FootSide, lands_in: f32) -> Option<PlannedStep> {
     let step = ctx.planned.of(side)?;
+    reachable(ctx, &step, lands_in).then_some(step)
+}
+
+/// Whether the body comes down within a leg's reach of `step`, landing in
+/// `lands_in` seconds where the step does not say.
+fn reachable(ctx: &PlacerCtx<'_>, step: &PlannedStep, lands_in: f32) -> bool {
     let travel = Vector2::new(ctx.velocity.x, ctx.velocity.z);
     let Some(ahead) = travel.try_normalize(1.0e-3) else {
-        return Some(step);
+        return true;
     };
     let hip = ctx.pelvis + ctx.velocity * step.landing.unwrap_or(lands_in);
     let behind = -Vector2::new(step.at.x - hip.x, step.at.z - hip.z).dot(&ahead);
-    let reach = reach_budget(max_leg_extension(ctx), ctx.standing_height);
-    (behind <= reach).then_some(step)
+    behind <= reach_budget(max_leg_extension(ctx), ctx.standing_height)
+}
+
+/// Plant `foot` at `position` at stance, facing the body, on the planned
+/// step `id` if it is one. It is eligible at once for the catch-up step a
+/// landing takes, not held to the fresh-plant stance gate.
+fn plant_at_stance(
+    foot: &mut PlacerFoot,
+    position: Point3<f32>,
+    id: Option<StepId>,
+    yaw: f32,
+    facing: Vector3<f32>,
+) {
+    foot.stands_on = id;
+    foot.phase = FootPhase::Planted;
+    foot.position = position;
+    foot.planted_position = position;
+    foot.planted_yaw = yaw;
+    foot.up = Vector3::y();
+    foot.forward = normalise_facing(facing);
+    foot.takeoff_up = Vector3::y();
+    foot.pre_lift = 0.0;
+    foot.since_plant = LONG_AGO;
 }
 
 /// Hip→foot distance the planner aims plants within, in metres. Sits
@@ -1861,7 +1853,7 @@ mod tests {
         let config = FootPlacerConfig::default();
         let pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
         let mut placer = FootPlacer::new(pelvis, Vector3::z(), HIP_WIDTH, 0.0);
-        placer.set_suspended(true);
+        placer.set_mode(LegMode::Off);
 
         let turn = std::f32::consts::FRAC_PI_2;
         let frames = 30;
@@ -1907,7 +1899,7 @@ mod tests {
         let half_turned = facing_from_yaw(std::f32::consts::FRAC_PI_4);
         placer.left.forward = half_turned;
         placer.right.forward = half_turned;
-        placer.set_suspended(true);
+        placer.set_mode(LegMode::Off);
 
         let yaw = std::f32::consts::FRAC_PI_2;
         hang(&mut placer, &config, 30, |_| yaw);
@@ -2144,9 +2136,14 @@ mod tests {
             config: &config,
         };
         let fly = |placer: &mut FootPlacer, planned: bool| {
-            placer.set_suspended(true);
             let mut t = 0.0;
             while t < FLIGHT {
+                placer.set_mode(LegMode::Fly(planned.then_some(FlightLanding {
+                    side: FootSide::Right,
+                    at: landing,
+                    in_seconds: FLIGHT - t,
+                    footfall: None,
+                })));
                 let steps = if planned {
                     PlannedSteps {
                         left: Some(PlannedStep {
@@ -2185,7 +2182,7 @@ mod tests {
         };
         assert!(planar_distance(to, after) < 1e-3, "trailing to {to:?}");
 
-        placer.set_suspended(false);
+        placer.set_mode(LegMode::Step);
         placer.tick(&PlacerCtx {
             right_ground: Some(landing),
             ..ctx(FLIGHT, PlannedSteps::default())
@@ -2198,10 +2195,10 @@ mod tests {
         );
     }
 
-    /// A flight flown onto a landing that the plan then stops handing, with
-    /// the body falling on past it (off the edge of the world), plants no
-    /// foot on its footfalls and ends once they are out of reach: the legs
-    /// hang rather than reach back up to where the body left.
+    /// A flight whose landing is missed, the body falling on past it (off
+    /// the edge of the world): the legs go off, keep no footfall and plant
+    /// no foot in the air, and coming down far below plants them under the
+    /// body rather than reaching back up to where it left.
     #[test]
     fn a_flight_that_falls_on_past_its_landing_leaves_no_foot_on_it() {
         const DT: f32 = 1.0 / 60.0;
@@ -2253,25 +2250,49 @@ mod tests {
             }),
         };
 
-        placer.set_suspended(true);
+        placer.set_mode(LegMode::Fly(Some(FlightLanding {
+            side: FootSide::Right,
+            at: Point3::new(-0.12, 0.0, 0.3),
+            in_seconds: 0.1,
+            footfall: None,
+        })));
         placer.tick(&ctx(0.0, landing));
-        assert!(placer.flies_to_landing(), "the plan's landing is flown");
+        assert!(placer.flies_to_landing(), "the landing is flown");
 
+        placer.set_mode(LegMode::Off);
         let mut t = DT;
         while t < 2.0 {
             placer.tick(&ctx(t, PlannedSteps::default()));
             t += DT;
         }
-        assert!(placer.is_suspended());
-        assert!(
-            !placer.flies_to_landing(),
-            "20 m past its landing, the legs are still drawn flying onto it"
-        );
+        assert!(!placer.flies_to_landing());
         for foot in [&placer.left, &placer.right] {
             assert!(
                 !foot.is_planted(),
                 "{:?} foot planted in the air",
                 foot.side
+            );
+            let FootPhase::Stepping(swing) = foot.phase else {
+                unreachable!();
+            };
+            assert_eq!(
+                swing.footfall, None,
+                "{:?} keeps the plan's footfall",
+                foot.side
+            );
+        }
+
+        // Down far below: the feet are planted under the body, and the gait
+        // may step one at once.
+        placer.set_mode(LegMode::Step);
+        placer.tick(&ctx(t, PlannedSteps::default()));
+        let pelvis = pelvis_at(t);
+        for foot in [&placer.left, &placer.right] {
+            assert!(
+                (pelvis.y - foot.position.y).abs() < dims.leg_length,
+                "{:?} foot left {:.1} m up",
+                foot.side,
+                foot.position.y - pelvis.y
             );
         }
     }
@@ -2293,7 +2314,6 @@ mod tests {
             gait.step_height,
             0.0,
         ));
-        placer.set_suspended(true);
         // Flying on along +z, landing in 0.3 s near z = 1.2; the plan, made
         // along a path turned back, lands it 1 m behind.
         let lands = |at: f32| PlacerCtx {
@@ -2324,9 +2344,19 @@ mod tests {
             },
             config: &config,
         };
+        let fly_to = |at: f32| {
+            LegMode::Fly(Some(FlightLanding {
+                side: FootSide::Right,
+                at: Point3::new(-0.12, 0.0, at),
+                in_seconds: 0.3,
+                footfall: None,
+            }))
+        };
         let mut ahead = placer.clone();
+        ahead.set_mode(fly_to(SPEED * 0.3));
         ahead.tick(&lands(SPEED * 0.3));
         assert!(ahead.flies_to_landing());
+        placer.set_mode(fly_to(-1.0));
         placer.tick(&lands(-1.0));
         assert!(!placer.flies_to_landing());
     }
@@ -2416,12 +2446,54 @@ mod tests {
         };
         let ctx = flight_ctx(&config, pelvis, Vector3::new(0.0, 0.0, 3.0), planned);
         let carried = carried_on(&placer.right, ctx.dt);
-        placer.set_suspended(true);
+        placer.set_mode(LegMode::Fly(Some(FlightLanding {
+            side: FootSide::Right,
+            at: Point3::new(-0.12, 0.0, 1.2),
+            in_seconds: 0.4,
+            footfall: None,
+        })));
         placer.tick(&ctx);
         let moved = planar_distance(placer.right.position, before);
         assert!(
             moved <= carried + 0.01,
             "the foot jumped {moved:.2} m, where its swing carries it {carried:.2} m"
+        );
+    }
+
+    #[test]
+    fn a_flight_coming_down_late_still_lands_on_the_plans_footfall() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, RigDims::player().standing_height, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), 0.12, 0.0);
+        let (from, to) = (Point3::new(-0.12, 0.0, -0.3), Point3::new(-0.12, 0.0, 0.3));
+        placer.right.phase =
+            FootPhase::Stepping(swung(from, to, Vector3::z(), Vector3::z(), 0.2, 0.05, 0.1));
+        placer.right.position = drawn(&placer.right);
+        // The body is a moment past the planned landing: the plan still
+        // names the footfall, but no longer lands a flight on it.
+        let footfall = Some(StepId(9));
+        let planned = PlannedSteps {
+            left: None,
+            right: Some(PlannedStep {
+                id: footfall,
+                at: to,
+                landing: None,
+            }),
+        };
+        let ctx = flight_ctx(&config, pelvis, Vector3::new(0.0, 0.0, 1.0), planned);
+        placer.set_mode(LegMode::Fly(Some(FlightLanding {
+            side: FootSide::Right,
+            at: to,
+            in_seconds: -0.001,
+            footfall,
+        })));
+        placer.tick(&ctx);
+        let FootPhase::Stepping(swing) = &placer.right.phase else {
+            panic!("the landing foot is still swinging down");
+        };
+        assert_eq!(
+            swing.footfall, footfall,
+            "the foot lands on the plan's footfall"
         );
     }
 
@@ -2481,40 +2553,6 @@ mod tests {
             rise < 0.15,
             "the foot jumped {rise:.2} m up off its takeoff"
         );
-    }
-
-    #[test]
-    fn feet_that_hang_from_takeoff_take_up_no_landing_in_the_air() {
-        let config = FootPlacerConfig::default();
-        let pelvis = Point3::new(0.0, RigDims::player().standing_height + 0.3, 0.0);
-        let mut placer = FootPlacer::new(pelvis, Vector3::z(), 0.12, 0.0);
-        placer.right.phase = FootPhase::Stepping(swung(
-            placer.right.planted_position,
-            Point3::new(-0.12, 0.0, 0.6),
-            Vector3::z(),
-            Vector3::z(),
-            0.2,
-            0.05,
-            0.0,
-        ));
-        placer.set_suspended(true);
-        let velocity = Vector3::new(0.0, 0.0, 4.0);
-        placer.tick(&flight_ctx(
-            &config,
-            pelvis,
-            velocity,
-            PlannedSteps::default(),
-        ));
-        let landing = PlannedSteps {
-            left: None,
-            right: Some(PlannedStep {
-                id: None,
-                at: Point3::new(-0.12, 0.0, 1.2),
-                landing: Some(0.3),
-            }),
-        };
-        placer.tick(&flight_ctx(&config, pelvis, velocity, landing));
-        assert!(!placer.flies_to_landing());
     }
 
     /// Probes are cast against the physics world as well as the terrain,

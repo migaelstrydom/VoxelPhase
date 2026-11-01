@@ -251,9 +251,8 @@ mod tests {
         let floats_at = float_depth(&config);
         let swim = config.swim;
         assert!(
-            swim.stand_depth < swim.swim_depth && swim.swim_depth < floats_at,
-            "stand {} swim {} float {floats_at}",
-            swim.stand_depth,
+            swim.swim_depth < floats_at,
+            "swim {} float {floats_at}",
             swim.swim_depth
         );
         assert!(

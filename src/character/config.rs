@@ -59,18 +59,27 @@ pub struct LocomotionConfig {
     /// place of the reach-based leniency the foot probes used to supply by
     /// accident. It stacks *ahead* of `ground_grace_period` on a real
     /// walk-off, so the total ground handling after an edge is the sum of the
-    /// two, and it must stay well under `launch_window` or a jump would still
-    /// read as grounded once `Launching` expires.
+    /// two. Every takeoff cancels it.
     pub ground_forgiveness_window: f32,
-    /// How long a jump may stay in `Launching` before it becomes airborne
-    /// regardless of what grounding reports (seconds).
+    /// How long a takeoff (a Hop or a Jump) may stay in its `Launch` phase
+    /// before it is in flight regardless of what grounding reports
+    /// (seconds).
     ///
     /// Still reporting ground contact for a frame or two after takeoff is
-    /// normal — a flat long jump skims within foot-probe range. Ground contact
-    /// must not be able to *hold* the character in launch, though: `Launching`
-    /// snaps a committed velocity and ignores input, so a grounding source
-    /// stuck true would freeze control permanently.
+    /// normal: a flat long jump skims within foot-probe range. Ground contact
+    /// must not be able to *hold* the character in launch, though: a long
+    /// jump's launch snaps a committed velocity and ignores input, so a
+    /// grounding source stuck true would freeze control permanently.
     pub launch_window: f32,
+    /// How long past its landing's time a Hop may still be in the air before
+    /// it has missed the landing and is a Fall (seconds): a body coming down
+    /// a frame or two late on a step's lip still lands the Hop.
+    pub hop_landing_slack: f32,
+    /// How long a roll-off keeps the climb it rode off a brow with, once off
+    /// the ground, before its rise is cancelled (seconds): how far crests
+    /// pop the body up. Zero is sticky, longer is floatier. The traversal
+    /// planner plans roll-offs to it (`BodyDims::rise_held`).
+    pub roll_off_rise_held: f32,
     /// Proportional gain for the yaw angular velocity drive.
     /// Higher = snappier turns when unloaded. When holding a heavy object,
     /// the constraint reaction torque limits the actual turn rate regardless.
@@ -114,6 +123,8 @@ impl LocomotionConfig {
             ground_grace_period: 0.08,
             ground_forgiveness_window: 0.08,
             launch_window: 0.2,
+            hop_landing_slack: 0.05,
+            roll_off_rise_held: 0.08,
             turn_aggression: 10.0,
             throw_turn_aggression: 20.0,
             collider_radius: 0.25,

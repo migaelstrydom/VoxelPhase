@@ -21,6 +21,7 @@ use std::fmt::Write as _;
 use nalgebra::{Point3, Vector3};
 
 use super::config::FootPlacerConfig;
+use super::mode::LegMode;
 use super::placer::{facing_from_yaw, planar_distance, FootPlacer, PlacerCtx};
 use super::planned::PlannedSteps;
 
@@ -199,7 +200,11 @@ fn replay_frames(
     let mut max_div_frame = 0usize;
     let mut first_div_frame = None;
     for (i, fr) in frames.iter().enumerate() {
-        placer.set_suspended(fr.suspended);
+        placer.set_mode(if fr.suspended {
+            LegMode::Off
+        } else {
+            LegMode::Step
+        });
         let ctx = PlacerCtx {
             dt: fr.dt,
             pelvis: fr.pelvis,
@@ -394,7 +399,11 @@ fn record_replay_round_trip() {
         let left_ground = contact(placer.left.probe_anchor());
         let right_ground = contact(placer.right.probe_anchor());
 
-        placer.set_suspended(suspended);
+        placer.set_mode(if suspended {
+            LegMode::Off
+        } else {
+            LegMode::Step
+        });
         let ctx = PlacerCtx {
             dt,
             pelvis,

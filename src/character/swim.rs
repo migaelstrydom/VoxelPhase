@@ -7,12 +7,11 @@ use super::immersion::Immersion;
 ///   depth (level to floor)
 ///     ▲
 ///     │  swimming          ── swim_depth: too deep to stand, start swimming
-///     │  either (hysteresis)
-///     │  wading            ── stand_depth: shallow enough, stand up again
+///     │  wading               (a swimmer stands once its feet are down here)
 ///     │
 /// ```
 ///
-/// The two depths sit just under the depth the character's body floats off
+/// The depth sits just under the depth the character's body floats off
 /// its feet at, which its bulk decides: a character that is still on its feet
 /// in chest-deep water starts swimming anyway, because a wader that waits for
 /// buoyancy to lift it off the floor spends its last stride skating, and one
@@ -23,9 +22,6 @@ pub struct SwimConfig {
     /// Still water deeper than this, level to floor, is too deep to stand in,
     /// in metres.
     pub swim_depth: f32,
-    /// Still water shallower than this is shallow enough to stand up in, in
-    /// metres. Below `swim_depth`, so a swimmer at the edge does not chatter.
-    pub stand_depth: f32,
     /// How far above the still level a swimmer's centre may rise before it has
     /// left the water, in metres. A jump off a wave, or the water draining out
     /// from under it.
@@ -60,7 +56,6 @@ impl Default for SwimConfig {
     fn default() -> Self {
         Self {
             swim_depth: 0.6,
-            stand_depth: 0.55,
             leave_height: 0.45,
             swim_speed: 2.0,
             sprint_swim_speed: 3.0,
@@ -100,19 +95,21 @@ impl SwimConfig {
         water.depth() >= self.swim_depth && in_it
     }
 
-    /// Whether a swimmer should stop: the water is shallow enough to stand
-    /// in, or its feet have found a floor in water it could wade, or it is no
-    /// longer in the water at all.
-    pub fn leaves_water(&self, immersion: &Immersion, body_y: f32, is_grounded: bool) -> bool {
-        match immersion.water {
-            None => true,
-            Some(water) => {
-                let depth = water.depth();
-                depth < self.stand_depth
-                    || (is_grounded && depth < self.swim_depth)
-                    || -water.below_level(body_y) > self.leave_height
-            }
-        }
+    /// Whether the water at the body is shallow enough to wade: a swimmer
+    /// whose feet are down in it stands up.
+    pub fn wadeable(&self, immersion: &Immersion) -> bool {
+        immersion
+            .water
+            .map_or(true, |water| water.depth() < self.swim_depth)
+    }
+
+    /// Whether a body centred at `body_y` is out of the water: none at the
+    /// body, or risen more than `leave_height` above its level (a jump off a
+    /// wave, or the water draining out from under it).
+    pub fn out_of_water(&self, immersion: &Immersion, body_y: f32) -> bool {
+        immersion
+            .water
+            .map_or(true, |water| -water.below_level(body_y) > self.leave_height)
     }
 
     /// Swimming speed, sprinting or not.
@@ -198,24 +195,21 @@ mod tests {
     }
 
     #[test]
-    fn a_swimmer_stands_in_the_shallows_or_on_found_footing() {
+    fn wading_depth_is_shallower_than_swimming_depth() {
         let swim = SwimConfig::default();
-        assert!(swim.leaves_water(&sea(swim.stand_depth - 0.05), -0.1, false));
-        assert!(!swim.leaves_water(&sea(swim.swim_depth - 0.02), -0.1, false));
+        assert!(swim.wadeable(&sea(swim.swim_depth - 0.02)));
         assert!(
-            swim.leaves_water(&sea(swim.swim_depth - 0.02), -0.1, true),
-            "feet on the floor in wading depth"
-        );
-        assert!(
-            !swim.leaves_water(&sea(3.0), -0.1, true),
+            !swim.wadeable(&sea(3.0)),
             "touching a wall out of its depth"
         );
+        assert!(swim.wadeable(&Immersion::dry()));
     }
 
     #[test]
     fn a_swimmer_out_of_the_water_has_left_it() {
         let swim = SwimConfig::default();
-        assert!(swim.leaves_water(&Immersion::dry(), 0.0, false));
-        assert!(swim.leaves_water(&sea(3.0), swim.leave_height + 0.1, false));
+        assert!(swim.out_of_water(&Immersion::dry(), 0.0));
+        assert!(swim.out_of_water(&sea(3.0), swim.leave_height + 0.1));
+        assert!(!swim.out_of_water(&sea(3.0), -0.1));
     }
 }

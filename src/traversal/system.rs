@@ -24,7 +24,8 @@ use super::legs::{footfall_id, step_id, Legs};
 use super::marker::PlansTraversal;
 use super::plan_capture::{scene_of, write_capture};
 use super::planning::{PlanFrame, PlanningInput, TraversalPlanning};
-use super::tracking::{floor_grade, track, Pace};
+use super::role::PlanRole;
+use super::tracking::{floor_grade, landing_reach, track, Pace};
 
 /// Key that shows and hides the plan in the world.
 const OVERLAY_KEY: KeyCode = KeyCode::F6;
@@ -62,6 +63,8 @@ pub struct TraversalPlanState {
     pub landing_late: Option<Limb>,
     /// Whether the player rides a carrier, which the plan stands aside for.
     pub riding: Riding,
+    /// The planner's role last frame, from the character's locomotion state.
+    pub role: PlanRole,
 }
 
 impl Default for TraversalPlanState {
@@ -73,6 +76,30 @@ impl Default for TraversalPlanState {
             tracking: true,
             landing_late: None,
             riding: Riding::default(),
+            role: PlanRole::On,
+        }
+    }
+}
+
+impl TraversalPlanState {
+    /// Drops the plan, the path it was laid along and the landing
+    /// bookkeeping: the next plan starts afresh.
+    pub fn forget(&mut self) {
+        if let Some(planning) = self.planning.as_mut() {
+            planning.forget();
+        }
+        self.last = None;
+        self.landing_late = None;
+    }
+
+    /// Takes the planner from role `from` to `to`: the one place a change of
+    /// role keeps or drops what it carried across frames.
+    fn enter(&mut self, from: PlanRole, to: PlanRole) {
+        match (from, to) {
+            (PlanRole::On, PlanRole::Off) => self.forget(),
+            (PlanRole::Off, PlanRole::On)
+            | (PlanRole::On, PlanRole::On)
+            | (PlanRole::Off, PlanRole::Off) => {}
         }
     }
 }
@@ -89,9 +116,11 @@ impl Default for TraversalPlanState {
 /// wall), and taking off where it hops. The stick sets a refused plan's
 /// pace. A jump the player presses still jumps.
 ///
-/// While the player rides a carrier ([`Riding`]) there is no plan: the
-/// planner's ground holds still, and the drive and the legs step in the
-/// carrier's frame on their own.
+/// The character's locomotion state sets the planner's [`PlanRole`]: off, in
+/// a jump, a fall or the water, it does nothing at all and the intent is the
+/// stick's. While the player rides a carrier ([`Riding`]) there is no plan
+/// either: the planner's ground holds still, and the drive and the legs step
+/// in the carrier's frame on their own.
 pub struct TraversalPlanSystem;
 
 impl<'a> System<'a> for TraversalPlanSystem {
@@ -161,6 +190,12 @@ impl<'a> System<'a> for TraversalPlanSystem {
         else {
             return;
         };
+        let role = PlanRole::of(&character.locomotion);
+        let was = std::mem::replace(&mut state.role, role);
+        state.enter(was, role);
+        if role == PlanRole::Off {
+            return;
+        }
         let Some(rigid) = physics.world.body(body) else {
             return;
         };
@@ -169,12 +204,8 @@ impl<'a> System<'a> for TraversalPlanSystem {
             .riding
             .update(StandsOn::of(&physics.world, body, &carriers))
         {
-            if let Some(planning) = state.planning.as_mut() {
-                planning.stand_aside();
-            }
+            state.forget();
             log.add("Traversal/Plan", "stands aside: riding a carrier");
-            state.last = None;
-            state.landing_late = None;
             return;
         }
 
@@ -195,7 +226,8 @@ impl<'a> System<'a> for TraversalPlanSystem {
             .or_else(|| Vector3::new(velocity.x, 0.0, velocity.z).try_normalize(0.1))
             .unwrap_or_else(Vector3::z);
         let target_speed =
-            resolve_ground_speed(intent, config, &character.crouch_lockout) * push.norm().min(1.0);
+            resolve_ground_speed(intent, config, character.conditioning.crouch_locked())
+                * push.norm().min(1.0);
         let changes: Vec<(Point3<f32>, Point3<f32>)> = terrain
             .changed_regions()
             .iter()
@@ -249,14 +281,16 @@ impl<'a> System<'a> for TraversalPlanSystem {
                 // for up or down a grade: ask for that much more.
                 let body_dims = &planning.params().body;
                 let grade = floor_grade(&frame.section.body_floor, frame.body.s);
-                let gait_speed = resolve_ground_speed(intent, config, &character.crouch_lockout)
-                    * body_dims.ground_speed(1.0, grade);
+                let gait_speed =
+                    resolve_ground_speed(intent, config, character.conditioning.crouch_locked())
+                        * body_dims.ground_speed(1.0, grade);
                 let tracked = track(
                     frame.plan(),
-                    frame.frame.forward(),
+                    &frame.frame,
                     frame.body.climb,
                     time.delta_seconds().max(1.0e-3),
                     frame.outcome.is_err(),
+                    landing_reach(planning.params()),
                 );
                 // The plan sets the pace; the stick steers, as the path is
                 // relaid only after it turns some way, but along a wall.
@@ -271,6 +305,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
                 };
                 intent.direction = steer * share;
                 intent.takeoff = tracked.takeoff;
+                intent.landing = tracked.landing;
             }
             if input.is_key_just_pressed(CAPTURE_KEY) {
                 let scene = scene_of(frame, planning.params(), target_speed);

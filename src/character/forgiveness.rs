@@ -28,6 +28,11 @@ pub struct GroundForgiveness {
     /// The last support actually observed, kept after the window closes:
     /// what the body most recently left.
     departed: Grounding,
+    /// Cancelled for a takeoff: real support is reported, but arms no
+    /// window, until the contact ends.
+    closed: bool,
+    /// Seconds since support was last actually observed.
+    since_contact: f32,
 }
 
 impl GroundForgiveness {
@@ -36,11 +41,16 @@ impl GroundForgiveness {
     /// Real support re-arms the window; its absence spends it.
     pub fn observe(&mut self, grounding: &Grounding, dt: f32, window: f32) -> Grounding {
         if grounding.is_grounded {
-            self.remaining = window.max(0.0);
-            self.last = *grounding;
+            self.since_contact = 0.0;
+            if !self.closed {
+                self.remaining = window.max(0.0);
+                self.last = *grounding;
+            }
             self.departed = *grounding;
             return *grounding;
         }
+        self.closed = false;
+        self.since_contact += dt;
 
         self.remaining = (self.remaining - dt).max(0.0);
         if self.remaining > 0.0 {
@@ -57,16 +67,26 @@ impl GroundForgiveness {
         &self.departed
     }
 
-    /// Close the window immediately.
+    /// Seconds since support was last actually observed, forgiven or not:
+    /// how long the body has been off the ground. Zero in contact.
+    pub fn since_contact(&self) -> f32 {
+        self.since_contact
+    }
+
+    /// Close the window until the contact ends.
     ///
-    /// A jump is a deliberate departure from the ground, so there is nothing
-    /// left to forgive: without this, a jump whose contact ends inside the
-    /// window would keep reporting support into the air, and a long enough
-    /// window would let `Airborne` see ground and land the character on
-    /// nothing.
+    /// A takeoff is a deliberate departure from the ground, so there is
+    /// nothing left to forgive: without this, a takeoff whose contact ends
+    /// inside the window would keep reporting support into the air, and a
+    /// long enough window would let a flight see ground and land the
+    /// character on nothing. The window stays closed while the contact
+    /// lasts: a roll-off, which has no impulse to break it, is still on the
+    /// brow a frame after it takes off, and that contact must not open the
+    /// window again for the moment it leaves.
     pub fn cancel(&mut self) {
         self.remaining = 0.0;
         self.last = Grounding::airborne();
+        self.closed = true;
     }
 }
 
@@ -180,6 +200,23 @@ mod tests {
             !f.observe(&Grounding::airborne(), DT, WINDOW).is_grounded,
             "a jump kept its takeoff contact alive in the air"
         );
+    }
+
+    /// A roll-off is still on the brow the frame after it takes off. That
+    /// contact is reported, but forgives nothing once it ends.
+    #[test]
+    fn a_cancelled_window_stays_closed_while_the_contact_lasts() {
+        let mut f = GroundForgiveness::default();
+        f.observe(&floor(), DT, WINDOW);
+        f.cancel();
+        assert!(f.observe(&floor(), DT, WINDOW).is_grounded);
+        assert!(
+            !f.observe(&Grounding::airborne(), DT, WINDOW).is_grounded,
+            "the takeoff's last contact opened the window again"
+        );
+        // Down again, the window is open as before.
+        f.observe(&floor(), DT, WINDOW);
+        assert!(f.observe(&Grounding::airborne(), DT, WINDOW).is_grounded);
     }
 
     #[test]

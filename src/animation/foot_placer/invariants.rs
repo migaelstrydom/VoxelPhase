@@ -823,9 +823,11 @@ fn run_stance_is_hip_symmetric() {
 }
 
 /// A one-frame airborne blip (terrain-seam contact loss) while running
-/// must not disturb the gait: the planted foot keeps its anchor through
-/// the blip (no replant teleport) and the takeoffs stay alternating and
-/// evenly spaced afterwards. Pins the displacement-gated resume.
+/// must not disturb the gait: a planted foot its leg still reaches keeps its
+/// anchor through the blip (no replant teleport), and the takeoffs stay
+/// alternating and evenly spaced afterwards. One the body has run past the
+/// leg's stretch from is planted afresh, as it was before the legs had
+/// modes (when both feet were).
 #[test]
 fn seam_blip_does_not_break_gait() {
     let blip_frame = 45; // t = 1.5 s, mid steady run
@@ -847,13 +849,21 @@ fn seam_blip_does_not_break_gait() {
     );
 
     // Anchors survive the blip: any foot planted on both sides of the
-    // blip keeps its planted position.
+    // blip, and still within its leg's stretch of its hip, keeps its
+    // planted position.
     let (before, after) = (&frames[blip_frame - 1], &frames[blip_frame + 1]);
+    let stretch = sim::LEG_LENGTH * FootPlacerConfig::default().max_leg_stretch_ratio;
     for foot_of in [(|s: &Frame| &s.left) as fn(&Frame) -> &PlacerFoot, |s| {
         &s.right
     }] {
         let (a, b) = (foot_of(before), foot_of(after));
-        if a.is_planted() && b.is_planted() {
+        let off = stance_offset(
+            facing_from_yaw(after.yaw),
+            sim::HIP_WIDTH,
+            a.side.side_sign(),
+        );
+        let hip = after.pelvis + Vector3::new(off.x, 0.0, off.y);
+        if a.is_planted() && b.is_planted() && (a.planted_position - hip).norm() <= stretch {
             assert!(
                 planar_distance(a.planted_position, b.planted_position) < 1e-4,
                 "planted anchor teleported across a seam blip"

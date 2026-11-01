@@ -26,9 +26,7 @@ use traversal_planner::plan::Limb;
 use traversal_planner::section::SphereCaster;
 
 use crate::animation::{CharacterAnimator, CharacterRigConfig, FootSide};
-use crate::character::{
-    CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig, Timer,
-};
+use crate::character::{CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig};
 use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::core::error::{EngineError, EngineResult};
 use crate::level::load_level;
@@ -272,7 +270,7 @@ fn asked_speed(harness: &GameHarness, character: Entity, intent: &CharacterInten
         .read_storage::<LocomotionConfig>()
         .get(character)
         .map_or(0.0, |config| {
-            push * resolve_ground_speed(intent, config, &Timer::default())
+            push * resolve_ground_speed(intent, config, false)
         })
 }
 

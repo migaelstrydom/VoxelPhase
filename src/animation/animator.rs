@@ -7,7 +7,7 @@ use nalgebra::{Point3, Vector3};
 use specs::{Component, VecStorage};
 
 use super::config::{CharacterRigConfig, GaitPreset};
-use super::foot_placer::{FootPlacer, FootSide, PlacerFoot};
+use super::foot_placer::{FlightLanding, FootPlacer, FootSide, LegMode, PlacerFoot, StepId};
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Stroke, Takeoff, TickCtx};
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
 use super::humanoid::stride_sync;
@@ -16,9 +16,10 @@ use super::legged::{LeggedLocomotion, LocomotionCtx};
 use super::pose::{Crossfade, Linear, PoseFragment};
 use super::state::{AnimationState, FootState, ThrowGesture, WaterEntry};
 use crate::character::grab::GrabConfig;
+use crate::character::locomotion::{Hop, Jump, JumpKind, TakeoffPhase};
 use crate::character::{
-    AirSteering, ArmState, CharacterIntent, CharacterState, Grounding, Immersion, LaunchKind,
-    LocomotionState, ThrowStroke, ThrowingHand,
+    ArmState, CharacterIntent, CharacterState, Foot, Grounding, Immersion, LocomotionState,
+    ThrowStroke, ThrowingHand,
 };
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
@@ -151,15 +152,10 @@ impl CharacterAnimator {
         self.locomotion.placer()
     }
 
-    /// Configure foot probes for the next frame. While the placer is
-    /// suspended (airborne) the probes aim at the feet the airborne
-    /// sampler is drawing, since the placer has no anchors to offer.
+    /// Configure foot probes for the next frame, as the legs' mode aims
+    /// them ([`LeggedLocomotion::configure_probes`]).
     pub fn configure_probes(&self, pelvis_position: Point3<f32>, yaw: f32) -> Vec<Probe> {
-        self.locomotion.configure_probes(
-            pelvis_position,
-            yaw,
-            [self.state.left.position, self.state.right.position],
-        )
+        self.locomotion.configure_probes(pelvis_position, yaw)
     }
 
     /// Process probe results and update animation.
@@ -235,8 +231,8 @@ impl CharacterAnimator {
         self.track_water_entry(&new_pose, dt);
 
         // Tick the foot placer before sampling so the pose layer reads a
-        // current foot position. Airborne states suspend the placer; feet
-        // come from the airborne/landing samplers in those cases.
+        // current foot position. Off the legs, the feet come from the
+        // airborne and swimming samplers.
         self.tick_locomotion(
             dt,
             pelvis_position,
@@ -245,6 +241,7 @@ impl CharacterAnimator {
             support_velocity,
             target,
             &new_pose,
+            leg_mode(&character_state.locomotion),
         );
         let flown_before = self.state.feet_flown;
         mirror_placer_into_state(&mut self.state, self.locomotion.placer());
@@ -359,10 +356,9 @@ impl CharacterAnimator {
             .apply_fragment(&fragment, &self.state, &self.config);
     }
 
-    /// Advance legged locomotion. Runs before pose sampling; its output is
-    /// mirrored into `AnimationState` and read by the grounded pose
-    /// samplers. Airborne states suspend stepping so feet don't step
-    /// against a body that isn't on the ground.
+    /// Advance legged locomotion in `mode`. Runs before pose sampling; its
+    /// output is mirrored into `AnimationState` and read by the grounded
+    /// pose samplers.
     #[allow(clippy::too_many_arguments)]
     fn tick_locomotion(
         &mut self,
@@ -373,12 +369,8 @@ impl CharacterAnimator {
         support_velocity: Vector3<f32>,
         target: &CharacterIntent,
         next_pose: &PoseState,
+        mode: LegMode,
     ) {
-        let airborne = matches!(
-            next_pose,
-            PoseState::Launching { .. } | PoseState::Airborne { .. } | PoseState::Swimming { .. }
-        );
-
         let preset = gait_preset_for(next_pose, &self.config);
         let step_height = preset
             .map(|p| p.step_height)
@@ -400,7 +392,7 @@ impl CharacterAnimator {
             velocity,
             support_velocity,
             intent_direction: target.direction,
-            airborne,
+            mode,
             step_height,
             stride_gain,
             pose_tag: next_pose.tag(),
@@ -704,6 +696,26 @@ fn map_upper_state(arm: &ArmState, pose: PoseState) -> UpperState {
     }
 }
 
+/// The legs' mode in `state`: the gait on foot, a Hop's feet flown onto its
+/// landing, and off in a jump, a fall or the water.
+fn leg_mode(state: &LocomotionState) -> LegMode {
+    match state {
+        LocomotionState::OnFoot(_) => LegMode::Step,
+        LocomotionState::Hop(hop) => LegMode::Fly(hop.landing.map(|landing| FlightLanding {
+            side: match landing.foot {
+                Foot::Left => FootSide::Left,
+                Foot::Right => FootSide::Right,
+            },
+            at: landing.at,
+            in_seconds: landing.in_seconds,
+            footfall: landing.footfall.map(StepId),
+        })),
+        LocomotionState::Jump(_) | LocomotionState::Fall(_) | LocomotionState::Swim(_) => {
+            LegMode::Off
+        }
+    }
+}
+
 /// Decide the next `PoseState`, honouring in-flight Launching/Landing
 /// timers so anticipation/follow-through play through to completion even
 /// if the underlying player state moves on. `landing_ground_y` is the
@@ -721,7 +733,7 @@ fn next_pose_state(
     // Launching: hold for the full anticipation window unless physics
     // reports an early touchdown (rare — e.g. hit ceiling, dropped back).
     if let PoseState::Launching { kind, takeoff, t } = current {
-        if matches!(character.locomotion, LocomotionState::Grounded) {
+        if matches!(character.locomotion, LocomotionState::OnFoot(_)) {
             return PoseState::Landing {
                 kind,
                 t: 0.0,
@@ -755,13 +767,33 @@ fn next_pose_state(
         },
     };
 
+    let takeoff = Takeoff {
+        facing,
+        air_speed: character.air_speed,
+    };
+    let launching = |kind: AirKind| PoseState::Launching {
+        kind,
+        takeoff,
+        t: 0.0,
+    };
+    // In the air, the kind and the takeoff carry over from the launch pose.
+    let airborne = |kind: AirKind| match current {
+        PoseState::Launching { kind, takeoff, .. } | PoseState::Airborne { kind, takeoff } => {
+            PoseState::Airborne { kind, takeoff }
+        }
+        _ => PoseState::Airborne { kind, takeoff },
+    };
+    let jump_kind = |kind: JumpKind| match kind {
+        JumpKind::Jump => AirKind::Jump,
+        JumpKind::LongJump => AirKind::LongJump,
+    };
+
     let mapped = match character.locomotion {
-        // CoyoteTime exists to bridge one-frame ground-contact losses
-        // (seams, lips). Treat it as grounded: flicking to Airborne here
+        // Grace bridges one-frame ground-contact losses (seams, lips) as
+        // well as walk-offs. It is still on foot: flicking to Airborne here
         // would suspend the foot placer and splice a spurious Landing on
-        // every blip. The fall pose starts only when the grace period
-        // genuinely expires into Airborne.
-        LocomotionState::Grounded | LocomotionState::CoyoteTime(_) => {
+        // every blip. The fall pose starts only when grace runs out.
+        LocomotionState::OnFoot(_) => {
             let gait = if target.crouch {
                 Gait::Crouch { walking: moving }
             } else if !moving {
@@ -773,46 +805,26 @@ fn next_pose_state(
             };
             PoseState::Grounded { gait }
         }
-        LocomotionState::Launching { kind, .. } => {
-            let kind = match kind {
-                LaunchKind::Jump => AirKind::Jump,
-                LaunchKind::LongJump => AirKind::LongJump,
-                LaunchKind::Leap => AirKind::Leap,
-            };
-            let takeoff = Takeoff {
-                facing,
-                air_speed: character.air_speed,
-            };
-            PoseState::Launching {
-                kind,
-                takeoff,
-                t: 0.0,
+        LocomotionState::Hop(Hop {
+            phase: TakeoffPhase::Launch { .. },
+            ..
+        }) => launching(AirKind::Leap),
+        LocomotionState::Jump(Jump {
+            kind,
+            phase: TakeoffPhase::Launch { .. },
+            ..
+        }) => launching(jump_kind(kind)),
+        LocomotionState::Swim(_) => swimming,
+        // Falling in, or standing up on the way out: upright in the water,
+        // so treading whatever the intent; only a swimmer lying down crawls.
+        LocomotionState::Hop(_) | LocomotionState::Jump(_) | LocomotionState::Fall(_) if afloat => {
+            PoseState::Swimming {
+                stroke: Stroke::Tread,
             }
         }
-        LocomotionState::Swimming => swimming,
-        // Falling in, or standing up on the way out: upright in the water,
-        // so treading whatever the intent — only a swimmer lying down crawls.
-        LocomotionState::Airborne { .. } if afloat => PoseState::Swimming {
-            stroke: Stroke::Tread,
-        },
-        LocomotionState::Airborne { steering, .. } => {
-            let kind = match (current, steering) {
-                (PoseState::Launching { kind, .. }, _) => kind,
-                (PoseState::Airborne { kind, .. }, _) => kind,
-                (_, AirSteering::Locked { .. }) => AirKind::LongJump,
-                (_, AirSteering::Responsive) => AirKind::Fall,
-            };
-            let takeoff = match current {
-                PoseState::Launching { takeoff, .. } | PoseState::Airborne { takeoff, .. } => {
-                    takeoff
-                }
-                _ => Takeoff {
-                    facing,
-                    air_speed: character.air_speed,
-                },
-            };
-            PoseState::Airborne { kind, takeoff }
-        }
+        LocomotionState::Hop(_) => airborne(AirKind::Leap),
+        LocomotionState::Jump(Jump { kind, .. }) => airborne(jump_kind(kind)),
+        LocomotionState::Fall(_) => airborne(AirKind::Fall),
     };
 
     // Splice Landing on the Airborne-ish → Grounded edge. Uses the prior
@@ -837,6 +849,7 @@ fn next_pose_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::character::locomotion::OnFoot;
 
     /// A hop a plan took off on is a running leap: the capsule is already
     /// rising as Launching begins, so a wind-up crouch would sink the body
@@ -844,12 +857,11 @@ mod tests {
     #[test]
     fn a_planned_takeoff_leaps_without_a_wind_up() {
         let mut character = CharacterState::default();
-        character.locomotion = LocomotionState::Launching {
-            kind: LaunchKind::Leap,
-            steering: AirSteering::Responsive,
-            allow_cutoff: false,
-            remaining: 0.1,
-        };
+        character.locomotion = LocomotionState::Hop(Hop {
+            phase: TakeoffPhase::launch(0.1),
+            landing: None,
+            rise_held: None,
+        });
         let next = next_pose_state(
             PoseState::Grounded { gait: Gait::Walk },
             &character,
@@ -867,13 +879,13 @@ mod tests {
         assert_eq!(kind.launch_crouch_depth(), 0.0);
     }
 
-    /// One-frame ground-contact losses (seams) put locomotion in
-    /// CoyoteTime; the pose must stay Grounded — flicking to Airborne
-    /// suspends the placer and splices a spurious Landing on return.
+    /// One-frame ground-contact losses (seams) put locomotion in grace; the
+    /// pose must stay Grounded — flicking to Airborne suspends the placer
+    /// and splices a spurious Landing on return.
     #[test]
-    fn coyote_time_keeps_grounded_pose() {
+    fn grace_keeps_grounded_pose() {
         let mut character = CharacterState::default();
-        character.locomotion = LocomotionState::CoyoteTime(0.1);
+        character.locomotion = LocomotionState::OnFoot(OnFoot { grace: Some(0.1) });
         let mut target = CharacterIntent::default();
         target.direction = Vector3::new(0.0, 0.0, 1.0);
 

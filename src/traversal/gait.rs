@@ -35,7 +35,7 @@ pub fn player_gait(config: &LocomotionConfig, rig: &CharacterRigConfig) -> GaitP
         body: BodyDims {
             radius: config.collider_radius,
             height: 2.0 * config.collider_half_height,
-            rise_held: config.ground_forgiveness_window,
+            rise_held: config.roll_off_rise_held,
             ..BodyDims::default()
         },
         foot: FootDims {

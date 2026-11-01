@@ -190,17 +190,22 @@ impl TraversalPlanning {
         }
     }
 
-    /// Forgets the last plan, for a frame the body is not planned for: the
-    /// next plan starts afresh from the feet.
-    pub fn stand_aside(&mut self) {
+    /// Forgets the last plan, the path it was laid along and the casts and
+    /// scenery kept along it: the next plan lays its path and starts afresh
+    /// from the feet. What changed in the world meanwhile was not watched,
+    /// so nothing kept is trusted.
+    pub fn forget(&mut self) {
         self.previous = None;
+        self.cache = SectionCache::default();
+        self.scenery = None;
     }
 
-    /// Plans this frame; `None` while the body stands still.
+    /// Plans this frame; `None`, and the planning forgotten, while the body
+    /// stands still.
     pub fn update(&mut self, input: &PlanningInput) -> Option<PlanFrame> {
         let speed = input.velocity.dot(&input.heading);
         if input.target_speed < STANDING_SPEED && speed < STANDING_SPEED {
-            self.previous = None;
+            self.forget();
             return None;
         }
         let started = Instant::now();

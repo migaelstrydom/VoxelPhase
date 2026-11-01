@@ -32,8 +32,8 @@
 use nalgebra::{Point3, Vector3};
 
 use crate::character::{
-    CharacterIntent, CharacterState, Immersion, LocomotionConfig, LocomotionInput, LocomotionState,
-    RuleSpeeds,
+    CharacterIntent, CharacterState, Facts, Immersion, LocomotionConfig, LocomotionInput,
+    LocomotionState, Requests, RuleSpeeds,
 };
 use crate::systems::resolve_ground_speed;
 
@@ -121,7 +121,7 @@ impl Body {
 
     /// Advance one frame under `intent`.
     ///
-    /// Order mirrors `CharacterControlSystem`: buffers first, then the
+    /// Order mirrors `CharacterControlSystem`: conditioning first, then the
     /// locomotion transition, then the movement rule, then integration.
     pub fn step(
         &mut self,
@@ -130,38 +130,43 @@ impl Body {
         ground: &dyn Ground,
         support_velocity: Vector3<f32>,
     ) {
-        self.tick_buffers(dt, intent);
-
         let move_dir = intent
             .direction
             .try_normalize(1e-4)
             .unwrap_or_else(Vector3::zeros);
-        let horizontal_speed = self.horizontal_speed();
-
-        let outcome = self.state.locomotion.tick(&LocomotionInput {
-            dt,
-            is_grounded: self.grounded,
-            jump_pressed: self.state.jump_buffer.active(),
-            horizontal_speed,
+        let requests = Requests {
             move_dir,
-            long_jump_armed: self.state.crouch_buffer.active(),
-            takeoff: None,
-            immersion: Immersion::dry(),
-            body_y: self.position.y,
+            ..self.state.conditioning.requests(intent, dt, &self.config)
+        };
+
+        let input = LocomotionInput {
+            dt,
+            facts: Facts {
+                grounded: self.grounded,
+                immersion: Immersion::dry(),
+                position: self.position,
+                velocity: self.velocity,
+                // No plan takes off here, and nothing else reads it.
+                since_contact: 0.0,
+            },
+            requests,
             config: &self.config,
-        });
-        self.state.locomotion = outcome.next_state;
-        if let Some(vy) = outcome.set_vy {
+        };
+        let (next, effects) = self.state.locomotion.advance(&input);
+        self.state.locomotion = next;
+        self.state.conditioning.apply(&effects, &self.config);
+        if let Some(vy) = effects.vertical_speed {
             self.velocity.y = vy;
         }
-        if let Some(air) = outcome.set_air_speed {
+        if let Some(air) = effects.air_speed {
             self.state.air_speed = air;
         }
-        if outcome.consumed_jump {
-            self.state.jump_buffer.clear();
-        }
 
-        let ground_speed = resolve_ground_speed(intent, &self.config, &self.state.crouch_lockout);
+        let ground_speed = resolve_ground_speed(
+            intent,
+            &self.config,
+            self.state.conditioning.crouch_locked(),
+        );
         let mut rule = self.state.locomotion.movement_rule(
             move_dir,
             &RuleSpeeds {
@@ -208,23 +213,9 @@ impl Body {
     /// Whether the locomotion state is one of the airborne ones. The animator
     /// reads grounding separately; this is for the report's pose column.
     pub fn is_airborne(&self) -> bool {
-        matches!(
-            self.state.locomotion,
-            LocomotionState::Airborne { .. } | LocomotionState::Launching { .. }
-        )
-    }
-
-    fn tick_buffers(&mut self, dt: f32, intent: &CharacterIntent) {
-        self.state.jump_buffer.tick(dt);
-        self.state.crouch_buffer.tick(dt);
-        self.state.crouch_lockout.tick(dt);
-        if intent.jump {
-            self.state.jump_buffer.arm(self.config.jump_buffer_window);
-        }
-        if intent.crouch_just_pressed {
-            self.state
-                .crouch_buffer
-                .arm(self.config.crouch_buffer_window);
+        match self.state.locomotion {
+            LocomotionState::Hop(_) | LocomotionState::Jump(_) | LocomotionState::Fall(_) => true,
+            LocomotionState::OnFoot(_) | LocomotionState::Swim(_) => false,
         }
     }
 

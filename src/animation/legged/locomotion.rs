@@ -23,7 +23,7 @@ use crate::character::Grounding;
 use crate::sensing::{ContactCandidate, Probe};
 
 use super::super::foot_placer::{
-    FootPlacer, FootSide, PlacerCtx, PlacerFoot, PlacerRecorder, PlannedSteps, StepId,
+    FootPlacer, FootSide, LegMode, PlacerCtx, PlacerFoot, PlacerRecorder, PlannedSteps, StepId,
 };
 use super::super::FootPlacerConfig;
 use super::dims::LegRigDims;
@@ -69,8 +69,8 @@ pub struct LocomotionCtx {
     /// Requested movement direction, before physics velocity has
     /// necessarily caught up. Drives anticipatory start steps.
     pub intent_direction: Vector3<f32>,
-    /// Whether the body is off the ground, which suspends stepping.
-    pub airborne: bool,
+    /// What the legs do, which the caller maps from its own state.
+    pub mode: LegMode,
     /// Peak height of a swing arc, from the active gait.
     pub step_height: f32,
     /// Fraction of the capture point a step plants at, from the active
@@ -241,33 +241,21 @@ impl LeggedLocomotion {
             .unwrap_or(pelvis.y - self.dims.standing_height)
     }
 
-    /// Aim a probe from each hip at what that foot cares about this frame.
-    ///
-    /// While stepping that is the committed landing target, so the swing
+    /// Aim each foot's probe for the next frame. Stepping or flying, at the
+    /// foot's anchor: while it swings, its committed landing, so the swing
     /// reads the terrain height where it will plant rather than where the
-    /// foot currently hangs; while planted it is the anchor, so the foot
-    /// tracks the surface directly beneath it. A suspended placer has no
-    /// opinion, so the caller supplies where its feet are being drawn —
-    /// `[left, right]`.
-    pub fn configure_probes(
-        &self,
-        pelvis: Point3<f32>,
-        yaw: f32,
-        suspended_aim: [Point3<f32>; 2],
-    ) -> Vec<Probe> {
+    /// foot hangs; planted, the anchor, so the foot tracks the surface
+    /// beneath it. Off, straight down from the hip.
+    pub fn configure_probes(&self, pelvis: Point3<f32>, yaw: f32) -> Vec<Probe> {
         let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
         let right = facing.cross(&Vector3::y());
-        let suspended = self.placer.is_suspended();
-
         [FootSide::Left, FootSide::Right]
             .into_iter()
-            .zip(suspended_aim)
-            .map(|(side, drawn)| {
+            .map(|side| {
                 let hip = pelvis + right * (side.side_sign() * self.dims.hip_width);
-                let aim = if suspended {
-                    drawn
-                } else {
-                    self.foot(side).probe_anchor()
+                let aim = match self.placer.mode() {
+                    LegMode::Step | LegMode::Fly(_) => self.foot(side).probe_anchor(),
+                    LegMode::Off => hip,
                 };
                 self.foot_probe(ground::probe_tag(side), hip, aim)
             })
@@ -358,7 +346,7 @@ impl LeggedLocomotion {
         };
         self.last_yaw = ctx.yaw;
 
-        self.placer.set_suspended(ctx.airborne);
+        self.placer.set_mode(ctx.mode);
 
         // Fallback foot-centre y used by the placer when no probe hit is
         // available: the rest-rig terrain level. It is also the rest
@@ -388,7 +376,8 @@ impl LeggedLocomotion {
         self.placer.tick(&placer_ctx);
 
         if let Some(recorder) = &mut self.recorder {
-            recorder.record(ctx.airborne, ctx.pose_tag, &placer_ctx, &self.placer);
+            let suspended = !matches!(ctx.mode, LegMode::Step);
+            recorder.record(suspended, ctx.pose_tag, &placer_ctx, &self.placer);
         }
     }
 

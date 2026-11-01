@@ -32,10 +32,11 @@ pub struct BodyDims {
     /// an arch's corners at speed the body lifts off by about this much,
     /// and is carried on as on the ground rather than by a flight.
     pub skim_height: f32,
-    /// How long a body leaving the floor while rising keeps rising, in
-    /// seconds: off a brow it carries the climb it rode up with until the
-    /// drive, its grounding forgiven no longer, cancels the rise. The
-    /// locomotion's ground forgiveness window (`character_viewer contract`).
+    /// How long a body rolling off the floor while rising keeps rising, in
+    /// seconds: off a brow it carries the climb it rode up with for this
+    /// long, and then the drive cancels the rise. The game's roll-off rise
+    /// held (`LocomotionConfig::roll_off_rise_held`, `character_viewer
+    /// contract`).
     pub rise_held: f32,
 }
 

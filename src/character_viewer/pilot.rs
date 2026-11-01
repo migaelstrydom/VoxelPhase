@@ -42,7 +42,9 @@ impl<'a> Pilot<'a> {
             .planned_hop
             .filter(|_| first_frame)
             .map(|(speed, climb)| PlannedTakeoff {
-                velocity: direction.normalize() * speed + Vector3::y() * climb,
+                planar: direction.normalize() * speed,
+                climb: Some(climb),
+                landing: None,
             });
         let intent = CharacterIntent {
             direction,

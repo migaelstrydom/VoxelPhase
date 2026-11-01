@@ -31,8 +31,8 @@ pub use animator::{BodyReading, CharacterAnimator};
 pub use config::CharacterRigConfig;
 pub use debug_config::AnimationDebugConfig;
 pub use foot_placer::{
-    FootPhase, FootPlacer, FootPlacerConfig, FootSide, GaitTiming, PlacerFoot, PlannedStep,
-    PlannedSteps, StepId, Swing,
+    FlightLanding, FootPhase, FootPlacer, FootPlacerConfig, FootSide, GaitTiming, LegMode,
+    PlacerFoot, PlannedStep, PlannedSteps, StepId, Swing,
 };
 pub use legged::{probe_tags, FootGround, LegRigDims, LeggedLocomotion, LocomotionCtx};
 pub use pose::{
