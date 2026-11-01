@@ -192,6 +192,10 @@ pub struct SpanChunk {
     /// since is current. Checked against `SpanRef::generation` in debug
     /// builds.
     changed: [u32; COLUMNS_PER_CHUNK],
+    /// Each column's underside: the height of the world's underside under
+    /// its lowest span, below which is floorless air rather than ground;
+    /// `f32::NEG_INFINITY` where the ground under it never closes.
+    undersides: [f32; COLUMNS_PER_CHUNK],
 }
 
 impl Default for SpanChunk {
@@ -201,6 +205,7 @@ impl Default for SpanChunk {
             spans: Vec::new(),
             generation: 0,
             changed: [0; COLUMNS_PER_CHUNK],
+            undersides: [f32::NEG_INFINITY; COLUMNS_PER_CHUNK],
         }
     }
 }
@@ -221,8 +226,20 @@ impl SpanChunk {
         chunk
     }
 
+    /// The same chunk with each column's underside, in local-index order.
+    pub fn with_undersides(mut self, undersides: [f32; COLUMNS_PER_CHUNK]) -> Self {
+        self.undersides = undersides;
+        self
+    }
+
     pub fn generation(&self) -> u32 {
         self.generation
+    }
+
+    /// The underside of the column at a local index (see
+    /// [`SpanChunk::undersides`](Self)).
+    pub fn underside(&self, local: usize) -> f32 {
+        self.undersides[local]
     }
 
     /// The generation at which the column at a local index last changed.

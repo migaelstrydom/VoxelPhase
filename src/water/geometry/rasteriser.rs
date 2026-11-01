@@ -81,9 +81,11 @@ pub struct RemapEntry {
 }
 
 /// What pairing one column found.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct PairedColumn {
     spans: Vec<Span>,
+    /// The world's underside under the lowest span ([`SpanGraph::underside`]).
+    underside: f32,
     /// The crossings alternated wrongly and had to be resolved by solidity
     /// tests.
     repaired: bool,
@@ -384,6 +386,7 @@ impl SpanRasteriser {
                 if !selected(column) {
                     return PairedColumn {
                         spans: graph.map(|g| g.spans(column).to_vec()).unwrap_or_default(),
+                        underside: graph.map_or(f32::NEG_INFINITY, |g| g.underside(column)),
                         repaired: self.repaired.contains(&column),
                     };
                 }
@@ -407,6 +410,7 @@ impl SpanRasteriser {
         generation: u32,
     ) {
         let mut lists = Vec::with_capacity(COLUMNS_PER_CHUNK);
+        let mut undersides = [f32::NEG_INFINITY; COLUMNS_PER_CHUNK];
         for (local, paired) in columns.into_iter().enumerate() {
             let column = coord.column(local);
             if paired.repaired {
@@ -417,9 +421,13 @@ impl SpanRasteriser {
                 self.repaired.remove(&column);
             }
             self.stats.columns_paired += 1;
+            undersides[local] = paired.underside;
             lists.push(paired.spans);
         }
-        graph.replace_chunk(coord, SpanChunk::from_columns(&lists, generation));
+        graph.replace_chunk(
+            coord,
+            SpanChunk::from_columns(&lists, generation).with_undersides(undersides),
+        );
     }
 
     /// Map each old span to the new span containing `(centre, floor_c + ε)`,
@@ -525,6 +533,7 @@ fn pair_column(
         None => (repaired_intervals(column, &crossings, terrain), true),
     };
 
+    let underside = underside(&crossings, &intervals);
     let mut spans: Vec<Span> = intervals
         .into_iter()
         .map(|(floor, ceiling)| Span {
@@ -537,7 +546,25 @@ fn pair_column(
         })
         .collect();
     fold_floor_bands(column, &mut spans, pieces);
-    PairedColumn { spans, repaired }
+    PairedColumn {
+        spans,
+        underside,
+        repaired,
+    }
+}
+
+/// The world's underside in a column: its lowest crossing, where that is not
+/// the floor of the lowest air interval but the bottom of the ground under
+/// it; `f32::NEG_INFINITY` where there is none.
+fn underside(crossings: &[Crossing], intervals: &[(f32, f32)]) -> f32 {
+    let lowest_floor = intervals
+        .first()
+        .map_or(f32::INFINITY, |interval| interval.0);
+    crossings
+        .first()
+        .map(|crossing| crossing.y)
+        .filter(|&y| y < lowest_floor)
+        .unwrap_or(f32::NEG_INFINITY)
 }
 
 /// Remove floor/ceiling pairs that meet at one height: a silhouette edge seen
@@ -701,8 +728,18 @@ mod tests {
 
     #[test]
     fn the_underside_of_the_world_is_not_a_span() {
-        let intervals = alternating_intervals(&[ceiling(-16.0), floor(0.0)]).unwrap();
+        let crossings = [ceiling(-16.0), floor(0.0)];
+        let intervals = alternating_intervals(&crossings).unwrap();
         assert_eq!(intervals, vec![(0.0, f32::INFINITY)]);
+        assert_eq!(underside(&crossings, &intervals), -16.0);
+    }
+
+    #[test]
+    fn ground_that_never_closes_below_has_no_underside() {
+        let crossings = [floor(0.0), ceiling(4.0), floor(8.0)];
+        let intervals = alternating_intervals(&crossings).unwrap();
+        assert_eq!(underside(&crossings, &intervals), f32::NEG_INFINITY);
+        assert_eq!(underside(&[], &[]), f32::NEG_INFINITY);
     }
 
     #[test]

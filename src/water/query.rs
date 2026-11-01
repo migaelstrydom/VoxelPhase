@@ -70,7 +70,8 @@ impl<'a> WaterQuery<'a> {
     /// The span is the one whose band holds the point: the air it is in, or
     /// for a point just inside the ground, the span resting on that ground.
     /// So a crate under a floating island reads the sea, and one on the
-    /// island reads the island's pool.
+    /// island reads the island's pool. A point under the world's underside
+    /// is in no span, and reads no water however much stands above it.
     pub fn sample(&self, point: Point3<f32>) -> Option<WaterSample> {
         let cell = self.field.cell_at(point)?;
         let cells = self.field.cells();

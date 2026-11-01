@@ -240,12 +240,27 @@ impl SpanGraph {
         );
     }
 
+    /// The height below which a column has floorless air under its ground:
+    /// the world's underside there. `f32::NEG_INFINITY` outside the graph and
+    /// where the ground never closes below.
+    pub fn underside(&self, column: Column) -> f32 {
+        self.chunk(column.chunk())
+            .map_or(f32::NEG_INFINITY, |chunk| {
+                chunk.underside(column.local_index())
+            })
+    }
+
     /// The span whose band holds height `y` in a column: the lowest span whose
-    /// ceiling is above `y`. `None` in a column with no spans.
+    /// ceiling is above `y`. `None` in a column with no spans, and below the
+    /// column's [`underside`](Self::underside).
     ///
     /// For a point in air this is the span containing it. For a point in solid
-    /// ground it is the span resting on that ground.
+    /// ground it is the span resting on that ground. Under the world's
+    /// underside is no ground, only air no span holds.
     pub fn span_at(&self, column: Column, y: f32) -> Option<SpanRef> {
+        if y < self.underside(column) {
+            return None;
+        }
         let spans = self.spans(column);
         let ordinal = spans.iter().position(|s| s.ceiling > y)?;
         Some(self.make_ref(column, ordinal as u8))
@@ -437,5 +452,24 @@ mod tests {
         // Inside the solid between the two, the upper span rests on it.
         assert_eq!(g.span_at(column, 5.0).unwrap().ordinal, 1);
         assert_eq!(g.span_at(column, 100.0).unwrap().ordinal, 1);
+    }
+
+    /// Just inside the ground, a point reads the span resting on it; under
+    /// the world's underside it reads nothing.
+    #[test]
+    fn nothing_holds_a_point_under_the_world() {
+        let coord = SpanChunkCoord { x: 0, z: 0 };
+        let mut g = SpanGraph::new(coord, coord);
+        let columns = vec![vec![span(0.0, f32::INFINITY)]; COLUMNS_PER_CHUNK];
+        g.replace_chunk(
+            coord,
+            SpanChunk::from_columns(&columns, 1).with_undersides([-16.0; COLUMNS_PER_CHUNK]),
+        );
+        let column = Column::new(1, 1);
+        assert_eq!(g.underside(column), -16.0);
+        assert_eq!(g.span_at(column, -0.5).unwrap().ordinal, 0);
+        assert_eq!(g.span_at(column, -15.0).unwrap().ordinal, 0);
+        assert!(g.span_at(column, -16.5).is_none());
+        assert!(g.span_at(column, -400.0).is_none());
     }
 }
