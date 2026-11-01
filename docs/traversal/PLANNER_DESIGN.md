@@ -1,9 +1,10 @@
 # Traversal planner design
 
 How the player crosses broken ground: lips, plank bridges, stepping stones,
-rubble that gives way. Later the same planner handles ledge grabs, hanging and
-climbing. This supersedes `docs/TRAVERSAL_PLAN.md`, which was abandoned on
-2026-10-19.
+rubble that gives way: walking and hopping, nothing more. Ledge grabs,
+hanging and climbing are locomotion states with the planner off
+(`docs/LOCOMOTION_STATES.md`), not planner moves. This supersedes
+`docs/TRAVERSAL_PLAN.md`, which was abandoned on 2026-10-19.
 
 ## Why the last attempt failed, and what this does differently
 
@@ -51,7 +52,7 @@ This design keeps three rules:
                                                                │      ▼ read only through SectionQuery
                                        previous Plan ─────────►│ Planner: body path, then footfalls
                                                                │      │   (body moves: ride, fly;
-                                                               │      │    later grab, pull up, climb)
+                                                               │      │    nothing else)
                                                                │      ▼
                               ┌─────────────────────────────── │ Plan: [Phase]  (committed prefix
                               │                     │          │        + tentative rest)
@@ -117,8 +118,7 @@ Heights are the cast sphere's *centre*, so a layer is the space that centre
 can occupy, and clearance is a comparison of centre heights.
 
 Each lane holds surfaces, not a height per `s`, because ledges, walls and
-overhangs are not heightfields. Gait planning reads only floors and ceilings,
-but the type does not have to change when climbing arrives.
+overhangs are not heightfields. Gait planning reads only floors and ceilings.
 
 **One layer: the body's.** The strip samples the open space the body is in,
 followed out from it station by station: each station's sphere rises from the
@@ -131,7 +131,7 @@ room to start (a crack between two balls), the layer has closed and the
 station is read from the top. What roofs the layer over, where something does,
 is kept as the **upper floor**: a flight may pass over it (the bulge of a
 ball over the trench at its foot) but the body does not ride or land on it.
-Moving between layers (onto a slab from under it) is climbing's, later. A
+Moving between layers (onto a slab from under it) is not planned. A
 floor cast that meets a face too steep to ride, leaning across the path, is
 cast again 2 cm off it: a sphere in the crease between the ground and a bank
 beside the path touches the bank first, and if the cast moved off lands on
@@ -152,8 +152,6 @@ Transition models and the planner never read lanes directly. They ask a
 | `floor(s)` | the body floor under the path, with its normal and footing |
 | `footholds(window)` | every standable foothold in a window along and across the path, with its normal, footing and margin to an edge, and, when the window names a foot's line, footholds on that line wherever the lanes either side hold the same surface; the planner judges which is best |
 | `clears(motion)` | whether the capsule along a grounded stretch or flight arc stays on or above the body floor and under the ceiling |
-
-Climbing adds `edges(s range)`, the grabbable edges, with the wall pass.
 
 The strip of lanes is the first implementation behind it. A real 3D height
 patch around the body can replace it later (see *Beyond one path*) without
@@ -180,11 +178,6 @@ This is the "closing" filter from the design discussion, built from colliders
 the game already has. Fine clutter disappears from the body's floor but stays
 visible to the feet.
 
-Later, climbing adds a **wall pass** (casts forward at several heights) and
-**edges**: convex corners where a floor meets the top of a wall, which can be
-grabbed. Both are new sampler passes that add surfaces and edges to the same
-`Section`.
-
 ## The plan
 
 ```text
@@ -198,10 +191,9 @@ Phase
   motion: Motion                      its variant is the phase's kind:
     Grounded { from, to, speeds }       rides the body floor from s = from to to
     Flight { takeoff, gravity }         ballistic from the takeoff state
-                                        (later: Hang, Climb)
 
 Contact
-  limb: LeftFoot | RightFoot          (later: LeftHand | RightHand)
+  limb: LeftFoot | RightFoot
   at: (s, d, z) on a surface, with its normal and footing
 ```
 
@@ -410,9 +402,7 @@ can do near a station, worked out once per station: a station is ridden
 through only with a foothold within half a step (so the capsule is never
 carried over a void propped on the corners of stones either side), and a
 flight needs a foothold just behind its takeoff and just past its landing,
-and is short enough for one step to span them. New ways for the body to move
-(grabbing a ledge, pulling up, climbing) are new kinds of edge out of a
-station.
+and is short enough for one step to span them.
 
 **The footfalls** are searched along that path. Each is a foot landing on a
 foothold as the body passes a point of its path: every flight ends with one,
@@ -538,8 +528,9 @@ A move state machine has states with entry and exit rules and a handover for
 every pair, so cases grow with the square of the move count. Here a body move
 only *proposes* edges out of a station, and the searches validate every
 proposal by the same rules. Adding a move adds edges and touches nothing else.
-What the drive and the legs consume is `Phase` data, and its set of kinds
-grows slowly: Support, Flight, then Hang and Climb.
+What the drive and the legs consume is `Phase` data, of two kinds: Support
+and Flight. Moves that are not walking or hopping (a jump, a grab, a climb) are
+locomotion states the planner stays out of (`docs/LOCOMOTION_STATES.md`).
 
 ## Beyond one path
 
@@ -557,26 +548,12 @@ both behind `SectionQuery`:
    instead of progress along one path. Only if the fan of arcs fails on the
    rubble and scree lanes.
 
-## Extension: ledges, hanging, climbing
+## Not extended: ledges, hanging, climbing
 
-What each future ability adds. Each is an addition; nothing already
-built changes shape.
-
-| Ability | Section | Plan | Model | Executor |
-|---|---|---|---|---|
-| Ledge grab | wall pass, `Edge`s | hand contacts | `Grab`: a flight ending in hands on an edge | `Hang` |
-| Hang, drop | | `Hang` phase | `Drop`: hang to flight | `Hang` holds a hand constraint to the edge's body (the joint arena), so hanging from rubble pulls on it |
-| Pull up / mantle | | | `PullUp`: hang to support on the edge's floor | `Hang` to `Support` |
-| Climb | wall surfaces tagged climbable | `Climb` phase, mixed hand and foot contacts | `ClimbReach` | `Climb` |
-
-The tracker dispatches on phase kind through a `PhaseExecutor` per kind,
-registered like the models.
-
-One limit to know now: shimmying along a ledge, turning a corner while
-hanging, and cross-stepping along a beam are sideways moves, so they don't fit
-a section taken along the walking path. The fix is a section frame chosen per phase (along the ledge while
-hanging). That is the main open question for climbing; the first version
-takes its frame from the predicted path only.
+The planner is not extended past walking and hopping: planning more moves
+as phases, each with its own executor, would cost more to maintain than it
+returns. Ledge grabs, hanging, pull-ups and climbing are locomotion states
+with the planner off; see `docs/LOCOMOTION_STATES.md`.
 
 ## Code layout
 
