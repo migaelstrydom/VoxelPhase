@@ -305,6 +305,11 @@ bodies asleep where they were placed, not where a foot has pushed them). First
 measured on 64b3dea with `--track --starts 5`: every crossing gets across, the
 even run at half its ideal pace. Why it is slow is not yet looked into.
 
+The crates' scenarios have since been dropped: the crates are light enough for a
+running body to kick them out from under itself, which is as meant, and their
+rows only ever flagged that. The lanes stay in the level for play; the tables
+here that list them are history.
+
 ```
 scenario           cross asked   min  time/ideal    snags     air  rise  drop rms_ay  slip slip_sum pops  best     off  miss miss_max
 crates_walk          5/5  5.00  1.08  2.35/ 2.10  48( 3) 142/177  2.43  2.28   30.3 0.008    0.021    0  4.40    1/35  0.03     0.25
