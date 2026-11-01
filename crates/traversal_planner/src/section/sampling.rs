@@ -71,6 +71,9 @@ struct LayerStation {
     /// above the ceiling: the top of an overhang, which the body may fly
     /// over but does not ride.
     upper_floor: Option<CastHit>,
+    /// The height of whatever bounds the layer over the floor, ceiling or
+    /// not; infinity where nothing does.
+    bound: f32,
 }
 
 /// Samples the strip around `origin` (the body's `s`), by the same rules
@@ -166,11 +169,18 @@ fn body_layer(
     let mut layer = vec![LayerStation::default(); stations.len()];
     let ahead = stations.partition_point(|&s| s < origin);
     let mut follow = |indices: &mut dyn Iterator<Item = usize>| {
-        let mut z = body_z;
+        let (mut z, mut bound) = (body_z, f32::INFINITY);
         for index in indices {
-            let station = layer_station(caster, stations[index], z, radius, least_floor_normal_z);
+            let station = layer_station(
+                caster,
+                stations[index],
+                (z, bound),
+                radius,
+                least_floor_normal_z,
+            );
             if let Some(floor) = station.floor {
                 z = floor.z;
+                bound = station.bound;
             }
             layer[index] = station;
         }
@@ -180,28 +190,40 @@ fn body_layer(
     layer
 }
 
-/// The layer at `s` of a body whose bottom-sphere centre was last at `z`.
+/// The layer at `s` of a body whose bottom-sphere centre was last at `z`, in
+/// a layer bounded at `bound` over it.
 ///
 /// Whatever a sphere rising from there meets bounds the layer: the floor is
 /// cast down from under it, and anything on top of it is the upper floor.
 /// Only a face that leans down is a ceiling; a wall corner grazed on the way
 /// up still bounds the layer, but nothing hangs over the body there. Where
-/// the sphere has no room to start, the layer has closed, and the station is
-/// read from the top.
+/// the sphere has no room to start (the face of a step up out of a gap),
+/// the floor is the step's top: under the last station's bound, which roofs
+/// the step too, where that finds a floor above the last one. Otherwise (a
+/// bound only grazed at the step's edge, or no room under it either) the
+/// station is read from the top.
 fn layer_station(
     caster: &impl SphereCaster,
     s: f32,
-    z: f32,
+    (z, bound): (f32, f32),
     radius: f32,
     least_floor_normal_z: f32,
 ) -> LayerStation {
     let rising = caster.cast_up(s, 0.0, radius, z);
     let closed = rising.is_some_and(|hit| hit.z < z + LAYER_CLOSED);
     let above = rising.filter(|_| !closed);
-    let from = above.map_or(f32::INFINITY, |above| above.z);
-    let floor = caster
-        .cast_down(s, 0.0, radius, from)
-        .map(|floor| off_the_wall(caster, s, from, radius, floor, least_floor_normal_z));
+    let floor_from = |from: f32| {
+        caster
+            .cast_down(s, 0.0, radius, from)
+            .map(|floor| off_the_wall(caster, s, from, radius, floor, least_floor_normal_z))
+    };
+    let floor = match above {
+        Some(above) => floor_from(above.z),
+        None if closed => floor_from(bound)
+            .filter(|floor| floor.z > z && floor.z < bound - LAYER_CLOSED)
+            .or_else(|| floor_from(f32::INFINITY)),
+        None => floor_from(f32::INFINITY),
+    };
     let over = match floor {
         Some(floor) if closed || floor.z < z - CEILING_RECAST_DROP => {
             caster.cast_up(s, 0.0, radius, floor.z + CEILING_START_GAP)
@@ -217,6 +239,7 @@ fn layer_station(
         floor,
         ceiling: over.filter(|hit| hit.normal.z <= -CEILING_FACING),
         upper_floor,
+        bound: over.map_or(f32::INFINITY, |over| over.z),
     }
 }
 
@@ -291,4 +314,79 @@ fn profile(
     }
     surfaces.extend(open.map(|(_, surface)| surface));
     Profile { surfaces }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Planks 40 cm high (body floor 0.65) on the ground (body floor 0.25),
+    /// with a 70 cm gap the body drops into, under a roof whose underside is
+    /// 6 m up and whose top is 12 m up. A sphere that starts against a plank
+    /// is stopped where it starts, as one in the physics world is.
+    struct PlanksUnderRoof;
+
+    impl PlanksUnderRoof {
+        const GROUND: f32 = 0.25;
+        const PLANK: f32 = 0.65;
+        const UNDER_ROOF: f32 = 5.75;
+        const ON_ROOF: f32 = 12.25;
+
+        fn plank_at(s: f32) -> bool {
+            (-1.0..=1.0).contains(&s) || (1.7..=12.0).contains(&s)
+        }
+
+        fn hit(z: f32, normal_z: f32) -> CastHit {
+            CastHit {
+                z,
+                normal: PathVec::new(0.0, 0.0, normal_z),
+                body: BodyKey(0),
+                footing: Footing::Fixed,
+            }
+        }
+    }
+
+    impl SphereCaster for PlanksUnderRoof {
+        fn cast_down(&self, s: f32, _d: f32, _radius: f32, from: f32) -> Option<CastHit> {
+            [Self::ON_ROOF, Self::PLANK, Self::GROUND]
+                .into_iter()
+                .filter(|&z| z <= from && (z != Self::PLANK || Self::plank_at(s)))
+                .map(|z| Self::hit(z, 1.0))
+                .next()
+        }
+
+        fn cast_up(&self, s: f32, _d: f32, _radius: f32, from: f32) -> Option<CastHit> {
+            if Self::plank_at(s) && from < Self::PLANK {
+                return Some(Self::hit(from, -1.0));
+            }
+            (from <= Self::UNDER_ROOF).then(|| Self::hit(Self::UNDER_ROOF, -1.0))
+        }
+    }
+
+    /// Out of the gap, a sphere at the ground's height starts against the
+    /// next plank. The floor there is the plank's top, under the roof that
+    /// covers the gap too, not the roof's top.
+    #[test]
+    fn a_step_up_out_of_a_gap_under_a_roof_is_the_step() {
+        let section = sample_section(
+            &PlanksUnderRoof,
+            &StripLayout::default(),
+            &GaitParams::default(),
+            0.0,
+            PlanksUnderRoof::PLANK,
+        );
+        let floor: Vec<(f32, f32)> = section
+            .body_floor
+            .surfaces
+            .iter()
+            .flat_map(|surface| surface.points.iter().map(|point| (point.s, point.z)))
+            .collect();
+        let in_gap = floor
+            .iter()
+            .any(|&(s, z)| s > 1.0 && s < 1.7 && z == PlanksUnderRoof::GROUND);
+        assert!(in_gap, "the body drops into the gap: {floor:?}");
+        for &(s, z) in floor.iter().filter(|&&(s, _)| s >= 1.7) {
+            assert_eq!(z, PlanksUnderRoof::PLANK, "at s = {s:.2}");
+        }
+    }
 }
