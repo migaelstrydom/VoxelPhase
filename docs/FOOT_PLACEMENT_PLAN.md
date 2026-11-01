@@ -162,7 +162,7 @@ update() flow becomes:
 
 ### Interaction with airborne states
 
-Airborne feet are not planted. `FootPlacer` exposes `suspend()` that freezes step state when `PoseState` is `Launching` or `Airborne`. During the Landing splice, feet resume from wherever Airborne left them and are immediately eligible to step — planted error will almost always exceed threshold on the first post-landing frame, which is exactly what we want (feet catch up to the slide via capture-point stepping).
+Airborne feet are not planted. The placer's `LegMode` comes from the locomotion state (`docs/LOCOMOTION_STATES.md`), never from the pose: `Off` in a jump or a fall, where the pose hangs the legs from the hips, and `Fly` in a planned Hop, where the placer swings the feet onto the landing. Back on the ground the feet are eligible to step at once — planted error will often exceed threshold on the first frame, which is what we want (feet catch up to the slide via capture-point stepping) — while the pose plays a landing squash on top of the gait.
 
 For anticipatory landing IK (the airborne feet-gap problem), `FootPlacer` exposes `reach_toward_ground(probe_hit, weight)`. Orthogonal to this plan; mentioned to confirm composition.
 

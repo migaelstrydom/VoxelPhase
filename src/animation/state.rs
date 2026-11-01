@@ -4,6 +4,7 @@
 
 use nalgebra::{Point3, Vector2, Vector3};
 
+use crate::animation::pose::PoseFragment;
 use crate::character::ThrowingHand;
 
 /// State of a single foot.
@@ -89,6 +90,62 @@ impl WaterEntry {
     }
 }
 
+/// The follow-through of a landing from the air: the pelvis squashes, the
+/// torso and head nod forward, and all of it eases back over the duration.
+/// Played on top of whatever the body does on its feet; nothing reads it
+/// back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LandingSquash {
+    /// How far the pelvis drops at touchdown, in metres.
+    depth: f32,
+    /// How long it takes to recover, in seconds.
+    duration: f32,
+    /// Seconds since touchdown.
+    elapsed: f32,
+}
+
+impl LandingSquash {
+    /// Forward nod of the torso and of the head at touchdown, in radians.
+    const NOD: f32 = 0.15;
+
+    pub fn new(depth: f32, duration: f32) -> Self {
+        Self {
+            depth,
+            duration: duration.max(1.0e-4),
+            elapsed: 0.0,
+        }
+    }
+
+    /// What is left of the squash, in [0, 1]: 1 at touchdown.
+    fn remaining(&self) -> f32 {
+        1.0 - (self.elapsed / self.duration).clamp(0.0, 1.0)
+    }
+
+    /// `fragment` squashed: its pelvis lowered, its torso and head nodded.
+    pub fn applied_to(&self, fragment: PoseFragment) -> PoseFragment {
+        let left = self.remaining();
+        let nod = Self::NOD * left;
+        PoseFragment {
+            pelvis_offset: Some(
+                fragment.pelvis_offset.unwrap_or_else(Vector3::zeros)
+                    - Vector3::y() * (self.depth * left),
+            ),
+            head_tilt: Some(fragment.head_tilt.unwrap_or_else(Vector2::zeros) + Vector2::x() * nod),
+            torso_pitch: Some(fragment.torso_pitch.unwrap_or(0.0) + nod),
+            ..fragment
+        }
+    }
+
+    /// Advance by `dt`; `None` once it has played out.
+    pub fn advanced(self, dt: f32) -> Option<Self> {
+        let next = Self {
+            elapsed: self.elapsed + dt,
+            ..self
+        };
+        (next.elapsed < next.duration).then_some(next)
+    }
+}
+
 /// An arm throwing: wound up from the click, let go at `windup`, then
 /// carried through and back to whatever the arms were doing.
 #[derive(Debug, Clone, Copy)]
@@ -161,9 +218,10 @@ pub struct AnimationState {
     /// `Grounding` component — the Support Set's answer, not the probes'.
     /// Animation reads support; it no longer decides it.
     pub is_grounded: bool,
-    /// Whether the foot placer is swinging the feet through this flight
-    /// onto a plan's landing: the airborne pose then draws them where the
-    /// placer has them, not hanging from the hips.
+    /// Whether the foot placer is swinging the feet through a Hop onto its
+    /// landing: the Hop pose then draws them where the placer has them, not
+    /// hanging from the hips. Data the placer shares, not its mode: a Hop
+    /// whose landing is out of reach flies no foot.
     pub feet_flown: bool,
 
     /// How far the physics body lies over from upright toward its facing, in
@@ -182,6 +240,8 @@ pub struct AnimationState {
     pub wade: f32,
     /// A fall into the water still being recovered from.
     pub water_entry: Option<WaterEntry>,
+    /// A landing from the air still being followed through.
+    pub landing: Option<LandingSquash>,
     /// Throws being played out, oldest first; at most one per hand.
     pub throws: Vec<ThrowGesture>,
 }
@@ -224,6 +284,7 @@ impl AnimationState {
             stroke_phase: 0.0,
             wade: 0.0,
             water_entry: None,
+            landing: None,
             throws: Vec::new(),
         }
     }

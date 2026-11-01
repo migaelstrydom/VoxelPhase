@@ -730,8 +730,9 @@ impl FootPlacer {
     ///
     /// Down from a flight, the flown feet land as they are. Back from off,
     /// each foot still within its leg's stretch of its hip, planted or held
-    /// where its swing was, is kept, and the others plant at stance, so a short drop or a creature's grounding flickering moves
-    /// no foot still under the body. Going off drops every footfall the
+    /// where its swing was, is kept, and the others plant at stance, so a
+    /// short drop or a creature's grounding flickering moves no foot still
+    /// under the body. Going off drops every footfall the
     /// feet stand on or swing to: a plan named them, and is gone. The swings
     /// themselves are kept, frozen, to be judged on the way back.
     fn enter(&mut self, from: LegMode, ctx: &PlacerCtx<'_>) {

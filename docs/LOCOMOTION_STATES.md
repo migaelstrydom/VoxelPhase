@@ -282,9 +282,10 @@ it plays on a change:
   light for a Hop, as the Leap's is today, and heavy for a long jump;
 - the water-entry plunge on entering Swim from the air.
 
-The pose no longer splices in a `Landing` state, runs its own water test, or
-reads whether the placer is flying the feet (`feet_flown`). During a Hop the
-legs are always the placer's, and outside one never.
+The pose no longer splices in a `Landing` state or runs its own water test.
+During a Hop the legs are the placer's, and outside one never: the Hop pose
+draws the feet where the placer flies them or, flying none, hangs them
+from the hips.
 
 ## Structure
 
@@ -493,6 +494,34 @@ Each step ships with the game working, and its tests.
    scree takes 2-3 % longer.
 4. **The pose and the arms.** Mappings and transients, replacing the splice,
    the `afloat` test and `feet_flown`.
+
+   Done (2026-11-01). `next_pose_state` and `map_upper_state` in the
+   humanoid animator are exhaustive matches on the state. A Hop has a pose
+   of its own (`PoseState::Hop`), which keeps the stride cycle so the arms
+   swing through it. The landing squash is `LandingSquash`, a transient like
+   `WaterEntry`, both started in `play_transients` on a change of pose.
+   Where it differs from the text above:
+   - **`feet_flown` stays, read by the Hop pose alone.** A Hop whose landing
+     is out of a leg's reach flies no foot (step 3), and the Hop pose then
+     hangs the legs from the hips. It is where the placer has the feet,
+     shared as data (rule 7), not whether the body is flying. Outside a Hop
+     the pose never draws the placer's feet in the air.
+   - **A jump's wind-up keeps its own clock** (0.14 s, 0.16 s for a long
+     jump), played while the state is a Jump. The Jump's `Launch` phase ends
+     the frame the body leaves the ground, a frame or two after the impulse,
+     too short to read as a crouch.
+   - **The water-entry plunge is as hard as the flight's fastest descent.**
+     Without `afloat`, the pose changes when Swim takes the body, 1-3 frames
+     after the pelvis goes under, by which time the water has slowed it
+     (5.9 to 3 m/s in `fall_in`).
+
+   `swim_off_edge` swims off Island Sea's ocean at its south edge (z = 56):
+   Swim goes to Fall there, the legs hang from the hips, the arms brace, and
+   nothing reaches back to the edge. Measured against step 3 (`--track
+   --starts 3`): body motion across the garden, the turning runs and the
+   contract are unchanged. Foot slip is lower on every station with a
+   flight, as the gait's own stride gain now applies from touchdown, not
+   the walk preset's through a landing pose.
 5. **Out of the water.** Jump from Swim.
 6. **Ledges.** The hand sensor, then `Ledge` with Grab, Hang and PullUp, from
    the air and from the water.

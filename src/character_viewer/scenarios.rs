@@ -10,7 +10,9 @@
 //! z = 61. And `climb_steep`, in the Water Park: the ramp down to the cavern
 //! courtyard at x = -33, rising 11 m from z = -12 to z = -24 (about 43°). And
 //! `contour` and `run_uphill`, on Island Sea's hillside: along it with the
-//! ground falling away on the right, and straight up it at a run. And
+//! ground falling away on the right, and straight up it at a run, and
+//! `swim_off_edge` off its ocean's south edge at z = 56, where the world
+//! ends. And
 //! `air_reverse`, `jump_straight`, `jump_standing`, `run_reverse` and
 //! `crouch_walk`, on the
 //! Traversal Garden's open ground,
@@ -250,6 +252,19 @@ pub fn catalogue() -> Vec<Scenario> {
                         .named("walk_behind"),
                 ),
             camera: CameraRig::side().with_distance(2.2).with_elevation(10.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "swim_off_edge",
+            summary: "Island Sea: swim south off the edge of the world and fall",
+            level: ISLAND,
+            start: (0.0, 50.0),
+            yaw: 0.0,
+            script: Script::new()
+                .then(Beat::stand(0.5).named("tread"))
+                .then(Beat::walk(5.0).named("swim").towards(Vector3::z()))
+                .then(Beat::stand(2.0).named("fall")),
+            camera: CameraRig::side().with_distance(7.0).with_elevation(10.0),
             judged: Judged::Motion,
         },
         Scenario {

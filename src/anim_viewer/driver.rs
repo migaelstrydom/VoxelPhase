@@ -282,8 +282,8 @@ fn pose_label(pose: &PoseState) -> &'static str {
             Gait::Crouch { walking: false } => "crouch",
         },
         PoseState::Launching { .. } => "launch",
+        PoseState::Hop { .. } => "hop",
         PoseState::Airborne { .. } => "air",
-        PoseState::Landing { .. } => "land",
         PoseState::Swimming { .. } => "swim",
     }
 }

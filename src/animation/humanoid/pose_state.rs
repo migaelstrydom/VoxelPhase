@@ -1,9 +1,10 @@
-//! Lower-body / core pose state machine.
+//! Lower-body / core pose.
 //!
-//! `PoseState` is the authoritative FSM for feet, pelvis, head-tilt, and
-//! head-bob. It reads `CharacterState` via the driver (see
-//! `CharacterAnimator::update`) and emits a `PoseFragment`. Upper-body
-//! channels (hands, shoulder twist) are produced by `UpperState`.
+//! `PoseState` draws the feet, pelvis, head tilt and head bob, and emits a
+//! `PoseFragment`. It is a mapping of the character's locomotion state (see
+//! `CharacterAnimator::update`); only a jump's wind-up keeps a clock of its
+//! own. Upper-body channels (hands, shoulder twist) are produced by
+//! `UpperState`.
 
 use std::f32::consts::PI;
 
@@ -13,7 +14,7 @@ use super::body_frame::BodyFrame;
 use super::stride_sync;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, FeetPose, FootAnchor, PoseFragment};
-use crate::animation::state::{AnimationState, WaterEntry};
+use crate::animation::state::{AnimationState, LandingSquash, WaterEntry};
 
 /// Gait preset inside `PoseState::Grounded`.
 ///
@@ -54,8 +55,9 @@ impl Gait {
 pub enum AirKind {
     Jump,
     LongJump,
-    /// A planned hop's running leap: no wind-up, as the body has already
-    /// left the ground, and a light landing back into the run.
+    /// A planned hop's running leap (`PoseState::Hop`): no wind-up, as the
+    /// body has already left the ground, and a light landing back into the
+    /// run.
     Leap,
     Fall,
 }
@@ -73,8 +75,13 @@ impl AirKind {
         }
     }
 
+    /// The squash a landing from this kind of flight plays.
+    pub fn landing_squash(self) -> LandingSquash {
+        LandingSquash::new(self.landing_squash_depth(), self.landing_duration())
+    }
+
     /// Landing (follow-through) duration, seconds.
-    pub fn landing_duration(self) -> f32 {
+    fn landing_duration(self) -> f32 {
         match self {
             AirKind::Jump => 0.12,
             AirKind::LongJump => 0.20,
@@ -92,8 +99,8 @@ impl AirKind {
         }
     }
 
-    /// Initial pelvis squash depth on Landing, metres.
-    pub fn landing_squash_depth(self) -> f32 {
+    /// Initial pelvis squash depth on landing, metres.
+    fn landing_squash_depth(self) -> f32 {
         match self {
             AirKind::Jump => 0.08,
             AirKind::LongJump => 0.14,
@@ -138,44 +145,34 @@ impl Default for Takeoff {
 pub enum PoseKey {
     Grounded(GaitKey),
     Launching(AirKind),
+    Hop,
     Airborne(AirKind),
-    Landing(AirKind),
     Swimming(Stroke),
 }
 
 /// Lower-body / core animation state.
 #[derive(Debug, Clone, Copy)]
 pub enum PoseState {
-    Grounded {
-        gait: Gait,
-    },
+    /// On foot, by gait.
+    Grounded { gait: Gait },
+    /// A jump's wind-up, played for its own duration from the jump.
     Launching {
         kind: AirKind,
         takeoff: Takeoff,
         t: f32,
     },
-    Airborne {
-        kind: AirKind,
-        takeoff: Takeoff,
-    },
-    Landing {
-        kind: AirKind,
-        t: f32,
-        /// World y of the ground at impact. Feet stay pinned to this
-        /// height while x/z track the hips — keeps legs from stretching
-        /// as the body slides horizontally.
-        ground_y: f32,
-    },
+    /// A planned hop's leap. The legs are the foot placer's: the feet it
+    /// flies onto the landing are drawn where it has them, as on the ground.
+    Hop { takeoff: Takeoff },
+    /// In the air after a jump's wind-up, or falling: the legs hang from the
+    /// hips.
+    Airborne { kind: AirKind, takeoff: Takeoff },
     /// In the water with nothing underfoot. The body's own pitch lays the rig
     /// flat or stands it up; this chooses what the limbs do.
-    Swimming {
-        stroke: Stroke,
-    },
+    Swimming { stroke: Stroke },
 }
 
-/// Per-frame tick inputs. `tick` is currently a no-op; the struct exists
-/// so the FSM signature is stable before Launching/Landing timers are
-/// wired in.
+/// Per-frame tick inputs.
 #[allow(dead_code)]
 pub struct TickCtx<'a> {
     pub dt: f32,
@@ -192,10 +189,8 @@ pub struct SampleCtx<'a> {
 }
 
 impl PoseState {
-    /// Advance FSM-internal timers. Launching and Landing own a `t`
-    /// counter that the driver reads to detect completion; the driver
-    /// handles the actual transition out (so the mapping from CharacterState
-    /// lives in one place).
+    /// Advance the wind-up's clock, which the driver reads to tell when it
+    /// has played out.
     pub fn tick(self, ctx: &TickCtx<'_>) -> Self {
         match self {
             PoseState::Launching { kind, takeoff, t } => PoseState::Launching {
@@ -203,23 +198,38 @@ impl PoseState {
                 takeoff,
                 t: t + ctx.dt,
             },
-            PoseState::Landing { kind, t, ground_y } => PoseState::Landing {
-                kind,
-                t: t + ctx.dt,
-                ground_y,
-            },
             other => other,
         }
     }
 
-    /// Whether this state's built-in timer has finished. Used by the
-    /// driver to decide when Launching/Landing should yield to the
-    /// CharacterState mapping.
+    /// Whether the wind-up has played out; never, for any other pose.
     pub fn timer_expired(&self) -> bool {
         match *self {
             PoseState::Launching { kind, t, .. } => t >= kind.launch_duration(),
-            PoseState::Landing { kind, t, .. } => t >= kind.landing_duration(),
-            _ => false,
+            PoseState::Grounded { .. }
+            | PoseState::Hop { .. }
+            | PoseState::Airborne { .. }
+            | PoseState::Swimming { .. } => false,
+        }
+    }
+
+    /// The kind of flight this pose is in, if it is in the air: what a
+    /// landing from it squashes by.
+    pub fn air_kind(&self) -> Option<AirKind> {
+        match *self {
+            PoseState::Launching { kind, .. } | PoseState::Airborne { kind, .. } => Some(kind),
+            PoseState::Hop { .. } => Some(AirKind::Leap),
+            PoseState::Grounded { .. } | PoseState::Swimming { .. } => None,
+        }
+    }
+
+    /// The takeoff latched by the flight this pose is in, if any.
+    pub fn takeoff(&self) -> Option<Takeoff> {
+        match *self {
+            PoseState::Launching { takeoff, .. }
+            | PoseState::Hop { takeoff }
+            | PoseState::Airborne { takeoff, .. } => Some(takeoff),
+            PoseState::Grounded { .. } | PoseState::Swimming { .. } => None,
         }
     }
 
@@ -235,8 +245,10 @@ impl PoseState {
                 }
             }
             PoseState::Launching { kind, t, .. } => sample_launching(ctx, *kind, *t),
-            PoseState::Landing { kind, t, .. } => sample_landing(ctx, *kind, *t),
-            PoseState::Airborne { kind, takeoff } => sample_airborne(ctx, *kind, *takeoff),
+            PoseState::Hop { takeoff } => {
+                sample_airborne(ctx, AirKind::Leap, *takeoff, ctx.anim.feet_flown)
+            }
+            PoseState::Airborne { kind, takeoff } => sample_airborne(ctx, *kind, *takeoff, false),
             PoseState::Swimming { stroke } => sample_swimming(ctx, *stroke),
         }
     }
@@ -248,8 +260,8 @@ impl PoseState {
         match *self {
             PoseState::Grounded { gait } => PoseKey::Grounded(gait.key()),
             PoseState::Launching { kind, .. } => PoseKey::Launching(kind),
+            PoseState::Hop { .. } => PoseKey::Hop,
             PoseState::Airborne { kind, .. } => PoseKey::Airborne(kind),
-            PoseState::Landing { kind, .. } => PoseKey::Landing(kind),
             PoseState::Swimming { stroke } => PoseKey::Swimming(stroke),
         }
     }
@@ -265,8 +277,8 @@ impl PoseState {
                 Gait::Crouch { walking: true } => "crouch_walk",
             },
             PoseState::Launching { .. } => "launching",
+            PoseState::Hop { .. } => "hop",
             PoseState::Airborne { .. } => "airborne",
-            PoseState::Landing { .. } => "landing",
             PoseState::Swimming {
                 stroke: Stroke::Crawl,
             } => "crawl",
@@ -280,10 +292,11 @@ impl PoseState {
     /// Populated for all `Grounded` states (including Idle) — the phase
     /// always exists; the upper body scales amplitude by
     /// `AnimationState::stride_activity` so rest-pose falls out of the
-    /// same math. Airborne states return `None` (no stride cycle).
+    /// same math. A Hop keeps the stride: it flows out of the run and back
+    /// into it, its feet swinging as steps do. Other flights have none.
     pub fn cycle(&self, anim: &AnimationState) -> Option<Cycle> {
         match self {
-            PoseState::Grounded { .. } => Some(Cycle {
+            PoseState::Grounded { .. } | PoseState::Hop { .. } => Some(Cycle {
                 phase: anim.stride_phase,
                 kind: CycleKind::Stride,
             }),
@@ -291,7 +304,7 @@ impl PoseState {
                 phase: anim.stroke_phase,
                 kind: CycleKind::Stroke,
             }),
-            _ => None,
+            PoseState::Launching { .. } | PoseState::Airborne { .. } => None,
         }
     }
 }
@@ -384,9 +397,18 @@ pub fn wade_lean(wade: f32) -> f32 {
 /// - `Jump`: tucked legs, small forward torso lean, neutral head.
 /// - `LongJump`: legs slightly extended forward along takeoff facing, body
 ///   committed forward, head pitched down.
+/// - `Leap`: a hop's, legs as `Jump`'s.
 /// - `Fall`: dangly legs, slight backward head tilt (arms handled by
 ///   `UpperState::Braced`).
-fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> PoseFragment {
+///
+/// With `flown`, the foot placer is swinging the feet onto the flight's
+/// landing, and they are drawn where it has them, as on the ground.
+fn sample_airborne(
+    ctx: &SampleCtx<'_>,
+    kind: AirKind,
+    takeoff: Takeoff,
+    flown: bool,
+) -> PoseFragment {
     let rig = ctx.rig;
     let anim = ctx.anim;
     let right = anim.facing.cross(&Vector3::y());
@@ -413,9 +435,7 @@ fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> Pose
     };
     let foot_push = forward * feet_forward;
 
-    // Through a flight the plan lands, the placer swings the feet onto
-    // the landing and they are drawn where it has them, as on the ground.
-    let feet = if anim.feet_flown {
+    let feet = if flown {
         FeetPose {
             left: anim.left.position,
             right: anim.right.position,
@@ -481,43 +501,6 @@ fn sample_launching(ctx: &SampleCtx<'_>, kind: AirKind, t: f32) -> PoseFragment 
         head_tilt: Some(Vector2::new(0.0, 0.0)),
         head_bob: Some(0.0),
         torso_pitch: Some(0.10 * envelope),
-    }
-}
-
-/// Landing (follow-through) pose. Pelvis squashes at t=0 and recovers by
-/// t=duration. Feet stay where the placer put them — the touchdown plane the
-/// state carries is a record of where the body landed, not a floor to pin feet
-/// to: a body still falling (a floor collapsing under it) leaves that plane
-/// above its own hips within a few frames.
-fn sample_landing(ctx: &SampleCtx<'_>, kind: AirKind, t: f32) -> PoseFragment {
-    let anim = ctx.anim;
-    let duration = kind.landing_duration().max(1e-4);
-    // Decaying profile: 1 at t=0, 0 at t=duration.
-    let decay = 1.0 - (t / duration).clamp(0.0, 1.0);
-    let squash = kind.landing_squash_depth() * decay;
-
-    // Feet come from `FootPlacer`, as they do standing and walking: the
-    // placer is live the moment the body is grounded again, and it is what
-    // knows where the ground is and which foot is holding the body up.
-    // Dragging them under the hips instead — which is what a landing pose
-    // that generates its own feet must do — slides both of them along the
-    // floor for the whole follow-through, and a landing taken at speed is
-    // exactly when the hips travel furthest. The squash belongs to the
-    // pelvis, and is applied there.
-    let feet = FeetPose {
-        left: anim.left.position,
-        right: anim.right.position,
-        anchor: FootAnchor::World,
-    };
-
-    PoseFragment {
-        feet: Some(feet),
-        hands: None,
-        pelvis_offset: Some(Vector3::new(0.0, -squash, 0.0)),
-        shoulder_twist: None,
-        head_tilt: Some(Vector2::new(0.15 * decay, 0.0)),
-        head_bob: Some(0.0),
-        torso_pitch: Some(0.15 * decay),
     }
 }
 
