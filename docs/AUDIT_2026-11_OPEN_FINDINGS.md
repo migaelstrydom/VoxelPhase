@@ -8,6 +8,9 @@ physics bench-harness tests were left out.
   or an in-game check (branch `audit-fixes`, on main at `50f0abb`).
 - **Code smell:** the dead code, misleading names and smaller duplications were
   cleaned up on branch `smell-cleanup`.
+- **Performance:** the localised findings were fixed on branch `perf-fixes`;
+  see "Fixed on `perf-fixes`" below. The ranked list keeps every finding as
+  it was reported.
 
 This file holds what is left: the performance findings, and the smell
 findings that were held back because each needs a decision first.
@@ -122,6 +125,56 @@ Already gone on `smell-cleanup`:
 - the Verlet angle-constraint clone;
 - the per-frame kinematic-sync join;
 - the opaque debug-overlay draw.
+
+### Fixed on `perf-fixes`
+
+Each in its own commit. Measured against `smell-cleanup` in release:
+`physics_perf` igloo about 7% less physics time a frame, glass about 10%
+(worst frame about 20%); `render_perf` on Stack Yard about 20% less model
+drawing CPU, and a few percent less simulate time in a blast.
+
+- **3, sleep:** a substep borrows the sleeping set instead of cloning it
+  three times; force providers (buoyancy) skip sleeping bodies; the
+  constraints that keep a body awake are read once per sleep update, not
+  once per awake body; `sync_bodies` asks the arena whether a body is live
+  instead of building a set.
+- **4, ray casts:** `raycast_bodies` takes its candidates from the bounds
+  index; the terrain probe queries triangles without building adjacency.
+- **6, debug output:** `DebugLog` records only on the frame F3 is pressed,
+  and the heavy writers and the physics contact snapshot check first.
+- **8, hulls:** B's edge normals are rotated once per hull pair; GJK accepts
+  convergence on a lone first vertex (it looped all 32 iterations); EPA
+  reuses its silhouette buffer. Hull edge adjacency (13) is hashed.
+- **9, buoyancy:** the water sleep tracker forgets despawned bodies.
+- **10, streamed buffers:** a `ManagedBuffer` maps once and stays mapped.
+- **11:** Verlet no longer clones its distance constraints per iteration.
+- **12, particles:** quad indices written once per slot; vertices and the
+  partition reuse buffers; spawning into a full pool cannot panic on NaN.
+- **13:** no allocations per model drawn; the manifold cache is written back
+  once a frame; idle frames sort only dirty chunk coordinates; fire pressure
+  is R32 instead of RGBA16F; the fire sync joins once. The fire Jacobi's
+  wasted last iteration had already been fixed on main.
+
+### Still open, and why
+
+- **1 frustum culling, 2 texture per block, 5 shared terrain vertices:**
+  redesigns, as ranked above.
+- **3:** the broadphase sorting every collider, CCD snapshotting every
+  collider, and `physics_sync` copying every body to the ECS. Each needs a
+  persistent structure or a rule about who may move a sleeping body.
+- **7 static terrain contacts:** the speculative path's second query could
+  be one wider query, but a wider patch can change the seam filter and the
+  reduced contacts. The allocations and repeated triangle normals need
+  scratch buffers or stored normals carried through `StaticGeometry`.
+- **8:** hull contacts' `support_face` probes, about 12 a contact.
+- **9:** buoyancy's three polyhedron clips per part, and swell waking sunken
+  sleepers (a behaviour change).
+- **11:** rig meshes rebuilt per frame. Keeping each rig's mesh across
+  frames touches three rigs and the render path, for tens of microseconds
+  with a handful of characters.
+- **13:** position-correction scratch (three small allocations per call);
+  level generation writing voxels one at a time (load time only; needs a
+  bulk octree builder that matches per-voxel writes exactly).
 
 ## Code smell held back
 
