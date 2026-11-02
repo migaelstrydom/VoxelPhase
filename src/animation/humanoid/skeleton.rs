@@ -223,8 +223,11 @@ impl Skeleton {
         self.left_shoulder = self.chest + left_offset * config.shoulder_width;
         self.right_shoulder = self.chest + right_offset * config.shoulder_width;
 
-        self.left_hand = left_hand;
-        self.right_hand = right_hand;
+        // Held to the arm's reach, as the feet are to the leg's: a pose that
+        // asks for a hand further out than the arm goes (a long jump's braced
+        // arms at speed) would otherwise stretch the forearm to get there.
+        self.left_hand = within_reach(self.left_shoulder, left_hand, config.arm_length());
+        self.right_hand = within_reach(self.right_shoulder, right_hand, config.arm_length());
 
         self.solve_elbow_ik(&torso, config);
 
@@ -320,8 +323,10 @@ fn solve_arm_ik(
         return shoulder + bend_dir * upper_length;
     }
 
-    // Clamp distance to valid range
-    let dist = dist.clamp(0.01, upper_length + lower_length - 0.01);
+    // The hand is already held within reach (`within_reach`), so the solve
+    // works to where it is: an elbow solved for any shorter reach would leave
+    // the forearm stretched to meet the hand.
+    let dist = dist.clamp(0.01, upper_length + lower_length);
 
     // Law of cosines to find elbow angle
     let cos_angle = ((upper_length * upper_length + dist * dist - lower_length * lower_length)
@@ -428,4 +433,33 @@ pub fn generate_character_mesh(
     mesh.sphere(skeleton.head, config.head_radius, config.head_colour);
 
     mesh.into_parts()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hand asked for beyond the arm's reach is drawn at the end of an arm
+    /// held straight, with both its bones at their own lengths.
+    #[test]
+    fn a_hand_out_of_reach_ends_a_straight_arm_of_its_own_length() {
+        let config = CharacterRigConfig::default();
+        let facing = Vector3::z();
+        let mut skeleton = Skeleton::new(&config, Point3::new(0.0, 1.0, 0.0), facing);
+        let frame = BodyFrame::new(facing, 0.0);
+        let far = Point3::new(0.0, 1.0, 3.0);
+
+        skeleton.update_upper_body(&frame, &config, 0.0, Vector2::zeros(), 0.0, 0.0, far, far);
+
+        let upper = (skeleton.left_elbow - skeleton.left_shoulder).norm();
+        let lower = (skeleton.left_hand - skeleton.left_elbow).norm();
+        assert!(
+            (upper - config.upper_arm_length).abs() < 1e-3,
+            "upper arm {upper}"
+        );
+        assert!(
+            (lower - config.lower_arm_length).abs() < 1e-3,
+            "forearm {lower}"
+        );
+    }
 }
