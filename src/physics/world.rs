@@ -351,6 +351,11 @@ impl PhysicsWorld {
         &self.debugger
     }
 
+    /// Build the debugger's contact snapshot each frame from now on (or stop).
+    pub fn keep_contact_snapshot(&mut self, keep: bool) {
+        self.debugger.keep_contact_snapshot(keep);
+    }
+
     pub fn sleeping_bodies(&self) -> Vec<RigidBodyHandle> {
         if !self.config.sleep.enabled {
             return Vec::new();

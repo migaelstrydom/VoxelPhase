@@ -95,18 +95,36 @@ impl DebugLines {
 /// // Or if F3 not pressed:
 /// debug_log.print_and_clear(false); // just clears
 /// ```
+///
+/// Only a frame someone will read keeps its entries: the frame loop switches
+/// recording on for the frame F3 is pressed on. A writer whose entries cost
+/// more than a `format!` or two checks [`DebugLog::is_recording`] first.
 #[derive(Default)]
 pub struct DebugLog {
     entries: BTreeMap<String, String>,
+    /// Whether this frame's entries will be read; when not, `add` drops them.
+    recording: bool,
 }
 
 impl DebugLog {
-    /// Add or update a debug log entry.
+    /// Add or update a debug log entry, if this frame is recording.
     ///
     /// If a key already exists, its value is replaced.
     /// Keys are sorted alphabetically when printing.
     pub fn add(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        self.entries.insert(key.into(), value.into());
+        if self.recording {
+            self.entries.insert(key.into(), value.into());
+        }
+    }
+
+    /// Whether this frame's entries will be read.
+    pub fn is_recording(&self) -> bool {
+        self.recording
+    }
+
+    /// Keep (or drop) the entries added from now until the log is cleared.
+    pub fn set_recording(&mut self, recording: bool) {
+        self.recording = recording;
     }
 
     /// Print all entries to stdout if `should_print` is true, then clear.

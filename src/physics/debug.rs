@@ -55,6 +55,8 @@ impl Default for PhysicsDebugConfig {
 /// Handles debug visualization and logging for the physics engine.
 pub struct PhysicsDebugger {
     config: PhysicsDebugConfig,
+    /// Whether `update` builds a contact snapshot; only a debug log reads it.
+    keep_snapshot: bool,
     last_snapshot: Option<ContactDebugSnapshot>,
 }
 
@@ -62,8 +64,16 @@ impl PhysicsDebugger {
     pub fn new(config: PhysicsDebugConfig) -> Self {
         Self {
             config,
+            keep_snapshot: false,
             last_snapshot: None,
         }
+    }
+
+    /// Build a contact snapshot each frame from now on (or stop). Off by
+    /// default: it costs a pass over every contact, and only
+    /// [`PhysicsDebugger::write_debug_log`] reads it.
+    pub fn keep_contact_snapshot(&mut self, keep: bool) {
+        self.keep_snapshot = keep;
     }
 
     /// Update debug statistics from the current frame's contact data.
@@ -75,6 +85,10 @@ impl PhysicsDebugger {
         active_manifolds: &[SolverManifold],
         events: &[ContactEvent],
     ) {
+        if !self.keep_snapshot {
+            self.last_snapshot = None;
+            return;
+        }
         self.last_snapshot = Some(ContactDebugSnapshot::new(
             bodies,
             raw_manifolds,

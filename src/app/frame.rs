@@ -6,7 +6,7 @@ use specs::{Dispatcher, World, WorldExt};
 
 use crate::debug::DebugLog;
 
-use super::event_handler::clear_frame_state;
+use super::event_handler::{clear_frame_state, debug_log_requested};
 use super::system_timing::{SystemTime, SystemTimings};
 
 /// How many of a frame's slowest systems F3 prints.
@@ -30,6 +30,10 @@ pub struct FrameTiming {
 /// game and an offline harness cannot run the frame in different orders.
 pub fn run_frame(world: &mut World, dispatcher: &mut Dispatcher) -> FrameTiming {
     let start = Instant::now();
+    let log_requested = debug_log_requested(world);
+    world
+        .write_resource::<DebugLog>()
+        .set_recording(log_requested);
 
     // `dispatch` would run the thread-local systems too, and the
     // render is one of them — calling it here and again below drew
@@ -53,7 +57,9 @@ pub fn run_frame(world: &mut World, dispatcher: &mut Dispatcher) -> FrameTiming 
     let rendered = Instant::now();
 
     let systems = world.read_resource::<SystemTimings>().take();
-    log_slowest_systems(&systems, &mut world.write_resource::<DebugLog>());
+    if log_requested {
+        log_slowest_systems(&systems, &mut world.write_resource::<DebugLog>());
+    }
 
     clear_frame_state(world);
 

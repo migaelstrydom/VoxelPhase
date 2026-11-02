@@ -618,7 +618,9 @@ impl<'a> System<'a> for RenderSystem {
                             debug.lines.add("GPU ms", format!("{:.2}", self.gpu_ms_ema));
                         }
                     }
-                    log_render_profile(renderer.profile(), &mut debug.log);
+                    if debug.log.is_recording() {
+                        log_render_profile(renderer.profile(), &mut debug.log);
+                    }
 
                     // Debug text and HUD go out as one batch: the overlay
                     // owns a single vertex buffer, so a second upload before

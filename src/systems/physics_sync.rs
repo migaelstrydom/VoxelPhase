@@ -278,6 +278,8 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         ): Self::SystemData,
     ) {
         let frame_dt = time.delta_seconds();
+        let logging = debug_log.is_recording();
+        physics.world.keep_contact_snapshot(logging);
 
         // Push the drive command for actuated bodies (player, platforms, etc.)
         Self::push_drive_intent(&mut physics.world, &mut drive_intents, &actuators, &bodies);
@@ -385,27 +387,29 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             physics.world.suspensions().map(|(_, _, readout)| readout),
             &mut debug_overlays,
         );
-        Self::log_frame_profile(physics.world.frame_profile(), &mut debug_log);
-        Self::log_traction_usage(&physics.world, &actuators, &bodies, &mut debug_log);
-        Self::log_allowance_usage(&physics.world, &actuators, &bodies, &mut debug_log);
-        physics.world.debugger().write_debug_log(
-            &mut debug_log,
-            physics.world.config().contact_margin,
-            physics.world.config().warm_start_depth_slop,
-        );
-        let fixed_dt = physics.stepper().fixed_dt();
-        let gravity = physics.world.config().gravity;
-        debug_log.add("Physics/Config/FrameDt", format!("{:.5}", frame_dt));
-        debug_log.add("Physics/Config/FixedDt", format!("{:.5}", fixed_dt));
-        debug_log.add("Physics/Config/Substeps", physics_substeps.to_string());
-        debug_log.add(
-            "Physics/Config/Gdt",
-            format!("{:.5}", gravity.magnitude() * fixed_dt),
-        );
-        debug_log.add(
-            "Physics/Config/GyDt",
-            format!("{:.5}", gravity.y * fixed_dt),
-        );
+        if logging {
+            Self::log_frame_profile(physics.world.frame_profile(), &mut debug_log);
+            Self::log_traction_usage(&physics.world, &actuators, &bodies, &mut debug_log);
+            Self::log_allowance_usage(&physics.world, &actuators, &bodies, &mut debug_log);
+            physics.world.debugger().write_debug_log(
+                &mut debug_log,
+                physics.world.config().contact_margin,
+                physics.world.config().warm_start_depth_slop,
+            );
+            let fixed_dt = physics.stepper().fixed_dt();
+            let gravity = physics.world.config().gravity;
+            debug_log.add("Physics/Config/FrameDt", format!("{:.5}", frame_dt));
+            debug_log.add("Physics/Config/FixedDt", format!("{:.5}", fixed_dt));
+            debug_log.add("Physics/Config/Substeps", physics_substeps.to_string());
+            debug_log.add(
+                "Physics/Config/Gdt",
+                format!("{:.5}", gravity.magnitude() * fixed_dt),
+            );
+            debug_log.add(
+                "Physics/Config/GyDt",
+                format!("{:.5}", gravity.y * fixed_dt),
+            );
+        }
 
         // Sync physics state back to ECS components
         Self::sync_physics_to_ecs(

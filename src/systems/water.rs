@@ -99,7 +99,9 @@ impl<'a> System<'a> for WaterSystem {
             }
         }
 
-        water.debug_log(&mut debug_log);
+        if debug_log.is_recording() {
+            water.debug_log(&mut debug_log);
+        }
     }
 }
 

@@ -181,12 +181,20 @@ fn escape_action(mouse_captured: bool, repeat: bool) -> EscapeAction {
     }
 }
 
+/// Whether this frame's debug log is wanted: F3 was pressed on it. False in a
+/// world with no input, as an offline harness's may be.
+pub fn debug_log_requested(world: &World) -> bool {
+    world
+        .try_fetch::<InputState>()
+        .is_some_and(|input| input.is_key_just_pressed(KeyCode::F3))
+}
+
 /// Clears per-frame state after systems have processed
 pub fn clear_frame_state(world: &mut World) {
-    let (should_print_debug, should_write_recording, should_slow_down) = {
+    let should_print_debug = debug_log_requested(world);
+    let (should_write_recording, should_slow_down) = {
         let input = world.read_resource::<InputState>();
         (
-            input.is_key_just_pressed(KeyCode::F3),
             input.is_key_just_pressed(KeyCode::F4),
             input.is_key_just_pressed(KeyCode::F9),
         )

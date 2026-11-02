@@ -279,6 +279,9 @@ impl<'a> System<'a> for BrainSystem {
             if !matches!(brain.behaviour, Behaviour::Idle) {
                 awake += 1;
             }
+            if !debug_log.is_recording() {
+                continue;
+            }
             debug_log.add(
                 format!("Creature/{}/Behaviour", entity.id()),
                 format!(

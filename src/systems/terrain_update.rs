@@ -26,8 +26,10 @@ impl<'a> System<'a> for TerrainUpdateSystem {
 
         terrain_manager.update();
 
-        if let Some(timings) = terrain_manager.last_update_timings() {
-            report(&timings, &mut debug_log);
+        if debug_log.is_recording() {
+            if let Some(timings) = terrain_manager.last_update_timings() {
+                report(&timings, &mut debug_log);
+            }
         }
     }
 }
