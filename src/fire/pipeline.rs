@@ -105,15 +105,27 @@ impl Default for FireSimParams {
 
 /// Descriptor sets for a single fire volume across all simulation passes.
 pub struct FireVolumeDescriptors {
-    /// Advection pass: [field_src, field_dst, vel_src, vel_dst]
+    /// Advection pass, by the index it reads: [field_src, field_dst, vel_src,
+    /// vel_dst].
     pub advect_sets: [vk::DescriptorSet; 2],
+    /// The passes after advection, by the index advection wrote. They work on
+    /// the field and velocity advection just produced, which alternate
+    /// between the two halves of each ping-pong pair frame to frame.
+    pub step_sets: [FireStepSets; 2],
+}
+
+/// The descriptor sets of the passes that follow advection, all bound to one
+/// half of the field and velocity pairs.
+#[derive(Clone, Copy)]
+pub struct FireStepSets {
     /// Forces pass: [field, velocity]
-    pub forces_set: vk::DescriptorSet,
-    /// Pressure pass: [velocity, pressure_src, pressure_dst] — no dedicated set,
-    /// updated each iteration via the two ping-pong sets.
-    pub pressure_sets: [vk::DescriptorSet; 2],
-    /// Correction pass: [velocity, pressure]
-    pub correct_set: vk::DescriptorSet,
+    pub forces: vk::DescriptorSet,
+    /// Pressure pass, by Jacobi iteration parity: [velocity, pressure_src,
+    /// pressure_dst].
+    pub pressure: [vk::DescriptorSet; 2],
+    /// Correction pass: [velocity, pressure], the pressure the last Jacobi
+    /// iteration wrote.
+    pub correct: vk::DescriptorSet,
 }
 
 /// The four compute pipelines for fire fluid simulation.
@@ -191,14 +203,17 @@ impl FireSimPipelines {
 
     /// Allocate descriptor sets for a fire volume.
     pub fn allocate_volume_descriptors(&self) -> EngineResult<FireVolumeDescriptors> {
-        let layouts = [
-            self.advect_layout,   // advect set A (src=0, dst=1)
-            self.advect_layout,   // advect set B (src=1, dst=0)
-            self.forces_layout,   // forces
-            self.pressure_layout, // pressure ping A
-            self.pressure_layout, // pressure ping B
-            self.correct_layout,  // correct
+        let step_layouts = [
+            self.forces_layout,
+            self.pressure_layout,
+            self.pressure_layout,
+            self.correct_layout,
         ];
+        let layouts: Vec<vk::DescriptorSetLayout> = [self.advect_layout, self.advect_layout]
+            .into_iter()
+            .chain(step_layouts)
+            .chain(step_layouts)
+            .collect();
 
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(self.descriptor_pool)
@@ -213,11 +228,14 @@ impl FireSimPipelines {
                 })?
         };
 
+        let step = |base: usize| FireStepSets {
+            forces: sets[base],
+            pressure: [sets[base + 1], sets[base + 2]],
+            correct: sets[base + 3],
+        };
         Ok(FireVolumeDescriptors {
             advect_sets: [sets[0], sets[1]],
-            forces_set: sets[2],
-            pressure_sets: [sets[3], sets[4]],
-            correct_set: sets[5],
+            step_sets: [step(2), step(6)],
         })
     }
 
@@ -232,35 +250,41 @@ impl FireSimPipelines {
         // Advect set B: reads from [1], writes to [0]
         self.write_advect_descriptors(descriptors.advect_sets[1], volume, 1, 0);
 
-        // Forces: reads+writes current source
-        self.write_storage_images(
-            descriptors.forces_set,
-            &[volume.field[0].image_view, volume.velocity[0].image_view],
-        );
+        for (k, sets) in descriptors.step_sets.iter().enumerate() {
+            self.write_step_descriptors(sets, volume, k);
+        }
+    }
 
-        // Pressure ping A: reads vel[0], pressure[0] → pressure[1]
+    /// Point one half's post-advection sets at field[k] and velocity[k].
+    fn write_step_descriptors(&self, sets: &FireStepSets, volume: &FireVolume, k: usize) {
+        let velocity = volume.velocity[k].image_view;
+        self.write_storage_images(sets.forces, &[volume.field[k].image_view, velocity]);
+
+        // Jacobi ping-pong: an even iteration reads pressure[0] and writes
+        // pressure[1], an odd one the reverse.
         self.write_storage_images(
-            descriptors.pressure_sets[0],
+            sets.pressure[0],
             &[
-                volume.velocity[0].image_view,
+                velocity,
                 volume.pressure[0].image_view,
                 volume.pressure[1].image_view,
             ],
         );
-        // Pressure ping B: reads vel[0], pressure[1] → pressure[0]
         self.write_storage_images(
-            descriptors.pressure_sets[1],
+            sets.pressure[1],
             &[
-                volume.velocity[0].image_view,
+                velocity,
                 volume.pressure[1].image_view,
                 volume.pressure[0].image_view,
             ],
         );
 
-        // Correct: reads vel[0], pressure[0]
+        // The last iteration, JACOBI_ITERATIONS - 1, wrote the half its
+        // parity points at.
+        let solved = (JACOBI_ITERATIONS % 2) as usize;
         self.write_storage_images(
-            descriptors.correct_set,
-            &[volume.velocity[0].image_view, volume.pressure[0].image_view],
+            sets.correct,
+            &[velocity, volume.pressure[solved].image_view],
         );
     }
 
@@ -285,24 +309,18 @@ impl FireSimPipelines {
             volume.swap();
             Self::barrier_compute_to_compute(cb, device);
 
+            // Everything after advection works on what it just wrote.
+            let step = &descriptors.step_sets[volume.src()];
+
             // Pass 2: Forces (reads+writes field/velocity in place)
-            self.dispatch(
-                cb,
-                device,
-                &self.forces,
-                descriptors.forces_set,
-                params,
-                gx,
-                gy,
-                gz,
-            );
+            self.dispatch(cb, device, &self.forces, step.forces, params, gx, gy, gz);
             Self::barrier_compute_to_compute(cb, device);
 
             // Pass 3: Pressure projection (Jacobi iterations with ping-pong)
             for i in 0..JACOBI_ITERATIONS {
                 let mut p = *params;
                 p.jacobi_iteration = i as i32;
-                let pressure_set = descriptors.pressure_sets[(i % 2) as usize];
+                let pressure_set = step.pressure[(i % 2) as usize];
                 self.dispatch(cb, device, &self.pressure, pressure_set, &p, gx, gy, gz);
                 if i < JACOBI_ITERATIONS - 1 {
                     Self::barrier_compute_to_compute(cb, device);
@@ -311,16 +329,7 @@ impl FireSimPipelines {
             Self::barrier_compute_to_compute(cb, device);
 
             // Pass 4: Velocity correction
-            self.dispatch(
-                cb,
-                device,
-                &self.correct,
-                descriptors.correct_set,
-                params,
-                gx,
-                gy,
-                gz,
-            );
+            self.dispatch(cb, device, &self.correct, step.correct, params, gx, gy, gz);
         }
     }
 
@@ -475,12 +484,13 @@ impl FireSimPipelines {
     }
 
     fn create_descriptor_pool(device: &ManagedDevice) -> EngineResult<vk::DescriptorPool> {
-        // Per volume: advect(2*4) + forces(2) + pressure(2*3) + correct(2) = 18 storage images
-        // 6 descriptor sets per volume
-        let max_sets = 6 * MAX_FIRE_VOLUMES;
+        // Per volume: advect 2 sets of 4 images, then per post-advection
+        // half forces (2) + pressure (2 sets of 3) + correct (2): 10 sets,
+        // 28 storage images.
+        let max_sets = 10 * MAX_FIRE_VOLUMES;
         let pool_size = vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_IMAGE,
-            descriptor_count: 18 * MAX_FIRE_VOLUMES,
+            descriptor_count: 28 * MAX_FIRE_VOLUMES,
         };
 
         let create_info = vk::DescriptorPoolCreateInfo::default()
