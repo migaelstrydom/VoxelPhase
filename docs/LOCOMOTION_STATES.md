@@ -112,10 +112,10 @@ column gives the request or fact that causes each transition.
 |---|---|---|---|---|---|
 | `OnFoot { grace }` | Hop, Jump, Fall (down), Swim (feet down), Ledge (pull-up done) | Hop (a plan's takeoff), Jump (jump pressed), Fall (`grace` runs out), Swim (deep water) | On | Step | Swing |
 | `Hop { phase, landing }` | OnFoot (a plan's takeoff) | OnFoot (down), Fall (landing missed), Swim | On | Fly | Swing |
-| `Jump { kind, phase, steering }` | OnFoot, Swim (jump out of the water) | OnFoot (down), Swim (falling into deep water), Ledge (an edge at the hands) | Off | Off | Brace |
+| `Jump { kind, phase, steering }` | OnFoot, Swim (jump out of the water), Ledge (back-jump) | OnFoot (down), Swim (falling into deep water), Ledge (an edge at the hands) | Off | Off | Brace |
 | `Fall { steering }` | OnFoot (`grace` runs out), Hop (landing missed), Swim (out over a drop), Ledge (drop) | OnFoot (down), Swim, Ledge (an edge at the hands) | Off | Off | Brace |
-| `Swim` | OnFoot, Fall, Jump falling, Ledge, once the water is deep | OnFoot, Fall, Jump, Ledge | Off | Off | Stroke |
-| `Ledge { edge, phase }` | Jump, Fall, Swim (an edge at the hands) | Fall (drop), OnFoot (pull-up done), Swim | Off | Off | Grip |
+| `Swim` | OnFoot, Fall, Jump falling, once the water is deep | OnFoot, Fall, Jump, Ledge | Off | Off | Stroke |
+| `Ledge { edge, phase }` | Jump, Fall, Swim (an edge at the hands) | Fall (drop, edge lost), Jump (back-jump), OnFoot (pull-up done) | Off | Off | Grip |
 
 ### Takeoffs: Hop and Jump
 
@@ -202,11 +202,12 @@ Hands on an edge. `phase` is one of:
 - `Hang`: the stick moves the body along the edge, which is shimmying.
 - `PullUp`.
 
-A drop is a Fall, and a finished pull-up is OnFoot on the edge's floor.
-Entering a Ledge drops whatever the hands hold. Which edges count, and how the
-hands find them, is for the ledge project's design. What matters here is that
-the edge comes from a hand sensor of its own, not the planner, because most
-grabs start in a Jump or a Fall, where the planner is off.
+A drop is a Fall (over deep water, the water takes it the next tick), a
+back-jump is a Jump, and a finished pull-up is OnFoot on the edge's floor.
+Entering a Ledge drops whatever the hands hold. The edge comes from a hand
+sensor of its own, not the planner, because most grabs start in a Jump or a
+Fall, where the planner is off. Which edges count, the sensor, the grip joint
+and the input timing: `docs/LEDGE_GRABS.md`.
 
 ## The consumers
 
@@ -546,7 +547,7 @@ Each step ships with the game working, and its tests.
    deep end, the lip cleared by 8 cm) are the `character_viewer`
    scenarios. A bank higher than that is a Ledge.
 6. **Ledges.** The hand sensor, then `Ledge` with Grab, Hang and PullUp, from
-   the air and from the water.
+   the air and from the water. Steps in `docs/LEDGE_GRABS.md`.
 
 A `character_viewer` scenario that swims off the edge of island_sea and falls
 checks steps 1 to 4 together: the planner off, the legs off, and nothing
