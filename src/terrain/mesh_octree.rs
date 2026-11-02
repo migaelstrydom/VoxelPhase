@@ -477,8 +477,15 @@ impl MeshOctree {
             return;
         }
 
+        // A node that owns no triangle still has to answer for those that
+        // reach into it: a query inside it would otherwise find nothing,
+        // though a triangle owned by a sibling crosses it.
+        if matches!(node.content, MeshNodeContent::Empty) {
+            node.content = MeshNodeContent::Leaf(MeshLeaf::new());
+        }
+
         match &mut node.content {
-            MeshNodeContent::Empty => {}
+            MeshNodeContent::Empty => unreachable!(),
             MeshNodeContent::Leaf(leaf) => {
                 // Add ref if this is not the owning leaf
                 if current_path != owner_path || current_depth != owner_depth {
@@ -1207,6 +1214,58 @@ mod tests {
         let query = AABB::new(Point3::new(5.5, 0.0, 0.0), Point3::new(7.0, 3.0, 3.0));
         let results = octree.query_aabb(&query);
         assert_eq!(results.len(), 1, "Should find triangle that spans boundary");
+    }
+
+    /// A triangle reaching into an octant that owns nothing is still found
+    /// by a query inside that octant.
+    #[test]
+    fn a_query_in_an_empty_octant_finds_a_triangle_reaching_into_it() {
+        let bounds = AABB::new(Point3::origin(), Point3::new(10.0, 10.0, 10.0));
+        let mut octree = MeshOctree::new(bounds);
+        let mut insert = |a: Point3<f32>, b: Point3<f32>, c: Point3<f32>| {
+            let min_vertex = [a, b, c]
+                .into_iter()
+                .min_by(|p, q| {
+                    p.x.total_cmp(&q.x)
+                        .then(p.y.total_cmp(&q.y))
+                        .then(p.z.total_cmp(&q.z))
+                })
+                .unwrap();
+            MeshOctree::insert_triangle_recursive(
+                &mut octree.root,
+                &test_vertex(a.x, a.y, a.z),
+                &test_vertex(b.x, b.y, b.z),
+                &test_vertex(c.x, c.y, c.z),
+                VoxelMaterial::Rock,
+                min_vertex,
+                0,
+            );
+        };
+        // Enough small triangles in the low corner to split the root, so
+        // every other octant is left owning nothing...
+        for i in 0..=MAX_TRIANGLES_PER_LEAF {
+            let x = (i % 10) as f32 * 0.4;
+            let y = (i / 10) as f32 * 0.4;
+            insert(
+                Point3::new(x, y, 1.0),
+                Point3::new(x + 0.1, y, 1.0),
+                Point3::new(x, y + 0.1, 1.0),
+            );
+        }
+        // ...and one owned there that reaches across x = 5.
+        insert(
+            Point3::new(4.0, 1.0, 1.0),
+            Point3::new(6.0, 1.0, 1.0),
+            Point3::new(5.0, 2.0, 1.0),
+        );
+        octree.rebuild_neighbor_refs();
+        assert!(
+            matches!(octree.root.content, MeshNodeContent::Interior(_)),
+            "precondition: the root split"
+        );
+
+        let query = AABB::new(Point3::new(5.5, 0.5, 0.5), Point3::new(5.8, 1.5, 1.5));
+        assert_eq!(octree.query_aabb(&query).len(), 1);
     }
 
     /// Collect all neighbor refs from the octree as a sorted Vec for comparison.
