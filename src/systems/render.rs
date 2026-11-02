@@ -12,7 +12,6 @@ use crate::fire::components::OnFire;
 use crate::force_field::{ring_draws, ring_model, ColumnMesh, ForceFieldVisual};
 use crate::hud::{Hud, HudContext};
 use crate::lighting::ActiveLights;
-use crate::model::Transform;
 use crate::particles::ParticlePool;
 use crate::rendering::debug_render::render_debug_overlays;
 use crate::rendering::material::{MaterialManager, SurfaceModulation};
@@ -425,10 +424,6 @@ impl<'a> System<'a> for RenderSystem {
                         let world_matrix = Matrix4::new_translation(&pos.0)
                             * entity_rotation(entity, &orientations, &rotations);
 
-                        // No animation, use identity transforms
-                        let part_transforms: Vec<Transform> =
-                            vec![Transform::default(); model_instance.model.parts.len()];
-
                         let modulation = material_modulations
                             .get(entity)
                             .map(|m| m.0)
@@ -438,7 +433,7 @@ impl<'a> System<'a> for RenderSystem {
                             draw_cb,
                             &model_instance.model,
                             &world_matrix,
-                            &part_transforms,
+                            &[],
                             &material_manager,
                             &texture_manager,
                             modulation,

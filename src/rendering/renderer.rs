@@ -224,6 +224,9 @@ pub struct Renderer {
     /// when they change. Everything else is streamed into the frame's
     /// buffers each time it is drawn.
     resident: ResidentGeometry,
+    /// A drawn model's resident primitives, copied out of `resident` so the
+    /// draw can borrow the renderer; kept so the copy does not allocate.
+    primitive_scratch: Vec<ResidentPrimitive>,
     /// Frames begun so far; the number of the one being recorded.
     frames_begun: u64,
     pub descriptors: Arc<DescriptorManager>,
@@ -440,6 +443,7 @@ impl Renderer {
             frames,
             slot: FrameSlot::default(),
             resident,
+            primitive_scratch: Vec::new(),
             frames_begun: 0,
             descriptors,
             vulkan_context,
@@ -789,6 +793,10 @@ impl Renderer {
     /// on `world_transform`'s origin; without one it reflects the sky. Only
     /// a model in view, or nearly, asks for one: an object off screen has no
     /// reflection to show.
+    ///
+    /// `part_transforms` moves each part from its rest pose, in part order; a
+    /// part past the end of the slice (every part, for an empty one) is drawn
+    /// at rest.
     pub fn draw_model(
         &mut self,
         cb: vk::CommandBuffer,
@@ -800,7 +808,39 @@ impl Renderer {
         modulation: SurfaceModulation,
         owner: Option<ProbeOwner>,
     ) -> EngineResult<()> {
-        let primitives = self.resident.model(model)?.to_vec();
+        let mut primitives = std::mem::take(&mut self.primitive_scratch);
+        primitives.clear();
+        primitives.extend_from_slice(self.resident.model(model)?);
+        let drawn = self.draw_model_primitives(
+            cb,
+            model,
+            &primitives,
+            world_transform,
+            part_transforms,
+            material_manager,
+            texture_manager,
+            modulation,
+            owner,
+        );
+        self.primitive_scratch = primitives;
+        drawn
+    }
+
+    /// The body of [`Self::draw_model`], over the model's resident
+    /// `primitives`.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_model_primitives(
+        &mut self,
+        cb: vk::CommandBuffer,
+        model: &Arc<Model>,
+        primitives: &[ResidentPrimitive],
+        world_transform: &Matrix4<f32>,
+        part_transforms: &[Transform],
+        material_manager: &MaterialManager,
+        texture_manager: &TextureManager,
+        modulation: SurfaceModulation,
+        owner: Option<ProbeOwner>,
+    ) -> EngineResult<()> {
         let mut resident = primitives.iter().copied();
 
         let reflects_surroundings =
@@ -814,7 +854,7 @@ impl Renderer {
         let probe = match owner {
             Some(owner)
                 if reflects_surroundings
-                    && self.in_probe_view(model, &primitives, world_transform) =>
+                    && self.in_probe_view(model, primitives, world_transform) =>
             {
                 let centre = world_transform.fixed_view::<3, 1>(0, 3).into_owned();
                 self.probes.request(owner, centre, &self.camera_pos)
@@ -884,18 +924,21 @@ impl Renderer {
         surface: SurfaceParams,
         texture_manager: &TextureManager,
     ) -> EngineResult<()> {
-        let primitives = self.resident.model(model)?.to_vec();
+        let mut primitives = std::mem::take(&mut self.primitive_scratch);
+        primitives.clear();
+        primitives.extend_from_slice(self.resident.model(model)?);
+        let mut drawn = Ok(());
         let mut resident = primitives.iter().copied();
-        for part in &model.parts {
+        'parts: for part in &model.parts {
             let transform = world_transform * part.local_transform.to_matrix();
             for _ in &part.primitives {
                 let Some(uploaded) = resident.next() else {
-                    return Ok(());
+                    break 'parts;
                 };
                 if uploaded.mesh.is_empty() {
                     continue;
                 }
-                self.submit_draw(
+                drawn = self.submit_draw(
                     cb,
                     uploaded.mesh.draw_info(),
                     || uploaded.bounds,
@@ -904,10 +947,14 @@ impl Renderer {
                     surface,
                     texture_manager,
                     DrawOptions::OPAQUE,
-                )?;
+                );
+                if drawn.is_err() {
+                    break 'parts;
+                }
             }
         }
-        Ok(())
+        self.primitive_scratch = primitives;
+        drawn
     }
 
     /// Whether any primitive of `model`, drawn at `world_transform`, is in

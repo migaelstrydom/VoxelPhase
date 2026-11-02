@@ -48,7 +48,6 @@ use crate::core::vulkan_context::VulkanContext;
 use crate::level::{
     create_level_materials, create_level_terrain, create_level_water, spawn_objects, Level,
 };
-use crate::model::Transform;
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{MaterialManager, MaterialManagerBuilder, SurfaceModulation};
 use crate::rendering::renderer::Renderer;
@@ -325,13 +324,11 @@ impl LevelViewer {
             {
                 let world_matrix = Matrix4::new_translation(&position.0)
                     * entity_rotation(entity, &orientations, &rotations);
-                let part_transforms = vec![Transform::default(); model.model.parts.len()];
-
                 self.renderer.draw_model(
                     cb,
                     &model.model,
                     &world_matrix,
-                    &part_transforms,
+                    &[],
                     &self.material_manager,
                     &self.texture_manager,
                     SurfaceModulation::IDENTITY,
