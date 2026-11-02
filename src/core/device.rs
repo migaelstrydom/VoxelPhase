@@ -21,35 +21,33 @@ impl ManagedDevice {
                 .enumerate_physical_devices()
                 .map_err(|e| EngineError::PhysicalDevice(format!("enumeration failed: {:?}", e)))?;
 
-            let (physical_device, _queue_family_index) = pdevices
+            // The most capable device that has a queue family to run on:
+            // a discrete GPU over an integrated one over anything else.
+            let (physical_device, family) = pdevices
                 .iter()
-                .find_map(|pdevice| {
-                    instance
+                .filter_map(|&pdevice| {
+                    let families = instance
                         .instance
-                        .get_physical_device_queue_family_properties(*pdevice)
-                        .iter()
-                        .enumerate()
-                        .find_map(|(index, info)| {
-                            if info.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                                Some((*pdevice, index as u32))
-                            } else {
-                                None
-                            }
-                        })
+                        .get_physical_device_queue_family_properties(pdevice);
+                    pick_queue_family(&families).map(|family| (pdevice, family))
+                })
+                .max_by_key(|&(pdevice, _)| {
+                    let kind = instance
+                        .instance
+                        .get_physical_device_properties(pdevice)
+                        .device_type;
+                    device_rank(kind)
                 })
                 .ok_or_else(|| {
-                    EngineError::PhysicalDevice("no suitable GPU with graphics support".to_string())
+                    EngineError::PhysicalDevice(
+                        "no GPU with a queue family supporting graphics and compute".to_string(),
+                    )
                 })?;
-
-            let queue_family_indices =
-                OptionalQueueFamilyIndices::new(&instance.instance, physical_device)
-                    .get_indices()
-                    .ok_or_else(|| {
-                        EngineError::PhysicalDevice(
-                            "missing required queue families (graphics/compute/transfer)"
-                                .to_string(),
-                        )
-                    })?;
+            let queue_family_indices = QueueFamilyIndices {
+                graphics: family,
+                compute: family,
+                transfer: family,
+            };
 
             let features = vk::PhysicalDeviceFeatures {
                 shader_clip_distance: 1,
@@ -59,6 +57,16 @@ impl ManagedDevice {
                 image_cube_array: 1,
                 ..Default::default()
             };
+            let supported = instance
+                .instance
+                .get_physical_device_features(physical_device);
+            let missing = missing_features(&features, &supported);
+            if !missing.is_empty() {
+                return Err(EngineError::PhysicalDevice(format!(
+                    "the GPU lacks required features: {}",
+                    missing.join(", ")
+                )));
+            }
             let device_extension_names_raw = [
                 ash::khr::swapchain::NAME.as_ptr(),
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -111,66 +119,122 @@ impl Drop for ManagedDevice {
     }
 }
 
+/// The queue families the engine runs on.
+///
+/// All three are the same family. The frame records its compute (the fire
+/// simulation) into its graphics command buffer, and uploads blit their mip
+/// chains, a graphics command, with no ownership transfers between families;
+/// so a separate compute or transfer family would be wrong, not faster.
 pub struct QueueFamilyIndices {
-    pub graphics: u32, // Index of family supporting graphics
-    pub compute: u32,  // Index of family supporting compute
-    pub transfer: u32, // Index of family supporting transfer
+    pub graphics: u32,
+    pub compute: u32,
+    pub transfer: u32,
 }
 
-struct OptionalQueueFamilyIndices {
-    pub graphics: Option<u32>, // Index of family supporting graphics
-    pub compute: Option<u32>,  // Index of family supporting compute
-    pub transfer: Option<u32>, // Index of family supporting transfer
+/// The first queue family that supports graphics and compute.
+///
+/// Transfer is not asked for: a family supporting graphics or compute
+/// supports transfer commands whether or not it reports the bit, which the
+/// specification leaves optional for them.
+fn pick_queue_family(families: &[vk::QueueFamilyProperties]) -> Option<u32> {
+    let needed = vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE;
+    families
+        .iter()
+        .position(|family| family.queue_count > 0 && family.queue_flags.contains(needed))
+        .map(|index| index as u32)
 }
 
-impl OptionalQueueFamilyIndices {
-    pub fn new(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Self {
-        let queue_families =
-            unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+/// How strongly a kind of device is preferred: higher is better.
+fn device_rank(kind: vk::PhysicalDeviceType) -> u32 {
+    match kind {
+        vk::PhysicalDeviceType::DISCRETE_GPU => 4,
+        vk::PhysicalDeviceType::INTEGRATED_GPU => 3,
+        vk::PhysicalDeviceType::VIRTUAL_GPU => 2,
+        vk::PhysicalDeviceType::CPU => 1,
+        _ => 0,
+    }
+}
 
-        let mut indices = OptionalQueueFamilyIndices {
-            graphics: None,
-            compute: None,
-            transfer: None,
-        };
+/// The names of the features `wanted` enables that `supported` lacks.
+fn missing_features(
+    wanted: &vk::PhysicalDeviceFeatures,
+    supported: &vk::PhysicalDeviceFeatures,
+) -> Vec<&'static str> {
+    [
+        (
+            "shader_clip_distance",
+            wanted.shader_clip_distance,
+            supported.shader_clip_distance,
+        ),
+        (
+            "sampler_anisotropy",
+            wanted.sampler_anisotropy,
+            supported.sampler_anisotropy,
+        ),
+        (
+            "fill_mode_non_solid",
+            wanted.fill_mode_non_solid,
+            supported.fill_mode_non_solid,
+        ),
+        (
+            "image_cube_array",
+            wanted.image_cube_array,
+            supported.image_cube_array,
+        ),
+    ]
+    .into_iter()
+    .filter(|&(_, wanted, supported)| wanted == vk::TRUE && supported != vk::TRUE)
+    .map(|(name, _, _)| name)
+    .collect()
+}
 
-        for (index, queue_family) in queue_families.iter().enumerate() {
-            let index = index as u32;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-            // Check for graphics support
-            if queue_family.queue_flags.contains(vk::QueueFlags::GRAPHICS)
-                && indices.graphics.is_none()
-            {
-                indices.graphics = Some(index);
-            }
-
-            // Check for compute support
-            if queue_family.queue_flags.contains(vk::QueueFlags::COMPUTE)
-                && indices.compute.is_none()
-            {
-                indices.compute = Some(index);
-            }
-
-            // Check for transfer support
-            if queue_family.queue_flags.contains(vk::QueueFlags::TRANSFER)
-                && indices.transfer.is_none()
-            {
-                indices.transfer = Some(index);
-            }
+    fn family(flags: vk::QueueFlags) -> vk::QueueFamilyProperties {
+        vk::QueueFamilyProperties {
+            queue_flags: flags,
+            queue_count: 1,
+            ..Default::default()
         }
-
-        indices
     }
 
-    pub fn get_indices(&self) -> Option<QueueFamilyIndices> {
-        if self.graphics.is_some() && self.compute.is_some() && self.transfer.is_some() {
-            Some(QueueFamilyIndices {
-                graphics: self.graphics.unwrap(),
-                compute: self.compute.unwrap(),
-                transfer: self.transfer.unwrap(),
-            })
-        } else {
-            None
-        }
+    /// A dedicated transfer family listed first is passed over, and a
+    /// graphics family that does not report transfer is taken.
+    #[test]
+    fn the_queue_family_is_one_that_draws_and_computes() {
+        let families = [
+            family(vk::QueueFlags::TRANSFER),
+            family(vk::QueueFlags::COMPUTE),
+            family(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE),
+        ];
+        assert_eq!(pick_queue_family(&families), Some(2));
+        assert_eq!(pick_queue_family(&families[..2]), None);
+    }
+
+    #[test]
+    fn a_discrete_gpu_is_preferred() {
+        assert!(
+            device_rank(vk::PhysicalDeviceType::DISCRETE_GPU)
+                > device_rank(vk::PhysicalDeviceType::INTEGRATED_GPU)
+        );
+    }
+
+    #[test]
+    fn missing_features_are_named() {
+        let wanted = vk::PhysicalDeviceFeatures {
+            image_cube_array: vk::TRUE,
+            sampler_anisotropy: vk::TRUE,
+            ..Default::default()
+        };
+        let supported = vk::PhysicalDeviceFeatures {
+            sampler_anisotropy: vk::TRUE,
+            ..Default::default()
+        };
+        assert_eq!(
+            missing_features(&wanted, &supported),
+            vec!["image_cube_array"]
+        );
     }
 }
