@@ -819,7 +819,10 @@ impl PhysicsWorld {
         }
 
         if let Some(body) = self.bodies.get_mut(handle.0) {
-            body.set_allowance_command(command.allowance);
+            // Verbs a frame without a substep left untaken still fire.
+            let mut allowance = command.allowance;
+            allowance.verbs = body.allowance_command().verbs.then(allowance.verbs);
+            body.set_allowance_command(allowance);
         }
 
         self.sleep_manager.wake_body(handle);
@@ -2013,6 +2016,23 @@ mod tests {
              this test is meaningless otherwise"
         );
         handle
+    }
+
+    /// A jump commanded on a frame no substep took survives the next frame's
+    /// command, which carries no jump of its own.
+    #[test]
+    fn an_untaken_jump_outlives_the_next_drive_command() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let body = sleeping_body(&mut world);
+        let mut jumping = DriveCommand::support(Vector3::zeros(), Vector3::zeros(), 10.0, 10.0);
+        jumping.allowance.verbs.jump_speed = Some(6.0);
+        world.set_body_drive(body, &jumping);
+
+        let walking = DriveCommand::support(Vector3::x(), Vector3::zeros(), 10.0, 10.0);
+        world.set_body_drive(body, &walking);
+
+        let verbs = world.bodies.get(body.0).unwrap().allowance_command().verbs;
+        assert_eq!(verbs.jump_speed, Some(6.0));
     }
 
     #[test]

@@ -89,6 +89,20 @@ impl VerticalVerbs {
     pub fn is_inert(&self) -> bool {
         self.jump_speed.is_none() && self.projection.is_identity()
     }
+
+    /// These verbs followed by a later frame's, for verbs no substep has
+    /// taken yet: a frame shorter than the fixed step runs none. The later
+    /// jump wins if there is one, and the projections compose as they would
+    /// have on two stepping frames in a row.
+    pub fn then(self, later: VerticalVerbs) -> VerticalVerbs {
+        let mut projection = self.projection;
+        projection.scale_by(later.projection.scale);
+        projection.clamp_positive |= later.projection.clamp_positive;
+        VerticalVerbs {
+            jump_speed: later.jump_speed.or(self.jump_speed),
+            projection,
+        }
+    }
 }
 
 /// Where the equal-and-opposite half of a drive impulse lands.
@@ -209,6 +223,35 @@ mod tests {
         };
         assert_eq!(cut.applied_to(10.0), 4.5);
         assert_eq!(cut.applied_to(-10.0), -10.0);
+    }
+
+    /// Verbs held over from a frame that ran no substep compose with the next
+    /// frame's as two stepping frames would have: the later jump wins, and
+    /// the cutoffs multiply.
+    #[test]
+    fn held_verbs_compose_with_the_next_frames() {
+        let held = VerticalVerbs {
+            jump_speed: Some(6.0),
+            projection: VerticalProjection {
+                scale: 0.5,
+                clamp_positive: false,
+            },
+        };
+        let cut = VerticalVerbs {
+            jump_speed: None,
+            projection: VerticalProjection {
+                scale: 0.5,
+                clamp_positive: true,
+            },
+        };
+        let both = held.then(cut);
+        assert_eq!(both.jump_speed, Some(6.0));
+        assert_eq!(both.projection.scale, 0.25);
+        assert!(both.projection.clamp_positive);
+        assert_eq!(
+            VerticalVerbs::default().then(VerticalVerbs::default()),
+            VerticalVerbs::default()
+        );
     }
 
     /// The walk-off verb: cancel the rise outright, whatever it was scaled by.
