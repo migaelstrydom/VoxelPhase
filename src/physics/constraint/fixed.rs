@@ -71,13 +71,14 @@ pub fn expand(
         0.0
     };
 
+    let bias_rate = primitives::joint_bias_rate(compliance, beta, dt);
     let axes = [Vector3::x(), Vector3::y(), Vector3::z()];
     let mut rows = SmallVec::new();
 
     // Rows 0-2: positional — pin anchor points together.
     for i in 0..3 {
         let positional_error = error.dot(&axes[i]);
-        let bias = -(beta / dt) * positional_error;
+        let bias = bias_rate * positional_error;
 
         rows.push(primitives::lock_linear_axis(
             &side_a,
@@ -97,7 +98,7 @@ pub fn expand(
     // Rows 3-5: angular — hold the reference rotation.
     let rotation_error = orientation_error(body_a.map(|(ba, _)| ba.rotation()), rot_b, reference);
     for (i, axis) in axes.into_iter().enumerate() {
-        let bias = -(beta / dt) * rotation_error.dot(&axis);
+        let bias = bias_rate * rotation_error.dot(&axis);
         rows.push(primitives::lock_angular_axis(
             &side_a,
             &side_b,

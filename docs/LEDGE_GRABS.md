@@ -348,15 +348,15 @@ joint's `anchor_velocity` (new on `BallJoint`) says how fast it moves on to
 the next point of its path. The joint's rows carry the body along at that
 speed, and the position correction meets only drift.
 
-Moving the anchor in one step a frame instead led the body by a frame's
-travel, and it worked out badly. The joints' velocity term
-(`−β/dt · error`, the same in every joint) then pushes the body *away* from
-the anchor, and only the position correction (NGS) moves it there. A body
-carried up at 1 m/s that way reported −1.46 m/s, and a pull-up −6 m/s while
-rising. With the velocity stated, the signs are right, but the magnitude
-still reads low (a pull-up rising at about 3 m/s reports about 1.1 m/s). The
-remaining error term accounts for that. Whether the joints' velocity term
-has the wrong sign is a question for the physics engine, open.
+Moving the anchor a frame's travel at a time instead left the body to the
+position pass alone. That exposed an engine bug, now fixed: the ball, fixed
+and hinge joints' velocity bias had its sign inverted (`−β/dt · error`
+under a solver whose rows converge where `J·v + bias` is zero), pushing
+bodies away from their anchors while the position pass dragged them back. A
+body carried up at 1 m/s reported −1.46 m/s, and a pull-up −6 m/s while
+rising. Rigid joints now carry no velocity bias and the position pass
+corrects their drift, as for contacts (`docs/PHYSICS_ARCHITECTURE.md`). A
+pull-up rising at 4 m/s now reports 4.2.
 
 - **Grab.** The joint is rigid from the start. A spring catch dips by about
   speed × time constant: 0.6 m at 5 m/s with a 0.12 s constant, and 1.4 m at

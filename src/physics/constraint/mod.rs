@@ -11,6 +11,9 @@ pub mod spring_slider;
 pub mod suspension;
 pub mod types;
 
+#[cfg(test)]
+mod tests;
+
 pub use types::{
     Constraint, ConstraintHandle, ConstraintKind, ConstraintRow, CorrectionMode, Enforcement,
     RowKind,

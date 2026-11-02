@@ -79,13 +79,14 @@ pub fn expand(
         0.0
     };
 
+    let bias_rate = primitives::joint_bias_rate(compliance, beta, dt);
     let axes = [Vector3::x(), Vector3::y(), Vector3::z()];
     let mut rows = SmallVec::new();
 
     // Rows 0-2: positional — pin anchor points together.
     for i in 0..3 {
         let positional_error = error.dot(&axes[i]);
-        let bias = -(beta / dt) * positional_error;
+        let bias = bias_rate * positional_error;
 
         rows.push(primitives::lock_linear_axis(
             &side_a,

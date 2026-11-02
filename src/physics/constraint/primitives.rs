@@ -38,6 +38,24 @@ pub struct RowParams {
     pub warm_impulse: f32,
 }
 
+/// The velocity bias per unit of position error for a joint's
+/// position-locking rows, in 1/s, under the solver's convention that a row
+/// converges where `J·v + bias` is zero.
+///
+/// A rigid joint's position error is the position pass's (NGS) to correct,
+/// which moves the bodies without giving them velocity, as it does for
+/// contacts. A velocity bias on top would correct the same error twice and
+/// leave the bodies moving at the correction's speed: zero. A compliant
+/// joint's bias is its spring, `β/dt` of the error pulling the anchors
+/// together against the row's softness.
+pub fn joint_bias_rate(compliance: f32, beta: f32, dt: f32) -> f32 {
+    if compliance > 0.0 {
+        beta / dt
+    } else {
+        0.0
+    }
+}
+
 /// Pin two anchor points together along one world-space axis.
 ///
 /// Produces a single linear constraint row that drives the separation between

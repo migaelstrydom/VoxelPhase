@@ -17,8 +17,11 @@ use super::types::ConstraintRow;
 /// Expand a BallJoint constraint into 3 solver rows.
 ///
 /// Rows 0-2: positional (X, Y, Z). Error = anchor_b_world - anchor_a_world.
-/// Each row drives the anchors' relative velocity along its axis to the
-/// moving anchor's `anchor_velocity`, less the correction for the error.
+/// Each row converges where `J·v + bias` is zero: the anchors' relative
+/// velocity along its axis is the moving anchor's `anchor_velocity`, and for
+/// a compliant joint also its spring's pull on the error
+/// ([`primitives::joint_bias_rate`]); a rigid joint's error is the position
+/// pass's.
 ///
 /// `beta` is the position correction factor (from solver config).
 #[allow(clippy::too_many_arguments)]
@@ -71,12 +74,13 @@ pub fn expand(
         0.0
     };
 
+    let bias_rate = primitives::joint_bias_rate(compliance, beta, dt);
     let axes = [Vector3::x(), Vector3::y(), Vector3::z()];
     let mut rows = SmallVec::new();
 
     for i in 0..3 {
         let positional_error = error.dot(&axes[i]);
-        let bias = -anchor_velocity.dot(&axes[i]) - (beta / dt) * positional_error;
+        let bias = bias_rate * positional_error - anchor_velocity.dot(&axes[i]);
 
         rows.push(primitives::lock_linear_axis(
             &side_a,

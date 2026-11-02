@@ -201,8 +201,12 @@ done. The result is independent of thread scheduling. Within an iteration:
   for a drive.
 - **Torsional** (`torsional.rs`): spin about the normal, bounded by μ·N·r. It is inert
   unless an actuator declares a patch radius.
-- **Constraint rows** (`constraint_row.rs`), using Baumgarte bias for joints, solved
-  before contacts in slice order. A row with a `CoupledBound` (`coupled_row.rs`) is
+- **Constraint rows** (`constraint_row.rs`), solved before contacts in slice order. A
+  row converges where `J·v + bias` is zero, so a bias of `rate · error` closes its
+  error. A rigid joint's rows carry no position bias: the position phase corrects its
+  drift, as it does a contact's (`primitives::joint_bias_rate`). A compliant joint's
+  bias is its spring. A ball joint's `anchor_velocity` is the speed its owner moves its
+  anchor at, which the rows carry the body along at. A row with a `CoupledBound` (`coupled_row.rs`) is
   bounded by its load row's impulse as it stands, a pair of them through the same cone
   projection contact friction uses (`friction::project_onto_cone`).
 - Restitution applies only above `restitution_velocity_threshold`. Warm starting is
