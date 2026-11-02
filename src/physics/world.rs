@@ -1177,17 +1177,13 @@ impl PhysicsWorld {
         self.traction_ledger.open_frame();
         self.substeps_taken = 0;
 
-        let sleeping_snapshot = self
+        let sleeping = self
             .config
             .sleep
             .enabled
-            .then(|| self.sleep_manager.sleeping_snapshot());
-        self.solver.prepare(
-            &self.bodies,
-            &self.constraints,
-            sleeping_snapshot.as_ref(),
-            dt,
-        );
+            .then(|| self.sleep_manager.sleeping());
+        self.solver
+            .prepare(&self.bodies, &self.constraints, sleeping, dt);
 
         // Static geometry is fixed for the frame; let CCD reset the query
         // cache it reuses across this frame's substeps.
@@ -1218,24 +1214,21 @@ impl PhysicsWorld {
         self.profile.substeps += 1;
         self.pose_epoch += 1;
         let lap = Instant::now();
-        let sleeping_snapshot = if self.config.sleep.enabled {
-            Some(self.sleep_manager.sleeping_snapshot())
-        } else {
-            None
-        };
 
         // Apply per-substep external forces from providers.
         // Forces are cleared first so bodies that leave an affected region
         // stop receiving stale forces.
         self.apply_substep_forces(force_providers);
 
+        // Nothing below changes who sleeps until the sleep update at the end.
+        let sleeping = self
+            .config
+            .sleep
+            .enabled
+            .then(|| self.sleep_manager.sleeping());
+
         // Integrate forces (gravity) into velocities
-        integrate_forces(
-            &mut self.bodies,
-            dt,
-            self.config.gravity,
-            sleeping_snapshot.as_ref(),
-        );
+        integrate_forces(&mut self.bodies, dt, self.config.gravity, sleeping);
 
         // Non-conservative authority, spent before the solve so that whatever
         // it conjures is still answerable to every contact and constraint. The
@@ -1294,11 +1287,6 @@ impl PhysicsWorld {
         let lap = Instant::now();
 
         // Save pre-integration state for CCD
-        let sleeping_snapshot = if self.config.sleep.enabled {
-            Some(self.sleep_manager.sleeping_snapshot())
-        } else {
-            None
-        };
         let pre_states: FxHashMap<generational_arena::Index, (Point3<f32>, UnitQuaternion<f32>)> =
             self.bodies
                 .iter()
@@ -1306,7 +1294,7 @@ impl PhysicsWorld {
                     if body.is_static() {
                         return false;
                     }
-                    if let Some(sleeping) = sleeping_snapshot.as_ref() {
+                    if let Some(sleeping) = sleeping {
                         return !sleeping.contains(&RigidBodyHandle(*idx));
                     }
                     true
@@ -1317,12 +1305,7 @@ impl PhysicsWorld {
         let lap = Instant::now();
 
         // Integrate positions
-        let sleeping_snapshot = if self.config.sleep.enabled {
-            Some(self.sleep_manager.sleeping_snapshot())
-        } else {
-            None
-        };
-        integrate_bodies(&mut self.bodies, dt, sleeping_snapshot.as_ref());
+        integrate_bodies(&mut self.bodies, dt, sleeping);
         integrate_time += lap.elapsed();
         self.profile.record(PhysicsStage::Integrate, integrate_time);
         let lap = Instant::now();
@@ -1336,7 +1319,7 @@ impl PhysicsWorld {
                 contact_events: &mut self.last_contacts,
                 impacts: &mut self.impacts,
                 narrowphase_ownership: &narrowphase_ownership,
-                sleeping: sleeping_snapshot.as_ref(),
+                sleeping,
                 pre_states: &pre_states,
                 contact_margin: self.config.contact_margin,
                 restitution_velocity_threshold: self.config.restitution_velocity_threshold,
@@ -1431,9 +1414,19 @@ impl PhysicsWorld {
             gravity_magnitude: self.config.gravity.magnitude(),
         };
 
+        // A sleeping body does not integrate, so a force on it is never felt;
+        // it is computed afresh on the substep it wakes.
+        let sleeping = self
+            .config
+            .sleep
+            .enabled
+            .then(|| self.sleep_manager.sleeping());
         let mut outputs: Vec<(RigidBodyHandle, ForceOutput)> = Vec::new();
         for provider in providers {
             for &handle in provider.affected_bodies() {
+                if sleeping.is_some_and(|sleeping| sleeping.contains(&handle)) {
+                    continue;
+                }
                 let output = provider.compute_force(handle, &ctx);
                 outputs.push((handle, output));
             }

@@ -78,6 +78,11 @@ impl SleepManager {
         self.sleeping.clone()
     }
 
+    /// The sleeping bodies, borrowed: for a pass that only reads them.
+    pub fn sleeping(&self) -> &FxHashSet<RigidBodyHandle> {
+        &self.sleeping
+    }
+
     /// Immediately put a body to sleep.
     pub fn sleep_body(&mut self, handle: RigidBodyHandle) {
         self.sleeping.insert(handle);
