@@ -35,4 +35,7 @@ pub struct OnFire {
     pub fuel_remaining: f32,
     /// Time the fire has been burning.
     pub burn_time: f32,
+    /// Seconds since the fuel ran out, while the last of the fire burns off
+    /// and its smoke clears.
+    pub burnt_out_for: f32,
 }

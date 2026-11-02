@@ -190,9 +190,14 @@ impl FireRenderer {
         dt: f32,
         total_time: f32,
     ) {
-        // Compute per-slot max source intensity
+        // Compute per-slot max source intensity. A slot is simulated while any
+        // fire references it, even at no intensity: a fire out of fuel keeps
+        // burning off and its smoke keeps rising and thinning for the grace
+        // period before it is removed, instead of freezing in place.
         let mut slot_intensities = [0.0f32; SIM_POOL_SIZE];
+        let mut slot_used = [false; SIM_POOL_SIZE];
         for fire in fires {
+            slot_used[fire.sim_slot] = true;
             let intensity = if fire.initial_fuel > 0.0 {
                 (fire.fuel_remaining / fire.initial_fuel).clamp(0.0, 1.0)
             } else {
@@ -207,7 +212,7 @@ impl FireRenderer {
 
         let device = &self.device.device;
         for (i, slot) in self.sim_slots.iter_mut().enumerate() {
-            if slot_intensities[i] <= 0.0 {
+            if !slot_used[i] {
                 continue;
             }
             params.source_intensity = slot_intensities[i];
@@ -226,7 +231,7 @@ impl FireRenderer {
         // swaps read/write indices each frame) to SHADER_READ_ONLY for fragment
         // sampling. Must happen here, outside the render pass, not in render().
         for (i, slot) in self.sim_slots.iter().enumerate() {
-            if slot_intensities[i] <= 0.0 {
+            if !slot_used[i] {
                 continue;
             }
             transition_field_for_read(device, cb, &slot.volume);

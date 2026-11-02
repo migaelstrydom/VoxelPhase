@@ -64,6 +64,7 @@ impl<'a> System<'a> for FireIgnitionSystem {
                 OnFire {
                     fuel_remaining: fuel,
                     burn_time: 0.0,
+                    burnt_out_for: 0.0,
                 },
             );
         }
@@ -77,8 +78,12 @@ pub struct FireCleanupSystem;
 /// Rate at which ECS fuel_remaining is consumed per second.
 /// This controls how long the fire *exists* (source injection fades with fuel).
 /// Separate from FireSimParams::burn_rate which controls per-voxel GPU fuel.
-/// With fuel=20 and rate=0.2, fire lasts ~100 seconds.
+/// With fuel=20, fire lasts about 67 seconds.
 const FUEL_BURN_RATE: f32 = 0.3;
+
+/// Seconds a fire is kept after its fuel runs out, while the volume, no
+/// longer fed, burns off and its smoke rises and thins.
+const SMOKE_GRACE: f32 = 2.0;
 
 impl<'a> System<'a> for FireCleanupSystem {
     type SystemData = (Entities<'a>, WriteStorage<'a, OnFire>, Read<'a, Time>);
@@ -87,21 +92,60 @@ impl<'a> System<'a> for FireCleanupSystem {
         let (entities, mut on_fires, time) = data;
         let dt = time.delta_seconds();
 
-        // Tick fuel and burn time
+        // Tick fuel and burn time, and once the fuel is gone the grace period.
         for fire in (&mut on_fires).join() {
             fire.burn_time += dt;
+            if fire.fuel_remaining <= 0.0 {
+                fire.burnt_out_for += dt;
+            }
             fire.fuel_remaining = (fire.fuel_remaining - FUEL_BURN_RATE * dt).max(0.0);
         }
 
-        // Remove fires that have burned out (grace period lets smoke dissipate)
+        // Remove fires whose smoke has had its grace period to clear.
         let extinguished: Vec<_> = (&entities, &on_fires)
             .join()
-            .filter(|(_, fire)| fire.fuel_remaining <= 0.0 && fire.burn_time > 2.0)
+            .filter(|(_, fire)| fire.burnt_out_for > SMOKE_GRACE)
             .map(|(entity, _)| entity)
             .collect();
 
         for entity in extinguished {
             on_fires.remove(entity);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use specs::{Builder, RunNow, World, WorldExt};
+
+    use super::*;
+
+    /// A fire is kept for the grace period after its fuel runs out, however
+    /// long it had been burning, so its smoke clears rather than vanishing.
+    #[test]
+    fn a_burnt_out_fire_is_kept_while_its_smoke_clears() {
+        let dt = 0.1;
+        let mut world = World::new();
+        world.register::<OnFire>();
+        world.insert(Time::fixed(dt));
+        let entity = world
+            .create_entity()
+            .with(OnFire {
+                fuel_remaining: FUEL_BURN_RATE * dt,
+                burn_time: 30.0,
+                burnt_out_for: 0.0,
+            })
+            .build();
+
+        let mut cleanup = FireCleanupSystem;
+        cleanup.run_now(&world);
+        let burning = |world: &World| world.read_storage::<OnFire>().contains(entity);
+        assert!(burning(&world), "removed the frame its fuel ran out");
+
+        let frames = (SMOKE_GRACE / dt).ceil() as usize + 1;
+        for _ in 0..frames {
+            cleanup.run_now(&world);
+        }
+        assert!(!burning(&world), "kept after the grace period");
     }
 }
