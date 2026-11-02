@@ -1,9 +1,9 @@
 //! GJK-based translation-only continuous collision detection (CCD).
 //!
 //! Computes the time of impact (TOI) for two convex shapes translating
-//! linearly over a timestep. Uses the Minkowski difference ray march
-//! algorithm: repeatedly queries GJK for the closest distance and advances
-//! along the relative displacement by that amount until the shapes touch.
+//! linearly over a timestep. Uses conservative advancement: repeatedly
+//! queries GJK for the closest points and advances time until the gap across
+//! the plane between them would close, until the shapes touch.
 //!
 //! This gives any `ConvexSupport` shape CCD without shape-pair-specific code.
 //! Rotation during the timestep is ignored (translation-only).
@@ -38,8 +38,8 @@ pub struct GjkRaycastHit {
 ///
 /// The algorithm works on the Minkowski difference: the relative displacement
 /// `rel_displacement = displacement_a - displacement_b` defines a ray from
-/// the origin of the configuration space. We march along this ray using GJK
-/// distance queries at each step as the conservative advancement distance.
+/// the origin of the configuration space. Each step advances by the GJK
+/// distance over the speed at which that gap is closing.
 ///
 /// # Arguments
 /// * `a` — shape A at its start-of-timestep position
@@ -101,6 +101,7 @@ pub fn gjk_raycast(
     // Create displaced shape wrappers that we'll advance through [0, 1].
     let mut t = 0.0f32;
     let mut last_normal = Vector3::zeros();
+    let mut last_point = Point3::origin();
 
     for _ in 0..MAX_ITERATIONS {
         // Create shape views offset to their positions at time `t`.
@@ -168,27 +169,40 @@ pub fn gjk_raycast(
                     });
                 }
 
-                // Conservative advancement: advance `t` by `distance / rel_speed`.
-                // This is safe because GJK distance is the exact minimum distance
-                // and the shapes can't move closer than `rel_speed` per unit time.
-                let dt = distance / rel_speed;
-                t += dt;
+                // Conservative advancement along the separating direction: the
+                // plane through the closest points, normal to it, keeps the
+                // shapes apart until the gap across it closes, and the gap
+                // closes at the speed along its normal, not the whole relative
+                // speed. Dividing by the whole speed crept towards a face
+                // approached at a glancing angle, closing only a share of the
+                // gap each step.
+                let separation = (closest_a - closest_b) / distance;
+                let closing_speed = -rel_displacement.dot(&separation);
+                if closing_speed <= 0.0 {
+                    // Moving apart across the plane: translating convex
+                    // shapes that are separating never meet.
+                    return None;
+                }
+                t += distance / closing_speed;
 
                 if t > 1.0 {
                     return None;
                 }
 
-                // Track the separation direction for normal estimation.
-                let delta = closest_a - closest_b;
-                if delta.magnitude_squared() > 1e-10 {
-                    last_normal = delta;
-                }
+                last_normal = separation;
+                last_point = closest_b;
             }
         }
     }
 
-    // Didn't converge — conservative miss.
-    None
+    // Out of iterations while still closing in, so a hit by the end of the
+    // step. Reported at the last time reached, which is no later than the true
+    // contact: an early stop is safe where a miss would let the body tunnel.
+    Some(GjkRaycastHit {
+        t,
+        normal: last_normal,
+        point: last_point,
+    })
 }
 
 /// A shape translated by an offset (for advancing shapes along their paths).
@@ -282,6 +296,48 @@ mod tests {
     }
 
     // --- OBB vs static plane (large thin OBB) ---
+
+    /// A sphere skimming down onto a floor at a glancing angle meets it.
+    /// Advancing by the whole relative speed closed only a twentieth of the
+    /// gap each step here and ran out of iterations, reporting a miss.
+    #[test]
+    fn a_glancing_approach_meets_the_floor() {
+        let floor = Obb::new(
+            Point3::new(0.0, -0.5, 0.0),
+            UnitQuaternion::identity(),
+            Vector3::new(100.0, 0.5, 100.0),
+        );
+        let sphere = SupportSphere {
+            center: Point3::new(0.0, 0.104, 0.0),
+            radius: 0.1,
+        };
+        // Sinking 0.1 m while sliding 2 m: about 3 degrees off the floor.
+        let skim = Vector3::new(2.0, -0.1, 0.0);
+
+        let hit = gjk_raycast(&sphere, &floor, skim, Vector3::zeros())
+            .expect("the sphere reaches the floor 4 mm below it");
+        // 4 mm of the 0.1 m drop.
+        assert!(
+            (hit.t - 0.04).abs() < 1e-3,
+            "TOI should be 0.04, got {}",
+            hit.t
+        );
+        assert!(hit.normal.y > 0.99, "normal {:?}", hit.normal);
+    }
+
+    /// Shapes moving apart across the plane between them never meet.
+    #[test]
+    fn shapes_moving_apart_do_not_meet() {
+        let a = SupportSphere {
+            center: Point3::new(0.0, 1.0, 0.0),
+            radius: 0.5,
+        };
+        let b = SupportSphere {
+            center: Point3::origin(),
+            radius: 0.2,
+        };
+        assert!(gjk_raycast(&a, &b, Vector3::new(3.0, 0.5, 0.0), Vector3::zeros()).is_none());
+    }
 
     #[test]
     fn obb_vs_plane() {
