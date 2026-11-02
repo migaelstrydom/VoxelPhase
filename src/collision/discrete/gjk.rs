@@ -161,10 +161,11 @@ pub fn gjk_query_seeded(
 
         // Convergence check: the new support point can't improve the closest
         // distance by more than `v·v - v·w`. If that's below tolerance, we've
-        // found the minimum distance.
+        // found the minimum distance. That holds for a lone first vertex too:
+        // a repeated support would only reduce the line back to it.
         let vv = v.magnitude_squared();
         let vw = v.dot(&w.point.coords);
-        if simplex.count >= 2 && vv - vw <= TOLERANCE * vv.max(1.0) {
+        if vv - vw <= TOLERANCE * vv.max(1.0) {
             let (closest_a, closest_b, distance) = extract_closest_points(&simplex);
             return GjkResult::Separated {
                 distance,

@@ -191,16 +191,21 @@ pub fn hull_hull_manifold(
     // Minkowski face, those edges are already the supporting features.
     let mut best_edge: Option<EdgeEdgeResult> = None;
 
+    // B's edge normals in world space, rotated once rather than once per
+    // pair of edges.
+    let b_edge_normals: Vec<(Vector3<f32>, Vector3<f32>)> = hull_b
+        .edges
+        .iter()
+        .map(|edge| (b.rotation * edge.normal_a, b.rotation * edge.normal_b))
+        .collect();
+
     for edge_a in &hull_a.edges {
         let na1 = a.rotation * edge_a.normal_a;
         let na2 = a.rotation * edge_a.normal_b;
         let dir_a = a.rotation
             * (hull_a.vertices[edge_a.v1 as usize] - hull_a.vertices[edge_a.v0 as usize]);
 
-        for edge_b in &hull_b.edges {
-            let nb1 = b.rotation * edge_b.normal_a;
-            let nb2 = b.rotation * edge_b.normal_b;
-
+        for (edge_b, &(nb1, nb2)) in hull_b.edges.iter().zip(&b_edge_normals) {
             if !is_minkowski_face(na1, na2, -nb2, -nb1) {
                 continue;
             }

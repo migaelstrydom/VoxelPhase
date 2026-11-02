@@ -62,6 +62,8 @@ pub fn epa_penetration(
 ) -> EpaResult {
     let mut vertices = Vec::with_capacity(MAX_VERTICES);
     let mut faces: Vec<EpaFace> = Vec::with_capacity(64);
+    // The silhouette of each expansion, reused across them.
+    let mut edges: Vec<[usize; 2]> = Vec::new();
 
     // Build the initial polytope from the GJK simplex.
     // We need a tetrahedron. If the simplex has fewer than 4 vertices,
@@ -126,7 +128,7 @@ pub fn epa_penetration(
         vertices.push(new_vertex);
 
         // Remove all faces visible from the new point and find the silhouette.
-        let mut edges: Vec<[usize; 2]> = Vec::new();
+        edges.clear();
         let mut i = 0;
         while i < faces.len() {
             let face = &faces[i];
