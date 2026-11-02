@@ -207,6 +207,12 @@ impl LeggedLocomotion {
     }
 
     /// The foot placer, for rigs reading foot poses and for debug overlays.
+    /// Stand the feet where the pose has put them, while the legs are off
+    /// ([`FootPlacer::hold_feet`]).
+    pub fn hold_feet(&mut self, left: Point3<f32>, right: Point3<f32>, yaw: f32) {
+        self.placer.hold_feet(left, right, yaw);
+    }
+
     pub fn placer(&self) -> &FootPlacer {
         &self.placer
     }

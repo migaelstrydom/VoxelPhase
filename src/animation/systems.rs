@@ -8,12 +8,20 @@ use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteS
 use super::animator::{BodyReading, CharacterAnimator};
 use super::debug_config::AnimationDebugConfig;
 use super::foot_placer::{FootPhase, FootPlacer};
+use super::humanoid::hang::{HangPhase, LedgeReading};
 use crate::character::grab::GrabConfig;
-use crate::character::{CharacterIntent, CharacterState, Grounding, Immersion, Throws};
+use crate::character::ledge::LedgeSensor;
+use crate::character::locomotion::{LeanTowards, Ledge, LedgePhase};
+use crate::character::{
+    CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig, LocomotionState,
+    Throws,
+};
 use crate::components::{Orientation, Position, Rotation, Velocity};
 use crate::debug::{DebugLines, DebugOverlays};
+use crate::physics::PhysicsWorld;
 use crate::rendering::Colour;
 use crate::sensing::{ContactCandidates, SensorSet};
+use crate::systems::PhysicsResource;
 use crate::time::Time;
 
 /// System that configures probes based on character animation state.
@@ -72,6 +80,9 @@ impl<'a> System<'a> for CharacterAnimationSystem {
         ReadStorage<'a, Grounding>,
         ReadStorage<'a, Immersion>,
         ReadStorage<'a, Throws>,
+        ReadStorage<'a, LedgeSensor>,
+        ReadStorage<'a, LocomotionConfig>,
+        Read<'a, PhysicsResource>,
         WriteStorage<'a, CharacterAnimator>,
         Write<'a, DebugLines>,
         Write<'a, DebugOverlays>,
@@ -93,6 +104,9 @@ impl<'a> System<'a> for CharacterAnimationSystem {
             groundings,
             immersions,
             throws,
+            sensors,
+            configs,
+            physics,
             mut animators,
             mut debug_lines,
             mut debug_overlays,
@@ -129,6 +143,19 @@ impl<'a> System<'a> for CharacterAnimationSystem {
                 up: body_up,
                 grounding,
                 immersion: &immersion,
+                ledge: match (&character_state.locomotion, configs.get(entity)) {
+                    (LocomotionState::Ledge(ledge), Some(config)) => ledge_reading(
+                        ledge,
+                        &physics.world,
+                        sensors.get(entity).is_some_and(|s| s.wall_below),
+                        config,
+                    ),
+                    _ => None,
+                },
+                reach_for: sensors
+                    .get(entity)
+                    .and_then(|s| s.ahead)
+                    .map(|ahead| (ahead.hands, ahead.in_seconds)),
             };
             if let Some(throws) = throws.get(entity) {
                 animator.observe_throws(throws.this_frame(), dt);
@@ -144,6 +171,52 @@ impl<'a> System<'a> for CharacterAnimationSystem {
             }
         }
     }
+}
+
+/// What the animation reads of `ledge` this frame: its edge where the edge's
+/// body has taken it, the phase as the animation counts it, and how fast the
+/// edge moves. `None` once the edge's body is gone.
+fn ledge_reading(
+    ledge: &Ledge,
+    world: &PhysicsWorld,
+    wall_below: bool,
+    config: &LocomotionConfig,
+) -> Option<LedgeReading> {
+    let at = ledge.edge.in_world(world)?;
+    let timing = &config.ledge;
+    let phase = match ledge.phase {
+        LedgePhase::Grab { elapsed } => HangPhase::Catch {
+            progress: (elapsed / timing.settle).clamp(0.0, 1.0),
+        },
+        LedgePhase::Hang { lean } => HangPhase::Hang {
+            lean: lean.map_or(0.0, |lean| {
+                let held = (lean.held / timing.commit_hold).clamp(0.0, 1.0);
+                match lean.towards {
+                    LeanTowards::Drop => -held,
+                    LeanTowards::PullUp => held,
+                }
+            }),
+        },
+        LedgePhase::PullUp { elapsed, duration } => HangPhase::Climb {
+            progress: (elapsed / duration).clamp(0.0, 1.0),
+        },
+    };
+    let grip = at.grip();
+    let outward = at.outward.into_inner();
+    let edge_velocity = ledge
+        .edge
+        .body
+        .and_then(|body| world.body(body))
+        .map_or(Vector3::zeros(), |body| body.velocity_at(grip));
+    Some(LedgeReading {
+        phase,
+        hands: at.hands,
+        outward,
+        face: grip + outward * timing.grip_depth,
+        stand: at.stand,
+        edge_velocity,
+        wall_below,
+    })
 }
 
 /// Stage 1 debug: visualise what the foot placer *would* do if it were

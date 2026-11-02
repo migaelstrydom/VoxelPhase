@@ -267,7 +267,7 @@ they are allowed, as today. Otherwise:
 | OnFoot, Hop | Swing |
 | Jump, Fall | Brace |
 | Swim | Stroke |
-| Ledge | Grip |
+| Ledge | Grip (`UpperState::Gripping`) |
 
 Today a Hop braces the arms. Swinging through it is deliberate: a hop is a
 running leap that flows out of the run and back into it. Which `ArmState`s each

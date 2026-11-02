@@ -10,6 +10,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::body_frame::BodyFrame;
 use super::gait::GaitCycle;
+use super::hang;
 use super::pose_state::{exit_drive, exit_gather, exit_kick, smoothstep, AirKind, Stroke, Takeoff};
 use super::stride_sync;
 use super::throw::{self, ThrowRig};
@@ -34,6 +35,7 @@ pub enum UpperKey {
     Holding,
     Braced,
     Stroking,
+    Gripping,
 }
 
 /// Upper-body animation state.
@@ -58,6 +60,9 @@ pub enum UpperState {
     /// Swimming: a front crawl, or sculling to tread water. Coupled to the
     /// `Stroke` cycle `PoseState::Swimming` exposes.
     Stroking,
+    /// Hands on an edge (`hang::sample_gripping`, from
+    /// `AnimationState::hang`).
+    Gripping,
 }
 
 /// Per-frame tick inputs for `UpperState`.
@@ -130,6 +135,7 @@ impl UpperState {
             UpperState::Holding { .. } => UpperKey::Holding,
             UpperState::Braced => UpperKey::Braced,
             UpperState::Stroking => UpperKey::Stroking,
+            UpperState::Gripping => UpperKey::Gripping,
         }
     }
 
@@ -149,6 +155,10 @@ impl UpperState {
             UpperState::Swinging => sample_swinging(ctx),
             UpperState::Braced => sample_braced(ctx),
             UpperState::Stroking => sample_stroking(ctx),
+            UpperState::Gripping => match &ctx.anim.hang {
+                Some(hang) => hang::sample_gripping(hang, ctx.anim, ctx.rig),
+                None => sample_braced(ctx),
+            },
             UpperState::Reaching { elapsed, target } => sample_reaching(ctx, *elapsed, *target),
             UpperState::Holding {
                 current_hold_height,
@@ -386,6 +396,10 @@ fn sample_braced(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
         Some(exit) => pressed_out(ctx, hands, &exit),
         None => hands,
     };
+    let hands = match anim.reach_for {
+        Some((holds, in_seconds)) => reaching_ahead(ctx, hands, holds, in_seconds),
+        None => hands,
+    };
 
     PoseFragment {
         feet: None,
@@ -397,6 +411,40 @@ fn sample_braced(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
         torso_pitch: None,
     }
 }
+
+/// Braced arms rising to the holds on an edge the arc is about to bring the
+/// hands to: from `REACH_AHEAD_FROM` seconds out, all the way there by
+/// `REACH_AHEAD_BY`, each hand to the hold on its own side, as far as the
+/// arm goes. A catch then lands hands already reaching for it.
+fn reaching_ahead(
+    ctx: &UpperSampleCtx<'_>,
+    braced: HandsPose,
+    holds: [Point3<f32>; 2],
+    in_seconds: f32,
+) -> HandsPose {
+    let shoulders = shoulders_with_twist(ctx, 0.0);
+    let reach = ctx.rig.arm_length();
+    let weight = 1.0 - smoothstep(REACH_AHEAD_BY, REACH_AHEAD_FROM, in_seconds);
+    let left_side = -ctx.anim.facing.cross(&Vector3::y());
+    let (left, right) = if (holds[0] - holds[1]).dot(&left_side) > 0.0 {
+        (holds[0], holds[1])
+    } else {
+        (holds[1], holds[0])
+    };
+    let toward = |hand: Point3<f32>, hold: Point3<f32>, shoulder: Point3<f32>| {
+        let held = clamp_to_reach(shoulder, hold, reach);
+        Point3::from(hand.coords.lerp(&held.coords, weight))
+    };
+    HandsPose {
+        left: toward(braced.left, left, shoulders.left),
+        right: toward(braced.right, right, shoulders.right),
+    }
+}
+
+/// Seconds before reaching an edge that the arms start rising to it, and
+/// by when they are there.
+const REACH_AHEAD_FROM: f32 = 0.3;
+const REACH_AHEAD_BY: f32 = 0.05;
 
 /// The arms of a jump out of the water over the braced pose (`WaterExit`):
 /// spread wide and high, then swept down hard in an arc out to the sides to

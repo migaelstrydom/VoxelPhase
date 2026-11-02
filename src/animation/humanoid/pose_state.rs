@@ -11,6 +11,7 @@ use std::f32::consts::PI;
 use nalgebra::{Point3, Vector2, Vector3};
 
 use super::body_frame::BodyFrame;
+use super::hang;
 use super::stride_sync;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, FeetPose, FootAnchor, PoseFragment};
@@ -148,6 +149,7 @@ pub enum PoseKey {
     Hop,
     Airborne(AirKind),
     Swimming(Stroke),
+    Hanging,
 }
 
 /// Lower-body / core animation state.
@@ -170,6 +172,9 @@ pub enum PoseState {
     /// In the water with nothing underfoot. The body's own pitch lays the rig
     /// flat or stands it up; this chooses what the limbs do.
     Swimming { stroke: Stroke },
+    /// Hands on an edge: hanging under them, or climbing over it
+    /// (`hang::sample_hanging`, from `AnimationState::hang`).
+    Hanging,
 }
 
 /// Per-frame tick inputs.
@@ -209,7 +214,8 @@ impl PoseState {
             PoseState::Grounded { .. }
             | PoseState::Hop { .. }
             | PoseState::Airborne { .. }
-            | PoseState::Swimming { .. } => false,
+            | PoseState::Swimming { .. }
+            | PoseState::Hanging => false,
         }
     }
 
@@ -219,7 +225,7 @@ impl PoseState {
         match *self {
             PoseState::Launching { kind, .. } | PoseState::Airborne { kind, .. } => Some(kind),
             PoseState::Hop { .. } => Some(AirKind::Leap),
-            PoseState::Grounded { .. } | PoseState::Swimming { .. } => None,
+            PoseState::Grounded { .. } | PoseState::Swimming { .. } | PoseState::Hanging => None,
         }
     }
 
@@ -229,7 +235,7 @@ impl PoseState {
             PoseState::Launching { takeoff, .. }
             | PoseState::Hop { takeoff }
             | PoseState::Airborne { takeoff, .. } => Some(takeoff),
-            PoseState::Grounded { .. } | PoseState::Swimming { .. } => None,
+            PoseState::Grounded { .. } | PoseState::Swimming { .. } | PoseState::Hanging => None,
         }
     }
 
@@ -250,6 +256,10 @@ impl PoseState {
             }
             PoseState::Airborne { kind, takeoff } => sample_airborne(ctx, *kind, *takeoff, false),
             PoseState::Swimming { stroke } => sample_swimming(ctx, *stroke),
+            PoseState::Hanging => match &ctx.anim.hang {
+                Some(hang) => hang::sample_hanging(hang, ctx.anim, ctx.rig),
+                None => sample_airborne(ctx, AirKind::Fall, Takeoff::default(), false),
+            },
         }
     }
 
@@ -263,6 +273,7 @@ impl PoseState {
             PoseState::Hop { .. } => PoseKey::Hop,
             PoseState::Airborne { kind, .. } => PoseKey::Airborne(kind),
             PoseState::Swimming { stroke } => PoseKey::Swimming(stroke),
+            PoseState::Hanging => PoseKey::Hanging,
         }
     }
 
@@ -285,6 +296,7 @@ impl PoseState {
             PoseState::Swimming {
                 stroke: Stroke::Tread,
             } => "tread",
+            PoseState::Hanging => "hanging",
         }
     }
 
@@ -304,7 +316,7 @@ impl PoseState {
                 phase: anim.stroke_phase,
                 kind: CycleKind::Stroke,
             }),
-            PoseState::Launching { .. } | PoseState::Airborne { .. } => None,
+            PoseState::Launching { .. } | PoseState::Airborne { .. } | PoseState::Hanging => None,
         }
     }
 }

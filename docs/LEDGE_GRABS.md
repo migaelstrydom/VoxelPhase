@@ -409,9 +409,41 @@ wildcards.
 | Consumer | Ledge |
 |---|---|
 | Planner (`PlanRole`) | Off |
-| Legs | Off. Step 7: the pose hangs them from the hips, knees bent a little towards the wall. |
-| Arms (`UpperState`) | Braced for now. Step 7: Grip, each hand held to its `Edge::hands` point, read through the edge's body each frame, with the elbows solved to them (the hand clamp from c553979). In Jump and Fall, a predicted edge turns Brace into Reach towards it. |
-| Pose | A fall's for now. Step 7: by phase, the Grab catch, the Hang with its lean, and the PullUp following the lift path |
+| Legs | Off. The pose draws the feet, and the legs are handed them (`FootPlacer::hold_feet`), so a climber's feet on the top are where the gait picks up. |
+| Arms (`UpperState`) | `Gripping`: the hands on their holds on the lip, read through the edge's body each frame, the elbows solved to them. In Jump and Fall, `Braced` arms rise to the holds of an edge the sensor finds along the arc (`LedgeSensor::ahead`), from 0.3 s out. |
+| Pose | `Hanging`: the posture, the legs' swing, and the climb (`animation/humanoid/hang.rs`) |
+
+### Animation
+
+`animation/humanoid/hang.rs`. The animation system reads the held edge from
+physics into a `LedgeReading` (the hands, the face, the stand point, the
+phase and lean, and the edge's velocity), so the animator stays
+physics-free. Nothing is a canned clip:
+
+- **Posture.** The shoulders go where the physics body puts them, the figure
+  leaning in towards the wall (it is slimmer than the capsule). They are drawn
+  in to the hands only as far as the arms are long, and less far again while
+  leaning to pull, which lifts the figure. The chest stays off the face. The
+  catch shows the body sinking onto its arms as the joint eases it to the
+  hang.
+- **Legs.** A damped pendulum from the hips, set swinging by every change in
+  the body's velocity relative to the edge: the catch, a platform's reversal.
+  The knees give on a catch and settle. With a wall below (one cast from the
+  shins, `LedgeSensor::wall_below`), the legs hang in to it and the toes rest
+  on it, never in it. Those feet are anchored to the world, so a back-jump or
+  drop blends out of them as a kick off the wall.
+- **Hands.** Planted on the edge like feet on the ground. A hand left 7 cm
+  from its place lifts and moves past it in an arc, one hand at a time: hand
+  over hand along a shimmy, a shuffle as a turning deck carries the body.
+- **Climb.** The capsule has to clear the lip, which puts its pelvis higher
+  than hands on the lip can reach. So the figure follows its own path, held
+  to the edge: from the hang (or, for a mantle, from standing), to over the
+  lip (hips at the lip, chest over the top, shoulders above the hands, the
+  lead knee up and its foot on the top), to standing. The hands stay
+  planted, so the elbows bend through the pull and press at the top. The
+  trailing leg steps up, then the lead foot moves from the lip to stand
+  under its hip.
+- **Back-jump.** One going straight out turns in the air to face its flight.
 | Grab system | `arm_state_allowed`: only `Idle` in a Ledge; entering one releases what is held |
 
 ## Testing
@@ -494,7 +526,7 @@ Each step ships with the game working, and its tests.
 5. **Shimmy** (done).
 6. **Pull-up and mantle** (done).
 7. **Arms and pose.** Hands on the edge, the arc prediction and the reach
-   ahead (cosmetic, so it waits until here), and the hang and lean poses.
+   ahead, and the hang, lean and climb poses (done).
 8. **Water, platforms, loose bodies and blasts**, and their scenarios.
 
 Steps 1 to 6 need no input except feel. Step 7 is about looks, and is best

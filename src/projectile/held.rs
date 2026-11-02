@@ -101,6 +101,8 @@ mod tests {
                 up: Vector3::y(),
                 grounding: &grounding,
                 immersion: &immersion,
+                ledge: None,
+                reach_for: None,
             };
             animator.update(
                 DT,

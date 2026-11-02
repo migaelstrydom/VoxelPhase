@@ -18,5 +18,5 @@ pub use config::LedgeConfig;
 pub use edge::{Edge, SensedEdge, WorldEdge};
 pub use grip::{Grip, GripFrame};
 pub use probe::{edge_at_hands, Reach};
-pub use sensor::LedgeSensor;
+pub use sensor::{EdgeAhead, LedgeSensor};
 pub use system::LedgeSensorSystem;

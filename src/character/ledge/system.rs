@@ -1,4 +1,4 @@
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::character::locomotion::{Ledge, LedgePhase};
@@ -19,7 +19,7 @@ use crate::traversal::{carriers, TraversalPlanState, WorldCaster};
 use super::config::LedgeConfig;
 use super::edge::{SensedEdge, WorldEdge};
 use super::probe::{edge_at_hands, Reach};
-use super::sensor::LedgeSensor;
+use super::sensor::{EdgeAhead, LedgeSensor};
 
 /// Finds the edge at each sensing body's hands, from the world as last
 /// stepped, and hands it to the locomotion state through the intent: while
@@ -131,9 +131,44 @@ impl<'a> System<'a> for LedgeSensorSystem {
                 }
                 _ => None,
             };
+            let gravity = world.config().gravity;
+            let velocity = rigid.linear_velocity();
+            sensor.wall_below = match (state.locomotion, &intent.edge) {
+                (LocomotionState::Ledge(_), Some(held)) => face_below(
+                    &caster,
+                    rigid.position(),
+                    held,
+                    config.collider_radius,
+                    ledge,
+                ),
+                _ => false,
+            };
+            let flying = matches!(
+                state.locomotion,
+                LocomotionState::Jump(_) | LocomotionState::Fall(_)
+            );
+            // An edge already at the hands that the state has not taken (below
+            // the chest, on the way up) is one they reach for now.
+            sensor.ahead = (flying && sensor.regrab_lock <= 0.0)
+                .then(|| match &intent.edge {
+                    Some(at_hands) => Some(EdgeAhead {
+                        hands: at_hands.at.hands,
+                        in_seconds: 0.0,
+                    }),
+                    None => {
+                        let heading = facing_from_rotation(rotation.0);
+                        edge_ahead(&caster, &reach(heading), velocity, gravity, ledge)
+                    }
+                })
+                .flatten();
             if plan_state.overlay {
                 if let Some(sensed) = &intent.edge {
                     draw(&mut overlays, &sensed.at);
+                }
+                if let Some(ahead) = &sensor.ahead {
+                    for hand in ahead.hands {
+                        overlays.add_sphere(hand, 0.03, Colour::new(1.0, 0.6, 0.0, 1.0));
+                    }
                 }
             }
         }
@@ -167,6 +202,57 @@ fn found_again(
         edge_at_hands(caster, &moved, config).is_some_and(|edge| same_body(&edge))
     });
     sensed(world, edge, room)
+}
+
+/// Whether a face stands below the held edge where the hanging feet are: a
+/// cast from the shins towards the wall.
+fn face_below(
+    caster: &WorldCaster,
+    centre: Point3<f32>,
+    held: &SensedEdge,
+    radius: f32,
+    config: &LedgeConfig,
+) -> bool {
+    let shins = centre - Vector3::y() * config.brace_drop;
+    let towards = -held.at.outward.into_inner();
+    let reach = radius + config.face_gap + config.reach_ahead;
+    caster
+        .cast(shins, towards, reach, FOOT)
+        .is_some_and(|hit| hit.contact.normal.dot(&towards) < -0.5)
+}
+
+/// Radius of the sphere the feet feel for a face with, in metres.
+const FOOT: f32 = 0.05;
+
+/// The edge the hands meet along the body's arc in the next
+/// `reach_ahead_time`, looked for every `reach_ahead_step` from where the
+/// body will be: a ballistic arc, the air steering left out. Only an edge
+/// the body would be falling or near the top of its rise to.
+fn edge_ahead(
+    caster: &WorldCaster,
+    now: &Reach,
+    velocity: Vector3<f32>,
+    gravity: Vector3<f32>,
+    config: &LedgeConfig,
+) -> Option<EdgeAhead> {
+    let steps = (config.reach_ahead_time / config.reach_ahead_step).round() as usize;
+    (1..=steps).find_map(|step| {
+        let t = step as f32 * config.reach_ahead_step;
+        let rising = velocity.y + gravity.y * t;
+        if rising > config.catch_rise {
+            return None;
+        }
+        let there = Reach {
+            centre: now.centre + velocity * t + gravity * (0.5 * t * t),
+            ..*now
+        };
+        let edge = edge_at_hands(caster, &there, config)?;
+        let at = edge.in_world(caster.world)?;
+        Some(EdgeAhead {
+            hands: at.hands,
+            in_seconds: t,
+        })
+    })
 }
 
 fn sensed(world: &PhysicsWorld, edge: super::Edge, room: [bool; 2]) -> Option<SensedEdge> {

@@ -313,6 +313,24 @@ impl FootPlacer {
 
     /// Set what the legs do from the next tick on. A change of mode is
     /// entered there ([`Self::enter`]), where the frame's context is.
+    /// While the legs are off, stand the feet where the pose has put them
+    /// (a hanger's against a wall, a climber's on the top), planted, so
+    /// that the legs coming back on keep every foot still within reach of
+    /// its hip. Ignored while the legs are on: then the feet are the
+    /// placer's own.
+    pub fn hold_feet(&mut self, left: Point3<f32>, right: Point3<f32>, yaw: f32) {
+        if self.mode != LegMode::Off {
+            return;
+        }
+        for (foot, at) in [(&mut self.left, left), (&mut self.right, right)] {
+            foot.phase = FootPhase::Planted;
+            foot.position = at;
+            foot.planted_position = at;
+            foot.planted_yaw = yaw;
+            foot.since_plant = 0.0;
+        }
+    }
+
     pub fn set_mode(&mut self, mode: LegMode) {
         if !self.mode.same_as(&mode) && self.entered_from.is_none() {
             self.entered_from = Some(self.mode);

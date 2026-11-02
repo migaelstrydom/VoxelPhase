@@ -78,6 +78,15 @@ pub struct LedgeConfig {
     /// metres.
     pub lip_clearance: f32,
 
+    /// How far ahead along the arc, in seconds, the hands look for an edge
+    /// to reach for.
+    pub reach_ahead_time: f32,
+    /// Spacing of the looks along the arc, in seconds.
+    pub reach_ahead_step: f32,
+    /// How far below the capsule's centre the feet look for a face to brace
+    /// on while hanging, in metres.
+    pub brace_drop: f32,
+
     /// Speed out from the wall a back-jump leaves at, in m/s.
     pub back_jump_speed: f32,
     /// Seconds a back-jump taken with the stick neutral or towards the wall
@@ -116,6 +125,9 @@ impl Default for LedgeConfig {
             pull_up_time: 0.6,
             mantle_time: 0.3,
             lip_clearance: 0.03,
+            reach_ahead_time: 0.3,
+            reach_ahead_step: 0.05,
+            brace_drop: 0.35,
             back_jump_speed: 4.0,
             back_jump_lock: 0.6,
         }

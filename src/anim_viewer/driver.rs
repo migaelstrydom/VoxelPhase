@@ -162,6 +162,8 @@ pub fn run(spec: &Run<'_>) -> Take {
                 up: Vector3::y(),
                 grounding: &grounding,
                 immersion: &Immersion::dry(),
+                ledge: None,
+                reach_for: None,
             },
             &body.state,
             &intent,
@@ -285,6 +287,7 @@ fn pose_label(pose: &PoseState) -> &'static str {
         PoseState::Hop { .. } => "hop",
         PoseState::Airborne { .. } => "air",
         PoseState::Swimming { .. } => "swim",
+        PoseState::Hanging => "hang",
     }
 }
 

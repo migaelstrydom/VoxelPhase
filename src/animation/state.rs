@@ -4,6 +4,7 @@
 
 use nalgebra::{Point3, Vector2, Vector3};
 
+use crate::animation::humanoid::hang::Hang;
 use crate::animation::pose::PoseFragment;
 use crate::character::ThrowingHand;
 
@@ -269,6 +270,11 @@ pub struct AnimationState {
     pub landing: Option<LandingSquash>,
     /// Throws being played out, oldest first; at most one per hand.
     pub throws: Vec<ThrowGesture>,
+    /// The hands' hold on a ledge, while there is one.
+    pub hang: Option<Hang>,
+    /// An edge the hands will reach along a jump's or a fall's arc: where
+    /// each hand will hold, and how soon.
+    pub reach_for: Option<([Point3<f32>; 2], f32)>,
 }
 
 impl AnimationState {
@@ -312,6 +318,8 @@ impl AnimationState {
             water_exit: None,
             landing: None,
             throws: Vec::new(),
+            hang: None,
+            reach_for: None,
         }
     }
 }

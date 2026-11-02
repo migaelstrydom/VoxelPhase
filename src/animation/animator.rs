@@ -8,6 +8,7 @@ use specs::{Component, VecStorage};
 
 use super::config::{CharacterRigConfig, GaitPreset};
 use super::foot_placer::{FlightLanding, FootPlacer, FootSide, LegMode, PlacerFoot, StepId};
+use super::humanoid::hang::{FigureNow, Hang, LedgeReading};
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Stroke, Takeoff, TickCtx};
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
 use super::humanoid::stride_sync;
@@ -59,6 +60,11 @@ pub struct BodyReading<'a> {
     pub up: Vector3<f32>,
     pub grounding: &'a Grounding,
     pub immersion: &'a Immersion,
+    /// The hands' hold on a ledge, while the character has one.
+    pub ledge: Option<LedgeReading>,
+    /// An edge the hands will reach along a jump's or fall's arc: where each
+    /// hand will hold, and how soon, in seconds.
+    pub reach_for: Option<([Point3<f32>; 2], f32)>,
 }
 
 /// The character animation driver.
@@ -190,6 +196,27 @@ impl CharacterAnimator {
         let velocity = body.velocity - support_velocity;
         let speed = Vector3::new(velocity.x, 0.0, velocity.z).magnitude();
         let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
+
+        let figure = FigureNow {
+            pelvis: pelvis_position,
+            facing,
+            feet: [self.state.left.position, self.state.right.position],
+            hands: [
+                self.state.left_hand.position,
+                self.state.right_hand.position,
+            ],
+        };
+        let before = self.state.velocity + support_velocity;
+        self.state.hang = body.ledge.map(|reading| {
+            let mut hang = self
+                .state
+                .hang
+                .take()
+                .unwrap_or_else(|| Hang::begin(reading, before));
+            hang.advance(reading, body.velocity, &figure, &self.config, dt);
+            hang
+        });
+        self.state.reach_for = body.reach_for;
 
         self.state.facing = facing;
         self.state.pelvis_position = pelvis_position;
@@ -343,6 +370,11 @@ impl CharacterAnimator {
             None => fragment,
         };
         self.apply_fragment_to_state(&fragment);
+        // While the legs are off and the pose places the feet (a climber's on
+        // the top), the legs take them as they stand, to keep coming back on.
+        if let (PoseState::Hanging, Some(feet)) = (&self.pose_state, &fragment.feet) {
+            self.locomotion.hold_feet(feet.left, feet.right, yaw);
+        }
         self.skeleton
             .apply_fragment(&fragment, &self.state, &self.config);
     }
@@ -434,7 +466,8 @@ impl CharacterAnimator {
                 PoseState::Launching { .. }
                 | PoseState::Hop { .. }
                 | PoseState::Airborne { .. }
-                | PoseState::Swimming { .. },
+                | PoseState::Swimming { .. }
+                | PoseState::Hanging,
                 _,
             ) => None,
         };
@@ -453,7 +486,8 @@ impl CharacterAnimator {
                 PoseState::Grounded { .. }
                 | PoseState::Launching { .. }
                 | PoseState::Hop { .. }
-                | PoseState::Swimming { .. },
+                | PoseState::Swimming { .. }
+                | PoseState::Hanging,
                 _,
             ) => None,
         };
@@ -466,7 +500,8 @@ impl CharacterAnimator {
                 PoseState::Grounded { .. }
                 | PoseState::Launching { .. }
                 | PoseState::Hop { .. }
-                | PoseState::Airborne { .. },
+                | PoseState::Airborne { .. }
+                | PoseState::Hanging,
                 _,
             ) => None,
         };
@@ -717,9 +752,8 @@ fn map_upper_state(arm: &ArmState, state: &LocomotionState) -> UpperState {
     match arm {
         ArmState::Idle => match state {
             LocomotionState::OnFoot(_) | LocomotionState::Hop(_) => UpperState::Swinging,
-            LocomotionState::Jump(_) | LocomotionState::Fall(_) | LocomotionState::Ledge(_) => {
-                UpperState::Braced
-            }
+            LocomotionState::Jump(_) | LocomotionState::Fall(_) => UpperState::Braced,
+            LocomotionState::Ledge(_) => UpperState::Gripping,
             LocomotionState::Swim(_) => UpperState::Stroking,
         },
         ArmState::Reaching { elapsed, target } => UpperState::Reaching {
@@ -801,24 +835,26 @@ fn next_pose_state(
             PoseState::Launching { kind, takeoff, .. } | PoseState::Airborne { kind, takeoff } => {
                 PoseState::Airborne { kind, takeoff }
             }
-            PoseState::Grounded { .. } | PoseState::Hop { .. } | PoseState::Swimming { .. } => {
-                match phase {
-                    TakeoffPhase::Launch { .. } => PoseState::Launching {
-                        kind: jump_kind(kind),
-                        takeoff,
-                        t: 0.0,
-                    },
-                    TakeoffPhase::Flight => PoseState::Airborne {
-                        kind: jump_kind(kind),
-                        takeoff,
-                    },
-                }
-            }
+            PoseState::Grounded { .. }
+            | PoseState::Hop { .. }
+            | PoseState::Swimming { .. }
+            | PoseState::Hanging => match phase {
+                TakeoffPhase::Launch { .. } => PoseState::Launching {
+                    kind: jump_kind(kind),
+                    takeoff,
+                    t: 0.0,
+                },
+                TakeoffPhase::Flight => PoseState::Airborne {
+                    kind: jump_kind(kind),
+                    takeoff,
+                },
+            },
         },
-        LocomotionState::Fall(_) | LocomotionState::Ledge(_) => PoseState::Airborne {
+        LocomotionState::Fall(_) => PoseState::Airborne {
             kind: AirKind::Fall,
             takeoff,
         },
+        LocomotionState::Ledge(_) => PoseState::Hanging,
         // In the water, the stroke follows the intent the way the gait does
         // on land: going somewhere is a crawl, staying put is a tread.
         LocomotionState::Swim(_) => PoseState::Swimming {

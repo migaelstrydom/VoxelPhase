@@ -1,5 +1,6 @@
 use crate::character::grab::{self, GrabConfig, ReachFrame};
 use crate::character::ledge::{Grip, GripFrame};
+use crate::character::locomotion::{AirSteering, Jump, JumpKind};
 use crate::character::{
     approach, facing_from_rotation, ArmState, AttitudeControl, CharacterIntent, CharacterState,
     EntryEffects, Facts, Grounding, Immersion, LocomotionConfig, LocomotionInput, LocomotionState,
@@ -202,10 +203,24 @@ impl<'a> System<'a> for CharacterControlSystem {
             let wall = sensed_edge
                 .filter(|_| hanging)
                 .map(|sensed| -sensed.at.outward.into_inner());
-            let heading = match (wall, throws.and_then(Throws::facing)) {
-                (Some(wall), _) => Some((wall, config.turn_aggression)),
-                (None, Some(aim)) => Some((aim, config.throw_turn_aggression)),
-                (None, None) => {
+            // A back-jump going straight out, the stick no say in it, turns to
+            // face where it flies.
+            let flight = matches!(
+                state.locomotion,
+                LocomotionState::Jump(Jump {
+                    kind: JumpKind::BackJump,
+                    steering: AirSteering::Locked { .. },
+                    ..
+                })
+            )
+            .then(|| across(motion.linear, &up))
+            .filter(|planar| planar.magnitude() > 0.5)
+            .map(|planar| planar.normalize());
+            let heading = match (wall, throws.and_then(Throws::facing), flight) {
+                (Some(wall), _, _) => Some((wall, config.turn_aggression)),
+                (None, Some(aim), _) => Some((aim, config.throw_turn_aggression)),
+                (None, None, Some(flight)) => Some((flight, config.turn_aggression)),
+                (None, None, None) => {
                     (move_dir.magnitude() > 0.001).then_some((move_dir, config.turn_aggression))
                 }
             };
