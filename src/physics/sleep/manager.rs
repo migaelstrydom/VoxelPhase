@@ -188,22 +188,18 @@ impl SleepManager {
             }
         }
 
-        let islands = self.island_builder.build(bodies, manifolds);
-        for island in islands {
-            if island
-                .bodies
-                .iter()
-                .all(|handle| candidates.contains(handle))
-            {
-                for handle in island.bodies {
-                    if let Some(body) = bodies.get_mut(handle.0) {
-                        if body.is_dynamic() {
-                            body.set_linear_velocity(Vector3::zeros());
-                            body.set_angular_velocity(Vector3::zeros());
-                        }
+        for island in self
+            .island_builder
+            .sleepable(bodies, manifolds, &candidates)
+        {
+            for handle in island.bodies {
+                if let Some(body) = bodies.get_mut(handle.0) {
+                    if body.is_dynamic() {
+                        body.set_linear_velocity(Vector3::zeros());
+                        body.set_angular_velocity(Vector3::zeros());
                     }
-                    self.sleeping.insert(handle);
                 }
+                self.sleeping.insert(handle);
             }
         }
     }
