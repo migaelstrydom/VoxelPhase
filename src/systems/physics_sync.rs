@@ -5,7 +5,7 @@
 //! 1. Steps the physics simulation
 //! 2. Syncs physics state back to ECS components
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::Vector3;
 use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
@@ -81,33 +81,6 @@ impl Default for PhysicsSyncSystem {
 }
 
 impl PhysicsSyncSystem {
-    fn sync_kinematics_from_ecs(
-        physics: &mut PhysicsWorld,
-        positions: &WriteStorage<Position>,
-        velocities: &WriteStorage<Velocity>,
-        orientations: &WriteStorage<Orientation>,
-        bodies: &ReadStorage<RigidBodyComponent>,
-    ) {
-        let mut kinematic_updates = Vec::new();
-        {
-            let physics_ref = &*physics;
-            for (pos, vel, orient, body) in
-                ((&*positions), (&*velocities), (&*orientations), bodies).join()
-            {
-                if let Some(rb) = physics_ref.body(body.0) {
-                    if rb.is_kinematic() {
-                        kinematic_updates.push((body.0, pos.0, vel.0, orient.0));
-                    }
-                }
-            }
-        }
-        for (handle, pos, vel, orient) in kinematic_updates {
-            let position = Point3::new(pos.x, pos.y, pos.z);
-            let _ = physics.set_kinematic_transform(handle, position, orient);
-            let _ = physics.set_kinematic_velocity(handle, vel, Vector3::zeros());
-        }
-    }
-
     /// Push this frame's command down into the engine.
     ///
     /// The discrete verbs are consumed here — on gameplay's side of the seam,
@@ -305,15 +278,6 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         ): Self::SystemData,
     ) {
         let frame_dt = time.delta_seconds();
-
-        // Sync kinematic bodies from ECS into physics before stepping.
-        Self::sync_kinematics_from_ecs(
-            &mut physics.world,
-            &positions,
-            &velocities,
-            &orientations,
-            &bodies,
-        );
 
         // Push the drive command for actuated bodies (player, platforms, etc.)
         Self::push_drive_intent(&mut physics.world, &mut drive_intents, &actuators, &bodies);
