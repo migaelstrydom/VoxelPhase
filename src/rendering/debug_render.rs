@@ -20,43 +20,17 @@ use crate::rendering::renderer::Renderer;
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::TextureManager;
 
-/// Render opaque debug overlay shapes into the current frame.
-///
-/// Call during the opaque render pass, after all scene geometry.
-pub fn render_debug_overlays_opaque(
-    renderer: &mut Renderer,
-    cb: ash::vk::CommandBuffer,
-    overlays: &DebugOverlays,
-    material_manager: &MaterialManager,
-    texture_manager: &TextureManager,
-) -> EngineResult<()> {
-    for shape in overlays.opaque_shapes() {
-        let (vertices, indices, transform) = tessellate(shape);
-        if !vertices.is_empty() {
-            renderer.draw_procedural_mesh(
-                cb,
-                &vertices,
-                &indices,
-                &transform,
-                material_manager,
-                texture_manager,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-/// Render transparent debug overlay shapes into the current frame.
+/// Render the debug overlay shapes into the current frame.
 ///
 /// Call during the transparent render pass (after water/fire, before particles).
-pub fn render_debug_overlays_transparent(
+pub fn render_debug_overlays(
     renderer: &mut Renderer,
     cb: ash::vk::CommandBuffer,
     overlays: &DebugOverlays,
     material_manager: &MaterialManager,
     texture_manager: &TextureManager,
 ) -> EngineResult<()> {
-    for shape in overlays.transparent_shapes() {
+    for shape in overlays.shapes() {
         let (vertices, indices, transform) = tessellate(shape);
         if !vertices.is_empty() {
             renderer.draw_procedural_mesh_transparent(

@@ -194,22 +194,17 @@ impl DebugShape {
 
 /// Debug overlay shapes to render in 3D.
 ///
-/// Shapes are split into opaque and transparent buckets, which are drawn
-/// during the opaque and transparent render passes respectively. All shapes
-/// are stored as lightweight [`DebugShape`] descriptors; mesh tessellation
+/// All are drawn alpha-blended in the transparent pass. Shapes are stored as lightweight [`DebugShape`] descriptors; mesh tessellation
 /// is deferred to render time.
 #[derive(Default)]
 pub struct DebugOverlays {
-    /// Shapes drawn during the opaque render pass.
-    opaque_shapes: Vec<DebugShape>,
-    /// Shapes drawn during the transparent render pass (alpha-blended).
-    transparent_shapes: Vec<DebugShape>,
+    /// Shapes to draw this frame.
+    shapes: Vec<DebugShape>,
 }
 
-#[allow(dead_code)]
 impl DebugOverlays {
     pub fn add_sphere(&mut self, position: Point3<f32>, radius: f32, colour: Colour) {
-        self.transparent_shapes.push(DebugShape::Sphere {
+        self.shapes.push(DebugShape::Sphere {
             center: position,
             radius,
             colour,
@@ -231,7 +226,7 @@ impl DebugOverlays {
         radius: f32,
         colour: Colour,
     ) {
-        self.transparent_shapes.push(DebugShape::Line {
+        self.shapes.push(DebugShape::Line {
             start,
             end,
             radius,
@@ -248,7 +243,7 @@ impl DebugOverlays {
         radius: f32,
         colour: Colour,
     ) {
-        self.transparent_shapes.push(DebugShape::Capsule {
+        self.shapes.push(DebugShape::Capsule {
             center,
             rotation,
             half_height,
@@ -262,22 +257,15 @@ impl DebugOverlays {
     /// Triangles are rendered with alpha blending during the transparent pass,
     /// making them useful for visualising mesh patches, collision geometry, etc.
     pub fn add_triangle(&mut self, vertices: [Point3<f32>; 3], colour: Colour) {
-        self.transparent_shapes
-            .push(DebugShape::Triangle { vertices, colour });
+        self.shapes.push(DebugShape::Triangle { vertices, colour });
     }
 
-    /// Shapes to draw during the opaque render pass.
-    pub fn opaque_shapes(&self) -> &[DebugShape] {
-        &self.opaque_shapes
-    }
-
-    /// Shapes to draw during the transparent render pass.
-    pub fn transparent_shapes(&self) -> &[DebugShape] {
-        &self.transparent_shapes
+    /// Shapes to draw this frame.
+    pub fn shapes(&self) -> &[DebugShape] {
+        &self.shapes
     }
 
     pub fn clear(&mut self) {
-        self.opaque_shapes.clear();
-        self.transparent_shapes.clear();
+        self.shapes.clear();
     }
 }

@@ -40,9 +40,7 @@ use voxel_phase::physics::stepping::FixedTimestep;
 use voxel_phase::physics::{ColliderShape, PhysicsWorld, StaticGeometry};
 use voxel_phase::rendering::camera::Camera;
 use voxel_phase::rendering::colour::Colour;
-use voxel_phase::rendering::debug_render::{
-    render_debug_overlays_opaque, render_debug_overlays_transparent,
-};
+use voxel_phase::rendering::debug_render::render_debug_overlays;
 use voxel_phase::rendering::material::MaterialManagerBuilder;
 use voxel_phase::rendering::renderer::Renderer;
 use voxel_phase::resources::manager::ResourceManager;
@@ -414,19 +412,9 @@ fn run_with_scenario<S: PhysicsBenchScenario>(scenario: &S) -> EngineResult<()> 
                             log::error!("Failed to render sky: {}", e);
                         }
 
-                        if let Err(e) = render_debug_overlays_opaque(
-                            &mut renderer,
-                            cb,
-                            &overlays,
-                            &material_manager,
-                            &texture_manager,
-                        ) {
-                            log::error!("Failed to render debug overlays: {}", e);
-                        }
-
                         renderer.begin_transparent_pass(cb, present_index);
 
-                        if let Err(e) = render_debug_overlays_transparent(
+                        if let Err(e) = render_debug_overlays(
                             &mut renderer,
                             cb,
                             &overlays,

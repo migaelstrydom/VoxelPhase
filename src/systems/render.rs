@@ -14,9 +14,7 @@ use crate::hud::{Hud, HudContext};
 use crate::lighting::ActiveLights;
 use crate::model::Transform;
 use crate::particles::ParticlePool;
-use crate::rendering::debug_render::{
-    render_debug_overlays_opaque, render_debug_overlays_transparent,
-};
+use crate::rendering::debug_render::render_debug_overlays;
 use crate::rendering::material::{MaterialManager, SurfaceModulation};
 use crate::rendering::profile::{RenderProfile, RenderStage};
 use crate::rendering::reflection::ProbeOwner;
@@ -536,19 +534,6 @@ impl<'a> System<'a> for RenderSystem {
                     }
                     renderer.record_stage(RenderStage::Rigs, lap.elapsed());
 
-                    // Render opaque debug overlay shapes (spheres, lines)
-                    let lap = Instant::now();
-                    if let Err(e) = render_debug_overlays_opaque(
-                        &mut renderer,
-                        draw_cb,
-                        &debug.overlays,
-                        &material_manager,
-                        &texture_manager,
-                    ) {
-                        log::error!("RenderSystem: Failed to draw debug overlays: {}", e);
-                    }
-                    renderer.record_stage(RenderStage::DebugShapes, lap.elapsed());
-
                     // Hand the water over before the particles: it is drawn inside
                     // the scene pass, and the particles are sorted by which side
                     // of its surface they are on.
@@ -600,7 +585,7 @@ impl<'a> System<'a> for RenderSystem {
 
                     // Render transparent debug overlay shapes (triangles)
                     let lap = Instant::now();
-                    if let Err(e) = render_debug_overlays_transparent(
+                    if let Err(e) = render_debug_overlays(
                         &mut renderer,
                         draw_cb,
                         &debug.overlays,
