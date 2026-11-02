@@ -259,8 +259,6 @@ impl Spawnable for PlankBridgeDef {
         for &(offset, varied_he, rotation) in &planks {
             boxes.push((varied_he, offset, rotation, plank_mat));
         }
-        let model = multi_material_rotated_compound_cuboid_model(&boxes);
-
         let orientation = Yaw::degrees(self.yaw).rotation();
 
         // Physics compound body.
@@ -297,8 +295,19 @@ impl Spawnable for PlankBridgeDef {
                 );
             }
 
-            body_handle
+            // The body's origin is its centre of mass, which the planks
+            // lift above the bottom of the beams the parts were laid out from.
+            let centre_of_mass = physics.world.recenter_on_colliders(body_handle);
+            (body_handle, centre_of_mass)
         };
+        let (body_handle, centre_of_mass) = body_handle;
+
+        // The model is laid out about the same centre as the colliders.
+        for (_, offset, _, _) in &mut boxes {
+            *offset -= centre_of_mass;
+        }
+        let model = multi_material_rotated_compound_cuboid_model(&boxes);
+        let centre = center + orientation * centre_of_mass;
 
         // Fracture joints: each plank connects to both beams.
         let threshold = self.fracture_threshold;
@@ -323,7 +332,7 @@ impl Spawnable for PlankBridgeDef {
 
         vec![world
             .create_entity()
-            .with(Position(Vector3::new(center.x, center.y, center.z)))
+            .with(Position(centre.coords))
             .with(Velocity(Vector3::zeros()))
             .with(Orientation(orientation))
             .with(RigidBodyComponent(body_handle))

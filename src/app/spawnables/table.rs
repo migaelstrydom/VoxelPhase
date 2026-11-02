@@ -125,12 +125,10 @@ impl Spawnable for TableDef {
             Vector3::new(leg_x, leg_y, leg_z),
         ];
 
-        // Build compound model
         let mut boxes = vec![(top_he, Vector3::new(0.0, top_y, 0.0))];
         for &pos in &leg_positions {
             boxes.push((leg_he, pos));
         }
-        let model = compound_cuboid_model(&boxes, materials[0]);
 
         // Create compound physics body
         let body_handle = {
@@ -161,8 +159,21 @@ impl Spawnable for TableDef {
                 );
             }
 
-            body_handle
+            // The body's origin is its centre of mass, which the heavy top
+            // holds well above the frame the parts were laid out in.
+            let centre_of_mass = physics.world.recenter_on_colliders(body_handle);
+            (body_handle, centre_of_mass)
         };
+        let (body_handle, centre_of_mass) = body_handle;
+
+        // The model is laid out about the same centre as the colliders.
+        let boxes: Vec<_> = boxes
+            .into_iter()
+            .map(|(half_extents, at)| (half_extents, at - centre_of_mass))
+            .collect();
+        let model = compound_cuboid_model(&boxes, materials[0]);
+        let rotation = Yaw::degrees(self.yaw).rotation();
+        let centre = initial_pos + rotation * centre_of_mass;
 
         // 5 children: [0] top slab, [1..4] legs.
         // 4 joints: each leg connects to the top.
@@ -196,13 +207,9 @@ impl Spawnable for TableDef {
 
         vec![world
             .create_entity()
-            .with(Position(Vector3::new(
-                initial_pos.x,
-                initial_pos.y,
-                initial_pos.z,
-            )))
+            .with(Position(centre.coords))
             .with(Velocity(Vector3::zeros()))
-            .with(Orientation(Yaw::degrees(self.yaw).rotation()))
+            .with(Orientation(rotation))
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)

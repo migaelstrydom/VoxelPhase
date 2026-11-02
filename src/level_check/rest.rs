@@ -609,6 +609,30 @@ mod tests {
         assert!(outcome.settled_after.is_some());
     }
 
+    /// A body's origin is its centre of mass: every dynamic body a table, a
+    /// plank bridge or a temple spawns is already centred on its colliders.
+    #[test]
+    fn compound_props_spawn_centred_on_their_mass() {
+        let level = flat_level(
+            "Table(pos: (-12.0, 1.0, -12.0)), \
+             PlankBridge(pos: (0.0, 0.0, 12.0), length: 6.0), \
+             Temple(pos: (8.0, 0.0, -8.0))",
+        );
+        let trial = RestTrial::spawn(&level, build_terrain(&level));
+        let mut physics = trial.physics_mut();
+        for object in trial.objects() {
+            for &(body, _, _) in &object.bodies {
+                let off = physics.world.recenter_on_colliders(body);
+                assert!(
+                    off.norm() < 1e-3,
+                    "{}: body origin {:.3} m from its centre of mass",
+                    object.label,
+                    off.norm()
+                );
+            }
+        }
+    }
+
     #[cfg(feature = "level_scenarios")]
     mod shipped {
         use std::path::Path;

@@ -420,22 +420,21 @@ impl Spawnable for TempleDef {
             // Physics hull.
             let (hull_verts, hull_faces) =
                 column_geometry(lay.col_base_r, lay.col_top_r, lay.col_height, COLUMN_SIDES);
-            let world_hull: Vec<_> = hull_verts
-                .iter()
-                .map(|v| Vector3::new(v.x + cx, v.y + col_y_base, v.z + cz))
-                .collect();
-            let centroid =
-                world_hull.iter().copied().sum::<Vector3<f32>>() / world_hull.len() as f32;
-            let local_hull: Vec<_> = world_hull.iter().map(|v| v - centroid).collect();
+            // The body's origin is the column's centre of mass: the centroid
+            // of its volume, which a column narrowing upward holds below
+            // half its height, not the mean of its vertices.
+            let centroid = build_convex_hull(&hull_verts, &hull_faces).centroid();
+            let local_hull: Vec<_> = hull_verts.iter().map(|v| v - centroid).collect();
 
-            let pos = Point3::new(centroid.x, centroid.y, centroid.z);
+            let pos = Point3::new(cx, col_y_base, cz) + centroid;
             let hull = Arc::new(build_convex_hull(&local_hull, &hull_faces));
 
-            // Rendering model with cylindrical UVs.
+            // Rendering model with cylindrical UVs, about the same centre.
             let model = fluted_column_model(
                 lay.col_base_r,
                 lay.col_top_r,
                 lay.col_height,
+                centroid.y,
                 COLUMN_SIDES,
                 fluted,
             );
@@ -607,11 +606,13 @@ fn column_geometry(
 /// U wraps around the circumference (0..1 maps to one full revolution) so the
 /// fluted texture tiles seamlessly. V runs from 0 (base) to 1 (capital).
 /// Side vertices get smooth radial normals; caps get flat up/down normals.
-/// Geometry is centred at the origin to match the physics hull's local space.
+/// Geometry is centred on `centroid_y`, the height of the physics hull's
+/// centroid above the column's base, to match the hull's local space.
 fn fluted_column_model(
     base_radius: f32,
     top_radius: f32,
     height: f32,
+    centroid_y: f32,
     num_sides: u32,
     material: MaterialId,
 ) -> Arc<Model> {
@@ -619,10 +620,10 @@ fn fluted_column_model(
     let angle_step = std::f32::consts::TAU / num_sides as f32;
     let white = Vector4::new(1.0, 1.0, 1.0, 1.0);
 
-    // The hull centroid (in raw local space) sits at y = height/2 with x=z=0
-    // (symmetric polygon). Shift the model down by the same amount so the
-    // rendering mesh and physics hull share the same origin.
-    let oy = -height / 2.0;
+    // The hull's centroid lies on the axis (a symmetric polygon), at
+    // `centroid_y`. Shift the model down by the same amount so the rendering
+    // mesh and physics hull share the same origin.
+    let oy = -centroid_y;
 
     let mut verts: Vec<Vertex> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
