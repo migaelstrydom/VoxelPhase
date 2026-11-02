@@ -966,23 +966,13 @@ impl ProbeTarget for TerrainWorld {
         length: f32,
     ) -> Option<ProbeHit> {
         let end = origin + direction * length;
-        let sweep_aabb = AABB::new(
-            Point3::new(
-                origin.x.min(end.x),
-                origin.y.min(end.y),
-                origin.z.min(end.z),
-            ),
-            Point3::new(
-                origin.x.max(end.x),
-                origin.y.max(end.y),
-                origin.z.max(end.z),
-            ),
-        );
-        let patch = self.query_region(&sweep_aabb);
+        let sweep_aabb = AABB::new(origin.inf(&end), origin.sup(&end));
+        // A ray needs the triangles alone: the patch's adjacency is for contacts.
+        let triangles = self.query_region_triangles(&sweep_aabb);
 
         let mut earliest: Option<RayHit> = None;
-        for pt in &patch.triangles {
-            if let Some(hit) = ray_triangle(origin, direction, &pt.triangle, length) {
+        for triangle in &triangles {
+            if let Some(hit) = ray_triangle(origin, direction, triangle, length) {
                 if earliest.as_ref().is_none_or(|e: &RayHit| hit.t < e.t) {
                     earliest = Some(hit);
                 }
