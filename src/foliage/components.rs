@@ -5,13 +5,13 @@ use std::sync::Arc;
 use nalgebra::{Isometry3, Vector3};
 use specs::{Component, VecStorage};
 
-use super::deform::{deform, Give, Press, Squash};
+use super::deform::{deform, Bending, Give};
 use super::drag::{DragVolume, VolumeFrame};
 use super::leaf_core::LeafCore;
 use super::shape::FoliageShape;
 use super::skin::Skin;
 use crate::model::MeshPrimitive;
-use crate::physics::RigidBodyHandle;
+use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::rendering::material::MaterialId;
 use crate::rendering::vertex::Vertex;
 
@@ -49,10 +49,8 @@ pub struct Foliage {
     pub give: Give,
     /// Rooted or loose.
     pub rooting: Rooting,
-    /// The surfaces it is pressed against.
-    pub press: Press,
-    /// Its squash after a landing.
-    pub squash: Squash,
+    /// What bends its skin this frame.
+    pub bending: Bending,
     /// The core's velocity last frame, to tell a landing from resting.
     pub last_velocity: Vector3<f32>,
     /// Whether the skin drawn is still right for a clump that has not moved
@@ -75,8 +73,7 @@ impl Foliage {
             core: LeafCore::default(),
             give: Give::default(),
             rooting: Rooting::Rooted { pose },
-            press: Press::default(),
-            squash: Squash::default(),
+            bending: Bending::default(),
             last_velocity: Vector3::zeros(),
             still_drawn: true,
         }
@@ -101,21 +98,25 @@ impl Foliage {
         }
     }
 
+    /// Where the clump's frame is now: its pose if rooted, its core's if
+    /// loose. `None` if its core has gone.
+    pub fn pose(&self, world: &PhysicsWorld) -> Option<Isometry3<f32>> {
+        match self.rooting {
+            Rooting::Rooted { pose } => Some(pose),
+            Rooting::Loose { body } => world
+                .body(body)
+                .map(|b| Isometry3::from_parts(b.position().coords.into(), b.rotation())),
+        }
+    }
+
     /// The skin as it is giving now, for the clump at `pose`: pressed and
     /// squashed, or at rest if nothing is doing either. `scratch` is reused
     /// for the bent vertices.
     pub fn drawn(&self, pose: &Isometry3<f32>, scratch: &mut Vec<Vertex>) -> MeshPrimitive {
-        if self.press.is_empty() && self.squash.is_settled() {
+        if self.bending.is_at_rest() {
             return self.rest_primitive();
         }
-        deform(
-            &self.skin.vertices,
-            pose,
-            &self.press,
-            &self.squash,
-            &self.give,
-            scratch,
-        );
+        deform(&self.skin, pose, &self.bending, &self.give, scratch);
         self.primitive(std::mem::take(scratch))
     }
 

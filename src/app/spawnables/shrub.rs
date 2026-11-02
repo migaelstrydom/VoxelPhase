@@ -102,7 +102,7 @@ impl Spawnable for ShrubDef {
             // Drawn pressed onto the ground it rests on from the start: it
             // sleeps until disturbed, and nothing presses it until then.
             let give = clump.give;
-            clump.press.touch(
+            clump.bending.press.touch(
                 Point3::new(self.pos.0, ground, self.pos.1),
                 Vector3::y(),
                 &give,

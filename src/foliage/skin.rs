@@ -87,6 +87,10 @@ pub struct Skin {
     pub vertices: Vec<Vertex>,
     /// Triangle list.
     pub indices: Vec<u32>,
+    /// How far each vertex stands out of the valleys between nubs, in
+    /// metres: its sprig. What a pressed or parted skin keeps, so leaves
+    /// pushed onto a surface stay leafy rather than becoming the surface.
+    pub sprigs: Vec<f32>,
 }
 
 /// One nub on a lobe: where it points, how big it is and how its sprig is
@@ -105,6 +109,7 @@ impl SkinSpec {
         let sphere = generate_icosphere(self.subdivisions);
         let mut rng = StdRng::seed_from_u64(seed as u64 ^ 0x5eed_1eaf);
         let mut vertices = Vec::new();
+        let mut sprigs = Vec::new();
         let mut indices = Vec::new();
         for (index, lobe) in shape.lobes.iter().enumerate() {
             let nubs = self.nubs(lobe, &mut rng);
@@ -124,6 +129,7 @@ impl SkinSpec {
                     lobe.radius * (1.0 - self.nub_depth * (1.0 - height) + wobble) + leaves;
                 let position = lobe.centre + direction * radius;
                 hidden.push(self.is_buried(position, index, shape));
+                sprigs.push((radius - lobe.radius * (1.0 - self.nub_depth)).max(0.0));
                 vertices.push(Vertex {
                     pos: position.coords,
                     color: opaque(self.colour(height, nub)),
@@ -140,7 +146,11 @@ impl SkinSpec {
             }
         }
         smooth_normals(&mut vertices, &indices);
-        compact(Skin { vertices, indices })
+        compact(Skin {
+            vertices,
+            indices,
+            sprigs,
+        })
     }
 
     /// Nubs spread evenly over a lobe, as many as fit their size.
@@ -271,6 +281,7 @@ pub(crate) fn smooth_normals(vertices: &mut [Vertex], indices: &[u32]) {
 fn compact(skin: Skin) -> Skin {
     let mut remap = vec![u32::MAX; skin.vertices.len()];
     let mut vertices = Vec::new();
+    let mut sprigs = Vec::new();
     let indices = skin
         .indices
         .iter()
@@ -279,11 +290,16 @@ fn compact(skin: Skin) -> Skin {
             if *slot == u32::MAX {
                 *slot = vertices.len() as u32;
                 vertices.push(skin.vertices[i as usize]);
+                sprigs.push(skin.sprigs[i as usize]);
             }
             *slot
         })
         .collect();
-    Skin { vertices, indices }
+    Skin {
+        vertices,
+        indices,
+        sprigs,
+    }
 }
 
 fn opaque(rgb: Vector3<f32>) -> Vector4<f32> {

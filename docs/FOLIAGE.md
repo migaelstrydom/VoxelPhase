@@ -22,6 +22,7 @@ visible lobes  ──  drag volume (rides with the clump)
 | Leaves dragging whatever overlaps a lobe (`FoliageDrag`) | The skin pressed onto what the core rests on (`Press`) |
 | Air dragging a loose clump to a 7 m/s terminal speed | A squash spring kicked by each landing (`Squash`) |
 | A blast's shove on a freshly uprooted core | Leaves shed on landings and uprooting (particles) |
+| | Leaves parted round whatever pushes through them (`Parting`) |
 | | A wading character's shorter stride (`leaf_depth`) |
 
 A rooted shrub has no body at all. Nothing collides with it; it is a drag
@@ -79,8 +80,8 @@ on the next physics step.
 
 - **No reaction on the leaves.** Something pushing through a loose clump's
   leaves is dragged but does not drag the clump; only its core is ever
-  pushed. Rooted shrubs don't stir as you wade through them, either visually
-  or physically.
+  pushed. Leaves part round a passer, to its capsule plus 10 cm, and ease
+  back over 0.2 s, but the parted skin is smooth where it hugs the capsule.
 - **Leaf look.** The leaves are geometry and vertex colour on a matte
   material. There is no translucency or wrap lighting, which is most of what
   makes sunlit foliage glow at its edges.

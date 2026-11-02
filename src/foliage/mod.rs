@@ -35,7 +35,7 @@ mod thicket;
 mod scenarios;
 
 pub use components::{Foliage, Rooting};
-pub use deform::{deform, ContactPlane, Give, Press, Squash};
+pub use deform::{deform, Bending, ContactPlane, Give, Parting, Press, Pusher, Squash};
 pub use drag::{DragVolume, FoliageDrag, LeafDrag, VolumeFrame};
 pub use leaf_core::LeafCore;
 pub use shape::{FoliageShape, Lobe, ShrubSpec};

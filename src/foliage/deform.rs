@@ -1,21 +1,25 @@
-//! How a clump's leaves give: flattened against what it rests on, and
-//! squashed for a moment when it lands.
+//! How a clump's leaves give: flattened against what it rests on, squashed
+//! for a moment when it lands, and parted round whatever pushes through.
 //!
 //! ```text
-//!   contacts ──▶ Press (planes, held a moment) ─┐
-//!   impacts  ──▶ Squash (a damped spring)  ─────┴─▶ deform(rest skin) ──▶ drawn skin
+//!   contacts ──▶ Press (planes, held a moment) ──┐
+//!   impacts  ──▶ Squash (a damped spring)  ──────┼─▶ deform(rest skin) ──▶ drawn skin
+//!   passers  ──▶ Parting (capsules, held) ───────┘
 //! ```
 //!
 //! The core sits inside the leaves, so the drawn skin reaches past what
 //! physics stops. Where it would pass into the ground, it is pressed onto
 //! the ground's plane instead, with a soft knee so the flattening rounds
 //! off into the clump rather than cutting it. A landing kicks a spring that
-//! squashes the clump along the impact and lets it wobble back. Neither
-//! changes what physics sees.
+//! squashes the clump along the impact and lets it wobble back. A body in
+//! its leaves pushes them aside, to its own surface, and they ease back
+//! once it has gone. None of it changes what physics sees.
 
 use nalgebra::{Isometry3, Point3, Vector3};
 use smallvec::SmallVec;
 
+use super::skin::Skin;
+use crate::physics::RigidBodyHandle;
 use crate::rendering::vertex::Vertex;
 
 /// A surface the clump is pressed against, in the world.
@@ -162,6 +166,68 @@ impl Squash {
     }
 }
 
+/// Something pushing through a clump's leaves: a capsule, as the segment
+/// at its core and its radius, in the world. A sphere is a capsule whose
+/// segment is a point.
+#[derive(Debug, Clone, Copy)]
+pub struct Pusher {
+    /// One end of the core segment.
+    pub a: Point3<f32>,
+    /// The other end.
+    pub b: Point3<f32>,
+    /// Radius round the segment.
+    pub radius: f32,
+}
+
+/// The bodies pushing through a clump's leaves, each held a moment after it
+/// was last seen there so the leaves ease back rather than snap.
+#[derive(Debug, Clone, Default)]
+pub struct Parting {
+    pushers: SmallVec<[(RigidBodyHandle, Pusher, f32); 4]>,
+}
+
+impl Parting {
+    /// `body` is in the leaves this frame, as `pusher`.
+    pub fn push(&mut self, body: RigidBodyHandle, pusher: Pusher, give: &Give) {
+        if let Some(entry) = self.pushers.iter_mut().find(|e| e.0 == body) {
+            entry.1 = pusher;
+            entry.2 = give.hold;
+        } else if self.pushers.len() < self.pushers.inline_size() {
+            self.pushers.push((body, pusher, give.hold));
+        }
+    }
+
+    /// Let `dt` pass: bodies no longer in the leaves let them go.
+    pub fn age(&mut self, dt: f32) {
+        for entry in &mut self.pushers {
+            entry.2 -= dt;
+        }
+        self.pushers.retain(|e| e.2 > 0.0);
+    }
+
+    /// Whether nothing is in the leaves.
+    pub fn is_empty(&self) -> bool {
+        self.pushers.is_empty()
+    }
+}
+
+/// A pusher in the clump's own frame, with how firmly it pushes.
+struct LocalPusher {
+    a: Point3<f32>,
+    b: Point3<f32>,
+    radius: f32,
+    firmness: f32,
+}
+
+/// How far leaves part, at most, as a share of the way out to a pusher's
+/// surface: part way, so a body wading through a small shrub dents it
+/// round itself rather than hollowing it out, and the rest of the leaves
+/// close over the limbs.
+const PARTING_SHARE: f32 = 0.7;
+/// How far parted leaves' normals turn to face the body parting them, at
+/// most.
+const PARTED_TURN: f32 = 0.4;
+
 /// A pressing surface in the clump's own frame.
 struct LocalPlane {
     point: Point3<f32>,
@@ -170,16 +236,46 @@ struct LocalPlane {
     firmness: f32,
 }
 
-/// The skin `rest` bent by `squash` and pressed onto `press`'s surfaces,
-/// for a clump at `pose`, into `out`.
+/// Everything bending a clump's skin.
+#[derive(Debug, Clone, Default)]
+pub struct Bending {
+    /// The surfaces it is pressed against.
+    pub press: Press,
+    /// Its squash after a landing.
+    pub squash: Squash,
+    /// The bodies pushing through its leaves.
+    pub parting: Parting,
+}
+
+impl Bending {
+    /// Whether nothing bends the skin: it is drawn as it was grown.
+    pub fn is_at_rest(&self) -> bool {
+        self.press.is_empty() && self.squash.is_settled() && self.parting.is_empty()
+    }
+
+    /// Whether the bend changes from frame to frame even with the clump
+    /// still: ringing from a landing, or parted by something that may move
+    /// on.
+    pub fn is_changing(&self) -> bool {
+        !self.squash.is_settled() || !self.parting.is_empty()
+    }
+}
+
+/// `skin` as `bending` bends it: squashed, parted round the bodies in its
+/// leaves and pressed onto the surfaces under it, for a clump at `pose`,
+/// into `out`.
 pub fn deform(
-    rest: &[Vertex],
+    skin: &Skin,
     pose: &Isometry3<f32>,
-    press: &Press,
-    squash: &Squash,
+    bending: &Bending,
     give: &Give,
     out: &mut Vec<Vertex>,
 ) {
+    let Bending {
+        press,
+        squash,
+        parting,
+    } = bending;
     let to_local = pose.inverse();
     let planes: SmallVec<[LocalPlane; 4]> = press
         .pressing(give)
@@ -189,25 +285,45 @@ pub fn deform(
             firmness,
         })
         .collect();
+    let pushers: SmallVec<[LocalPusher; 4]> = parting
+        .pushers
+        .iter()
+        .map(|(_, p, held)| LocalPusher {
+            a: to_local * p.a,
+            b: to_local * p.b,
+            radius: p.radius,
+            firmness: (held / give.hold).clamp(0.0, 1.0) * PARTING_SHARE,
+        })
+        .collect();
     let squashing = !squash.is_settled();
 
     out.clear();
-    out.extend(rest.iter().map(|vertex| {
-        let mut v = *vertex;
-        let mut position = Point3::from(v.pos);
-        if squashing {
-            let (p, n) = squashed(position, v.normal, squash);
-            position = p;
-            v.normal = n;
-        }
-        for plane in &planes {
-            let (p, n) = pressed(position, v.normal, plane, give);
-            position = p;
-            v.normal = n;
-        }
-        v.pos = position.coords;
-        v
-    }));
+    out.extend(
+        skin.vertices
+            .iter()
+            .zip(&skin.sprigs)
+            .map(|(vertex, &sprig)| {
+                let mut v = *vertex;
+                let mut position = Point3::from(v.pos);
+                if squashing {
+                    let (p, n) = squashed(position, v.normal, squash);
+                    position = p;
+                    v.normal = n;
+                }
+                for pusher in &pushers {
+                    let (p, n) = parted(position, v.normal, sprig, pusher, give);
+                    position = p;
+                    v.normal = n;
+                }
+                for plane in &planes {
+                    let (p, n) = pressed(position, v.normal, sprig, plane, give);
+                    position = p;
+                    v.normal = n;
+                }
+                v.pos = position.coords;
+                v
+            }),
+    );
 }
 
 /// A point and its normal, squashed along the squash's axis towards its
@@ -231,11 +347,67 @@ fn squashed(
     (moved, turned.try_normalize(1e-9).unwrap_or(normal))
 }
 
+/// A point and its normal pushed aside by a capsule: away from its axis,
+/// untouched beyond the knee outside it, eased out to its surface within.
+///
+/// Aside, not out of its rounded ends: leaves part round a body wading
+/// through them and close over nothing, so a body opens a channel through
+/// a clump and its top comes out of the top, rather than wearing the leaves
+/// as a lid. Past the capsule's ends the parting fades over its radius. A
+/// sphere (a pusher whose segment is a point) parts them every way.
+fn parted(
+    position: Point3<f32>,
+    normal: Vector3<f32>,
+    sprig: f32,
+    pusher: &LocalPusher,
+    give: &Give,
+) -> (Point3<f32>, Vector3<f32>) {
+    let axis = pusher.b - pusher.a;
+    let length = axis.magnitude();
+    let (core, reach) = if length > 1e-6 {
+        let along = axis / length;
+        let t = (position - pusher.a).dot(&along);
+        let past = (-t).max(t - length).max(0.0);
+        let fade = (1.0 - past / pusher.radius).clamp(0.0, 1.0);
+        (pusher.a + along * t, fade)
+    } else {
+        (pusher.a, 1.0)
+    };
+    if reach <= 0.0 {
+        return (position, normal);
+    }
+    let offset = position - core;
+    let distance = offset.magnitude();
+    let outside = distance - pusher.radius;
+    let knee = give.knee;
+    if outside >= knee {
+        return (position, normal);
+    }
+    let Some(out) = offset.try_normalize(1e-6) else {
+        return (position, normal);
+    };
+    let firmness = pusher.firmness * reach;
+    let flatness = ((knee - outside) / knee).clamp(0.0, 1.0) * firmness;
+    // Pushed out to the knee, plus their own sprig: the parted wall stays a
+    // wall of nubs rather than a smooth sleeve round the body.
+    let eased = knee * ((outside - knee) / knee).exp() + sprig * flatness;
+    let lift = (eased - outside) * firmness;
+    // They turn towards the body that parts them, but only part way, and
+    // keep most of their own sprigs' shading.
+    let flatness = flatness * PARTED_TURN;
+    let turned = normal.lerp(&-out, flatness);
+    (
+        position + out * lift,
+        turned.try_normalize(1e-9).unwrap_or(-out),
+    )
+}
+
 /// A point and its normal pressed onto a surface: untouched above the knee,
 /// eased onto the surface below it, never through it.
 fn pressed(
     position: Point3<f32>,
     normal: Vector3<f32>,
+    sprig: f32,
     plane: &LocalPlane,
     give: &Give,
 ) -> (Point3<f32>, Vector3<f32>) {
@@ -245,14 +417,16 @@ fn pressed(
         return (position, normal);
     }
     let knee = give.knee;
-    let eased = knee * ((height - knee) / knee).exp();
+    let depth = ((knee - height) / knee).clamp(0.0, 1.0);
+    // Eased onto the surface, plus its own sprig: pressed leaves stay leafy.
+    let eased = knee * ((height - knee) / knee).exp() + sprig * depth;
     let lift = (eased - height) * firmness;
     let across = (position - point) - surface * height;
     let spread = across
         .try_normalize(1e-6)
         .map_or(Vector3::zeros(), |d| d * lift * give.bulge);
     // Leaves pressed flat on a surface face into it: the clump's underside.
-    let flatness = ((knee - height) / knee).clamp(0.0, 1.0) * firmness;
+    let flatness = depth * firmness;
     let turned = normal.lerp(&-surface, flatness);
     (
         position + surface * lift + spread,
@@ -263,6 +437,15 @@ fn pressed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A skin of these vertices, without sprigs or triangles.
+    fn skin_of(vertices: &[Vertex]) -> Skin {
+        Skin {
+            vertices: vertices.to_vec(),
+            indices: Vec::new(),
+            sprigs: vec![0.0; vertices.len()],
+        }
+    }
 
     fn vertex(at: Vector3<f32>) -> Vertex {
         Vertex {
@@ -286,16 +469,59 @@ mod tests {
             vertex(Vector3::new(0.0, 0.5, 0.0)),
         ];
         let mut out = Vec::new();
+        let bending = Bending {
+            press,
+            ..Bending::default()
+        };
         deform(
-            &rest,
+            &skin_of(&rest),
             &Isometry3::identity(),
-            &press,
-            &Squash::default(),
+            &bending,
             &give,
             &mut out,
         );
         assert!(out[0].pos.y > -0.3, "a leaf went through: {}", out[0].pos.y);
         assert!(out[0].pos.y < -0.3 + give.knee);
+        assert_eq!(out[1].pos, rest[1].pos);
+    }
+
+    /// Leaves in a body's way are pushed most of the way out to its surface;
+    /// leaves well clear of it are left alone.
+    #[test]
+    fn a_body_parts_the_leaves_round_it() {
+        let give = Give::default();
+        let mut parting = Parting::default();
+        let pusher = Pusher {
+            a: Point3::new(0.0, -0.25, 0.0),
+            b: Point3::new(0.0, 0.25, 0.0),
+            radius: 0.25,
+        };
+        parting.push(
+            RigidBodyHandle(generational_arena::Index::from_raw_parts(0, 0)),
+            pusher,
+            &give,
+        );
+        let rest = [
+            vertex(Vector3::new(0.1, 0.0, 0.0)),
+            vertex(Vector3::new(1.0, 0.0, 0.0)),
+        ];
+        let mut out = Vec::new();
+        let bending = Bending {
+            parting,
+            ..Bending::default()
+        };
+        deform(
+            &skin_of(&rest),
+            &Isometry3::identity(),
+            &bending,
+            &give,
+            &mut out,
+        );
+        let pushed = (out[0].pos.x - 0.1) / (0.25 - 0.1);
+        assert!(
+            pushed > PARTING_SHARE * 0.9,
+            "a leaf in the body's way moved only {pushed:.2} of the way out"
+        );
         assert_eq!(out[1].pos, rest[1].pos);
     }
 

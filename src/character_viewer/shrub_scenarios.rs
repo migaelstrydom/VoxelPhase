@@ -28,7 +28,10 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::stand(0.3))
                 .then(Beat::walk(3.0).towards(NORTH).named("wade"))
                 .then(Beat::stand(0.5)),
-            camera: CameraRig::side().with_azimuth(90.0).with_distance(5.0),
+            camera: CameraRig::side()
+                .with_azimuth(-35.0)
+                .with_distance(3.5)
+                .with_elevation(35.0),
             judged: Judged::Motion,
         },
         Scenario {
