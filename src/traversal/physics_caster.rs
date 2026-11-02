@@ -2,12 +2,13 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use nalgebra::Vector3;
-use traversal_planner::section::{BodyKey, CastHit, Footing, SphereCaster, StripLayout};
+use traversal_planner::section::{BodyKey, CastHit, SphereCaster, StripLayout};
 use traversal_planner::{GaitParams, PathVec};
 
-use crate::physics::{CastObstacles, PhysicsWorld, RigidBodyHandle, SphereCast, StaticGeometry};
+use crate::physics::{PhysicsWorld, RigidBodyHandle, StaticGeometry};
 
 use super::path_frame::PathFrame;
+use super::world_caster::WorldCaster;
 
 /// The key of the static geometry, which like a fixed authored shape is one
 /// body.
@@ -24,20 +25,6 @@ const REACH_BELOW: f32 = 6.0;
 pub fn strip_reach(layout: &StripLayout, params: &GaitParams) -> (f32, f32) {
     let steepest = params.body.max_ground_slope_degrees.to_radians().tan();
     (REACH_ABOVE_RISE + layout.ahead * steepest, REACH_BELOW)
-}
-
-/// How fast a dynamic body's surface may move, in m/s, for the strip to see
-/// it: faster, it is in flight, not ground, and gone from where it is before
-/// a step could land on it. A blast's pieces are passed through until they
-/// slow.
-pub const IN_FLIGHT_SPEED: f32 = 2.0;
-/// How fast a dynamic body's surface may move, in m/s, and still be resting
-/// footing. Whatever the player stands on is awake, so asleep is no test.
-const RESTING_SPEED: f32 = 0.05;
-
-/// Whether a dynamic body is at rest as footing: asleep, or awake but still.
-pub fn is_resting(world: &PhysicsWorld, handle: RigidBodyHandle) -> bool {
-    world.is_sleeping(handle) || world.surface_speed(handle) <= RESTING_SPEED
 }
 
 /// The planner's sphere casts in the physics world: the terrain and every
@@ -71,38 +58,23 @@ impl PhysicsCaster<'_> {
         length: f32,
         radius: f32,
     ) -> Option<CastHit> {
-        let cast = SphereCast {
-            origin: self.frame.world_point(from),
-            direction,
-            length,
-            radius,
-            exclude: self.exclude,
-            solid_bodies: false,
-            obstacles: CastObstacles::Settled {
-                fastest: IN_FLIGHT_SPEED,
-                seen: self.carriers,
-            },
-        };
-        let hit = self.world.cast_sphere(self.scenery, &cast)?;
-        let (body, footing) = match hit.body {
-            None => (STATIC_GEOMETRY, Footing::Fixed),
-            Some(handle) => (body_key(handle), self.footing(handle)),
-        };
+        let hit =
+            self.world_caster()
+                .cast(self.frame.world_point(from), direction, length, radius)?;
         Some(CastHit {
-            z: cast.centre_at(hit.distance).y,
-            normal: self.frame.path_vector(hit.normal),
-            body,
-            footing,
+            z: hit.centre.y,
+            normal: self.frame.path_vector(hit.contact.normal),
+            body: hit.contact.body.map_or(STATIC_GEOMETRY, body_key),
+            footing: hit.footing,
         })
     }
 
-    fn footing(&self, handle: RigidBodyHandle) -> Footing {
-        match self.world.body(handle) {
-            Some(body) if body.is_dynamic() && !self.carriers.contains(&handle) => Footing::Loose {
-                mass: body.mass(),
-                resting: is_resting(self.world, handle),
-            },
-            _ => Footing::Fixed,
+    fn world_caster(&self) -> WorldCaster<'_> {
+        WorldCaster {
+            world: self.world,
+            scenery: self.scenery,
+            exclude: self.exclude,
+            carriers: self.carriers,
         }
     }
 }
@@ -145,10 +117,12 @@ impl SphereCaster for PhysicsCaster<'_> {
 #[cfg(test)]
 mod tests {
     use nalgebra::Point3;
+    use traversal_planner::section::Footing;
 
     use crate::physics::bench_harness::geometry::EmptyGeometry;
     use crate::physics::{ColliderDesc, PhysicsConfig, RigidBodyDesc};
 
+    use super::super::world_caster::IN_FLIGHT_SPEED;
     use super::*;
 
     /// The footing a cast down onto a dynamic box reads, if it sees it:

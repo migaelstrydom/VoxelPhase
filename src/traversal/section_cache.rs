@@ -8,7 +8,7 @@ use traversal_planner::GaitParams;
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
 
 use super::path_frame::PathFrame;
-use super::physics_caster::{is_resting, IN_FLIGHT_SPEED};
+use super::world_caster::{is_resting, IN_FLIGHT_SPEED};
 
 /// How far a body moves before the casts around it are dropped, in metres.
 const MOVED: f32 = 0.01;
