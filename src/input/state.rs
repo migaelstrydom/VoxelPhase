@@ -13,10 +13,10 @@ pub struct InputState {
     /// Keys that were just released this frame
     just_released_keys: HashSet<KeyCode>,
 
-    /// Mouse movement delta since last frame
+    /// Mouse movement since the last frame ended. Like the key edges, it is
+    /// gathered from the events delivered between frames and read by the
+    /// frame that follows them.
     mouse_delta: (f32, f32),
-    /// Accumulated mouse delta (for when we process input faster than we consume it)
-    mouse_delta_accumulator: (f32, f32),
 
     /// Currently pressed mouse buttons
     pressed_mouse_buttons: HashSet<MouseButton>,
@@ -36,17 +36,15 @@ impl InputState {
 
     // === Frame lifecycle ===
 
-    /// Call at the start of each frame to prepare for new input events.
-    /// Clears per-frame state like "just pressed" while keeping held state.
+    /// Call when a frame is done, before the events for the next one arrive.
+    /// Clears per-frame state like "just pressed" and the mouse's motion
+    /// while keeping held state.
     pub fn begin_frame(&mut self) {
         self.just_pressed_keys.clear();
         self.just_released_keys.clear();
         self.just_pressed_mouse_buttons.clear();
         self.just_released_mouse_buttons.clear();
-
-        // Transfer accumulated mouse delta and reset accumulator
-        self.mouse_delta = self.mouse_delta_accumulator;
-        self.mouse_delta_accumulator = (0.0, 0.0);
+        self.mouse_delta = (0.0, 0.0);
     }
 
     // === Event handlers (called from event loop) ===
@@ -70,8 +68,8 @@ impl InputState {
 
     /// Handle mouse motion event from winit (device event for relative motion)
     pub fn handle_mouse_motion(&mut self, delta_x: f64, delta_y: f64) {
-        self.mouse_delta_accumulator.0 += delta_x as f32;
-        self.mouse_delta_accumulator.1 += delta_y as f32;
+        self.mouse_delta.0 += delta_x as f32;
+        self.mouse_delta.1 += delta_y as f32;
     }
 
     /// Handle mouse button event from winit
@@ -112,7 +110,6 @@ impl InputState {
         // Motion accumulated while focus was leaving would arrive as one large
         // jump on the next frame the camera reads.
         self.mouse_delta = (0.0, 0.0);
-        self.mouse_delta_accumulator = (0.0, 0.0);
     }
 
     // === Query methods (called from systems) ===
@@ -226,6 +223,22 @@ mod tests {
 
         assert!(input.is_key_just_released(KeyCode::Space));
         assert!(input.is_mouse_button_just_released(MouseButton::Right));
+    }
+
+    /// Motion delivered between frames is read by the next frame, as a key
+    /// press is, not held back a frame.
+    #[test]
+    fn mouse_motion_is_read_by_the_frame_after_it() {
+        let mut input = InputState::new();
+        input.set_mouse_captured(true);
+
+        input.handle_mouse_motion(12.0, -3.0);
+        input.handle_keyboard_input(KeyCode::KeyW, ElementState::Pressed);
+        assert!(input.is_key_just_pressed(KeyCode::KeyW));
+        assert_eq!(input.mouse_delta(), (12.0, -3.0));
+
+        input.begin_frame();
+        assert_eq!(input.mouse_delta(), (0.0, 0.0));
     }
 
     #[test]
