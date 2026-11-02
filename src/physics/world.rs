@@ -1624,54 +1624,56 @@ impl PhysicsWorld {
         skip_static: bool,
         exclude: &[RigidBodyHandle],
     ) -> Option<(RigidBodyHandle, ProbeHit)> {
+        debug_assert!(length.is_finite(), "a ray's bounds need a finite length");
         let end = origin + direction * length;
         let mut earliest: Option<(RigidBodyHandle, ProbeHit)> = None;
 
-        for (idx, body) in self.bodies.iter() {
-            if skip_static && body.is_static() {
+        let mut candidates = Vec::new();
+        self.colliders_meeting(
+            &AABB::new(origin.inf(&end), origin.sup(&end)),
+            &mut candidates,
+        );
+        for (handle, ch) in candidates {
+            let Some(body) = self.bodies.get(handle.0) else {
                 continue;
-            }
-            let handle = RigidBodyHandle(idx);
-            if exclude.contains(&handle) {
+            };
+            if (skip_static && body.is_static()) || exclude.contains(&handle) {
                 continue;
             }
             let body_pos = body.position();
             let body_rot = body.rotation();
-
-            for ch in body.colliders() {
-                let Some(collider) = self.colliders.get(ch.0) else {
-                    continue;
-                };
-                let center = collider.world_center(body_pos, body_rot);
-                let world_xform = collider.world_transform(body_pos, body_rot);
-                let hit = match collider.shape() {
-                    ColliderShape::Sphere { radius: r } => {
-                        ray_vs_sphere(origin, direction, length, center, *r)
-                    }
-                    ColliderShape::Box { half_extents } => {
-                        let obb = Obb::new(center, world_xform.rotation, *half_extents);
-                        ray_vs_obb(origin, end, &obb, *half_extents)
-                    }
-                    ColliderShape::Capsule {
-                        half_height,
-                        radius: cap_radius,
-                    } => ray_vs_capsule(
-                        origin,
-                        direction,
-                        length,
-                        center,
-                        world_xform.rotation,
-                        *half_height,
-                        *cap_radius,
-                    ),
-                    ColliderShape::ConvexHull { hull } => {
-                        ray_vs_convex_hull(origin, direction, length, &world_xform, hull)
-                    }
-                };
-                if let Some(hit) = hit {
-                    if earliest.as_ref().map_or(true, |(_, e)| hit.t < e.t) {
-                        earliest = Some((handle, hit));
-                    }
+            let Some(collider) = self.colliders.get(ch.0) else {
+                continue;
+            };
+            let center = collider.world_center(body_pos, body_rot);
+            let world_xform = collider.world_transform(body_pos, body_rot);
+            let hit = match collider.shape() {
+                ColliderShape::Sphere { radius: r } => {
+                    ray_vs_sphere(origin, direction, length, center, *r)
+                }
+                ColliderShape::Box { half_extents } => {
+                    let obb = Obb::new(center, world_xform.rotation, *half_extents);
+                    ray_vs_obb(origin, end, &obb, *half_extents)
+                }
+                ColliderShape::Capsule {
+                    half_height,
+                    radius: cap_radius,
+                } => ray_vs_capsule(
+                    origin,
+                    direction,
+                    length,
+                    center,
+                    world_xform.rotation,
+                    *half_height,
+                    *cap_radius,
+                ),
+                ColliderShape::ConvexHull { hull } => {
+                    ray_vs_convex_hull(origin, direction, length, &world_xform, hull)
+                }
+            };
+            if let Some(hit) = hit {
+                if earliest.as_ref().map_or(true, |(_, e)| hit.t < e.t) {
+                    earliest = Some((handle, hit));
                 }
             }
         }
