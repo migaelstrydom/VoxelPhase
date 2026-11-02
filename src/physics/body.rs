@@ -10,7 +10,7 @@ use super::drive::allowance::AllowanceCommand;
 use super::drive::command::VerticalVerbs;
 use super::force_provider::MediumDrag;
 use super::handle::ColliderHandle;
-use super::math::{integrate_orientation, skew, transform_inertia_tensor};
+use super::math::{inertia_to_world, integrate_orientation, skew};
 
 /// Type of rigid body determining how it participates in physics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -345,7 +345,7 @@ impl RigidBody {
             return 0.0;
         }
         let linear = 0.5 * self.mass * self.linear_velocity.magnitude_squared();
-        let world_inertia = transform_inertia_tensor(&self.local_inertia, &self.rotation);
+        let world_inertia = inertia_to_world(&self.local_inertia, &self.rotation);
         let angular = 0.5
             * self
                 .angular_velocity
@@ -401,7 +401,7 @@ impl RigidBody {
         if self.inv_mass == 0.0 {
             return Matrix3::zeros();
         }
-        transform_inertia_tensor(&self.inv_local_inertia, &self.rotation)
+        inertia_to_world(&self.inv_local_inertia, &self.rotation)
     }
 
     // === Mutators ===
@@ -759,7 +759,7 @@ mod tests {
     /// Angular momentum and rotational energy, the two quantities a body
     /// spinning with nothing acting on it must keep.
     fn rotational_state(body: &RigidBody) -> (f32, f32) {
-        let inertia = transform_inertia_tensor(&body.local_inertia, &body.rotation);
+        let inertia = inertia_to_world(&body.local_inertia, &body.rotation);
         let momentum = inertia * body.angular_velocity;
         (
             momentum.magnitude(),

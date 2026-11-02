@@ -81,9 +81,9 @@ pub fn capsule_inertia_tensor(mass: f32, half_height: f32, radius: f32) -> Matri
     Matrix3::from_diagonal(&Vector3::new(i_xz, i_y, i_xz))
 }
 
-/// Transform a world-space inertia tensor to local frame.
-/// I_world = R * I_local * R^T
-pub fn transform_inertia_tensor(
+/// A body-frame inertia tensor (or its inverse) expressed in the world frame
+/// of a body turned by `rotation`: I_world = R * I_local * R^T.
+pub fn inertia_to_world(
     local_inertia: &Matrix3<f32>,
     rotation: &UnitQuaternion<f32>,
 ) -> Matrix3<f32> {
