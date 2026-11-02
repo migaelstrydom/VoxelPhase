@@ -3,6 +3,7 @@
 use nalgebra::{Point3, Vector3};
 
 use super::triangle::Triangle;
+use super::triangle_closest::closest_on_triangle;
 
 /// Contact from a sphere-triangle overlap test.
 #[derive(Debug, Clone, Copy)]
@@ -40,55 +41,10 @@ pub fn sphere_triangle_collision(
     Some(SphereTriangleContact { normal })
 }
 
-/// Find the closest point on a triangle to a given point.
-/// Uses barycentric coordinates and Voronoi regions.
+/// The point of `tri` closest to `point`.
 pub fn closest_point_on_triangle(point: Point3<f32>, tri: &Triangle) -> Point3<f32> {
-    let ab = tri.v1 - tri.v0;
-    let ac = tri.v2 - tri.v0;
-    let ap = point - tri.v0;
-
-    let d1 = ab.dot(&ap);
-    let d2 = ac.dot(&ap);
-    if d1 <= 0.0 && d2 <= 0.0 {
-        return tri.v0;
-    }
-
-    let bp = point - tri.v1;
-    let d3 = ab.dot(&bp);
-    let d4 = ac.dot(&bp);
-    if d3 >= 0.0 && d4 <= d3 {
-        return tri.v1;
-    }
-
-    let vc = d1 * d4 - d3 * d2;
-    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        let v = d1 / (d1 - d3);
-        return tri.v0 + ab * v;
-    }
-
-    let cp = point - tri.v2;
-    let d5 = ab.dot(&cp);
-    let d6 = ac.dot(&cp);
-    if d6 >= 0.0 && d5 <= d6 {
-        return tri.v2;
-    }
-
-    let vb = d5 * d2 - d1 * d6;
-    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        let w = d2 / (d2 - d6);
-        return tri.v0 + ac * w;
-    }
-
-    let va = d3 * d6 - d5 * d4;
-    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        return tri.v1 + (tri.v2 - tri.v1) * w;
-    }
-
-    let denom = 1.0 / (va + vb + vc);
-    let v = vb * denom;
-    let w = vc * denom;
-    tri.v0 + ab * v + ac * w
+    let corners = [tri.v0, tri.v1, tri.v2];
+    closest_on_triangle(point, corners).point(corners)
 }
 
 #[cfg(test)]

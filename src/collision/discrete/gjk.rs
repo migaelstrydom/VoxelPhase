@@ -7,6 +7,7 @@
 use nalgebra::{Point3, Vector3};
 
 use crate::collision::support::ConvexSupport;
+use crate::collision::triangle_closest::{closest_on_triangle, TriangleFeature};
 
 /// Maximum GJK iterations before bailing out.
 const MAX_ITERATIONS: u32 = 32;
@@ -238,105 +239,32 @@ fn process_line_simplex(simplex: &mut GjkSimplex, v: &mut Vector3<f32>) {
 }
 
 /// Process a 3-vertex simplex (triangle). Finds the closest point on the
-/// triangle to the origin, reduces the simplex, and updates `v`.
+/// triangle to the origin, reduces the simplex to the feature holding it, and
+/// updates `v`.
 ///
-/// Uses the Voronoi region method from Christer Ericson's "Real-Time Collision
-/// Detection" (Section 5.1.5). Vertices are stored as [oldest..newest] with
-/// A=vertices[2] being the most recently added.
+/// Vertices are stored as [oldest..newest]; a reduced edge keeps its
+/// lower-indexed corner (by newest first) as the newer vertex.
 fn process_triangle_simplex(simplex: &mut GjkSimplex, v: &mut Vector3<f32>) {
-    // Copy vertices to locals so we can rearrange the simplex without aliasing.
-    let va = simplex.vertices[2]; // A (newest)
-    let vb = simplex.vertices[1]; // B
-    let vc = simplex.vertices[0]; // C
-
-    let a = va.point.coords;
-    let b = vb.point.coords;
-    let c = vc.point.coords;
-
-    let ab = b - a;
-    let ac = c - a;
-    let ao = -a;
-
-    let d1 = ab.dot(&ao);
-    let d2 = ac.dot(&ao);
-
-    // Vertex A region.
-    if d1 <= 0.0 && d2 <= 0.0 {
-        simplex.vertices[0] = va;
-        simplex.count = 1;
-        *v = a;
-        return;
+    let corners = [
+        simplex.vertices[2],
+        simplex.vertices[1],
+        simplex.vertices[0],
+    ];
+    let points = corners.map(|c| c.point);
+    let closest = closest_on_triangle(Point3::origin(), points);
+    *v = closest.point(points).coords;
+    match closest.feature {
+        TriangleFeature::Vertex(i) => {
+            simplex.vertices[0] = corners[i];
+            simplex.count = 1;
+        }
+        TriangleFeature::Edge(i, j) => {
+            simplex.vertices[0] = corners[j];
+            simplex.vertices[1] = corners[i];
+            simplex.count = 2;
+        }
+        TriangleFeature::Face => {}
     }
-
-    let bo = -b;
-    let d3 = ab.dot(&bo);
-    let d4 = ac.dot(&bo);
-
-    // Edge AB region.
-    let vc_bary = d1 * d4 - d3 * d2;
-    if vc_bary <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        let t = d1 / (d1 - d3);
-        simplex.vertices[0] = vb;
-        simplex.vertices[1] = va;
-        simplex.count = 2;
-        *v = a + ab * t;
-        return;
-    }
-
-    let co = -c;
-    let d5 = ab.dot(&co);
-    let d6 = ac.dot(&co);
-
-    // Edge AC region.
-    let vb_bary = d5 * d2 - d1 * d6;
-    if vb_bary <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        let t = d2 / (d2 - d6);
-        simplex.vertices[0] = vc;
-        simplex.vertices[1] = va;
-        simplex.count = 2;
-        *v = a + ac * t;
-        return;
-    }
-
-    // Vertex B region.
-    if d3 >= 0.0 && d4 <= d3 {
-        simplex.vertices[0] = vb;
-        simplex.count = 1;
-        *v = b;
-        return;
-    }
-
-    // Vertex C region.
-    if d6 >= 0.0 && d5 <= d6 {
-        simplex.vertices[0] = vc;
-        simplex.count = 1;
-        *v = c;
-        return;
-    }
-
-    // Edge BC region.
-    let va_bary = d3 * d6 - d5 * d4;
-    if va_bary <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-        let t = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        simplex.vertices[0] = vb;
-        simplex.vertices[1] = vc;
-        simplex.count = 2;
-        *v = b + (c - b) * t;
-        return;
-    }
-
-    // Interior of triangle — keep all three vertices.
-    let denom = va_bary + vb_bary + vc_bary;
-    if denom.abs() < DEGENERATE_TOLERANCE {
-        *v = a;
-        return;
-    }
-    // Ericson barycentrics:
-    // va_bary weights A, vb_bary weights B, vc_bary weights C.
-    let wa = va_bary / denom;
-    let wb = vb_bary / denom;
-    let wc = 1.0 - wa - wb;
-    *v = a * wa + b * wb + c * wc;
 }
 
 /// Process a 4-vertex simplex (tetrahedron). Returns true if the origin is
@@ -474,7 +402,7 @@ fn extract_closest_points(simplex: &GjkSimplex) -> (Point3<f32>, Point3<f32>, f3
             (v.support_a, v.support_b, v.point.coords.magnitude())
         }
         2 => closest_on_line_segment(&simplex.vertices[0], &simplex.vertices[1]),
-        3 => closest_on_triangle(
+        3 => closest_on_simplex_triangle(
             &simplex.vertices[0],
             &simplex.vertices[1],
             &simplex.vertices[2],
@@ -510,95 +438,22 @@ fn closest_on_line_segment(
     (closest_a, closest_b, distance)
 }
 
-/// Closest point to the origin on a triangle, with barycentric interpolation.
-fn closest_on_triangle(
+/// Closest point to the origin on a triangle, with barycentric interpolation
+/// of the witness points.
+fn closest_on_simplex_triangle(
     v0: &MinkowskiVertex,
     v1: &MinkowskiVertex,
     v2: &MinkowskiVertex,
 ) -> (Point3<f32>, Point3<f32>, f32) {
-    let a = v0.point.coords;
-    let b = v1.point.coords;
-    let c = v2.point.coords;
-
-    let ab = b - a;
-    let ac = c - a;
-    let ao = -a;
-
-    let d1 = ab.dot(&ao);
-    let d2 = ac.dot(&ao);
-    // Vertex region A.
-    if d1 <= 0.0 && d2 <= 0.0 {
-        return (v0.support_a, v0.support_b, a.magnitude());
-    }
-
-    // Vertex region B.
-    let bo = -b;
-    let d3_ = ab.dot(&bo);
-    let d4_ = ac.dot(&bo);
-    if d3_ >= 0.0 && d4_ <= d3_ {
-        return (v1.support_a, v1.support_b, b.magnitude());
-    }
-
-    // Edge region AB.
-    let vc = d1 * d4_ - d3_ * d2;
-    if vc <= 0.0 && d1 >= 0.0 && d3_ <= 0.0 {
-        let t = d1 / (d1 - d3_);
-        let closest_a = Point3::from(v0.support_a.coords.lerp(&v1.support_a.coords, t));
-        let closest_b = Point3::from(v0.support_b.coords.lerp(&v1.support_b.coords, t));
-        let closest_mink = a + ab * t;
-        return (closest_a, closest_b, closest_mink.magnitude());
-    }
-
-    // Vertex region C.
-    let co = -c;
-    let d5_ = ab.dot(&co);
-    let d6_ = ac.dot(&co);
-    if d6_ >= 0.0 && d5_ <= d6_ {
-        return (v2.support_a, v2.support_b, c.magnitude());
-    }
-
-    // Edge region AC.
-    let vb = d5_ * d2 - d1 * d6_;
-    if vb <= 0.0 && d2 >= 0.0 && d6_ <= 0.0 {
-        let t = d2 / (d2 - d6_);
-        let closest_a = Point3::from(v0.support_a.coords.lerp(&v2.support_a.coords, t));
-        let closest_b = Point3::from(v0.support_b.coords.lerp(&v2.support_b.coords, t));
-        let closest_mink = a + ac * t;
-        return (closest_a, closest_b, closest_mink.magnitude());
-    }
-
-    // Edge region BC.
-    let va = d3_ * d6_ - d5_ * d4_;
-    if va <= 0.0 {
-        let bc = c - b;
-        let bo_dot_bc = bo.dot(&bc);
-        let bc_sq = bc.magnitude_squared();
-        if bo_dot_bc >= 0.0 && bo_dot_bc <= bc_sq && bc_sq > DEGENERATE_TOLERANCE {
-            let t = bo_dot_bc / bc_sq;
-            let closest_a = Point3::from(v1.support_a.coords.lerp(&v2.support_a.coords, t));
-            let closest_b_pt = Point3::from(v1.support_b.coords.lerp(&v2.support_b.coords, t));
-            let closest_mink = b + bc * t;
-            return (closest_a, closest_b_pt, closest_mink.magnitude());
-        }
-    }
-
-    // Interior of triangle.
-    let denom = va + vb + vc;
-    if denom.abs() < DEGENERATE_TOLERANCE {
-        return (v0.support_a, v0.support_b, a.magnitude());
-    }
-    let wa = va / denom;
-    let wb = vb / denom;
-    let wc = vc / denom;
-
-    let closest_a = Point3::from(
-        v0.support_a.coords * wa + v1.support_a.coords * wb + v2.support_a.coords * wc,
-    );
-    let closest_b = Point3::from(
-        v0.support_b.coords * wa + v1.support_b.coords * wb + v2.support_b.coords * wc,
-    );
-    let closest_mink = a * wa + b * wb + c * wc;
-    (closest_a, closest_b, closest_mink.magnitude())
+    let points = [v0.point, v1.point, v2.point];
+    let closest = closest_on_triangle(Point3::origin(), points);
+    let support_a = closest.point([v0.support_a, v1.support_a, v2.support_a]);
+    let support_b = closest.point([v0.support_b, v1.support_b, v2.support_b]);
+    (
+        support_a,
+        support_b,
+        closest.point(points).coords.magnitude(),
+    )
 }
 
 #[cfg(test)]
@@ -1604,7 +1459,7 @@ mod tests {
             Point3::new(12.0, 0.0, 3.0),
             Point3::new(9.0, 0.0, 0.0),
         );
-        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+        let (ca, cb, dist) = closest_on_simplex_triangle(&v0, &v1, &v2);
 
         assert!((ca - v0.support_a).magnitude() < 1e-5);
         assert!((cb - v0.support_b).magnitude() < 1e-5);
@@ -1629,7 +1484,7 @@ mod tests {
             Point3::new(10.0, 0.0, 3.0),
             Point3::new(7.0, 0.0, 0.0),
         );
-        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+        let (ca, cb, dist) = closest_on_simplex_triangle(&v0, &v1, &v2);
 
         assert!((ca - v1.support_a).magnitude() < 1e-5);
         assert!((cb - v1.support_b).magnitude() < 1e-5);
@@ -1654,7 +1509,7 @@ mod tests {
             Point3::new(8.0, 0.0, 0.0),
             Point3::new(7.0, -1.0, 0.0),
         );
-        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+        let (ca, cb, dist) = closest_on_simplex_triangle(&v0, &v1, &v2);
 
         assert!((ca - v2.support_a).magnitude() < 1e-5);
         assert!((cb - v2.support_b).magnitude() < 1e-5);
@@ -1680,7 +1535,7 @@ mod tests {
             Point3::new(2.0, 2.0, 0.0),
             Point3::new(2.0, 0.0, 0.0),
         );
-        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+        let (ca, cb, dist) = closest_on_simplex_triangle(&v0, &v1, &v2);
 
         // Closest mink point is (0, 1, 0) at t=0.5 on AB.
         assert!(approx_eq(dist, 1.0, 1e-5));
@@ -1708,7 +1563,7 @@ mod tests {
             Point3::new(4.0, 0.0, 0.0),
             Point3::new(2.0, -1.0, 0.0),
         );
-        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+        let (ca, cb, dist) = closest_on_simplex_triangle(&v0, &v1, &v2);
 
         assert!(approx_eq(dist, 1.0, 1e-5));
         let expected_a = Point3::new(2.0, 0.0, 0.0);
@@ -1735,7 +1590,7 @@ mod tests {
             Point3::new(4.0, 0.0, 0.0),
             Point3::new(2.0, -1.0, 0.0),
         );
-        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+        let (ca, cb, dist) = closest_on_simplex_triangle(&v0, &v1, &v2);
 
         assert!(approx_eq(dist, 1.0, 1e-5));
         let expected_a = Point3::new(2.0, 0.0, 0.0);
@@ -1762,7 +1617,7 @@ mod tests {
             Point3::new(2.0, 3.0, 2.0),
             Point3::new(2.0, 1.0, 0.0),
         );
-        let (_ca, _cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+        let (_ca, _cb, dist) = closest_on_simplex_triangle(&v0, &v1, &v2);
 
         // Closest point on the y=2 plane is (0, 2, 0), distance = 2.
         assert!(approx_eq(dist, 2.0, 1e-4));
@@ -1787,7 +1642,7 @@ mod tests {
             Point3::new(15.0, 0.0, 5.0),
             Point3::new(15.0, -2.0, 3.0),
         );
-        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+        let (ca, cb, dist) = closest_on_simplex_triangle(&v0, &v1, &v2);
         let closest_mink = ca - cb;
 
         assert!(approx_eq(dist, 2.0, 1e-5));
@@ -1815,7 +1670,7 @@ mod tests {
             Point3::new(7.0, 0.0, 0.0),
             Point3::new(4.0, -3.0, 0.0),
         );
-        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+        let (ca, cb, dist) = closest_on_simplex_triangle(&v0, &v1, &v2);
 
         // Should not crash or return NaN.
         assert!(dist.is_finite());

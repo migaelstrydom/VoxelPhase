@@ -7,7 +7,7 @@
 //! - Segment geometry utilities
 //! - Contact reduction (area-maximizing)
 //! - AABB for spatial queries
-//! - Sphere-triangle intersection tests
+//! - Sphere-triangle intersection tests and the closest point of a triangle
 //! - Ray-triangle intersection (Möller–Trumbore)
 //! - Continuous collision detection (CCD)
 //! - Mesh patch types for terrain queries
@@ -33,6 +33,7 @@ pub mod sphere_triangle;
 pub mod support;
 mod surface;
 pub mod triangle;
+pub mod triangle_closest;
 
 pub use aabb::AABB;
 pub use convex_hull::ConvexHull;
