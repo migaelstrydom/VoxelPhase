@@ -1,6 +1,9 @@
 //! Convex hull shape: vertices + faces with support function and face extraction.
 
+use std::collections::hash_map::Entry;
+
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use super::shape_view::{SupportFace, SupportFaceExtractor};
@@ -507,7 +510,10 @@ fn build_edge_adjacency(_vertices: &[Vector3<f32>], faces: &[HullFace]) -> Vec<H
         b: u16,
     }
 
+    // Edges in the order first met, which the SAT's edge loop iterates in;
+    // `slot` finds an edge's entry without a scan.
     let mut edge_faces: Vec<((u16, u16), Vec<FaceEdgeRef>)> = Vec::new();
+    let mut slot: FxHashMap<(u16, u16), usize> = FxHashMap::default();
 
     for (face_idx, face) in faces.iter().enumerate() {
         let indices = &face.vertex_indices;
@@ -517,10 +523,16 @@ fn build_edge_adjacency(_vertices: &[Vector3<f32>], faces: &[HullFace]) -> Vec<H
             let b = indices[(j + 1) % n];
             let key = if a < b { (a, b) } else { (b, a) };
 
-            if let Some((_, refs)) = edge_faces.iter_mut().find(|(k, _)| *k == key) {
-                refs.push(FaceEdgeRef { face_idx, a, b });
-            } else {
-                edge_faces.push((key, vec![FaceEdgeRef { face_idx, a, b }]));
+            match slot.entry(key) {
+                Entry::Occupied(entry) => {
+                    edge_faces[*entry.get()]
+                        .1
+                        .push(FaceEdgeRef { face_idx, a, b });
+                }
+                Entry::Vacant(entry) => {
+                    entry.insert(edge_faces.len());
+                    edge_faces.push((key, vec![FaceEdgeRef { face_idx, a, b }]));
+                }
             }
         }
     }

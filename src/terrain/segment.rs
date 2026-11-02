@@ -340,12 +340,7 @@ impl Segment {
     /// `rebuilt`. Returns `None` if there was nothing to do.
     pub fn update(&mut self, rebuilt: &mut Vec<AABB>) -> Option<SegmentTimings> {
         self.last_rebuilt.clear();
-        let dirty: Vec<ChunkCoord> = self
-            .grid
-            .coords()
-            .into_iter()
-            .filter(|c| self.grid.chunk(*c).is_some_and(|chunk| chunk.is_dirty()))
-            .collect();
+        let dirty = self.grid.dirty_coords();
 
         if dirty.is_empty() {
             return None;

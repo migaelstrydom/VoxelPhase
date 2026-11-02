@@ -182,6 +182,19 @@ impl ChunkGrid {
         coords
     }
 
+    /// Coordinates of the chunks waiting to be remeshed, sorted as
+    /// [`Self::coords`] sorts them.
+    pub fn dirty_coords(&self) -> Vec<ChunkCoord> {
+        let mut coords: Vec<ChunkCoord> = self
+            .chunks
+            .iter()
+            .filter(|(_, chunk)| chunk.is_dirty())
+            .map(|(coord, _)| *coord)
+            .collect();
+        coords.sort_unstable();
+        coords
+    }
+
     /// Allocate the neighbours that own boundary cells of solid chunks.
     ///
     /// A marching-cubes cell straddling the minimum face of chunk `c` is owned
