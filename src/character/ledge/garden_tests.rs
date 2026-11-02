@@ -94,3 +94,28 @@ fn a_bevelled_lip_is_held_at_its_top_wherever_the_body_rides() {
         }
     }
 }
+
+#[test]
+fn scratch_roof_side_climbable() {
+    let level = load_level(Path::new("levels/ledge_garden.level.ron")).unwrap();
+    let terrain = build_terrain(&level);
+    let world = PhysicsWorld::new(PhysicsConfig::default());
+    let caster = WorldCaster {
+        world: &world,
+        scenery: &terrain,
+        exclude: &[],
+        carriers: &[],
+    };
+    for x in [8.0, 10.0, 12.9, 14.5, 14.9] {
+        for y in [2.67, 2.9, 3.0] {
+            let reach = Reach {
+                centre: Point3::new(x, y, 15.74),
+                heading: Vector3::z(),
+                radius: 0.25,
+                half_height: 0.5,
+            };
+            let edge = edge_at_hands(&caster, &reach, &LedgeConfig::default());
+            eprintln!("x {x} y {y}: {:?}", edge.map(|e| (e.hands[0].y, e.stand)));
+        }
+    }
+}

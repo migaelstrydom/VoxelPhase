@@ -120,12 +120,8 @@ impl Ledge {
         else {
             return LocomotionState::Fall(Fall);
         };
-        let held = |phase| {
-            LocomotionState::Ledge(Self {
-                edge: sensed.edge,
-                phase,
-            })
-        };
+        let edge = self.edge.followed(&sensed.edge, config.shimmy_probe * 0.2);
+        let held = |phase| LocomotionState::Ledge(Self { edge, phase });
         let let_go = || {
             if input.facts.grounded {
                 Some(LocomotionState::OnFoot(OnFoot::default()))

@@ -6,27 +6,51 @@ use crate::physics::{ConstraintHandle, ConstraintKind, PhysicsWorld, RigidBodyHa
 
 use super::edge::{frame_of, SensedEdge, WorldEdge};
 
-/// The hands' hold on a ledge: a ball joint from the edge's body to a point
-/// on the hanger's axis, `hang_reach` above its centre. Only the edge's end
-/// moves: eased from where the body was caught to the hang, slid along the
-/// edge to shimmy, and lifted over the lip to pull up, so every path is in
-/// the edge's frame. Each frame the end stands where the body should be and
-/// is given the velocity that takes it to the next point of its path, which
-/// the joint carries the body along at. Rotation is free; the body's attitude control keeps it
-/// upright, and it swings on the joint.
+/// The hands' hold on a ledge: a ball joint from the edge to a point on the
+/// hanger's axis, `hang_reach` above its centre. Only the edge's end moves:
+/// eased from where the body was caught to the hang, slid along the edge to
+/// shimmy, and lifted over the lip to pull up, so every path is in the edge's
+/// frame. Each frame the end stands where the body should be and is given
+/// the velocity that takes it to the next point of its path, which the joint
+/// carries the body along at. Rotation is free; the body's attitude control
+/// keeps it upright, and it swings on the joint.
+///
+/// The joint is anchored to the edge's body only if that body outweighs the
+/// hanger by `anchor_mass_ratio`, or does not move at all. A lighter body
+/// (a crate, a platform's deck) would be the one the joint moved: a climb's
+/// path held to it turns with it, drags the hanger round, and turns it
+/// further, which flung an 8 kg box off the world. Its joint is anchored to
+/// the world at the edge, following it, and the body takes the hanger's
+/// weight at the grip.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Grip {
     constraint: ConstraintHandle,
     edge_body: Option<RigidBodyHandle>,
+    /// The body the joint is anchored to: the edge's, or `None` for the
+    /// world (static geometry, or an edge body too light to anchor to).
+    anchored: Option<RigidBodyHandle>,
     /// Where the joint's edge end started its present motion (the catch's
     /// ease, or the pull-up's climb), in the edge's frame.
     from: Point3<f32>,
     /// Whether that motion is a pull-up.
     climbing: bool,
+    /// Whether the hanger and the edge's body pass through each other. A
+    /// light body the joint is not anchored to does for the whole hold: the
+    /// world-anchored joint pulls the hanger towards the face, and contact
+    /// would push the body away, the anchor following it, the hanger after
+    /// it, a pump. Any moving body does from a climb's start: the path is
+    /// built to clear the lip, and contacts along it would only shove the
+    /// body out from under the climb.
+    passing: bool,
+    /// The hanger's body.
+    hanger: RigidBodyHandle,
     /// Where the joint's edge end carries the body to by the end of this
-    /// frame, in the edge's frame; the end is moved there next frame and
+    /// frame, in the joint's frame; the end is moved there next frame and
     /// set moving on.
     carried: Point3<f32>,
+    /// The same point in the edge's frame: where along the edge the hands
+    /// are, held as the edge moves however the joint is anchored.
+    aimed: Point3<f32>,
 }
 
 /// What [`Grip::reconcile`] reads this frame.
@@ -45,17 +69,20 @@ impl Grip {
     /// held, its edge end placed for the phase; none otherwise.
     pub fn reconcile(grip: &mut Option<Grip>, world: &mut PhysicsWorld, frame: &GripFrame) {
         let held = match (frame.state, frame.sensed) {
-            (LocomotionState::Ledge(ledge), Some(sensed)) => Some((ledge.phase, sensed)),
+            (LocomotionState::Ledge(ledge), Some(sensed)) => ledge
+                .edge
+                .in_world(world)
+                .map(|at| (ledge.phase, sensed, at)),
             _ => None,
         };
-        let Some((phase, sensed)) = held else {
+        let Some((phase, sensed, at)) = held else {
             if let Some(old) = grip.take() {
-                world.remove_constraint(old.constraint);
+                old.release(world);
             }
             return;
         };
         if grip.is_some_and(|g| g.edge_body != sensed.edge.body) {
-            world.remove_constraint(grip.take().unwrap().constraint);
+            grip.take().unwrap().release(world);
         }
         let Some(to_world) = frame_of(world, sensed.edge.body) else {
             return;
@@ -73,26 +100,30 @@ impl Grip {
         let Some(current) = grip.as_mut() else {
             return;
         };
+        let Some(to_joint) = frame_of(world, current.anchored) else {
+            return;
+        };
         current.settle_at(world, current.carried);
-        let now = to_world * current.carried;
+        let now = to_joint * current.carried;
         if climbing && !current.climbing {
-            current.from = current.carried;
+            current.from = to_world.inverse() * now;
             current.climbing = true;
+            current.pass_through(world);
         }
         let target = match phase {
             LedgePhase::Grab { elapsed } => {
                 let t = smoothstep(elapsed / frame.config.ledge.settle);
                 let from = to_world * current.from;
-                from + (hang_point(&sensed.at, frame.config) - from) * t
+                from + (hang_point(&at, frame.config) - from) * t
             }
             LedgePhase::Hang { .. } => {
-                let hang = hang_point(&sensed.at, frame.config);
-                let along = sensed.at.along();
-                hang + along * (now - hang).dot(&along) + shimmy(sensed, frame) * frame.dt
+                let hang = hang_point(&at, frame.config);
+                let along = at.along();
+                let held = to_world * current.aimed;
+                hang + along * (held - hang).dot(&along) + shimmy(sensed, frame) * frame.dt
             }
             LedgePhase::PullUp { elapsed, duration } => {
-                climb(&sensed.at, to_world * current.from, frame.config)
-                    .at(smoothstep(elapsed / duration))
+                climb(&at, to_world * current.from, frame.config).at(smoothstep(elapsed / duration))
             }
         };
         let velocity = if frame.dt > 0.0 {
@@ -101,7 +132,45 @@ impl Grip {
             Vector3::zeros()
         };
         current.aim(world, velocity);
-        current.carried = to_world.inverse() * target;
+        current.carried = to_joint.inverse() * target;
+        current.aimed = to_world.inverse() * target;
+        current.bear_weight(world, frame, &at);
+    }
+
+    /// An edge body the joint is not anchored to takes the hanger's weight
+    /// at the grip, one frame's worth.
+    fn bear_weight(&self, world: &mut PhysicsWorld, frame: &GripFrame, edge: &WorldEdge) {
+        let Some(edge_body) = self.edge_body.filter(|_| self.anchored.is_none()) else {
+            return;
+        };
+        let Some(mass) = world.body(frame.body).map(|b| b.mass()) else {
+            return;
+        };
+        let weight = world.config().gravity * (mass * frame.dt);
+        world.apply_impulse_at_point(edge_body, weight, edge.grip());
+    }
+
+    /// Let go: the joint goes, and contact with the edge's body resumes.
+    fn release(self, world: &mut PhysicsWorld) {
+        world.remove_constraint(self.constraint);
+        if let Some(edge) = self.edge_body.filter(|_| self.passing) {
+            world.restore_contacts(self.hanger, edge);
+        }
+    }
+
+    /// From now until the grip lets go, the hanger and a moving edge body
+    /// pass through each other.
+    fn pass_through(&mut self, world: &mut PhysicsWorld) {
+        if let Some(edge) = self.moving_edge(world).filter(|_| !self.passing) {
+            world.exempt_contacts(self.hanger, edge);
+            self.passing = true;
+        }
+    }
+
+    /// The edge's body, if it is one that moves.
+    fn moving_edge(&self, world: &PhysicsWorld) -> Option<RigidBodyHandle> {
+        self.edge_body
+            .filter(|&edge| world.body(edge).is_some_and(|body| body.is_dynamic()))
     }
 
     /// Whether the joint still holds: there, and not torn.
@@ -117,26 +186,40 @@ impl Grip {
         anchor: Point3<f32>,
         frame: &GripFrame,
     ) -> Option<Self> {
-        let to_local = frame_of(world, sensed.edge.body)?.inverse();
-        let from = to_local * anchor;
+        let from = frame_of(world, sensed.edge.body)?.inverse() * anchor;
+        let hanger = world.body(frame.body)?.mass();
+        let anchored = sensed.edge.body.filter(|&edge| {
+            world.body(edge).is_some_and(|body| {
+                !body.is_dynamic() || body.mass() >= hanger * frame.config.ledge.anchor_mass_ratio
+            })
+        });
+        let carried = frame_of(world, anchored)?.inverse() * anchor;
         // Unbreakable: the solver's limit is an impulse per substep, and
         // moving the edge end each frame asks for more than any hit would.
         let constraint = world.create_constraint(ConstraintKind::BallJoint {
-            body_a: sensed.edge.body,
+            body_a: anchored,
             body_b: frame.body,
-            local_anchor_a: from.coords,
+            local_anchor_a: carried.coords,
             anchor_velocity: Vector3::zeros(),
             local_anchor_b: hang_anchor(frame.config),
             compliance: 0.0,
             max_impulse: f32::INFINITY,
         });
-        Some(Self {
+        let mut grip = Self {
             constraint,
             edge_body: sensed.edge.body,
+            anchored,
             from,
             climbing: false,
-            carried: from,
-        })
+            passing: false,
+            hanger: frame.body,
+            carried,
+            aimed: from,
+        };
+        if anchored.is_none() {
+            grip.pass_through(world);
+        }
+        Some(grip)
     }
 
     /// Set the joint's edge end moving at `velocity` from where it stands,
@@ -156,7 +239,7 @@ impl Grip {
         }
     }
 
-    /// Move the joint's edge end to `local`, in the edge's frame: where the
+    /// Move the joint's edge end to `local`, in the joint's frame: where the
     /// body was carried to over the last frame.
     fn settle_at(&self, world: &mut PhysicsWorld, local: Point3<f32>) {
         if let Some(constraint) = world.constraint_mut(self.constraint) {

@@ -528,6 +528,7 @@ mod tests {
             plan_offset: None,
             path_laid: false,
             plan_diverged: false,
+            others: (0.0, 0.0),
             feet: [foot, foot],
         }
     }

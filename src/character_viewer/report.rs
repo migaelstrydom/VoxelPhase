@@ -42,7 +42,7 @@ pub fn report(take: &Take, every: usize) -> String {
     let _ = writeln!(out, "-- frames");
     let _ = writeln!(
         out,
-        "  {:>6} {:8} {:10} {:12} {:9} {:>5} {:>3} {:>6} {:>6} {:>7} {:>7} {:>6} {:>6} {:>20}",
+        "  {:>6} {:8} {:10} {:12} {:9} {:>5} {:>3} {:>6} {:>6} {:>7} {:>7} {:>6} {:>6} {:>20} {:>12}",
         "t",
         "beat",
         "locomotion",
@@ -56,7 +56,8 @@ pub fn report(take: &Take, every: usize) -> String {
         "pelv-sf",
         "speed",
         "vy",
-        "body"
+        "body",
+        "others v/w"
     );
     for frame in take.frames.iter().step_by(every.max(1)) {
         let _ = writeln!(out, "  {}", row(frame));
@@ -83,7 +84,7 @@ fn row(f: &FrameRecord) -> String {
             .unwrap_or_else(|| "      -".to_string())
     };
     format!(
-        "{:6.2} {:8} {:10} {:12} {:9} {:2.0}/{:2.0} {:>3} {} {} {} {} {:6.2} {:+6.2} {:6.2} {:6.2} {:6.2}",
+        "{:6.2} {:8} {:10} {:12} {:9} {:2.0}/{:2.0} {:>3} {} {} {} {} {:6.2} {:+6.2} {:6.2} {:6.2} {:6.2} {:6.2}/{:5.2}",
         f.time,
         f.beat,
         f.locomotion,
@@ -100,7 +101,9 @@ fn row(f: &FrameRecord) -> String {
         f.velocity.y,
         f.body.x,
         f.body.y,
-        f.body.z
+        f.body.z,
+        f.others.0,
+        f.others.1
     )
 }
 

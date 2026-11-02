@@ -405,10 +405,32 @@ pull-up rising at 4 m/s now reports 4.2.
 - **Leaving.** Drop, back-jump or a lost edge removes the joint, and the body
   leaves with the velocity it has. On a platform, that is the platform's.
 
+**Light edge bodies.** The joint is anchored to the edge's body only if that
+body outweighs the hanger by `anchor_mass_ratio` (3), or doesn't move. The
+Ledge Garden's 8 kg and 70 kg boxes and its 81 kg platform decks are lighter.
+Anchored to them, the climb's path turned with the box, dragged the hanger
+round and turned the box further, flinging the 8 kg box off the world. So a
+lighter body's joint is anchored to the world at the edge, following it, and:
+
+- the body takes the hanger's weight at the grip each frame;
+- the hanger and the body pass through each other for the whole hold
+  (`PhysicsWorld::exempt_contacts`). Otherwise the world-anchored joint pulls
+  the hanger to the face, contact pushes the body away, the anchor follows
+  it, and the hanger follows that: a pump that rocked the tall light box;
+- the hands' place along the edge is held in the edge's frame, so a platform
+  carries its hanger along.
+
+Any moving edge body also passes through its climber from a climb's start:
+the path is built to clear the lip, and contacts along it would only shove
+the body out from under the climb. A held edge stays as caught in its
+body's frame until the hands move along it (`Edge::followed`); found afresh
+every frame, it wandered with the casts that found it.
+
 Whatever velocity entering a state sets on the body (the catch's match to
 the edge, the back-jump's whole launch, the pull-up's match at the end), the
 edge's body takes the equal and opposite impulse at the grip
-(`EntryEffects::push_against`, `match_edge`). A catch yanks a light crate, and
+(`EntryEffects::push_against`, `match_edge`), unless the body is on its
+feet: a mantle begun walking stops on its feet, not its hands. A catch yanks a light crate, and
 a back-jump kicks it away, as a jump from its top does; a back-jump off the
 Ledge Garden's light tall box topples it. The back-jump's rise is set with
 the launch, not conjured as a jump with nothing under it would be.

@@ -113,6 +113,11 @@ another pass generates contacts for exactly the bodies it woke, until a pass wak
 A stack touched at the top is therefore solved whole, down to the ground, on the frame it
 wakes, rather than one layer per frame.
 
+**Exemptions** (`contact_exemptions.rs`): a pair of bodies given to
+`PhysicsWorld::exempt_contacts` passes through each other, in the narrowphase and in CCD,
+until `restore_contacts`. For a pair something else holds in relation: a climber and the
+light crate it climbs, whose contacts would only shove one against the other.
+
 **Against static geometry** (`static_contacts.rs`, in parallel per collider): query the
 patch around the collider, then run the mesh pipeline in `collision/mesh/`:
 
@@ -280,8 +285,11 @@ collect_candidates ──▶ static_sweep / dynamic_sweep ──▶ clamp to ear
 ## Sleep
 
 `sleep/`: `SleepTracker` counts substeps a body has been still, which means below both
-velocity thresholds **and** not moved in pose. Pose matters because NGS moves bodies
-without giving them velocity. When every body of a contact island is a candidate, the
+velocity thresholds, **and** not moved in pose, **and** not speeding up. Pose matters
+because NGS moves bodies without giving them velocity. Speeding up matters because a body
+starting to fall from near a balance (a tall box just past its edge) stays under every
+speed threshold for seconds; a body whose speed has risen through a whole window is not
+still. When every body of a contact island is a candidate, the
 island sleeps and its velocities are zeroed. Sleeping bodies start no contacts, are skipped
 by integration and CCD, and are woken by contact from an awake body, by `apply_impulse` /
 `apply_angular_impulse` / `wake_body`, or by a drive being set. **Every created body starts

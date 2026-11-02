@@ -158,7 +158,12 @@ impl<'a> System<'a> for CharacterControlSystem {
             if effects.cut_rise {
                 drive.cut_rise(config.jump_cutoff_factor);
             }
-            set_velocity_for_entry(&mut physics_res.world, character_body, &effects);
+            set_velocity_for_entry(
+                &mut physics_res.world,
+                character_body,
+                &effects,
+                is_grounded,
+            );
             let hanging = matches!(state.locomotion, LocomotionState::Ledge(_));
             Grip::reconcile(
                 &mut state.grip,
@@ -562,10 +567,16 @@ fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule, left_still_g
 
 /// The velocity an entry sets outright: a back-jump's launch off the wall,
 /// and the velocity of an edge's body at its grip on catching or leaving it.
-/// The edge's body takes the equal and opposite impulse at the grip: a light
-/// crate is yanked by a catch and kicked away by a back-jump, as it is by a
-/// jump from its top.
-fn set_velocity_for_entry(world: &mut PhysicsWorld, body: RigidBodyHandle, effects: &EntryEffects) {
+/// Off the ground, the edge's body takes the equal and opposite impulse at
+/// the grip: a light crate is yanked by a catch and kicked away by a
+/// back-jump, as it is by a jump from its top. A body on its feet (a mantle
+/// begun walking) stops on its feet, not its hands.
+fn set_velocity_for_entry(
+    world: &mut PhysicsWorld,
+    body: RigidBodyHandle,
+    effects: &EntryEffects,
+    grounded: bool,
+) {
     let Some((before, angular, mass)) = world
         .body(body)
         .map(|b| (b.linear_velocity(), b.angular_velocity(), b.mass()))
@@ -586,7 +597,10 @@ fn set_velocity_for_entry(world: &mut PhysicsWorld, body: RigidBodyHandle, effec
         (None, None) => return,
     };
     world.set_body_velocity(body, after, angular);
-    if let Some((edge_body, sensed)) = edge.and_then(|s| s.edge.body.map(|b| (b, s))) {
+    let pushed = edge
+        .filter(|_| !grounded)
+        .and_then(|s| s.edge.body.map(|b| (b, s)));
+    if let Some((edge_body, sensed)) = pushed {
         let reaction = -(after - before) * mass;
         world.apply_impulse_at_point(edge_body, reaction, sensed.at.grip());
     }

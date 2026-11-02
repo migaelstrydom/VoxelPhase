@@ -86,6 +86,20 @@ impl Edge {
     pub fn climbable(&self) -> bool {
         self.stand.is_some()
     }
+
+    /// This edge, or `found` in its place once the hands have moved along
+    /// the edge by more than `slack`. Both are in the same body's frame, where
+    /// a lip does not move; taken afresh every frame, it would wander with
+    /// the casts that found it, and the grip's anchor with it.
+    pub fn followed(&self, found: &Edge, slack: f32) -> Self {
+        let mid = |e: &Edge| nalgebra::center(&e.hands[0], &e.hands[1]);
+        let along = Vector3::y().cross(&self.outward).normalize();
+        if (mid(found) - mid(self)).dot(&along).abs() > slack {
+            *found
+        } else {
+            *self
+        }
+    }
 }
 
 impl WorldEdge {

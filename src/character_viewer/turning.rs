@@ -299,6 +299,7 @@ mod tests {
             plan_offset: Some(0.01 * index as f32),
             path_laid: laid,
             plan_diverged: false,
+            others: (0.0, 0.0),
             feet: [foot, foot],
         }
     }

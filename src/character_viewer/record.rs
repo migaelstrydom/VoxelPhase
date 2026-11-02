@@ -58,6 +58,10 @@ pub struct FrameRecord {
     pub plan_diverged: bool,
     /// The left foot and the right, as the rig drew them.
     pub feet: [FootRecord; 2],
+    /// The fastest other dynamic body this frame: its speed in m/s and its
+    /// spin in rad/s, the fastest of each. What the character set going (a
+    /// crate it hangs from or climbs) shows here.
+    pub others: (f32, f32),
 }
 
 /// One foot of one frame.

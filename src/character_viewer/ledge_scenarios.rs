@@ -140,6 +140,35 @@ pub fn catalogue() -> Vec<Scenario> {
                     .then(Beat::stand(0.5).named("after")),
             )
         },
+        Scenario {
+            start: (12.9, 15.6),
+            yaw: 0.0,
+            ..at_wall(
+                "ledge_roof_side",
+                "Ledge: jump at the side of the roofed wall, into the gap under its roof, pushing in",
+                15.6,
+                Script::new()
+                    .then(Beat::stand(0.3))
+                    .then(Beat::jump(0.8).named("jump").towards(Vector3::z()))
+                    .then(Beat::walk(2.5).named("push").towards(Vector3::z()))
+                    .then(Beat::stand(1.0).named("after")),
+            )
+        },
+        Scenario {
+            start: (12.9, 13.6),
+            yaw: 0.0,
+            ..at_wall(
+                "ledge_roof_side_run",
+                "Ledge: run and jump at the side of the roofed wall, into the gap under its roof",
+                13.6,
+                Script::new()
+                    .then(Beat::stand(0.3))
+                    .then(Beat::walk(0.35).named("run").towards(Vector3::z()))
+                    .then(Beat::jump(0.8).named("jump").towards(Vector3::z()))
+                    .then(Beat::walk(2.5).named("push").towards(Vector3::z()))
+                    .then(Beat::stand(1.0).named("after")),
+            )
+        },
         walk_in(
             "ledge_light_mantle",
             "Ledge: walk into a light box at the chest and climb onto it",

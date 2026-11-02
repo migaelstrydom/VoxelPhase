@@ -371,6 +371,17 @@ fn record(
         plan_offset: planned_path(world).map(|(path, _)| path.path_point(position).d),
         path_laid: planned_path(world).is_some_and(|(_, laid)| laid),
         plan_diverged: plan_diverged(world),
+        others: physics
+            .world
+            .bodies()
+            .iter()
+            .filter(|(index, other)| *index != handle.0 && other.is_dynamic())
+            .fold((0.0f32, 0.0f32), |(v, w), (_, other)| {
+                (
+                    v.max(other.linear_velocity().norm()),
+                    w.max(other.angular_velocity().norm()),
+                )
+            }),
         feet: [FootSide::Left, FootSide::Right].map(|side| {
             let drawn = match side {
                 FootSide::Left => animator.skeleton.left_foot,
