@@ -20,6 +20,7 @@ use ash::vk;
 use nalgebra::{Matrix4, Vector2, Vector3};
 use winit::window::Window;
 
+use crate::core::command_buffer::ManagedCommandBuffer;
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
 use crate::fire::renderer::{ActiveFire, FireRenderer};
@@ -37,7 +38,8 @@ use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::post::PostProcessRenderer;
 use crate::rendering::profile::{GpuSpan, GpuTimer, RenderProfile, RenderStage};
 use crate::rendering::reflection::{
-    BoundingSphere, ProbeCaster, ProbeConfig, ProbeOwner, ProbeRenderer, Reach, Reflects,
+    BoundingSphere, ProbeCaster, ProbeConfig, ProbeFrameStats, ProbeOwner, ProbeRenderer, Reach,
+    Reflects,
 };
 use crate::rendering::resident::{ResidentGeometry, ResidentPrimitive, VersionedMeshId};
 use crate::rendering::shadow::map::SHADOW_SAMPLED_LAYOUT;
@@ -590,29 +592,30 @@ impl Renderer {
         // would be holding one with no way to return it, and after a few frames
         // the acquire would block on an exhausted pool.
         //
-        // Both command buffers may still be recording from a frame that was
-        // abandoned mid-flight. `begin` implicitly resets them (the pool is
-        // created with RESET_COMMAND_BUFFER), so that state is self-healing.
+        // A frame given up between here and its submit leaves its command
+        // buffers recording, and beginning one that is still recording is
+        // invalid: every way out of that stretch resets them
+        // (`abandon_recording`).
 
         // The shadow pass records into its own command buffer, filled by the
         // same draw calls that fill the geometry one. Opening it here means a
         // caller cannot forget to.
-        let frame = &self.frames[slot];
-        self.shadow.begin_frame(slot, &frame.timer)?;
-        self.probes.begin_frame(slot, &frame.timer)?;
-
-        frame
-            .command_buffer
-            .begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
+        let begun = self.begin_recording(slot);
+        if let Err(e) = begun {
+            self.abandon_recording();
+            return Err(e);
+        }
 
         let acquire = Instant::now();
-        let acquired = match self.output.acquire(&frame.sync) {
+        let acquired = match self.output.acquire(&self.frames[slot].sync) {
             Ok(acquired) => acquired,
-            Err(EngineError::SwapchainOutOfDate) => {
-                self.output_stale = true;
-                return Err(EngineError::SwapchainOutOfDate);
+            Err(e) => {
+                if matches!(e, EngineError::SwapchainOutOfDate) {
+                    self.output_stale = true;
+                }
+                self.abandon_recording();
+                return Err(e);
             }
-            Err(e) => return Err(e),
         };
         self.profile.record(RenderStage::Acquire, acquire.elapsed());
         let image_index = acquired.index;
@@ -622,6 +625,34 @@ impl Renderer {
         self.timer().begin(cb, GpuSpan::FireSim);
 
         Ok((cb, image_index))
+    }
+
+    /// Open the slot's command buffers: the shadow and probe passes' and the
+    /// geometry pass's.
+    fn begin_recording(&mut self, slot: FrameSlot) -> EngineResult<()> {
+        let frame = &self.frames[slot];
+        self.shadow.begin_frame(slot, &frame.timer)?;
+        self.probes.begin_frame(slot, &frame.timer)?;
+        frame
+            .command_buffer
+            .begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+    }
+
+    /// Return the current slot's command buffers to their initial state, for
+    /// a frame given up before its submit: whatever was recorded is dropped,
+    /// and the next frame on this slot can begin them again. None of them is
+    /// pending: the slot's fence was waited on before they were begun.
+    fn abandon_recording(&self) {
+        let release = vk::CommandBufferResetFlags::empty();
+        for buffer in [
+            self.shadow.command_buffer(),
+            self.probes.command_buffer(),
+            &self.frames[self.slot].command_buffer,
+        ] {
+            if let Err(e) = buffer.reset(release) {
+                log::error!("Failed to reset an abandoned command buffer: {e}");
+            }
+        }
     }
 
     /// The frame in flight being recorded.
@@ -1712,28 +1743,15 @@ impl Renderer {
             .apply_bloom(cb, image_index, self.targets.extent);
         self.timer().end(cb, GpuSpan::Bloom);
 
-        let meshes = self.mesh_bindings();
-        let scene_set = self.descriptors.scene_set(self.slot);
-        let in_flight = &self.frames[self.slot];
-        in_flight.command_buffer.end()?;
-
-        // Records the casters collected alongside every opaque draw this
-        // frame, now that the buffers hold all of them, and closes the pass.
-        self.shadow.end_frame(
-            self.vulkan_context.device(),
-            &in_flight.timer,
-            CasterBindings {
-                scene_set,
-                meshes: meshes.clone(),
-            },
-        )?;
+        // Everything from here to the present must hand the acquired image
+        // back: its acquire semaphore is waited on by this frame's submit
+        // and nothing else, and the image is returned to the swapchain only
+        // by a present. If recording fails, an empty submit still waits on
+        // the one and signals the fence and the present's semaphore, and the
+        // image is presented, before the error is returned.
         let recording = Instant::now();
-        let probes = self.probes.end_frame(&in_flight.timer, scene_set, meshes)?;
+        let recorded = self.finish_recording();
         let recording = recording.elapsed();
-        self.profile.record(RenderStage::Probes, recording);
-        self.profile.counters.probes = probes.probes;
-        self.profile.counters.probe_faces = probes.faces;
-        self.profile.counters.probe_draws = probes.draws;
 
         // Only a swapchain acquire produces semaphores to synchronize against;
         // an engine-owned image is ready the moment it is asked for, and the
@@ -1742,6 +1760,7 @@ impl Renderer {
         let signal: Vec<vk::Semaphore> = frame.signal.into_iter().collect();
         let wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT; wait.len()];
 
+        let in_flight = &self.frames[self.slot];
         in_flight.sync.reset()?;
 
         let queue_submit = Instant::now();
@@ -1751,14 +1770,23 @@ impl Renderer {
         // are what make that read see this frame's contents rather than the
         // last one's. The probes go next, on the same terms, for the geometry
         // pass that samples them.
+        if recorded.is_err() {
+            self.abandon_recording();
+        }
+        let in_flight = &self.frames[self.slot];
+        let command_buffers: &[&ManagedCommandBuffer] = if recorded.is_ok() {
+            &[
+                self.shadow.command_buffer(),
+                self.probes.command_buffer(),
+                &in_flight.command_buffer,
+            ]
+        } else {
+            &[]
+        };
         self.vulkan_context
             .command_buffer_manager
             .submit_recorded_graphics_batch_async(
-                &[
-                    self.shadow.command_buffer(),
-                    self.probes.command_buffer(),
-                    &in_flight.command_buffer,
-                ],
+                command_buffers,
                 in_flight.sync.draw_fence,
                 &wait,
                 &signal,
@@ -1766,7 +1794,9 @@ impl Renderer {
             )?;
         let queue_submit = queue_submit.elapsed();
         self.profile.record(RenderStage::QueueSubmit, queue_submit);
-        self.frame_mut().timer.mark_submitted();
+        if recorded.is_ok() {
+            self.frame_mut().timer.mark_submitted();
+        }
 
         // A failed picture must not keep the frame from its present, which
         // the acquire's semaphores are waiting on.
@@ -1791,7 +1821,35 @@ impl Renderer {
                 .saturating_sub(recording)
                 .saturating_sub(queue_submit),
         );
+        let probes = recorded?;
+        self.profile.counters.probes = probes.probes;
+        self.profile.counters.probe_faces = probes.faces;
+        self.profile.counters.probe_draws = probes.draws;
         released
+    }
+
+    /// Close the frame's command buffers: the geometry pass's, and the
+    /// shadow and probe passes recorded from the draws it collected.
+    fn finish_recording(&mut self) -> EngineResult<ProbeFrameStats> {
+        let meshes = self.mesh_bindings();
+        let scene_set = self.descriptors.scene_set(self.slot);
+        let in_flight = &self.frames[self.slot];
+        in_flight.command_buffer.end()?;
+
+        // Records the casters collected alongside every opaque draw this
+        // frame, now that the buffers hold all of them, and closes the pass.
+        self.shadow.end_frame(
+            self.vulkan_context.device(),
+            &in_flight.timer,
+            CasterBindings {
+                scene_set,
+                meshes: meshes.clone(),
+            },
+        )?;
+        let probing = Instant::now();
+        let probes = self.probes.end_frame(&in_flight.timer, scene_set, meshes)?;
+        self.profile.record(RenderStage::Probes, probing.elapsed());
+        Ok(probes)
     }
 
     /// The number of the frame most recently begun, counted from 1. Matches
