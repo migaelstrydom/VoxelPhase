@@ -451,12 +451,8 @@ fn compute_box_submersion(
     let hz = half_extents.z;
     let full_volume = 8.0 * hx * hy * hz;
 
-    let mut poly = build_obb_polyhedron(center, rotation, half_extents);
-    // Water occupies the slab floor <= y <= surface.
-    clip_polyhedron_with_plane(&mut poly, Vector3::new(0.0, 1.0, 0.0), sample.surface_level);
-    clip_polyhedron_with_plane(&mut poly, Vector3::new(0.0, -1.0, 0.0), -sample.floor_level);
-
-    let (submerged_volume, buoyancy_center) = polyhedron_volume_centroid(&poly)?;
+    let poly = build_obb_polyhedron(rotation, half_extents);
+    let (submerged_volume, buoyancy_center) = submerged_volume_centroid(poly, center, &sample)?;
     if submerged_volume <= 0.0 {
         return None;
     }
@@ -489,7 +485,7 @@ fn compute_hull_submersion(
     let vertices: Vec<Point3<f32>> = hull
         .vertices
         .iter()
-        .map(|v| center + rotation * v)
+        .map(|v| Point3::from(rotation * v))
         .collect();
 
     let faces: Vec<Vec<usize>> = hull
@@ -498,11 +494,8 @@ fn compute_hull_submersion(
         .map(|f| f.vertex_indices.iter().map(|&i| i as usize).collect())
         .collect();
 
-    let mut poly = Polyhedron { vertices, faces };
-    clip_polyhedron_with_plane(&mut poly, Vector3::new(0.0, 1.0, 0.0), sample.surface_level);
-    clip_polyhedron_with_plane(&mut poly, Vector3::new(0.0, -1.0, 0.0), -sample.floor_level);
-
-    let (submerged_volume, buoyancy_center) = polyhedron_volume_centroid(&poly)?;
+    let poly = Polyhedron { vertices, faces };
+    let (submerged_volume, buoyancy_center) = submerged_volume_centroid(poly, center, &sample)?;
     if submerged_volume <= 0.0 {
         return None;
     }
@@ -510,17 +503,43 @@ fn compute_hull_submersion(
     Some((submerged_volume, submerged_fraction, buoyancy_center))
 }
 
+/// A closed convex polyhedron, its vertices relative to the body part's
+/// centre.
+///
+/// Relative, not world: the volume and centroid sum tetrahedra fanned from
+/// the origin, and fanned from the world origin each term is the size of the
+/// part's distance from it, cancelling down to the part's own small volume.
+/// In f32 that cancellation moved the centre of buoyancy of a 20 cm block
+/// by millimetres at 80 m from the origin, and by more further out.
 #[derive(Clone)]
 struct Polyhedron {
     vertices: Vec<Point3<f32>>,
     faces: Vec<Vec<usize>>,
 }
 
-fn build_obb_polyhedron(
+/// The volume and world centroid of the part of `poly`, placed at `center`,
+/// that lies in the water slab `floor <= y <= surface`.
+fn submerged_volume_centroid(
+    mut poly: Polyhedron,
     center: Point3<f32>,
-    rotation: UnitQuaternion<f32>,
-    half_extents: Vector3<f32>,
-) -> Polyhedron {
+    sample: &WaterSample,
+) -> Option<(f32, Point3<f32>)> {
+    clip_polyhedron_with_plane(
+        &mut poly,
+        Vector3::new(0.0, 1.0, 0.0),
+        sample.surface_level - center.y,
+    );
+    clip_polyhedron_with_plane(
+        &mut poly,
+        Vector3::new(0.0, -1.0, 0.0),
+        center.y - sample.floor_level,
+    );
+    let (volume, centroid) = polyhedron_volume_centroid(&poly)?;
+    Some((volume, centroid + center.coords))
+}
+
+/// A box's polyhedron, relative to its centre.
+fn build_obb_polyhedron(rotation: UnitQuaternion<f32>, half_extents: Vector3<f32>) -> Polyhedron {
     let hx = half_extents.x;
     let hy = half_extents.y;
     let hz = half_extents.z;
@@ -536,7 +555,7 @@ fn build_obb_polyhedron(
     ];
     let vertices = local
         .into_iter()
-        .map(|v| center + rotation * v)
+        .map(|v| Point3::from(rotation * v))
         .collect::<Vec<_>>();
     // Outward-oriented face loops.
     let faces = vec![
@@ -887,6 +906,51 @@ fn shape_drag_properties(shape: &ColliderShape) -> (f32, f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A small tilted block half in the water lies the same way far from the
+    /// origin as at it: the centre of buoyancy, relative to the block, does
+    /// not drift with where the block is.
+    #[test]
+    fn a_far_block_floats_like_a_near_one() {
+        let water = StillWater {
+            surface: 0.0,
+            floor: -10.0,
+        };
+        let tilt = UnitQuaternion::from_euler_angles(0.4, 0.3, 0.2);
+        let half_extents = Vector3::new(0.1, 0.1, 0.1);
+        let lying = |at: Point3<f32>| {
+            let (volume, _, centre) =
+                compute_box_submersion(at, tilt, half_extents, &water).unwrap();
+            (volume, centre - at)
+        };
+        let hull = crate::collision::convex_hull::cube_hull(half_extents);
+        let hull_lying = |at: Point3<f32>| {
+            let (volume, _, centre) = compute_hull_submersion(at, tilt, &hull, &water).unwrap();
+            (volume, centre - at)
+        };
+
+        let (near_volume, near_offset) = lying(Point3::new(0.0, 0.03, 0.0));
+        let (hull_volume, hull_offset) = hull_lying(Point3::new(0.0, 0.03, 0.0));
+        for far in [
+            Point3::new(80.0, 0.03, 80.0),
+            Point3::new(-120.0, 0.03, 60.0),
+        ] {
+            let (volume, offset) = lying(far);
+            assert!((volume - near_volume).abs() < near_volume * 1e-3);
+            assert!(
+                (offset - near_offset).norm() < 1e-3,
+                "box at {far}: centre of buoyancy off by {:.4} m",
+                (offset - near_offset).norm()
+            );
+            let (volume, offset) = hull_lying(far);
+            assert!((volume - hull_volume).abs() < hull_volume * 1e-3);
+            assert!(
+                (offset - hull_offset).norm() < 1e-3,
+                "hull at {far}: centre of buoyancy off by {:.4} m",
+                (offset - hull_offset).norm()
+            );
+        }
+    }
 
     fn make_test_grid(surface_level: f32) -> StillWater {
         StillWater {

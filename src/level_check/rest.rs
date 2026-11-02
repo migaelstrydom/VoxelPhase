@@ -629,7 +629,7 @@ mod tests {
             ("subsidence.level.ron", 4),
             ("test_arena.level.ron", 7),
             ("test_segments.level.ron", 5),
-            ("water_park.level.ron", 4),
+            ("water_park.level.ron", 3),
             ("wrecking_yard.level.ron", 3),
         ];
 
