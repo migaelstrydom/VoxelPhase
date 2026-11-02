@@ -446,6 +446,13 @@ fn compute_box_submersion(
     water: &dyn WaterSurface,
 ) -> Option<(f32, f32, Point3<f32>)> {
     let sample = water.sample(center)?;
+
+    // As for the other shapes: a part whose centre is under the floor is in
+    // the ground, not the water.
+    if center.y <= sample.floor_level {
+        return None;
+    }
+
     let hx = half_extents.x;
     let hy = half_extents.y;
     let hz = half_extents.z;
@@ -886,17 +893,9 @@ fn shape_drag_properties(shape: &ColliderShape) -> (f32, f32, f32) {
             (DRAG_COEFF_CAPSULE, projected_area, radius_sq)
         }
         ColliderShape::ConvexHull { hull } => {
-            let (mut min_v, mut max_v) = (
-                Vector3::from_element(f32::MAX),
-                Vector3::from_element(f32::MIN),
-            );
-            for v in &hull.vertices {
-                min_v = min_v.zip_map(v, f32::min);
-                max_v = max_v.zip_map(v, f32::max);
-            }
-            let ext = max_v - min_v;
-            // Mean projected area from three AABB face areas.
-            let projected_area = (ext.x * ext.y + ext.y * ext.z + ext.x * ext.z) / 3.0;
+            // A convex body's projected area, averaged over every direction,
+            // is a quarter of its surface (Cauchy), as the box's is above.
+            let projected_area = hull.surface_area() * 0.25;
             let radius_sq = hull.bounding_radius * hull.bounding_radius;
             (DRAG_COEFF_BOX, projected_area, radius_sq)
         }
@@ -906,6 +905,31 @@ fn shape_drag_properties(shape: &ColliderShape) -> (f32, f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hull shaped like a box meets the water like the box: the same drag
+    /// area, and nothing from below the floor.
+    #[test]
+    fn a_box_shaped_hull_drags_like_the_box() {
+        let half_extents = Vector3::new(0.5, 0.2, 0.3);
+        let as_box = ColliderShape::Box { half_extents };
+        let as_hull = ColliderShape::ConvexHull {
+            hull: std::sync::Arc::new(crate::collision::convex_hull::cube_hull(half_extents)),
+        };
+        let (_, box_area, _) = shape_drag_properties(&as_box);
+        let (_, hull_area, _) = shape_drag_properties(&as_hull);
+        assert!(
+            (box_area - hull_area).abs() < 1e-5,
+            "box {box_area}, hull {hull_area}"
+        );
+
+        let water = StillWater {
+            surface: 1.0,
+            floor: 0.0,
+        };
+        let buried = Point3::new(0.0, -0.1, 0.0);
+        let level = UnitQuaternion::identity();
+        assert!(compute_box_submersion(buried, level, half_extents, &water).is_none());
+    }
 
     /// A small tilted block half in the water lies the same way far from the
     /// origin as at it: the centre of buoyancy, relative to the block, does

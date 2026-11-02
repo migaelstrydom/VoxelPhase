@@ -140,6 +140,27 @@ impl ConvexHull {
         0.5 * twice
     }
 
+    /// Total area of the hull's faces.
+    pub fn surface_area(&self) -> f32 {
+        self.faces
+            .iter()
+            .filter(|face| face.vertex_indices.len() >= 3)
+            .map(|face| {
+                let indices = &face.vertex_indices;
+                let v0 = self.vertices[indices[0] as usize];
+                let twice: Vector3<f32> = indices[1..]
+                    .windows(2)
+                    .map(|pair| {
+                        let v1 = self.vertices[pair[0] as usize];
+                        let v2 = self.vertices[pair[1] as usize];
+                        (v1 - v0).cross(&(v2 - v0))
+                    })
+                    .sum();
+                0.5 * twice.norm()
+            })
+            .sum()
+    }
+
     /// Compute volume via tetrahedron decomposition from the origin.
     ///
     /// Each face is decomposed into triangles (fan from first vertex).
