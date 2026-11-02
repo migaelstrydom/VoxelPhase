@@ -3,10 +3,9 @@
 //! Executes probes against all registered probe targets and produces
 //! contact candidates. Has no knowledge of what the probes are used for.
 
-use specs::{Entities, Join, Read, System, Write, WriteStorage};
+use specs::{Entities, Join, Read, ReadStorage, System, WriteStorage};
 
 use super::probe::{ContactCandidate, ContactCandidates, ProbeSet, ProbeTarget, SensorSet};
-use crate::debug::DebugOverlays;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 
@@ -21,14 +20,13 @@ impl<'a> System<'a> for SensorProbeSystem {
         Option<Read<'a, TerrainWorld>>,
         Option<Read<'a, PhysicsResource>>,
         Entities<'a>,
-        WriteStorage<'a, SensorSet>,
+        ReadStorage<'a, SensorSet>,
         WriteStorage<'a, ContactCandidates>,
-        Write<'a, DebugOverlays>,
     );
 
     fn run(
         &mut self,
-        (terrain_opt, physics_opt, entities, sensors, mut candidates, mut _debug_overlays): Self::SystemData,
+        (terrain_opt, physics_opt, entities, sensors, mut candidates): Self::SystemData,
     ) {
         let targets = ProbeSet::new([
             terrain_opt.as_ref().map(|t| &**t as &dyn ProbeTarget),
@@ -55,11 +53,6 @@ impl<'a> System<'a> for SensorProbeSystem {
                         normal: hit.normal,
                         distance,
                     });
-                    // _debug_overlays.add_line(
-                    //     probe.origin,
-                    //     hit.point,
-                    //     Colour::YELLOW,
-                    // );
                 }
             }
 
