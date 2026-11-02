@@ -44,27 +44,19 @@ impl StreamedMesh {
     /// Write `vertices` and `indices` to the start of the two buffers. The
     /// caller caps both to the capacity it allocated.
     pub fn upload<V: Copy>(&self, vertices: &[V], indices: &[u32]) -> EngineResult<()> {
-        let vertex_bytes = std::mem::size_of_val(vertices);
-        let index_bytes = std::mem::size_of_val(indices);
-        debug_assert!(vertex_bytes as vk::DeviceSize <= self.vertex_buffer.size);
-        debug_assert!(index_bytes as vk::DeviceSize <= self.index_buffer.size);
+        self.upload_vertices(vertices)?;
+        self.upload_indices(indices)
+    }
 
-        unsafe {
-            let ptr = self.vertex_buffer.mapped()?;
-            std::ptr::copy_nonoverlapping(
-                vertices.as_ptr() as *const u8,
-                ptr as *mut u8,
-                vertex_bytes,
-            );
+    /// Write `vertices` to the start of the vertex buffer, leaving the indices
+    /// as they were: for a mesh whose index pattern never changes.
+    pub fn upload_vertices<V: Copy>(&self, vertices: &[V]) -> EngineResult<()> {
+        write_start(&self.vertex_buffer, vertices)
+    }
 
-            let ptr = self.index_buffer.mapped()?;
-            std::ptr::copy_nonoverlapping(
-                indices.as_ptr() as *const u8,
-                ptr as *mut u8,
-                index_bytes,
-            );
-        }
-        Ok(())
+    /// Write `indices` to the start of the index buffer.
+    pub fn upload_indices(&self, indices: &[u32]) -> EngineResult<()> {
+        write_start(&self.index_buffer, indices)
     }
 
     /// Bind both buffers at offset zero.
@@ -74,4 +66,15 @@ impl StreamedMesh {
             device.cmd_bind_index_buffer(cb, self.index_buffer.buffer, 0, vk::IndexType::UINT32);
         }
     }
+}
+
+/// Copy `items` to the start of `buffer`, which must hold them.
+fn write_start<T: Copy>(buffer: &ManagedBuffer, items: &[T]) -> EngineResult<()> {
+    let bytes = std::mem::size_of_val(items);
+    debug_assert!(bytes as vk::DeviceSize <= buffer.size);
+    unsafe {
+        let ptr = buffer.mapped()?;
+        std::ptr::copy_nonoverlapping(items.as_ptr() as *const u8, ptr as *mut u8, bytes);
+    }
+    Ok(())
 }

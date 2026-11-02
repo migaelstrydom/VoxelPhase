@@ -61,6 +61,11 @@ pub struct ParticleRenderer {
     draw_order: Vec<(f32, usize)>,
     /// Where the particles beyond the water end in `draw_order`.
     beyond_end: usize,
+    /// The near-side half of `draw_order` while it is partitioned, kept so
+    /// the partition does not allocate.
+    partition_scratch: Vec<(f32, usize)>,
+    /// This frame's billboard vertices, kept so they do not allocate.
+    vertices: Vec<ParticleVertex>,
 
     /// View and projection matrices `prepare` was given, pushed at bind time.
     matrices: Option<(Matrix4<f32>, Matrix4<f32>)>,
@@ -81,8 +86,18 @@ impl ParticleRenderer {
             (MAX_PARTICLES * 4 * std::mem::size_of::<ParticleVertex>()) as vk::DeviceSize;
         let index_buffer_size = (MAX_PARTICLES * 6 * std::mem::size_of::<u32>()) as vk::DeviceSize;
 
+        // Every particle is a quad of two triangles, 0-1-2 and 0-2-3, and the
+        // quads are laid down in draw order, so the indices never change.
+        let quad_indices: Vec<u32> = (0..MAX_PARTICLES as u32)
+            .flat_map(|quad| {
+                let base = quad * 4;
+                [base, base + 1, base + 2, base, base + 2, base + 3]
+            })
+            .collect();
         let meshes = PerFrame::try_new(|_| {
-            StreamedMesh::new(&device, vertex_buffer_size, index_buffer_size)
+            let mesh = StreamedMesh::new(&device, vertex_buffer_size, index_buffer_size)?;
+            mesh.upload_indices(&quad_indices)?;
+            Ok(mesh)
         })?;
 
         Ok(Self {
@@ -92,6 +107,8 @@ impl ParticleRenderer {
             slot: FrameSlot::default(),
             draw_order: Vec::with_capacity(MAX_PARTICLES),
             beyond_end: 0,
+            partition_scratch: Vec::with_capacity(MAX_PARTICLES),
+            vertices: Vec::with_capacity(MAX_PARTICLES * 4),
             matrices: None,
         })
     }
@@ -135,14 +152,16 @@ impl ParticleRenderer {
 
         let particles = pool.particles();
         self.sort_far_to_near(particles, camera_pos);
-        self.beyond_end = partition_stable(&mut self.draw_order, |&(_, index)| {
-            beyond(&particles[index].position)
-        });
+        self.beyond_end = partition_stable(
+            &mut self.draw_order,
+            &mut self.partition_scratch,
+            |&(_, index)| beyond(&particles[index].position),
+        );
         let particle_count = self.draw_order.len();
 
         // Generate billboard vertices for each particle
-        let mut vertices = Vec::with_capacity(particle_count * 4);
-        let mut indices = Vec::with_capacity(particle_count * 6);
+        let vertices = &mut self.vertices;
+        vertices.clear();
 
         // Billboard corner offsets
         let corners = [
@@ -152,9 +171,8 @@ impl ParticleRenderer {
             Vector2::new(-1.0, 1.0),  // Top-left
         ];
 
-        for (i, &(_, particle_index)) in self.draw_order.iter().enumerate() {
+        for &(_, particle_index) in &self.draw_order {
             let particle = &particles[particle_index];
-            let base_index = (i * 4) as u32;
             let life_normalized = particle.normalized_age();
             let motion = particle.velocity * particle.stretch;
             let shape = Vector4::new(
@@ -177,17 +195,9 @@ impl ParticleRenderer {
                     shape,
                 });
             }
-
-            // Two triangles: 0-1-2, 0-2-3
-            indices.push(base_index);
-            indices.push(base_index + 1);
-            indices.push(base_index + 2);
-            indices.push(base_index);
-            indices.push(base_index + 2);
-            indices.push(base_index + 3);
         }
 
-        self.meshes[self.slot].upload(&vertices, &indices)?;
+        self.meshes[self.slot].upload_vertices(vertices)?;
 
         self.matrices = Some((*view_matrix, *proj_matrix));
 
@@ -325,12 +335,23 @@ impl ParticleRenderer {
 }
 
 /// Move the items `first` picks to the front, keeping the order within each
-/// side. Returns where the others begin.
-fn partition_stable<T: Copy>(items: &mut Vec<T>, first: impl Fn(&T) -> bool) -> usize {
-    let (mut front, back): (Vec<T>, Vec<T>) = items.iter().partition(|item| first(item));
-    let split = front.len();
-    front.extend(back);
-    *items = front;
+/// side, with `scratch` holding the others meanwhile. Returns where the others
+/// begin.
+fn partition_stable<T: Copy>(
+    items: &mut Vec<T>,
+    scratch: &mut Vec<T>,
+    first: impl Fn(&T) -> bool,
+) -> usize {
+    scratch.clear();
+    items.retain(|item| {
+        let keep = first(item);
+        if !keep {
+            scratch.push(*item);
+        }
+        keep
+    });
+    let split = items.len();
+    items.extend_from_slice(scratch);
     split
 }
 

@@ -231,7 +231,7 @@ impl ParticlePool {
                 .particles
                 .iter()
                 .enumerate()
-                .min_by(|(_, a), (_, b)| a.life.partial_cmp(&b.life).unwrap())
+                .min_by(|(_, a), (_, b)| a.life.total_cmp(&b.life))
             {
                 self.particles[idx] = particle;
             }
