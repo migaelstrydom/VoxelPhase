@@ -16,6 +16,7 @@ use smallvec::SmallVec;
 
 use crate::collision::contact::{ContactManifold, ContactPoint};
 use crate::collision::contact_reducer::ContactReducer;
+use crate::collision::discrete::clipping::clip_against_face_sides;
 use crate::collision::mesh::crease_contacts::{crease_edge_contacts, SolidPlane};
 use crate::collision::mesh::polygon::point_in_convex_polygon;
 use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
@@ -247,7 +248,7 @@ fn clip_shape_face_against_mesh_face(
     let face_normal = face.normal;
 
     // Clip shape face against mesh face edges (Sutherland-Hodgman).
-    let clipped = clip_against_face_edges(&shape_face.vertices, mesh_verts, &face_normal);
+    let clipped = clip_against_face_sides(mesh_verts, face_normal, &shape_face.vertices);
 
     let face_point = face.vertices[0];
 
@@ -313,82 +314,10 @@ fn project_shape_verts_into_face(
     contacts
 }
 
-/// Clip subject polygon against the edge half-planes of a clip polygon.
-fn clip_against_face_edges(
-    subject: &SmallVec<[Point3<f32>; 8]>,
-    clip_verts: &SmallVec<[Point3<f32>; 8]>,
-    face_normal: &Vector3<f32>,
-) -> SmallVec<[Point3<f32>; 8]> {
-    if clip_verts.len() < 3 {
-        return subject.clone();
-    }
-
-    let centroid = compute_centroid(clip_verts);
-    let mut clipped = subject.clone();
-
-    for i in 0..clip_verts.len() {
-        if clipped.is_empty() {
-            break;
-        }
-        let a = clip_verts[i];
-        let b = clip_verts[(i + 1) % clip_verts.len()];
-        let edge = b - a;
-        let candidate_inward = edge.cross(face_normal);
-
-        let inward = if (centroid - a).dot(&candidate_inward) >= 0.0 {
-            candidate_inward
-        } else {
-            -candidate_inward
-        };
-
-        clipped = clip_polygon_by_plane(&clipped, a, inward);
-    }
-
-    clipped
-}
-
-/// Clip a convex polygon against a half-plane, keeping the inside.
-fn clip_polygon_by_plane(
-    polygon: &[Point3<f32>],
-    plane_point: Point3<f32>,
-    plane_normal: Vector3<f32>,
-) -> SmallVec<[Point3<f32>; 8]> {
-    let mut out: SmallVec<[Point3<f32>; 8]> = SmallVec::new();
-    if polygon.is_empty() {
-        return out;
-    }
-
-    for i in 0..polygon.len() {
-        let p1 = polygon[i];
-        let p2 = polygon[(i + 1) % polygon.len()];
-        let d1 = (p1 - plane_point).dot(&plane_normal);
-        let d2 = (p2 - plane_point).dot(&plane_normal);
-
-        if d1 >= 0.0 && d2 >= 0.0 {
-            out.push(p2);
-        } else if d1 >= 0.0 {
-            let t = d1 / (d1 - d2);
-            out.push(p1 + (p2 - p1) * t);
-        } else if d2 >= 0.0 {
-            let t = d1 / (d1 - d2);
-            out.push(p1 + (p2 - p1) * t);
-            out.push(p2);
-        }
-    }
-
-    out
-}
-
 /// Project a point onto a face's plane along the face normal.
 fn project_onto_face_plane(point: Point3<f32>, face: &ContactFace) -> Point3<f32> {
     let signed_dist = (point - face.vertices[0]).dot(&face.normal);
     point - face.normal * signed_dist
-}
-
-/// Compute centroid of a polygon.
-fn compute_centroid(verts: &[Point3<f32>]) -> Point3<f32> {
-    let sum: Vector3<f32> = verts.iter().map(|v| v.coords).sum();
-    Point3::from(sum / verts.len() as f32)
 }
 
 #[cfg(test)]

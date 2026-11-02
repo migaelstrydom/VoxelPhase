@@ -29,7 +29,9 @@ use smallvec::SmallVec;
 
 use crate::collision::contact::{ContactManifold, ContactPoint};
 use crate::collision::contact_reducer::ContactReducer;
-use crate::collision::discrete::clipping::{clip_polygon, obb_face, ClipPolygon, ObbFace};
+use crate::collision::discrete::clipping::{
+    clip_against_face_sides, clip_polygon, obb_face, ClipPolygon, ObbFace,
+};
 use crate::collision::mesh::crease_contacts::{crease_edge_contacts, SolidPlane};
 use crate::collision::mesh::crease_edges::{PatchRidges, Ridge};
 use crate::collision::mesh::polygon::point_in_convex_polygon;
@@ -86,7 +88,7 @@ pub fn obb_patch_manifold(
             }
         }
         let support = find_support_face(obb, &normal);
-        let clipped = clip_against_polygon(&support.vertices, &face.vertices, &normal);
+        let clipped = clip_against_face_sides(&face.vertices, normal, &support.vertices);
 
         let face_point = face.vertices[0];
 
@@ -327,48 +329,6 @@ fn find_support_face(obb: &Obb, face_normal: &Vector3<f32>) -> SupportFace {
     SupportFace {
         vertices: obb_face(obb, best_axis, sign).vertices,
     }
-}
-
-/// Clip a convex polygon against another convex polygon's edge planes.
-///
-/// Uses Sutherland-Hodgman: for each edge of the clip polygon, clip the
-/// subject polygon against the edge's half-plane. Winding-agnostic: uses
-/// the polygon centroid to determine the inward direction for each edge.
-fn clip_against_polygon(
-    subject: &[Point3<f32>],
-    clip_verts: &[Point3<f32>],
-    face_normal: &Vector3<f32>,
-) -> ClipPolygon {
-    if clip_verts.len() < 3 {
-        return ClipPolygon::from_slice(subject);
-    }
-
-    let centroid = Point3::from(
-        clip_verts.iter().map(|v| v.coords).sum::<Vector3<f32>>() / clip_verts.len() as f32,
-    );
-
-    let mut clipped = ClipPolygon::from_slice(subject);
-
-    for i in 0..clip_verts.len() {
-        if clipped.is_empty() {
-            break;
-        }
-        let a = clip_verts[i];
-        let b = clip_verts[(i + 1) % clip_verts.len()];
-        let edge_dir = b - a;
-        let candidate_inward = edge_dir.cross(face_normal);
-
-        let to_centroid = centroid - a;
-        let inward = if to_centroid.dot(&candidate_inward) >= 0.0 {
-            candidate_inward
-        } else {
-            -candidate_inward
-        };
-
-        clipped = clip_polygon(&clipped, a, inward);
-    }
-
-    clipped
 }
 
 /// Fallback: test OBB edges against boundary edges of the patch.

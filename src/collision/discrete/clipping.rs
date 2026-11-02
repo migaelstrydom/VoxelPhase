@@ -4,7 +4,7 @@
 //! against reference face side planes.
 
 use nalgebra::{Point3, Vector3};
-use smallvec::SmallVec;
+use smallvec::{Array, SmallVec};
 
 use crate::collision::obb::Obb;
 
@@ -35,32 +35,8 @@ pub fn clip_polygon(
     plane_point: Point3<f32>,
     plane_normal: Vector3<f32>,
 ) -> ClipPolygon {
-    if polygon.is_empty() {
-        return ClipPolygon::new();
-    }
-
     let mut result = ClipPolygon::new();
-
-    for i in 0..polygon.len() {
-        let p1 = polygon[i];
-        let p2 = polygon[(i + 1) % polygon.len()];
-        let d1 = (p1 - plane_point).dot(&plane_normal);
-        let d2 = (p2 - plane_point).dot(&plane_normal);
-        let inside1 = d1 >= 0.0;
-        let inside2 = d2 >= 0.0;
-
-        if inside1 && inside2 {
-            result.push(p2);
-        } else if inside1 && !inside2 {
-            let t = d1 / (d1 - d2);
-            result.push(p1 + (p2 - p1) * t);
-        } else if !inside1 && inside2 {
-            let t = d1 / (d1 - d2);
-            result.push(p1 + (p2 - p1) * t);
-            result.push(p2);
-        }
-    }
-
+    clip_polygon_into(polygon, plane_point, plane_normal, &mut result);
     result
 }
 
@@ -209,11 +185,11 @@ pub fn clip_against_face_sides(
 /// Clip a convex polygon against a half-plane into a caller-provided buffer.
 ///
 /// Keeps the portion on the inside (non-negative side) of the plane.
-fn clip_polygon_into(
+fn clip_polygon_into<A: Array<Item = Point3<f32>>>(
     polygon: &[Point3<f32>],
     plane_point: Point3<f32>,
     plane_normal: Vector3<f32>,
-    out: &mut HullClipPolygon,
+    out: &mut SmallVec<A>,
 ) {
     out.clear();
     if polygon.is_empty() {
