@@ -32,6 +32,7 @@ use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::discrete::clipping::{clip_polygon, obb_face, ClipPolygon, ObbFace};
 use crate::collision::mesh::crease_contacts::{crease_edge_contacts, SolidPlane};
 use crate::collision::mesh::crease_edges::{PatchRidges, Ridge};
+use crate::collision::mesh::polygon::point_in_convex_polygon;
 use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
 use crate::collision::mesh::solid_side::pushing_faces;
 use crate::collision::obb::Obb;
@@ -475,30 +476,6 @@ fn nearest_support_vertex(point: &Point3<f32>, support_verts: &[Point3<f32>; 4])
         }
     }
     best
-}
-
-/// Test if a point lies inside a convex polygon (winding-agnostic).
-fn point_in_convex_polygon(
-    point: &Point3<f32>,
-    verts: &[Point3<f32>],
-    normal: &Vector3<f32>,
-) -> bool {
-    let n = verts.len();
-    let mut positive = 0u32;
-    let mut negative = 0u32;
-    for i in 0..n {
-        let a = verts[i];
-        let b = verts[(i + 1) % n];
-        let edge = b - a;
-        let to_point = *point - a;
-        let cross_dot = edge.cross(&to_point).dot(normal);
-        if cross_dot > 1e-6 {
-            positive += 1;
-        } else if cross_dot < -1e-6 {
-            negative += 1;
-        }
-    }
-    positive == 0 || negative == 0
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ use smallvec::SmallVec;
 use crate::collision::contact::{ContactManifold, ContactPoint};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::mesh::crease_contacts::{crease_edge_contacts, SolidPlane};
+use crate::collision::mesh::polygon::point_in_convex_polygon;
 use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
 use crate::collision::mesh::solid_side::pushing_faces;
 use crate::collision::obb::Obb;
@@ -388,30 +389,6 @@ fn project_onto_face_plane(point: Point3<f32>, face: &ContactFace) -> Point3<f32
 fn compute_centroid(verts: &[Point3<f32>]) -> Point3<f32> {
     let sum: Vector3<f32> = verts.iter().map(|v| v.coords).sum();
     Point3::from(sum / verts.len() as f32)
-}
-
-/// Test if a point lies inside a convex polygon (winding-agnostic).
-fn point_in_convex_polygon(
-    point: &Point3<f32>,
-    verts: &[Point3<f32>],
-    normal: &Vector3<f32>,
-) -> bool {
-    let n = verts.len();
-    let mut positive = 0u32;
-    let mut negative = 0u32;
-    for i in 0..n {
-        let a = verts[i];
-        let b = verts[(i + 1) % n];
-        let edge = b - a;
-        let to_point = *point - a;
-        let cross_dot = edge.cross(&to_point).dot(normal);
-        if cross_dot > 1e-6 {
-            positive += 1;
-        } else if cross_dot < -1e-6 {
-            negative += 1;
-        }
-    }
-    positive == 0 || negative == 0
 }
 
 #[cfg(test)]

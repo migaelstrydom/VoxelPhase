@@ -12,9 +12,10 @@ use smallvec::SmallVec;
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::mesh::crease_edges::{convex_creases, ConvexCrease};
+use crate::collision::mesh::polygon::point_in_convex_polygon;
 use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
 use crate::collision::mesh::solid_side::pushing_faces;
-use crate::collision::mesh::sphere_patch::{closest_point_on_segment, point_in_convex_polygon};
+use crate::collision::segment::closest_point_on_segment;
 use crate::collision::SurfaceId;
 
 /// Maximum contacts emitted before reduction.

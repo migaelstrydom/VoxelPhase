@@ -20,8 +20,10 @@ use smallvec::SmallVec;
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::mesh::crease_edges::{convex_creases, ConvexCrease};
+use crate::collision::mesh::polygon::point_in_convex_polygon;
 use crate::collision::mesh::seam_filter::{ContactEdge, FilteredPatch};
 use crate::collision::mesh::solid_side::pushing_faces;
+use crate::collision::segment::closest_point_on_segment;
 use crate::collision::SurfaceId;
 
 /// Maximum contacts emitted before reduction.
@@ -291,48 +293,6 @@ fn sphere_vs_edge(
         feature_id: edge.feature_id,
         surface: edge.surface,
     })
-}
-
-/// Test if a point lies inside a convex polygon (winding-agnostic).
-///
-/// Works for both CW and CCW winding: a point is inside iff it's on the
-/// same side of all edges (all cross products have the same sign).
-pub(crate) fn point_in_convex_polygon(
-    point: &Point3<f32>,
-    verts: &[Point3<f32>],
-    normal: &Vector3<f32>,
-) -> bool {
-    let n = verts.len();
-    let mut positive = 0u32;
-    let mut negative = 0u32;
-    for i in 0..n {
-        let a = verts[i];
-        let b = verts[(i + 1) % n];
-        let edge = b - a;
-        let to_point = *point - a;
-        let cross_dot = edge.cross(&to_point).dot(normal);
-        if cross_dot > 1e-6 {
-            positive += 1;
-        } else if cross_dot < -1e-6 {
-            negative += 1;
-        }
-    }
-    positive == 0 || negative == 0
-}
-
-/// Closest point on a line segment to a query point.
-pub(crate) fn closest_point_on_segment(
-    p: Point3<f32>,
-    a: Point3<f32>,
-    b: Point3<f32>,
-) -> Point3<f32> {
-    let ab = b - a;
-    let len_sq = ab.magnitude_squared();
-    if len_sq < 1e-12 {
-        return a;
-    }
-    let t = ((p - a).dot(&ab) / len_sq).clamp(0.0, 1.0);
-    a + ab * t
 }
 
 #[cfg(test)]

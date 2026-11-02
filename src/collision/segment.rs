@@ -11,6 +11,18 @@ const EPS: f32 = 1e-6;
 /// sin² of the angle below which two segments count as parallel.
 const PARALLEL_SIN_SQ: f32 = 1e-6;
 
+/// Closest point on the segment `a`–`b` to `p`; `a` for a segment of no
+/// length.
+pub fn closest_point_on_segment(p: Point3<f32>, a: Point3<f32>, b: Point3<f32>) -> Point3<f32> {
+    let ab = b - a;
+    let len_sq = ab.magnitude_squared();
+    if len_sq < 1e-12 {
+        return a;
+    }
+    let t = ((p - a).dot(&ab) / len_sq).clamp(0.0, 1.0);
+    a + ab * t
+}
+
 /// Closest points between two line segments.
 ///
 /// Returns `(point_on_seg1, point_on_seg2)` — the pair of points, one on each

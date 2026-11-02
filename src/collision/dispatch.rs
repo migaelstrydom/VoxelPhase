@@ -233,8 +233,8 @@ mod tests {
     use super::*;
     use crate::collision::contact::FeatureId;
     use crate::collision::convex_hull::{ConvexHull, HullFace};
+    use crate::collision::mesh::polygon::point_in_convex_polygon;
     use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
-    use crate::collision::mesh::sphere_patch::point_in_convex_polygon;
     use crate::collision::SurfaceId;
     use nalgebra::{Point3, UnitQuaternion, Vector3};
     use smallvec::SmallVec;
