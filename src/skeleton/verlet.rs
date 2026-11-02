@@ -14,7 +14,6 @@ use nalgebra::{Point3, Vector3};
 /// Particles are the "joints" of the skeleton. Each has a position and
 /// remembers its previous position (velocity is implicit in the difference).
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct Particle {
     /// Current position in world space.
     pub position: Point3<f32>,
@@ -30,7 +29,6 @@ pub struct Particle {
     pub damping: f32,
 }
 
-#[allow(dead_code)]
 impl Particle {
     /// Create a new particle at the given position.
     pub fn new(position: Point3<f32>) -> Self {
@@ -87,7 +85,6 @@ impl Particle {
 /// This is the "bone" of the skeleton - maintains a fixed distance
 /// between two particles (joints).
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct DistanceConstraint {
     /// Index of the first particle.
     pub particle_a: usize,
@@ -99,7 +96,6 @@ pub struct DistanceConstraint {
     pub stiffness: f32,
 }
 
-#[allow(dead_code)]
 impl DistanceConstraint {
     /// Create a new distance constraint.
     pub fn new(particle_a: usize, particle_b: usize, rest_length: f32) -> Self {
@@ -118,62 +114,17 @@ impl DistanceConstraint {
     }
 }
 
-/// An angle constraint limiting rotation between connected bones.
-///
-/// This prevents joints from bending in unnatural ways.
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub struct AngleConstraint {
-    /// The "hinge" particle (shared between two bones).
-    pub hinge: usize,
-    /// First endpoint particle.
-    pub particle_a: usize,
-    /// Second endpoint particle.
-    pub particle_b: usize,
-    /// Minimum angle in radians (0 = straight).
-    pub min_angle: f32,
-    /// Maximum angle in radians (PI = completely folded).
-    pub max_angle: f32,
-    /// Stiffness of the constraint.
-    pub stiffness: f32,
-}
-
-#[allow(dead_code)]
-impl AngleConstraint {
-    /// Create a new angle constraint.
-    pub fn new(hinge: usize, particle_a: usize, particle_b: usize) -> Self {
-        Self {
-            hinge,
-            particle_a,
-            particle_b,
-            min_angle: 0.0,
-            max_angle: std::f32::consts::PI,
-            stiffness: 0.5,
-        }
-    }
-
-    /// Set the angle limits.
-    pub fn with_limits(mut self, min: f32, max: f32) -> Self {
-        self.min_angle = min;
-        self.max_angle = max;
-        self
-    }
-}
-
 /// The step `Particle::damping` is stated for.
 const DAMPING_REFERENCE_STEP: f32 = 1.0 / 60.0;
 
 /// The Verlet physics simulation.
 ///
 /// Contains particles and constraints, handles integration and solving.
-#[allow(dead_code)]
 pub struct VerletSystem {
     /// All particles in the simulation.
     pub particles: Vec<Particle>,
     /// Distance constraints (bones).
     pub distance_constraints: Vec<DistanceConstraint>,
-    /// Angle constraints (joint limits).
-    pub angle_constraints: Vec<AngleConstraint>,
     /// Number of constraint solving iterations.
     pub iterations: u32,
     /// Global gravity.
@@ -183,14 +134,12 @@ pub struct VerletSystem {
     last_dt: Option<f32>,
 }
 
-#[allow(dead_code)]
 impl VerletSystem {
     /// Create a new Verlet system.
     pub fn new() -> Self {
         Self {
             particles: Vec::new(),
             distance_constraints: Vec::new(),
-            angle_constraints: Vec::new(),
             iterations: 4, // Good balance of accuracy vs performance
             gravity: Vector3::new(0.0, -9.81, 0.0),
             last_dt: None,
@@ -209,11 +158,6 @@ impl VerletSystem {
         self.distance_constraints.push(constraint);
     }
 
-    /// Add an angle constraint.
-    pub fn add_angle_constraint(&mut self, constraint: AngleConstraint) {
-        self.angle_constraints.push(constraint);
-    }
-
     /// Connect two particles with a distance constraint using their current distance.
     pub fn connect(&mut self, a: usize, b: usize) {
         let rest_length = (self.particles[a].position - self.particles[b].position).magnitude();
@@ -228,7 +172,6 @@ impl VerletSystem {
         // Solve constraints iteratively
         for _ in 0..self.iterations {
             self.solve_distance_constraints();
-            self.solve_angle_constraints();
         }
     }
 
@@ -295,72 +238,6 @@ impl VerletSystem {
 
                 self.particles[constraint.particle_a].position += correction * ratio_a;
                 self.particles[constraint.particle_b].position -= correction * ratio_b;
-            }
-        }
-    }
-
-    /// Solve all angle constraints.
-    fn solve_angle_constraints(&mut self) {
-        for constraint in &self.angle_constraints.clone() {
-            let hinge_pos = self.particles[constraint.hinge].position;
-            let pos_a = self.particles[constraint.particle_a].position;
-            let pos_b = self.particles[constraint.particle_b].position;
-
-            // Vectors from hinge to endpoints
-            let to_a = pos_a - hinge_pos;
-            let to_b = pos_b - hinge_pos;
-
-            let len_a = to_a.magnitude();
-            let len_b = to_b.magnitude();
-
-            if len_a < 0.0001 || len_b < 0.0001 {
-                continue;
-            }
-
-            // Calculate current angle
-            let dot = to_a.dot(&to_b) / (len_a * len_b);
-            let current_angle = dot.clamp(-1.0, 1.0).acos();
-
-            // Check if we need to constrain
-            if current_angle >= constraint.min_angle && current_angle <= constraint.max_angle {
-                continue;
-            }
-
-            // Determine target angle
-            let target_angle = if current_angle < constraint.min_angle {
-                constraint.min_angle
-            } else {
-                constraint.max_angle
-            };
-
-            // Calculate rotation axis (perpendicular to both vectors)
-            let axis = to_a.cross(&to_b);
-            if axis.magnitude() < 0.0001 {
-                continue; // Vectors are parallel
-            }
-            let axis = axis.normalize();
-
-            // Calculate angle difference
-            let angle_diff = (target_angle - current_angle) * constraint.stiffness * 0.5;
-
-            // Rotate endpoints toward valid angle
-            let rotation_a = nalgebra::UnitQuaternion::from_axis_angle(
-                &nalgebra::Unit::new_normalize(axis),
-                -angle_diff,
-            );
-            let rotation_b = nalgebra::UnitQuaternion::from_axis_angle(
-                &nalgebra::Unit::new_normalize(axis),
-                angle_diff,
-            );
-
-            // Apply rotations if particles aren't pinned
-            if !self.particles[constraint.particle_a].is_pinned() {
-                let new_to_a = rotation_a * to_a;
-                self.particles[constraint.particle_a].position = hinge_pos + new_to_a;
-            }
-            if !self.particles[constraint.particle_b].is_pinned() {
-                let new_to_b = rotation_b * to_b;
-                self.particles[constraint.particle_b].position = hinge_pos + new_to_b;
             }
         }
     }
