@@ -12,28 +12,20 @@
 //! `Edge` (smaller vertex first). When exactly two triangles share an edge
 //! (manifold), they are linked as neighbors.
 //!
-//! # Incremental updates
+//! # Use
 //!
-//! The edge map persists across updates. When terrain is modified in a
-//! region, the caller collects the "old" triangles in that region before
-//! the mesh rebuild and the "new" triangles after. `update_region` then:
-//!
-//! 1. **Removes** old triangles' edges from the edge map, fixing
-//!    back-references on surviving neighbors that lost an adjacency link.
-//! 2. **Adds** new triangles' edges, creating adjacency links whenever an
-//!    edge becomes manifold (exactly 2 triangles).
-//!
-//! This makes adjacency cost proportional to the modification size, not
-//! the total mesh size (~1–2 ms vs ~16 ms for a 10K-triangle terrain).
+//! The terrain builds one map per chunk, fresh from the chunk's triangles
+//! whenever it remeshes (`from_triangles`), and replaces the old one whole;
+//! `segment_adjacency` links triangles across chunk seams on top.
 
 use std::hash::Hash;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nalgebra::Point3;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use super::mesh_octree::{MeshOctree, TriangleRef};
+use super::mesh_octree::TriangleRef;
 
 /// Quantized vertex position for floating-point-safe edge matching.
 ///
@@ -130,13 +122,9 @@ pub struct AdjacencyMap<R = TriangleRef> {
     /// Per-triangle neighbor lookup.
     adjacency: FxHashMap<R, TriangleNeighbors<R>>,
 
-    /// Persistent edge map. Updated surgically during incremental rebuilds.
+    /// Every edge and the triangles (and their edge slots) that claim it.
     /// SmallVec<[_; 2]> keeps manifold edges (the common case) inline.
     edge_map: FxHashMap<Edge, SmallVec<[(R, u8); 2]>>,
-
-    /// Reusable triangle collection buffer (used by full `rebuild`).
-    #[allow(dead_code)]
-    triangle_buf: Vec<(R, [Point3<f32>; 3])>,
 
     /// Cached inverse cell size for quantization.
     inv_cell: f64,
@@ -148,15 +136,26 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
         Self {
             adjacency: FxHashMap::default(),
             edge_map: FxHashMap::default(),
-            triangle_buf: Vec::new(),
             inv_cell: 0.0,
         }
     }
 
-    /// Link `triangles` among themselves, as a fresh map.
+    /// Link `triangles` among themselves, as a fresh map: the first two
+    /// triangles to claim an edge are neighbours across it.
     pub fn from_triangles(triangles: &[(R, [Point3<f32>; 3])], tolerance: f32) -> Self {
         let mut map = Self::new();
-        map.update_region(&[], triangles, tolerance);
+        map.inv_cell = 1.0 / tolerance as f64;
+        for (tri_ref, positions) in triangles {
+            let edges = map.triangle_edges(positions);
+            for (edge_idx, edge) in edges.iter().enumerate() {
+                let entries = map.edge_map.entry(*edge).or_default();
+                entries.push((*tri_ref, edge_idx as u8));
+                if let [(ref_a, edge_a), (ref_b, edge_b)] = entries[..] {
+                    map.set_neighbour(ref_a, edge_a, Some(ref_b));
+                    map.set_neighbour(ref_b, edge_b, Some(ref_a));
+                }
+            }
+        }
         map
     }
 
@@ -211,95 +210,6 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
             Edge::new(q[1], q[2]),
             Edge::new(q[2], q[0]),
         ]
-    }
-
-    /// Incrementally update adjacency for a modified region.
-    ///
-    /// `old_triangles` are the triangles that existed in the region before
-    /// the mesh rebuild (collected via `collect_triangles_in_region`).
-    /// `new_triangles` are the triangles in the region after the rebuild.
-    ///
-    /// Only edges involving these triangles are reprocessed. Triangles
-    /// outside the region are untouched.
-    pub fn update_region(
-        &mut self,
-        old_triangles: &[(R, [Point3<f32>; 3])],
-        new_triangles: &[(R, [Point3<f32>; 3])],
-        tolerance: f32,
-    ) -> AdjacencyTimings {
-        self.inv_cell = 1.0 / tolerance as f64;
-        let t_unlink = Instant::now();
-        // === REMOVE phase ===
-        for (tri_ref, positions) in old_triangles {
-            let edges = self.triangle_edges(positions);
-
-            for edge in edges.iter() {
-                if let Some(entries) = self.edge_map.get_mut(edge) {
-                    // If this was a manifold edge (2 entries), the surviving
-                    // triangle loses its neighbor on this edge.
-                    if entries.len() == 2 {
-                        let survivor = if entries[0].0 == *tri_ref {
-                            entries[1]
-                        } else {
-                            entries[0]
-                        };
-                        if let Some(neighbors) = self.adjacency.get_mut(&survivor.0) {
-                            neighbors.neighbors[survivor.1 as usize] = None;
-                        }
-                    }
-
-                    // Remove this triangle's entry from the edge.
-                    entries.retain(|(r, _)| r != tri_ref);
-
-                    // Clean up empty edge entries to avoid unbounded growth.
-                    if entries.is_empty() {
-                        self.edge_map.remove(edge);
-                    }
-                }
-            }
-
-            // Remove the triangle from the adjacency map.
-            self.adjacency.remove(tri_ref);
-        }
-
-        let unlink = t_unlink.elapsed();
-
-        // === ADD phase ===
-        let t_link = Instant::now();
-        for (tri_ref, positions) in new_triangles {
-            let edges = self.triangle_edges(positions);
-
-            for (edge_idx, edge) in edges.iter().enumerate() {
-                let entries = self.edge_map.entry(*edge).or_default();
-                entries.push((*tri_ref, edge_idx as u8));
-
-                // If this edge just became manifold (exactly 2 triangles),
-                // create the adjacency link in both directions.
-                if entries.len() == 2 {
-                    let (ref_a, edge_a) = entries[0];
-                    let (ref_b, edge_b) = entries[1];
-
-                    self.adjacency
-                        .entry(ref_a)
-                        .or_insert(TriangleNeighbors {
-                            neighbors: [None; 3],
-                        })
-                        .neighbors[edge_a as usize] = Some(ref_b);
-
-                    self.adjacency
-                        .entry(ref_b)
-                        .or_insert(TriangleNeighbors {
-                            neighbors: [None; 3],
-                        })
-                        .neighbors[edge_b as usize] = Some(ref_a);
-                }
-            }
-        }
-
-        AdjacencyTimings {
-            unlink,
-            link: t_link.elapsed(),
-        }
     }
 
     /// Every triangle with at least one neighbour, and its neighbours.
@@ -364,64 +274,19 @@ pub struct DefectiveEdge {
     pub triangles: usize,
 }
 
-impl AdjacencyMap<TriangleRef> {
-    /// Full rebuild of the adjacency map from the entire `MeshOctree`.
-    ///
-    /// Prefer `update_region` for incremental terrain modifications. This is a
-    /// correctness baseline for a single octree, and only meaningful when the
-    /// map is keyed by that octree's own `TriangleRef`.
-    #[allow(dead_code)]
-    pub fn rebuild(&mut self, octree: &MeshOctree, tolerance: f32) {
-        self.inv_cell = 1.0 / tolerance as f64;
-
-        self.triangle_buf.clear();
-        octree.collect_all_triangles_into(&mut self.triangle_buf);
-
-        self.edge_map.clear();
-
-        let buf = std::mem::take(&mut self.triangle_buf);
-        for (tri_ref, positions) in &buf {
-            let edges = self.triangle_edges(positions);
-            for (edge_idx, edge) in edges.iter().enumerate() {
-                self.edge_map
-                    .entry(*edge)
-                    .or_default()
-                    .push((*tri_ref, edge_idx as u8));
-            }
-        }
-        self.triangle_buf = buf;
-
-        self.adjacency.clear();
-
-        for entries in self.edge_map.values() {
-            if entries.len() == 2 {
-                let (ref_a, edge_a) = entries[0];
-                let (ref_b, edge_b) = entries[1];
-
-                self.adjacency
-                    .entry(ref_a)
-                    .or_insert(TriangleNeighbors {
-                        neighbors: [None; 3],
-                    })
-                    .neighbors[edge_a as usize] = Some(ref_b);
-
-                self.adjacency
-                    .entry(ref_b)
-                    .or_insert(TriangleNeighbors {
-                        neighbors: [None; 3],
-                    })
-                    .neighbors[edge_b as usize] = Some(ref_a);
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::collision::AABB;
     use crate::rendering::vertex::Vertex;
     use crate::terrain::mesh_octree::MeshOctree;
+
+    /// The map of a whole octree, keyed by its own triangle refs.
+    fn adjacency_of(octree: &MeshOctree) -> AdjacencyMap {
+        let mut triangles = Vec::new();
+        octree.collect_all_triangles_into(&mut triangles);
+        AdjacencyMap::from_triangles(&triangles, 1e-4)
+    }
 
     fn test_vertex(x: f32, y: f32, z: f32) -> Vertex {
         Vertex {
@@ -452,8 +317,7 @@ mod tests {
         octree.rebuild_neighbor_refs();
         assert_eq!(octree.triangle_count(), 2);
 
-        let mut adj = AdjacencyMap::new();
-        adj.rebuild(&octree, 1e-4);
+        let adj = adjacency_of(&octree);
         assert_eq!(adj.manifold_edge_count(), 1);
         assert_eq!(adj.len(), 2);
     }
@@ -476,8 +340,7 @@ mod tests {
 
         octree.rebuild_neighbor_refs();
 
-        let mut adj = AdjacencyMap::new();
-        adj.rebuild(&octree, 1e-4);
+        let adj = adjacency_of(&octree);
         assert_eq!(adj.manifold_edge_count(), 1);
         assert_eq!(adj.boundary_edge_count(2), 4);
     }
@@ -504,8 +367,7 @@ mod tests {
                 );
             }
             octree.rebuild_neighbor_refs();
-            let mut adj = AdjacencyMap::new();
-            adj.rebuild(&octree, 1e-4);
+            let adj = adjacency_of(&octree);
             adj.boundary_edge_count(triangles.len())
         };
 
@@ -545,101 +407,8 @@ mod tests {
 
         octree.rebuild_neighbor_refs();
 
-        let mut adj = AdjacencyMap::new();
-        adj.rebuild(&octree, 1e-4);
+        let adj = adjacency_of(&octree);
         assert_eq!(adj.manifold_edge_count(), 0);
         assert!(adj.is_empty());
-    }
-
-    #[test]
-    fn test_rebuild_reuses_allocations() {
-        let bounds = AABB::new(Point3::origin(), Point3::new(10.0, 10.0, 10.0));
-        let mut octree = MeshOctree::new(bounds);
-
-        octree.insert_test_triangle(
-            &test_vertex(0.0, 0.0, 0.0),
-            &test_vertex(1.0, 0.0, 0.0),
-            &test_vertex(0.5, 1.0, 0.0),
-        );
-        octree.insert_test_triangle(
-            &test_vertex(0.0, 0.0, 0.0),
-            &test_vertex(1.0, 0.0, 0.0),
-            &test_vertex(0.5, -1.0, 0.0),
-        );
-        octree.rebuild_neighbor_refs();
-
-        let mut adj = AdjacencyMap::new();
-        adj.rebuild(&octree, 1e-4);
-        assert_eq!(adj.manifold_edge_count(), 1);
-
-        adj.rebuild(&octree, 1e-4);
-        assert_eq!(adj.manifold_edge_count(), 1);
-        assert_eq!(adj.len(), 2);
-    }
-
-    #[test]
-    fn test_incremental_update_region() {
-        let bounds = AABB::new(Point3::origin(), Point3::new(10.0, 10.0, 10.0));
-        let mut octree = MeshOctree::new(bounds);
-
-        // Build a strip of 3 triangles sharing edges along the x-axis:
-        //   T0: (0,0,0) (1,0,0) (0.5,1,0)
-        //   T1: (1,0,0) (2,0,0) (1.5,1,0)
-        //   T2: (2,0,0) (3,0,0) (2.5,1,0)
-        // T0-T1 share edge (1,0,0). T1-T2 share edge (2,0,0).
-        // Wait, they share single vertices, not edges. Let me fix that.
-        //
-        // Strip of 3 triangles forming a fan sharing vertex (1,1,0):
-        //   T0: (0,0,0) (1,0,0) (1,1,0)   -- left triangle
-        //   T1: (1,0,0) (2,0,0) (1,1,0)   -- middle triangle
-        //   T2: (2,0,0) (3,0,0) (1,1,0)   -- right triangle (no shared edge with T0)
-        // T0-T1 share edge (1,0,0)-(1,1,0). T1-T2 share edge (2,0,0)-(1,1,0).
-        // T0-T2 do NOT share an edge.
-        octree.insert_test_triangle(
-            &test_vertex(0.0, 0.0, 0.0),
-            &test_vertex(1.0, 0.0, 0.0),
-            &test_vertex(1.0, 1.0, 0.0),
-        );
-        octree.insert_test_triangle(
-            &test_vertex(1.0, 0.0, 0.0),
-            &test_vertex(2.0, 0.0, 0.0),
-            &test_vertex(1.0, 1.0, 0.0),
-        );
-        octree.insert_test_triangle(
-            &test_vertex(2.0, 0.0, 0.0),
-            &test_vertex(3.0, 0.0, 0.0),
-            &test_vertex(1.0, 1.0, 0.0),
-        );
-        octree.rebuild_neighbor_refs();
-
-        let mut adj = AdjacencyMap::new();
-        adj.rebuild(&octree, 1e-4);
-        assert_eq!(adj.manifold_edge_count(), 2); // T0-T1 and T1-T2
-
-        // Now simulate removing T1 (the middle triangle). Pick it out by its
-        // distinguishing vertex (2,0,0), which only T1 and T2 share — and T2 is
-        // excluded because it also owns (3,0,0).
-        let mut all_tris = Vec::new();
-        octree.collect_all_triangles_into(&mut all_tris);
-        let old_tris: Vec<_> = all_tris
-            .iter()
-            .filter(|(_, p)| p.iter().any(|v| v.x == 2.0) && !p.iter().any(|v| v.x == 3.0))
-            .copied()
-            .collect();
-        assert_eq!(old_tris.len(), 1, "expected to isolate T1");
-
-        // Remove T1 from the octree (simulate clear).
-        // For this test, we'll just do the adjacency update with old=[T1], new=[].
-        let new_tris: Vec<(TriangleRef, [Point3<f32>; 3])> = Vec::new();
-        adj.update_region(&old_tris, &new_tris, 1e-4);
-
-        // T0 and T2 should now have no shared edges (T1 was their bridge).
-        // T0 lost its neighbor on edge (1,0,0)-(1,1,0).
-        // T2 lost its neighbor on edge (2,0,0)-(1,1,0).
-        assert_eq!(adj.manifold_edge_count(), 0);
-
-        // Now add T1 back.
-        adj.update_region(&new_tris, &old_tris, 1e-4);
-        assert_eq!(adj.manifold_edge_count(), 2);
     }
 }
