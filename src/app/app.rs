@@ -110,6 +110,9 @@ impl<'a, 'b> App<'a, 'b> {
             .ok_or_else(|| EngineError::InvalidState("Event loop already consumed".to_string()))?;
 
         set_mouse_captured(&self.window, &mut self.world, true);
+        // The level was built since the clock was made; the first frame
+        // should not be handed that time.
+        self.world.write_resource::<Time>().restart();
 
         let window = &self.window;
         let world = &mut self.world;

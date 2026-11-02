@@ -16,7 +16,7 @@ use crate::physics::{
     SubstepForceProvider,
 };
 use crate::terrain::TerrainWorld;
-use crate::time::Time;
+use crate::time::{Time, MAX_FRAME_DELTA};
 use crate::water::buoyancy::BuoyancyForceProvider;
 use crate::water::{WaterSleepTracker, WaterWorld};
 
@@ -42,18 +42,27 @@ impl PhysicsResource {
     }
 }
 
+/// The game's fixed physics step, in seconds.
+const PHYSICS_STEP: f32 = 1.0 / 240.0;
+
 impl Default for PhysicsResource {
     fn default() -> Self {
         Self {
             world: PhysicsWorld::default(),
-            // 12 × 1/240 = 0.05s of budget, so physics keeps real time down
-            // to 20 FPS. At 8 the budget was 0.0333s — exactly 30 FPS — which
-            // a 30Hz display sits right on, discarding ~2% of every frame.
+            // The substep cap covers the longest frame the game advances,
+            // MAX_FRAME_DELTA: 12 × 1/240 = 0.05 s, so physics keeps real
+            // time down to 20 FPS and steps exactly what every other system
+            // does on a frame longer than that. At 8 the budget was 0.0333 s
+            // — exactly 30 FPS — which a 30Hz display sits right on,
+            // discarding ~2% of every frame.
             //
             // The cap only binds below its own frame rate, so this costs
             // nothing above 20 FPS: the substep count comes from the
             // accumulator, not the cap. Verified in `tests/substep_budget.rs`.
-            stepper: Some(Box::new(SequentialStepper::new(1.0 / 240.0, 12))),
+            stepper: Some(Box::new(SequentialStepper::new(
+                PHYSICS_STEP,
+                (MAX_FRAME_DELTA / PHYSICS_STEP).round() as u32,
+            ))),
         }
     }
 }

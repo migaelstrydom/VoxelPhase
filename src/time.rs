@@ -1,5 +1,10 @@
 use std::time::{Duration, Instant};
 
+/// The most game time one frame may advance, in seconds. A frame that takes
+/// longer runs slow instead of jumping: everything from physics to animation
+/// steps the same capped time. Physics sizes its substep budget from this.
+pub const MAX_FRAME_DELTA: f32 = 0.05;
+
 /// Tracks frame timing for consistent game updates.
 /// This is an ECS resource that systems can read for delta time.
 #[derive(Debug)]
@@ -50,6 +55,12 @@ impl Time {
 
     /// Advance a clock made by [`Time::fixed`] by its own step, so its
     /// total and frame count move exactly as a real frame loop's would.
+    /// Start the clock now: the first frame after measures from here, not
+    /// from when the resource was made, before the level was built.
+    pub fn restart(&mut self) {
+        self.last_frame = Instant::now();
+    }
+
     pub fn advance_fixed(&mut self) {
         self.total += self.delta;
         self.frame_count += 1;
@@ -64,8 +75,9 @@ impl Time {
 
         // Cap delta time to avoid physics explosions on frame hitches
         // 100ms = 10 FPS minimum
-        const MAX_DELTA: Duration = Duration::from_millis(100);
-        self.delta = real.min(MAX_DELTA).mul_f32(self.scale);
+        self.delta = real
+            .min(Duration::from_secs_f32(MAX_FRAME_DELTA))
+            .mul_f32(self.scale);
 
         self.delta_seconds = self.delta.as_secs_f32();
         self.total += self.delta;
@@ -104,5 +116,34 @@ impl Time {
 impl Default for Time {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A long frame advances the game by the cap and no more.
+    #[test]
+    fn a_long_frame_advances_by_the_cap() {
+        let mut time = Time::new();
+        time.last_frame = Instant::now() - Duration::from_millis(400);
+        time.update();
+        assert!((time.delta_seconds() - MAX_FRAME_DELTA).abs() < 1e-6);
+    }
+
+    /// The time spent before the loop starts (building the level) is not the
+    /// first frame's.
+    #[test]
+    fn a_restarted_clock_measures_from_the_restart() {
+        let mut time = Time::new();
+        time.last_frame = Instant::now() - Duration::from_millis(400);
+        time.restart();
+        time.update();
+        assert!(
+            time.real_delta_seconds() < 0.02,
+            "{}",
+            time.real_delta_seconds()
+        );
     }
 }
