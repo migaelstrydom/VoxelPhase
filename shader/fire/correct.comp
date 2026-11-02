@@ -7,7 +7,7 @@
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 layout(set = 0, binding = 0, rgba16f) uniform image3D velTex;
-layout(set = 0, binding = 1, rgba16f) uniform readonly image3D pressureTex;
+layout(set = 0, binding = 1, r32f) uniform readonly image3D pressureTex;
 
 layout(push_constant) uniform FireSimParams {
     float dt;

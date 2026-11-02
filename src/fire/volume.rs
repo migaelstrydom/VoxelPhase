@@ -70,9 +70,27 @@ impl FireVolume {
             ManagedTexture::new_3d(device.clone(), width, height, depth, format, field_usage)?,
         ];
 
+        // Pressure is a scalar. R32 rather than R16: core Vulkan guarantees
+        // storage-image support for R32_SFLOAT, and R16 needs an optional
+        // feature.
+        let pressure_format = vk::Format::R32_SFLOAT;
         let pressure = [
-            ManagedTexture::new_3d(device.clone(), width, height, depth, format, field_usage)?,
-            ManagedTexture::new_3d(device.clone(), width, height, depth, format, field_usage)?,
+            ManagedTexture::new_3d(
+                device.clone(),
+                width,
+                height,
+                depth,
+                pressure_format,
+                field_usage,
+            )?,
+            ManagedTexture::new_3d(
+                device.clone(),
+                width,
+                height,
+                depth,
+                pressure_format,
+                field_usage,
+            )?,
         ];
 
         Ok(Self {

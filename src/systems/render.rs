@@ -301,30 +301,21 @@ impl<'a> System<'a> for RenderSystem {
                 renderer.remove_active_fire(entity);
             }
 
-            // Create fires for newly ignited entities
+            // Follow each burning entity's fuel and position, creating a fire
+            // for one newly ignited.
             for (entity, on_fire, pos, rb) in
                 (&entities, &on_fires, &positions, &rigid_bodies).join()
             {
-                if renderer.active_fires.iter().any(|(e, _)| *e == entity) {
-                    continue;
-                }
-
                 let scale = fire_volume_scale(physics_world, rb);
                 let volume_to_world = fire_volume_to_world(&pos.0, &scale);
-
-                renderer.create_active_fire(entity, volume_to_world, on_fire.fuel_remaining);
-            }
-
-            // Update fuel and position on existing fires
-            for (entity, on_fire, pos, rb) in
-                (&entities, &on_fires, &positions, &rigid_bodies).join()
-            {
-                if let Some((_, fire)) =
-                    renderer.active_fires.iter_mut().find(|(e, _)| *e == entity)
-                {
-                    fire.fuel_remaining = on_fire.fuel_remaining;
-                    let scale = fire_volume_scale(physics_world, rb);
-                    fire.volume_to_world = fire_volume_to_world(&pos.0, &scale);
+                match renderer.active_fires.iter_mut().find(|(e, _)| *e == entity) {
+                    Some((_, fire)) => {
+                        fire.fuel_remaining = on_fire.fuel_remaining;
+                        fire.volume_to_world = volume_to_world;
+                    }
+                    None => {
+                        renderer.create_active_fire(entity, volume_to_world, on_fire.fuel_remaining)
+                    }
                 }
             }
         }
