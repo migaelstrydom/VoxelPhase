@@ -1,0 +1,88 @@
+use nalgebra::{Isometry3, Point3, Unit, UnitVector3};
+use traversal_planner::section::Footing;
+
+use crate::physics::{PhysicsWorld, RigidBodyHandle};
+
+/// A lip the hands can hold, in the frame of the body it belongs to: wherever
+/// that body takes it, the edge goes too.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Edge {
+    /// The body the lip is on; `None` for terrain and other static geometry.
+    pub body: Option<RigidBodyHandle>,
+    /// Where each hand holds, on the top just behind the lip, in the body's
+    /// frame (the world's for terrain).
+    pub hands: [Point3<f32>; 2],
+    /// Horizontal at the grab, pointing out of the face, away from the top:
+    /// the way a drop or a back-jump leaves. In the body's frame.
+    pub outward: UnitVector3<f32>,
+    /// Where the body's axis stands after a pull-up, on the top, in the
+    /// body's frame; `None` if the top is too narrow, too steep or too low
+    /// under a roof to stand on.
+    pub stand: Option<Point3<f32>>,
+    /// What the body is as footing.
+    pub footing: Footing,
+}
+
+/// An [`Edge`] read in the world this frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorldEdge {
+    /// Where each hand holds.
+    pub hands: [Point3<f32>; 2],
+    /// Out of the face, away from the top.
+    pub outward: UnitVector3<f32>,
+    /// Where the body's axis stands after a pull-up.
+    pub stand: Option<Point3<f32>>,
+}
+
+impl Edge {
+    /// The edge found at world points, kept in the frame of `body` as it
+    /// stands in `world` now.
+    pub fn from_world(
+        world: &PhysicsWorld,
+        body: Option<RigidBodyHandle>,
+        found: &WorldEdge,
+        footing: Footing,
+    ) -> Option<Self> {
+        let to_local = frame_of(world, body)?.inverse();
+        Some(Self {
+            body,
+            hands: found.hands.map(|hand| to_local * hand),
+            outward: Unit::new_unchecked(to_local * found.outward.into_inner()),
+            stand: found.stand.map(|stand| to_local * stand),
+            footing,
+        })
+    }
+
+    /// The edge where its body has taken it; `None` once the body is gone.
+    pub fn in_world(&self, world: &PhysicsWorld) -> Option<WorldEdge> {
+        let to_world = frame_of(world, self.body)?;
+        Some(WorldEdge {
+            hands: self.hands.map(|hand| to_world * hand),
+            outward: Unit::new_unchecked(to_world * self.outward.into_inner()),
+            stand: self.stand.map(|stand| to_world * stand),
+        })
+    }
+
+    /// Whether the body can be pulled up onto the top.
+    pub fn climbable(&self) -> bool {
+        self.stand.is_some()
+    }
+}
+
+impl WorldEdge {
+    /// Midway between the hands: where the grip holds.
+    pub fn grip(&self) -> Point3<f32> {
+        nalgebra::center(&self.hands[0], &self.hands[1])
+    }
+}
+
+/// The pose of `body` in the world: the identity for static geometry, and
+/// `None` for a body that is gone.
+fn frame_of(world: &PhysicsWorld, body: Option<RigidBodyHandle>) -> Option<Isometry3<f32>> {
+    match body {
+        None => Some(Isometry3::identity()),
+        Some(handle) => world
+            .body(handle)
+            .map(|body| Isometry3::from_parts(body.position().coords.into(), body.rotation())),
+    }
+}

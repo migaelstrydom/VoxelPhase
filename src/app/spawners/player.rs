@@ -2,6 +2,7 @@ use nalgebra::{Point3, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use crate::animation::{CharacterAnimator, CharacterRigConfig};
+use crate::character::ledge::LedgeSensor;
 use crate::character::{
     AttitudeControl, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig,
     Throws,
@@ -160,6 +161,7 @@ pub fn spawn_player(world: &mut World, initial_pos: Point3<f32>) -> Entity {
         .create_entity()
         .with(Player)
         .with(PlansTraversal)
+        .with(LedgeSensor::default())
         .with(CharacterIntent::default())
         .with(CharacterState::default())
         .with(Throws::default())

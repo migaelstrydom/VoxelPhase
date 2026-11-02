@@ -119,8 +119,9 @@ pub struct Edge {
     /// Horizontal, pointing out of the face, away from the top: the way a
     /// drop or back-jump leaves. In the body's frame.
     pub outward: UnitVector3<f32>,
-    /// Whether the top is standable and has room for the body.
-    pub climbable: bool,
+    /// Where the body's centre stands after a pull-up; `None` if the edge
+    /// isn't climbable. The pull-up's path ends here.
+    pub stand: Option<Point3<f32>>,
     /// The body's footing, as the planner reads it (`Fixed` or `Loose`).
     pub footing: Footing,
 }
@@ -154,26 +155,30 @@ The strip passes through bodies moving faster than `IN_FLIGHT_SPEED`
 `WorldCaster` takes its bodies always seen as a parameter (today's
 `carriers`), and the sensor adds the held edge's body to them.
 
-For each hand, at the hand's reach point (the shoulder, plus the arm along the
-body's heading, at the height being tested):
+Each hand feels from the body's axis, moved `hand_offset` (0.15 m) to its
+side, with spheres of 2 cm radius (`src/character/ledge/probe.rs`):
 
-1. **Face.** A small sphere (radius 3 cm) cast forward along the heading finds
-   the face, its point and its normal. A miss means no face: the lip may hang
-   free, so go on to step 2 at a fixed reach ahead.
-2. **Top.** A cast down from the top of the reach band, `grip_depth` beyond
-   the face, finds the top and its normal.
-3. **Lip.** A cast forward just above the top (+5 cm) must be clear past the
-   hand. Otherwise the top is a step in a wall that carries on up.
-4. **Climbable.** A capsule-radius cast down at `stand_depth` beyond the lip,
-   and a cast up from there for the body's height.
+1. **A top ahead.** Casts down through the catch band, 5 cm apart from the
+   capsule's surface out to `reach_ahead` (0.25 m) beyond it. The nearest top
+   the fingers hold gives the lip's height.
+2. **The face.** A cast forward, 6 cm under the lip (below the rounding a
+   voxel mesh gives it), finds the face. It must be steeper than
+   `face_slope` and face the body. Looking just under the lip, rather than
+   low down, finds the face of a free slab's edge too.
+3. **The hold.** A cast down `grip_depth` behind the face must find the top
+   again, within a few centimetres of the lip. That is where the hand holds.
+4. **Room for the hand.** A cast forward `hand_clearance` above the hold must
+   be clear to the hand. Otherwise the top is a step in a wall that carries
+   on up.
+5. **Climbable.** A capsule-radius cast down at `stand_depth` behind the lip
+   must find a top within `stand_slope`, and a cast up from there must be
+   clear for the body's height.
 
-`outward` is the horizontal part of the face normal from step 1, averaged
-over both hands. With no face (a free lip), it comes from the line between
-the two hands' lip points: a 0.18 m baseline on marching-cubes noise is too
-short to trust where a face is available. On bumpy terrain each hand holds its
-own lip point, so the hands sit on the real geometry. The edge is grippable
-only if both hands find a lip and the two lip heights differ by at most
-`hand_step` (4 cm, about 13° of tilt over the hands' spacing).
+`outward` is the horizontal part of the faces' normals, summed over both
+hands. On bumpy terrain each hand holds its own lip point, so the hands sit on
+the real geometry. The edge is grippable only if both hands find a lip on the
+same body, and the two lip heights differ by at most `hand_step` (4 cm, about
+8° over the hands' 0.3 m spacing).
 
 All of that is about a dozen casts per test position. The planner's strip
 costs about 3000 for comparison.
@@ -395,13 +400,15 @@ wildcards.
 **Unit tests**, in `src/character/ledge/` and `locomotion/tests.rs`:
 - The edge test on synthetic geometry (`SolidsGeometry` blocks):
   - wall tops at heights through the band;
-  - a 3 cm lip, which is not grippable;
-  - a 5 cm lip, which is grippable and not climbable;
+  - a 2 cm lip, which is not grippable;
+  - a 6 cm lip, which is grippable and not climbable;
   - a top under a low roof, which is grippable and not climbable;
-  - a sloped top at 40° and 50°;
-  - a step in a wall that carries on up;
+  - a top tilted at 30° and 50°;
   - a free slab edge;
-  - two hands at lip heights that differ by more than `hand_step`.
+  - a terrain wall, as static geometry;
+  - two hands at lip heights that differ by 2 cm and by 6 cm;
+  - an edge carried by its body when the body moves and turns
+  (done, `src/character/ledge/tests.rs`).
 - The prediction finds an edge the arc will meet, and no edge on an arc that
   clears the wall.
 - The state machine, on scripted facts and requests:
@@ -437,12 +444,16 @@ Each step ships with the game working, and its tests.
 
 1. **`WorldCaster`.** The world-space core split out of `PhysicsCaster`. No
    change in behaviour: captured fixtures stay identical (done).
-2. **The edge test and `LedgeSensor`.** Grippable and climbable, the
-   released-edge memory, the held edge always seen, and an F3 overlay of
-   sensed edges. Unit tests on synthetic geometry.
+2. **The edge test and `LedgeSensor`.** Grippable and climbable, sensed
+   every frame for the player and drawn with the plan's overlay (F6): the
+   hands yellow, the way out a yellow line, the stand point green. Unit tests
+   on boxes, and on the Traversal Garden's cave roof as voxel terrain
+   (`traversal_scenarios`) (done).
 3. **The `Ledge` state.** Phases, input timing, exits, `hands_free`, the new
-   movement rule and entry effects, and every consumer's mapping. Unit tests
-   on scripted facts.
+   movement rule and entry effects, and every consumer's mapping. The
+   sensor's catch conditions (rise, facing, speed, the regrab lock) and the
+   held edge always seen, which need the state. Unit tests on scripted
+   facts.
 4. **The grip.** Catch, hang, drop and back-jump, and `ledge_garden`'s first
    walls.
 5. **Shimmy.**
@@ -462,5 +473,12 @@ judged in play.
    the ball joint still lets it swing like a pendulum about the hands. Under a
    free lip (a slab's edge, a platform's rim) there is no face to stop it.
    Should it swing freely, or be damped?
-3. **Crouch to drop.** A button press as well as the stick held away? It's
+3. **Is the mantle band too narrow?** With a 1 m body and a 2.5 m jump, a
+   chest-high box is cleared by any jump that reaches it. The mantle band
+   (lip between the chest and the shoulders) is 5 cm deep. A mantle happens
+   only when a jump meets the box's face and drops back down it. Options:
+   - let OnFoot mantle a box at the chest when the stick pushes into it;
+   - widen the band down to the waist;
+   - accept it as rare.
+4. **Crouch to drop.** A button press as well as the stick held away? It's
    faster and needs no hold, but it takes away the effort the hold gives.

@@ -22,6 +22,7 @@ mod grounding;
 mod grounding_system;
 mod immersion;
 mod immersion_system;
+pub mod ledge;
 pub mod locomotion;
 mod swim;
 mod throws;

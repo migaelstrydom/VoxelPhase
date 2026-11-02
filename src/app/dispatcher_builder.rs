@@ -4,6 +4,7 @@ use crate::aim::AimPredictionSystem;
 use crate::animation::critter::{CritterAnimationSystem, CritterProbeConfigSystem};
 use crate::animation::peeper::{PeeperAnimationSystem, PeeperProbeConfigSystem};
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
+use crate::character::ledge::LedgeSensorSystem;
 use crate::character::{ContactGroundingSystem, ImmersionSystem};
 use crate::cleave::SolidCleaveSystem;
 use crate::creature::{
@@ -67,10 +68,13 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // F7, and rewriting that intent to follow it unless F8 turns tracking
         // off.
         .with(TraversalPlanSystem, "traversal_plan", &["player_input"])
+        // The edge at the hands, from the world as last stepped; drawn with
+        // the plan's overlay.
+        .with(LedgeSensorSystem, "ledge_sensor", &["traversal_plan"])
         .with(
             CharacterControlSystem,
             "character_control",
-            &["player_input", "brain", "traversal_plan"],
+            &["player_input", "brain", "traversal_plan", "ledge_sensor"],
         )
         // Platform motors state their intent as a velocity, exactly as the
         // character systems do, and must land before physics_sync turns it

@@ -6,6 +6,7 @@ use crate::animation::peeper::PeeperAnimator;
 use crate::animation::{AnimationDebugConfig, CharacterAnimator};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::character::grab::GrabConfig;
+use crate::character::ledge::LedgeSensor;
 use crate::character::{
     AttitudeControl, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig,
     Throws,
@@ -77,6 +78,7 @@ impl WorldBuilder {
         world.register::<CameraComponent>();
         world.register::<Player>();
         world.register::<PlansTraversal>();
+        world.register::<LedgeSensor>();
         world.register::<CharacterIntent>();
         world.register::<CharacterState>();
         world.register::<Throws>();
