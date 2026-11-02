@@ -138,8 +138,7 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
                 &patch.triangles[j].triangle,
                 &normal_i,
             ) {
-                let lo = i.min(j) as u32;
-                let hi = i.max(j) as u32;
+                let pair = FeatureId::from_mesh_triangle_pair(pt_i.key(), patch.triangles[j].key());
                 faces.push(ContactFace {
                     vertices: SmallVec::from_buf_and_len(
                         [
@@ -153,7 +152,7 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
                         4,
                     ),
                     normal: normal_i,
-                    feature_id: FeatureId::from_triangle_set(&[lo, hi]),
+                    feature_id: pair,
                     surface: pt_i.surface,
                 });
                 merged[i] = true;
@@ -177,7 +176,7 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
                     3,
                 ),
                 normal: normal_i,
-                feature_id: FeatureId::from_face(i as u32),
+                feature_id: FeatureId::from_mesh_triangle(pt_i.key()),
                 surface: pt_i.surface,
             });
         }
@@ -186,9 +185,9 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
     // Pass 2: emit boundary edges for all triangles (merged or not).
     // The shared coplanar edge between merged pairs is still suppressed
     // by the coplanar check; the outer edges of both triangles are emitted.
-    for (i, pt) in patch.triangles.iter().enumerate() {
+    for pt in &patch.triangles {
         let normal = pt.triangle.normal();
-        let ti = i as u32;
+        let key = pt.key();
 
         for edge_idx in 0..3u32 {
             let neighbor_normal = pt.neighbors[edge_idx as usize]
@@ -204,7 +203,7 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
                 boundary_edges.push(ContactEdge {
                     a,
                     b,
-                    feature_id: FeatureId::from_edge_pair(ti, edge_idx),
+                    feature_id: FeatureId::from_mesh_edge(key, edge_idx),
                     normal_a: normal,
                     normal_b: neighbor_normal,
                     surface: pt.surface,
@@ -302,6 +301,52 @@ mod tests {
                     surface: SurfaceId::UNSPECIFIED,
                 },
             ],
+        }
+    }
+
+    /// The quad's feature IDs do not change when the query that returned it
+    /// also returned another triangle, walked first: they follow the
+    /// triangles, not their places in the patch.
+    #[test]
+    fn feature_ids_follow_the_triangles_not_their_order_in_the_patch() {
+        let alone = filter_patch(&flat_quad_patch(), COPLANAR_DOT);
+
+        let mut gained = flat_quad_patch();
+        for triangle in &mut gained.triangles {
+            for neighbour in triangle.neighbors.iter_mut().flatten() {
+                *neighbour += 1;
+            }
+        }
+        gained.triangles.insert(
+            0,
+            PatchTriangle {
+                triangle: Triangle::new(
+                    Point3::new(5.0, 0.0, 0.0),
+                    Point3::new(6.0, 0.0, 0.0),
+                    Point3::new(6.0, 0.0, 1.0),
+                ),
+                neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
+            },
+        );
+        let with_another = filter_patch(&gained, COPLANAR_DOT);
+
+        let ids = |filtered: &FilteredPatch| -> Vec<FeatureId> {
+            filtered
+                .faces
+                .iter()
+                .map(|f| f.feature_id)
+                .chain(filtered.boundary_edges.iter().map(|e| e.feature_id))
+                .collect()
+        };
+        let before = ids(&alone);
+        let after = ids(&with_another);
+        assert!(!before.is_empty());
+        for id in &before {
+            assert!(
+                after.contains(id),
+                "{id:?} lost when another triangle came first"
+            );
         }
     }
 

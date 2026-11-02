@@ -25,6 +25,26 @@ pub struct PatchTriangle {
     pub surface: SurfaceId,
 }
 
+impl PatchTriangle {
+    /// A key naming this triangle whatever query returned it, for the feature
+    /// IDs warm-starting matches contacts by.
+    ///
+    /// Its index in a patch will not do: the index follows the order the
+    /// geometry walked its triangles in, and every triangle a moving body's
+    /// query gains or loses shifts the ones after it. The triangle's own
+    /// vertices are bit for bit the same each time it is returned, until the
+    /// mesh around it is rebuilt.
+    pub fn key(&self) -> u64 {
+        let t = &self.triangle;
+        [t.v0, t.v1, t.v2]
+            .iter()
+            .flat_map(|v| [v.x, v.y, v.z])
+            .fold(0xcbf29ce484222325, |hash, c| {
+                (hash ^ c.to_bits() as u64).wrapping_mul(0x100000001b3)
+            })
+    }
+}
+
 /// A localized fragment of a triangle mesh returned by broad-phase queries.
 ///
 /// Contains all triangles intersecting the query AABB, plus adjacency

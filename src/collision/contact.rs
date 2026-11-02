@@ -15,6 +15,17 @@ use super::SurfaceId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FeatureId(pub u64);
 
+/// Set on a mesh edge's feature ID, clear on a mesh face's, so that the two
+/// cannot be mistaken for each other.
+const MESH_EDGE_BIT: u64 = 1 << 63;
+
+/// FNV-1a over 64-bit words.
+fn fnv1a(words: &[u64]) -> u64 {
+    words.iter().fold(0xcbf29ce484222325, |hash, &word| {
+        (hash ^ word).wrapping_mul(0x100000001b3)
+    })
+}
+
 impl FeatureId {
     /// Constant feature ID for pairs with only one possible contact (e.g. sphere-sphere).
     pub const SINGLE: Self = Self(0);
@@ -35,14 +46,20 @@ impl FeatureId {
         Self((1u64 << 63) | ((edge_a as u64) << 32) | (edge_b as u64))
     }
 
-    /// Construct from a set of mesh triangle indices composing a merged face.
-    pub fn from_triangle_set(indices: &[u32]) -> Self {
-        let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
-        for &idx in indices {
-            hash ^= idx as u64;
-            hash = hash.wrapping_mul(0x100000001b3); // FNV-1a prime
-        }
-        Self(hash)
+    /// A mesh triangle, by a key that names it whatever query it came back
+    /// from ([`PatchTriangle::key`](crate::collision::mesh_patch::PatchTriangle::key)).
+    pub fn from_mesh_triangle(key: u64) -> Self {
+        Self(key & !MESH_EDGE_BIT)
+    }
+
+    /// A face merged from two mesh triangles, in either order.
+    pub fn from_mesh_triangle_pair(a: u64, b: u64) -> Self {
+        Self(fnv1a(&[a.min(b), a.max(b)]) & !MESH_EDGE_BIT)
+    }
+
+    /// One edge (0, 1 or 2) of a mesh triangle.
+    pub fn from_mesh_edge(triangle: u64, edge: u32) -> Self {
+        Self(MESH_EDGE_BIT | (fnv1a(&[triangle, edge as u64]) >> 1))
     }
 
     /// Combine a base feature ID with a vertex index to produce a unique
@@ -187,17 +204,28 @@ mod tests {
     }
 
     #[test]
-    fn feature_id_triangle_set_deterministic() {
-        let a = FeatureId::from_triangle_set(&[0, 1, 2]);
-        let b = FeatureId::from_triangle_set(&[0, 1, 2]);
-        assert_eq!(a, b);
+    fn a_merged_mesh_face_is_named_the_same_in_either_order() {
+        assert_eq!(
+            FeatureId::from_mesh_triangle_pair(7, 11),
+            FeatureId::from_mesh_triangle_pair(11, 7)
+        );
+        assert_ne!(
+            FeatureId::from_mesh_triangle_pair(7, 11),
+            FeatureId::from_mesh_triangle_pair(7, 12)
+        );
     }
 
     #[test]
-    fn feature_id_triangle_set_differs_by_content() {
-        let a = FeatureId::from_triangle_set(&[0, 1, 2]);
-        let b = FeatureId::from_triangle_set(&[3, 4, 5]);
-        assert_ne!(a, b);
+    fn a_mesh_edge_is_never_a_mesh_face() {
+        let key = u64::MAX;
+        assert_ne!(
+            FeatureId::from_mesh_triangle(key),
+            FeatureId::from_mesh_edge(key, 0)
+        );
+        assert_ne!(
+            FeatureId::from_mesh_edge(key, 0),
+            FeatureId::from_mesh_edge(key, 1)
+        );
     }
 
     #[test]
