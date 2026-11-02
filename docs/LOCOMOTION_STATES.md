@@ -280,7 +280,8 @@ phase, Fall, Swim by stroke, Ledge by phase. On top of that are the transients
 it plays on a change:
 - a landing squash on entering OnFoot from the air, scaled by what landed:
   light for a Hop, as the Leap's is today, and heavy for a long jump;
-- the water-entry plunge on entering Swim from the air.
+- the water-entry plunge on entering Swim from the air;
+- the water-exit kick on a Jump out of Swim.
 
 The pose no longer splices in a `Landing` state or runs its own water test.
 During a Hop the legs are the placer's, and outside one never: the Hop pose
@@ -533,7 +534,12 @@ Each step ships with the game working, and its tests.
    from a stroke, which leaves lying flat. Releasing the key early cuts it
    as on land: a tap rises 0.5 m. The body stands up from the stroke's 80°
    in the air, at `stand_rate`, and is upright by the top of the arc. The
-   pose goes straight to Airborne: there is no ground to wind up against.
+   pose goes straight to Airborne, as there is no ground to wind up
+   against, and plays `WaterExit` over it, blended in over 0.1 s rather
+   than the swim's 0.3: knees drawn up and arms spread, then the legs
+   kicked down straight and together and the arms swept down to the hips,
+   held as the body breaks the surface and let go by 0.6 s. Along the
+   body's axis, so out of a crawl it is a kick behind as the body stands.
 
    `water_jump` (treading: a tap, then held), `water_jump_stroke`
    (mid-crawl) and `jump_ashore` (onto the quay 0.3 m over `swim_test`'s

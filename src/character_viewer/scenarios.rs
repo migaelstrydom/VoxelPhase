@@ -281,7 +281,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::stand(2.5).named("back_in"))
                 .then(Beat::jump(0.6).named("hold"))
                 .then(Beat::stand(2.5).named("back_in")),
-            camera: CameraRig::side().with_distance(5.0),
+            camera: CameraRig::three_quarter().with_elevation(5.0).with_distance(3.5),
             judged: Judged::Motion,
         },
         Scenario {
@@ -295,7 +295,7 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(1.5).named("stroke").towards(-Vector3::z()))
                 .then(Beat::jump(0.6).named("jump").towards(-Vector3::z()))
                 .then(Beat::walk(2.5).named("back_in").towards(-Vector3::z())),
-            camera: CameraRig::side().with_distance(5.0),
+            camera: CameraRig::side().with_azimuth(90.0).with_distance(3.5),
             judged: Judged::Motion,
         },
         Scenario {

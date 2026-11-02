@@ -14,7 +14,7 @@ use super::humanoid::stride_sync;
 use super::humanoid::upper_state::{UpperSampleCtx, UpperState, UpperTickCtx};
 use super::legged::{LeggedLocomotion, LocomotionCtx};
 use super::pose::{Crossfade, Linear, PoseFragment};
-use super::state::{AnimationState, FootState, ThrowGesture, WaterEntry};
+use super::state::{AnimationState, FootState, ThrowGesture, WaterEntry, WaterExit};
 use crate::character::grab::GrabConfig;
 use crate::character::locomotion::{Jump, JumpKind, TakeoffPhase};
 use crate::character::{
@@ -438,6 +438,25 @@ impl CharacterAnimator {
                 _,
             ) => None,
         };
+        self.state.water_exit = match (next, &self.pose_state) {
+            (
+                PoseState::Airborne {
+                    kind: AirKind::Jump,
+                    ..
+                },
+                PoseState::Swimming { .. },
+            ) => Some(WaterExit::default()),
+            (PoseState::Airborne { .. }, _) => {
+                self.state.water_exit.and_then(|exit| exit.advanced(dt))
+            }
+            (
+                PoseState::Grounded { .. }
+                | PoseState::Launching { .. }
+                | PoseState::Hop { .. }
+                | PoseState::Swimming { .. },
+                _,
+            ) => None,
+        };
         self.state.water_entry = match (next, from_air) {
             (PoseState::Swimming { .. }, Some(_)) => WaterEntry::at(descent),
             (PoseState::Swimming { .. }, None) => {
@@ -578,10 +597,17 @@ fn begin_crossfade_if_changed<K: PartialEq, F: FnOnce() -> PoseFragment>(
 /// How long a change from `from` to `to` should take to blend.
 fn blend_duration(from: &PoseState, to: &PoseState) -> f32 {
     let swimming = |p: &PoseState| matches!(p, PoseState::Swimming { .. });
-    if swimming(from) || swimming(to) {
-        SWIM_BLEND_DURATION
-    } else {
-        TRANSITION_BLEND_DURATION
+    match (from, to) {
+        // A jump out of the water is a burst, not a body settling.
+        (
+            PoseState::Swimming { .. },
+            PoseState::Airborne {
+                kind: AirKind::Jump,
+                ..
+            },
+        ) => TRANSITION_BLEND_DURATION,
+        _ if swimming(from) || swimming(to) => SWIM_BLEND_DURATION,
+        _ => TRANSITION_BLEND_DURATION,
     }
 }
 
@@ -1042,6 +1068,50 @@ mod tests {
         animator.play_transients(&tread, 1.0 / 60.0);
         let entry = animator.state.water_entry.expect("a plunge");
         assert_eq!(entry.strength, WaterEntry::at(5.0).unwrap().strength);
+    }
+
+    /// A jump out of the water kicks and presses its way out, quickly
+    /// blended in, and plays until it is done or the body is down; swimming
+    /// off an edge does not.
+    #[test]
+    fn a_jump_out_of_the_water_kicks_its_way_out() {
+        let config = CharacterRigConfig::default();
+        let mut animator = CharacterAnimator::new(config, Point3::new(0.0, 1.0, 0.0), 1.0, 0.0);
+        let tread = PoseState::Swimming {
+            stroke: Stroke::Tread,
+        };
+        let air = |kind| PoseState::Airborne {
+            kind,
+            takeoff: Takeoff::default(),
+        };
+        let dt = 1.0 / 60.0;
+
+        animator.pose_state = tread;
+        animator.play_transients(&air(AirKind::Fall), dt);
+        assert!(animator.state.water_exit.is_none());
+        assert_eq!(
+            blend_duration(&tread, &air(AirKind::Fall)),
+            SWIM_BLEND_DURATION
+        );
+
+        animator.play_transients(&air(AirKind::Jump), dt);
+        assert!(animator.state.water_exit.is_some());
+        assert_eq!(
+            blend_duration(&tread, &air(AirKind::Jump)),
+            TRANSITION_BLEND_DURATION
+        );
+        animator.pose_state = air(AirKind::Jump);
+        let frames = (WaterExit::DURATION / dt).ceil() as usize;
+        for _ in 0..frames {
+            animator.play_transients(&air(AirKind::Jump), dt);
+        }
+        assert!(animator.state.water_exit.is_none());
+
+        animator.pose_state = tread;
+        animator.play_transients(&air(AirKind::Jump), dt);
+        animator.pose_state = air(AirKind::Jump);
+        animator.play_transients(&WALK, dt);
+        assert!(animator.state.water_exit.is_none());
     }
 
     /// One-frame ground-contact losses (seams) put locomotion in grace; the

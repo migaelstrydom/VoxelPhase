@@ -14,7 +14,7 @@ use super::body_frame::BodyFrame;
 use super::stride_sync;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, FeetPose, FootAnchor, PoseFragment};
-use crate::animation::state::{AnimationState, LandingSquash, WaterEntry};
+use crate::animation::state::{AnimationState, LandingSquash, WaterEntry, WaterExit};
 
 /// Gait preset inside `PoseState::Grounded`.
 ///
@@ -457,7 +457,7 @@ fn sample_airborne(
         }
     };
 
-    PoseFragment {
+    let fragment = PoseFragment {
         feet: Some(feet),
         hands: None,
         pelvis_offset: None,
@@ -465,8 +465,77 @@ fn sample_airborne(
         head_tilt: Some(head_tilt),
         head_bob: Some(0.0),
         torso_pitch: Some(torso_pitch),
+    };
+    match anim.water_exit {
+        Some(exit) if !flown => kicked_out(ctx, fragment, &exit),
+        _ => fragment,
     }
 }
+
+/// The legs and trunk of a jump out of the water over the airborne pose
+/// (`WaterExit`): knees drawn up and scissored apart, then kicked down
+/// straight and together with the chest lifted and the chin up, held through
+/// the surface and let go. Along the body's own axis, so a jump out of a
+/// crawl kicks behind it as the body stands up.
+fn kicked_out(ctx: &SampleCtx<'_>, mut fragment: PoseFragment, exit: &WaterExit) -> PoseFragment {
+    let rig = ctx.rig;
+    let anim = ctx.anim;
+    let frame = BodyFrame::new(anim.facing, anim.body_pitch);
+    let leg = rig.leg_length();
+    let (gather, drive) = (exit_gather(exit), exit_drive(exit));
+    let pelvis = anim.pelvis_position;
+
+    if let Some(feet) = fragment.feet.as_mut() {
+        for (foot, side, scissor) in [
+            (&mut feet.left, frame.left(), 1.0),
+            (&mut feet.right, frame.right, -1.0),
+        ] {
+            let hip = pelvis + side * rig.hip_width;
+            let tucked =
+                hip - frame.up * (leg * 0.6) + frame.front * (KICK_SCISSOR * scissor) + side * 0.05;
+            let kicked = pelvis - frame.up * (leg * 0.98) + side * 0.03;
+            *foot = Point3::from(foot.coords.lerp(&tucked.coords, gather));
+            *foot = Point3::from(foot.coords.lerp(&kicked.coords, drive));
+        }
+    }
+    let lerp = |base: f32, tucked: f32, kicked: f32| {
+        let after_gather = base + (tucked - base) * gather;
+        after_gather + (kicked - after_gather) * drive
+    };
+    fragment.torso_pitch = fragment.torso_pitch.map(|p| lerp(p, 0.2, -0.1));
+    fragment.head_tilt = fragment
+        .head_tilt
+        .map(|tilt| Vector2::new(lerp(tilt.x, 0.08, -0.15), tilt.y));
+    fragment
+}
+
+/// How far apart the gathered legs scissor, front and back, in metres.
+const KICK_SCISSOR: f32 = 0.16;
+
+/// How far a jump out of the water has gathered, in [0, 1]: up at once on
+/// the press, then folded into the kick.
+pub fn exit_gather(exit: &WaterExit) -> f32 {
+    smoothstep(0.0, EXIT_GATHERED, exit.elapsed)
+        * (1.0 - smoothstep(EXIT_GATHERED, EXIT_KICKED, exit.elapsed))
+}
+
+/// How far a jump out of the water has kicked and pressed, in [0, 1]: a
+/// snap through the gather's end, held while the body breaks the surface,
+/// then let go into the airborne pose.
+pub fn exit_drive(exit: &WaterExit) -> f32 {
+    exit_kick(exit) * (1.0 - smoothstep(0.32, WaterExit::DURATION, exit.elapsed))
+}
+
+/// How far through the kick and the sweep of the arms a jump out of the
+/// water is, in [0, 1].
+pub fn exit_kick(exit: &WaterExit) -> f32 {
+    smoothstep(EXIT_GATHERED, EXIT_KICKED, exit.elapsed)
+}
+
+/// Seconds after the press a jump out of the water is fully gathered.
+const EXIT_GATHERED: f32 = 0.07;
+/// Seconds after the press its kick and sweep have finished.
+const EXIT_KICKED: f32 = 0.17;
 
 /// Launching (anticipation) pose. Feet stay planted, pelvis dips over a
 /// rise-and-fall arc peaking at half-duration, torso leans slightly forward.

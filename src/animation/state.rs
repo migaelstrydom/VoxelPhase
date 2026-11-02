@@ -90,6 +90,29 @@ impl WaterEntry {
     }
 }
 
+/// A jump out of the water, from the press until the body is clear of it.
+///
+/// The legs gather and the arms spread, then the legs kick down straight and
+/// together and the arms sweep down to the hips, driving the body out; held
+/// as it breaks the surface, then let go into the airborne pose. The
+/// samplers play it off `elapsed`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WaterExit {
+    /// Seconds since the press.
+    pub elapsed: f32,
+}
+
+impl WaterExit {
+    /// How long the drive takes to play out, in seconds.
+    pub const DURATION: f32 = 0.6;
+
+    /// Advance by `dt`; `None` once it has played out.
+    pub fn advanced(self, dt: f32) -> Option<Self> {
+        let elapsed = self.elapsed + dt;
+        (elapsed < Self::DURATION).then_some(Self { elapsed })
+    }
+}
+
 /// The follow-through of a landing from the air: the pelvis squashes, the
 /// torso and head nod forward, and all of it eases back over the duration.
 /// Played on top of whatever the body does on its feet; nothing reads it
@@ -240,6 +263,8 @@ pub struct AnimationState {
     pub wade: f32,
     /// A fall into the water still being recovered from.
     pub water_entry: Option<WaterEntry>,
+    /// A jump out of the water still driving the body up.
+    pub water_exit: Option<WaterExit>,
     /// A landing from the air still being followed through.
     pub landing: Option<LandingSquash>,
     /// Throws being played out, oldest first; at most one per hand.
@@ -284,6 +309,7 @@ impl AnimationState {
             stroke_phase: 0.0,
             wade: 0.0,
             water_entry: None,
+            water_exit: None,
             landing: None,
             throws: Vec::new(),
         }

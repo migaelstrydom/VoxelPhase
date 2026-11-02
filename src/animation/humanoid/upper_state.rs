@@ -10,12 +10,12 @@ use nalgebra::{Point3, Vector3};
 
 use super::body_frame::BodyFrame;
 use super::gait::GaitCycle;
-use super::pose_state::{smoothstep, AirKind, Stroke, Takeoff};
+use super::pose_state::{exit_drive, exit_gather, exit_kick, smoothstep, AirKind, Stroke, Takeoff};
 use super::stride_sync;
 use super::throw::{self, ThrowRig};
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, HandsPose, PoseFragment};
-use crate::animation::state::{AnimationState, HandState};
+use crate::animation::state::{AnimationState, HandState, WaterExit};
 use crate::character::grab::GrabConfig;
 use crate::physics::{ConstraintHandle, RigidBodyHandle};
 
@@ -382,6 +382,10 @@ fn sample_braced(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
             right: shoulders.right + right * 0.1 - Vector3::y() * arm_hang,
         },
     };
+    let hands = match anim.water_exit {
+        Some(exit) => pressed_out(ctx, hands, &exit),
+        None => hands,
+    };
 
     PoseFragment {
         feet: None,
@@ -391,6 +395,32 @@ fn sample_braced(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
         head_tilt: None,
         head_bob: None,
         torso_pitch: None,
+    }
+}
+
+/// The arms of a jump out of the water over the braced pose (`WaterExit`):
+/// spread wide and high, then swept down hard in an arc out to the sides to
+/// press on the water by the hips, held through the surface and let go.
+/// Along the body's own axis, as the kick is.
+fn pressed_out(ctx: &UpperSampleCtx<'_>, hands: HandsPose, exit: &WaterExit) -> HandsPose {
+    let reach = ctx.rig.arm_length();
+    let shoulders = shoulders_with_twist(ctx, 0.0);
+    let torso = torso_frame(ctx);
+    let (gather, drive) = (exit_gather(exit), exit_drive(exit));
+    // Swinging out through the sweep, so the hands travel round, not across.
+    let sweep = (PI * exit_kick(exit)).sin();
+    let hand = |hand: Point3<f32>, shoulder: Point3<f32>, side: Vector3<f32>| {
+        let spread = shoulder + side * (reach * 0.75) + torso.up * (reach * 0.55);
+        let pressed = shoulder - torso.up * (reach * 0.85)
+            + side * (reach * (0.2 + 0.45 * sweep))
+            + torso.front * (reach * 0.05);
+        let hand = Point3::from(hand.coords.lerp(&spread.coords, gather));
+        let hand = Point3::from(hand.coords.lerp(&pressed.coords, drive));
+        clamp_to_reach(shoulder, hand, reach)
+    };
+    HandsPose {
+        left: hand(hands.left, shoulders.left, torso.left()),
+        right: hand(hands.right, shoulders.right, torso.right),
     }
 }
 
