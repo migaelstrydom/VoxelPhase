@@ -5,8 +5,11 @@
 
 use nalgebra::Point3;
 
-/// Epsilon for degenerate segment detection.
+/// Squared length below which a segment counts as a point, in m².
 const EPS: f32 = 1e-6;
+
+/// sin² of the angle below which two segments count as parallel.
+const PARALLEL_SIN_SQ: f32 = 1e-6;
 
 /// Closest points between two line segments.
 ///
@@ -46,10 +49,13 @@ pub fn segment_segment_closest_points(
         return (p1 + d1 * s, p2);
     }
 
-    // General case: both segments are non-degenerate.
+    // General case: both segments are non-degenerate. `denom` is
+    // |d1|²|d2|² sin²θ, so the test for parallel segments is on sin²θ: an
+    // absolute threshold on it would call two short segments parallel at
+    // any angle (two 3 cm edges at right angles have denom 8e-7).
     let b = d1.dot(&d2);
     let denom = a * e - b * b;
-    let mut s = if denom.abs() > EPS {
+    let mut s = if denom > PARALLEL_SIN_SQ * a * e {
         ((b * f - c * e) / denom).clamp(0.0, 1.0)
     } else {
         0.0
@@ -90,6 +96,26 @@ mod tests {
         let t = ((p - a).dot(&ab) / ab_len_sq).clamp(0.0, 1.0);
         let closest = a + ab * t;
         (p - closest).magnitude_squared()
+    }
+
+    /// Short segments crossing at right angles meet where they cross, not
+    /// at an end, however short they are.
+    #[test]
+    fn short_crossing_segments_meet_where_they_cross() {
+        let (on_first, on_second) = segment_segment_closest_points(
+            Point3::new(-0.015, 0.0, 0.0),
+            Point3::new(0.015, 0.0, 0.0),
+            Point3::new(0.0, -0.015, 0.002),
+            Point3::new(0.0, 0.015, 0.002),
+        );
+        assert!(
+            approx_eq_point(on_first, Point3::origin(), 1e-6),
+            "{on_first}"
+        );
+        assert!(
+            approx_eq_point(on_second, Point3::new(0.0, 0.0, 0.002), 1e-6),
+            "{on_second}"
+        );
     }
 
     // --- point_segment_distance_sq ---
