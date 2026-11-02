@@ -456,16 +456,22 @@ wildcards.
 | `ledge_shimmy` | 1.5 m along the lip in 1.5 s |
 | `ledge_no_room` | under a roof, pushing in only strains |
 | `ledge_mantle` | walking into a 0.72 m box climbs onto it |
+| `ledge_light_mantle`, `ledge_heavy_mantle` | walking into an 8 kg and a 250 kg box 0.66 m high climbs onto each |
+| `ledge_light_tall` | a 70 kg box 3.1 m high holds a hanger, and tips over towards them as they pull up; they end standing on it on its side |
+| `ledge_heavy_tall` | a 14 t box 3.1 m high: hang, pull up, stand on top |
+| `ledge_platform_lift` | catches the rim of a platform rising from 1 m to 3.5 m, rides it up and back down, and stands when its feet reach the ground |
+| `ledge_platform_side`, `ledge_platform_diagonal` | catches the rim of a platform going side to side, and one going diagonally to the side and up, and rides it; at a reversal the hanger's momentum tugs the deck's edge and turns the deck (its yaw resistance is the neutral one), carrying the hanger round with it |
+| `ledge_platform_still` | hangs from a platform holding still, pulls up and stands on the deck, which tips under them |
 
 The Traversal Garden's `ledge_walk` (its 0.7 m ledge) now crosses on 5 of 5
 starts by mantling. Its baseline in `docs/traversal/BASELINE.md` was 0 of 5,
 bouncing against the wall.
 
 Still to build, with step 8: `ledge_from_water` (swim to a 1 m bank and
-climb out), `ledge_platform` (catch a moving platform's rim, ride it, drop
-off with its velocity), `ledge_light_crate` (hang from a light crate on a
-shelf, which comes down), `ledge_blasted` (a blast takes the lip, and the
-body falls), and a fall down a wall's face that catches its lip.
+climb out), dropping off a moving platform with its velocity,
+`ledge_light_crate` (hang from a light crate on a shelf, which comes down),
+`ledge_blasted` (a blast takes the lip, and the body falls), and a fall down
+a wall's face that catches its lip.
 
 ## Steps
 

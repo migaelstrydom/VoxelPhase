@@ -390,3 +390,27 @@ fn the_hands_are_free_on_foot_in_flight_and_in_the_water() {
     assert!(!jump(TakeoffPhase::launch(0.2)).hands_free());
     assert!(!hanging().hands_free());
 }
+
+#[test]
+fn a_hanger_whose_feet_find_the_ground_stands() {
+    let mut grounded = air().edge(hang_lip());
+    grounded.facts.grounded = true;
+    assert_eq!(
+        advance(hanging(), grounded).0,
+        LocomotionState::OnFoot(OnFoot::default())
+    );
+    let climbing = ledge(
+        hang_lip(),
+        LedgePhase::PullUp {
+            elapsed: 0.0,
+            duration: config().pull_up_time,
+        },
+    );
+    assert!(
+        matches!(
+            phase(advance(climbing, grounded).0),
+            Some(LedgePhase::PullUp { .. })
+        ),
+        "a pull-up meets the top with its feet and carries on"
+    );
+}

@@ -9,8 +9,20 @@
 //   z  12   a box 0.72 m high, at the chest of a body standing: a mantle
 //   z  18   a wall 3.2 m high with a roof 0.6 m over its top: a lip to hang
 //           from with no room to stand on it
+//   z  24   a light box 0.66 m high (8 kg): mantled, and shoved by it
+//   z  30   a light box 3.1 m high (70 kg, 1.5 m square): too high to jump
+//           onto; it holds a hanger, and tips over towards them when they
+//           pull up onto it
+//   z  36   a heavy box 0.66 m high (250 kg)
+//   z  42   a heavy box 3.1 m high (14 t)
+//   z  50   a platform rising from 1 m to 3.5 m and back
+//   z  58   a platform at 3 m going side to side, along z
+//   z  66   a platform going diagonally, to the side and up
+//   z  74   a platform at 3 m holding still: it gives only as a deck does,
+//           tipping under a body on its edge
 //
-// The player's capsule is 1 m tall and 0.5 m across.
+// Each box's and platform's face is at x = 7. The player's capsule is 1 m
+// tall and 0.5 m across, and weighs 56 kg.
 Level(
     name: "Ledge Garden",
 
@@ -20,7 +32,7 @@ Level(
 
             terrain: Terrain(
                 voxel_size: 0.25,
-                bounds: (min: (-8.0, -8.0, -8.0), max: (24.0, 16.0, 28.0)),
+                bounds: (min: (-8.0, -8.0, -8.0), max: (24.0, 16.0, 82.0)),
                 base_height: 0.0,
                 material_layers: [
                     (depth: 1.0,  material: Grass),
@@ -43,7 +55,32 @@ Level(
                 ],
             ),
 
-            objects: [],
+            objects: [
+                Dropped(Box(pos: (7.4, 1.0, 24.0), half_extents: (0.4, 0.33, 0.4), style: Cardboard, density: 20.0)),
+                Dropped(Box(pos: (7.75, 2.0, 30.0), half_extents: (0.75, 1.55, 0.75), style: Cardboard, density: 10.0)),
+                Dropped(Box(pos: (7.4, 1.0, 36.0), half_extents: (0.4, 0.33, 0.4), style: Metal, density: 600.0)),
+                Dropped(Box(pos: (7.75, 2.0, 42.0), half_extents: (0.75, 1.55, 0.75), style: Stone, density: 2000.0)),
+
+                MovingPlatform(
+                    waypoints: [(8.5, 0.85, 50.0), (8.5, 3.35, 50.0)],
+                    half_extents: (1.5, 0.15, 1.5),
+                    speed: 0.8,
+                ),
+                MovingPlatform(
+                    waypoints: [(8.5, 2.85, 55.5), (8.5, 2.85, 60.5)],
+                    half_extents: (1.5, 0.15, 1.5),
+                    speed: 1.0,
+                ),
+                MovingPlatform(
+                    waypoints: [(8.5, 1.35, 63.5), (8.5, 3.35, 68.5)],
+                    half_extents: (1.5, 0.15, 1.5),
+                    speed: 1.0,
+                ),
+                MovingPlatform(
+                    waypoints: [(8.5, 2.85, 74.0)],
+                    half_extents: (1.5, 0.15, 1.5),
+                ),
+            ],
         ),
     ],
 
