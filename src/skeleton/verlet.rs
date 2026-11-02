@@ -24,7 +24,9 @@ pub struct Particle {
     pub acceleration: Vector3<f32>,
     /// Inverse mass (0 = infinite mass / pinned).
     pub inv_mass: f32,
-    /// Damping factor (0-1, higher = more damping).
+    /// Share of its velocity lost per step at 60 Hz (0-1, higher = more
+    /// damping). A step of another length loses the share that compounds to
+    /// the same per second.
     pub damping: f32,
 }
 
@@ -158,6 +160,9 @@ impl AngleConstraint {
     }
 }
 
+/// The step `Particle::damping` is stated for.
+const DAMPING_REFERENCE_STEP: f32 = 1.0 / 60.0;
+
 /// The Verlet physics simulation.
 ///
 /// Contains particles and constraints, handles integration and solving.
@@ -173,6 +178,9 @@ pub struct VerletSystem {
     pub iterations: u32,
     /// Global gravity.
     pub gravity: Vector3<f32>,
+    /// Length of the last step, which the positions' difference measures
+    /// velocity over; `None` before the first.
+    last_dt: Option<f32>,
 }
 
 #[allow(dead_code)]
@@ -185,6 +193,7 @@ impl VerletSystem {
             angle_constraints: Vec::new(),
             iterations: 4, // Good balance of accuracy vs performance
             gravity: Vector3::new(0.0, -9.81, 0.0),
+            last_dt: None,
         }
     }
 
@@ -223,9 +232,18 @@ impl VerletSystem {
         }
     }
 
-    /// Verlet integration step.
+    /// Verlet integration step, corrected for a step that differs from the
+    /// last: the positions' difference is a velocity over the last step, so
+    /// it is rescaled to this one, and damping is applied as a rate. Without
+    /// either, a body swung faster or stiffer with the frame rate, and kept
+    /// its real-time swing when F9 slowed the step.
     fn integrate(&mut self, dt: f32) {
+        if dt <= 0.0 {
+            return;
+        }
         let dt2 = dt * dt;
+        let rescale = self.last_dt.map_or(1.0, |last| dt / last);
+        self.last_dt = Some(dt);
 
         for particle in &mut self.particles {
             if particle.is_pinned() {
@@ -235,9 +253,12 @@ impl VerletSystem {
             // Apply gravity
             particle.acceleration += self.gravity;
 
-            // Verlet integration: new_pos = 2*pos - prev_pos + acc*dt^2
-            let velocity = particle.position - particle.prev_position;
-            let damped_velocity = velocity * (1.0 - particle.damping);
+            // Verlet integration: new_pos = pos + (pos - prev_pos) + acc*dt^2
+            let velocity = (particle.position - particle.prev_position) * rescale;
+            let retained = (1.0 - particle.damping)
+                .max(0.0)
+                .powf(dt / DAMPING_REFERENCE_STEP);
+            let damped_velocity = velocity * retained;
 
             let new_position = particle.position + damped_velocity + particle.acceleration * dt2;
 
@@ -397,6 +418,47 @@ impl Default for VerletSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pendulum swung at 144 Hz is where one swung at 60 Hz is after the
+    /// same time, and at a tenth of the step it covers a tenth of the swing.
+    #[test]
+    fn the_swing_follows_time_not_the_frame_rate() {
+        fn swing(step: f32, seconds: f32) -> Point3<f32> {
+            let mut system = VerletSystem::new();
+            let hinge = system.add_particle(Particle::pinned(Point3::new(0.0, 2.0, 0.0)));
+            let bob = system.add_particle(Particle::new(Point3::new(1.0, 2.0, 0.0)));
+            system.add_distance_constraint(DistanceConstraint::new(hinge, bob, 1.0));
+            for _ in 0..(seconds / step).round() as usize {
+                system.update(step);
+            }
+            system.particles[bob].position
+        }
+
+        let at_60 = swing(1.0 / 60.0, 0.5);
+        let at_144 = swing(1.0 / 144.0, 0.5);
+        assert!(
+            (at_60 - at_144).norm() < 0.05,
+            "60 Hz {at_60}, 144 Hz {at_144}"
+        );
+
+        let mut slowed = VerletSystem::new();
+        let hinge = slowed.add_particle(Particle::pinned(Point3::new(0.0, 2.0, 0.0)));
+        let bob = slowed.add_particle(Particle::new(Point3::new(1.0, 2.0, 0.0)));
+        slowed.add_distance_constraint(DistanceConstraint::new(hinge, bob, 1.0));
+        for _ in 0..15 {
+            slowed.update(1.0 / 60.0);
+        }
+        // F9 at x0.1: the same frames now step a tenth of the time.
+        for _ in 0..150 {
+            slowed.update(1.0 / 600.0);
+        }
+        let real_time = swing(1.0 / 60.0, 0.5);
+        assert!(
+            (slowed.particles[bob].position - real_time).norm() < 0.05,
+            "slowed {}, real time {real_time}",
+            slowed.particles[bob].position
+        );
+    }
 
     #[test]
     fn test_basic_simulation() {
