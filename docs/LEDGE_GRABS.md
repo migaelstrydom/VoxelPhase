@@ -463,9 +463,13 @@ physics-free. Nothing is a canned clip:
   shins, `LedgeSensor::wall_below`), the legs hang in to it and the toes rest
   on it, never in it. Those feet are anchored to the world, so a back-jump or
   drop blends out of them as a kick off the wall.
-- **Hands.** Planted on the edge like feet on the ground. A hand left 7 cm
-  from its place lifts and moves past it in an arc, one hand at a time: hand
-  over hand along a shimmy, a shuffle as a turning deck carries the body.
+- **Hands.** Planted on the edge like feet on the ground, and moved in an
+  arc, one hand at a time. Along a shimmy the leading hand reaches out first,
+  18 cm past its place, once the body has caught up with it; the figure
+  shifts its weight towards it (up to 8 cm); then the trailing hand follows,
+  landing 5 cm nearer it than the hands' spacing. The moves quicken with the
+  shimmy, down to 0.06 s. A body held still (a turning deck carrying it)
+  shuffles a hand left 7 cm off its place back to it.
 - **Climb.** The capsule has to clear the lip, which puts its pelvis higher
   than hands on the lip can reach. So the figure follows its own path, held
   to the edge: from the hang (or, for a mantle, from standing), to over the

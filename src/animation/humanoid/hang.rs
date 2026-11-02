@@ -109,6 +109,9 @@ pub struct Hang {
     lean: f32,
     /// The hands' holds, left then right.
     holds: [HandHold; 2],
+    /// How far the figure has shifted its weight along the edge, to the
+    /// body's right, in metres.
+    sway: f32,
     /// The climb, once one has begun.
     climb: Option<ClimbStart>,
     /// The body's velocity relative to the edge last frame.
@@ -123,6 +126,8 @@ pub struct Hang {
 struct HandHold {
     along: f32,
     shift: Option<HandShift>,
+    /// Seconds since the hand last landed.
+    planted: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -130,6 +135,15 @@ struct HandShift {
     from: f32,
     to: f32,
     elapsed: f32,
+    /// Seconds the move takes.
+    duration: f32,
+}
+
+impl HandShift {
+    /// How far through the move the hand is, 0 to 1.
+    fn progress(&self) -> f32 {
+        (self.elapsed / self.duration).clamp(0.0, 1.0)
+    }
 }
 
 /// How the figure stood when its climb began, relative to the grip.
@@ -160,12 +174,31 @@ const TUCK_KICK: f32 = 0.35;
 const TUCK_REST: f32 = 0.12;
 /// Seconds the lean takes to follow the stick.
 const LEAN_EASE: f32 = 0.08;
-/// How far a hand's hold may fall behind or run ahead of its place before it
-/// moves, how far past its place it reaches when the body is on the move,
-/// and how long the move takes, in metres and seconds.
+/// How far a still body's hand may lie off its place before it moves there,
+/// and how long a hand's move takes at most, in metres and seconds.
 const HAND_SLACK: f32 = 0.07;
-const HAND_LEAD: f32 = 0.06;
 const HAND_SHIFT: f32 = 0.16;
+/// Shimmying, how far past its place the leading hand lands, in metres:
+/// past the shoulder, as far as arms near straight reach out to the side.
+const HAND_REACH: f32 = 0.18;
+/// Shimmying, how much nearer the leading hand the trailing one lands than
+/// the hands' spacing, in metres. The shoulders stand wider than the hands,
+/// so closing them in further crosses the trailing arm under the head.
+const HAND_CLOSE: f32 = 0.05;
+/// A shimmy's hand moves take this share of the time the body takes to
+/// catch up with the leading hand, no longer than `HAND_SHIFT` nor shorter
+/// than `HAND_QUICKEST`.
+const HAND_SHARE: f32 = 0.35;
+const HAND_QUICKEST: f32 = 0.06;
+/// The leading hand bears the weight for this share of a hand move before
+/// the trailing hand follows.
+const WEIGHT_SHARE: f32 = 0.5;
+/// How far the figure shifts along the edge towards where its hands hold,
+/// as a share of the holds' midpoint; at most `SWAY_LIMIT` metres, and
+/// eased over `SWAY_EASE` seconds.
+const SWAY_GAIN: f32 = 0.5;
+const SWAY_LIMIT: f32 = 0.08;
+const SWAY_EASE: f32 = 0.06;
 /// How high a moving hand lifts off the lip, and how far out from the wall.
 const HAND_LIFT: f32 = 0.05;
 const HAND_CLEAR: f32 = 0.03;
@@ -186,12 +219,15 @@ impl Hang {
                 HandHold {
                     along: -offset,
                     shift: None,
+                    planted: 0.0,
                 },
                 HandHold {
                     along: offset,
                     shift: None,
+                    planted: 0.0,
                 },
             ],
+            sway: 0.0,
             climb: None,
             velocity: velocity - reading.edge_velocity,
             mantle: matches!(reading.phase, HangPhase::Climb { .. }),
@@ -247,6 +283,8 @@ impl Hang {
         let moved = relative.dot(&right) * dt;
         let climbing = matches!(reading.phase, HangPhase::Climb { .. });
         self.keep_holds(moved, relative.dot(&right), climbing, dt);
+        let sway = (SWAY_GAIN * self.weight_along()).clamp(-SWAY_LIMIT, SWAY_LIMIT);
+        self.sway += (sway - self.sway) * (1.0 - (-dt / SWAY_EASE).exp());
 
         if climbing && self.climb.is_none() {
             self.climb = Some(self.climb_start(figure, rig));
@@ -261,11 +299,13 @@ impl Hang {
     }
 
     /// Hands keep their place on the edge as the body slides along it by
-    /// `moved`: a hand left `HAND_SLACK` behind (or ahead) of its place moves
-    /// to it, past it in the way the body is going, one hand at a time.
+    /// `moved`. On the move they go hand over hand, leading hand first
+    /// ([`Self::shimmy_holds`]); still, a hand left `HAND_SLACK` off its place
+    /// moves to it, one hand at a time.
     fn keep_holds(&mut self, moved: f32, speed: f32, climbing: bool, dt: f32) {
         for hold in &mut self.holds {
             hold.along -= moved;
+            hold.planted += dt;
             if let Some(shift) = &mut hold.shift {
                 shift.from -= moved;
                 shift.to -= moved;
@@ -273,9 +313,10 @@ impl Hang {
             }
         }
         for hold in &mut self.holds {
-            if let Some(shift) = hold.shift.filter(|s| s.elapsed >= HAND_SHIFT) {
+            if let Some(shift) = hold.shift.filter(|s| s.elapsed >= s.duration) {
                 hold.along = shift.to;
                 hold.shift = None;
+                hold.planted = 0.0;
             }
         }
         if climbing || self.holds.iter().any(|h| h.shift.is_some()) {
@@ -283,22 +324,55 @@ impl Hang {
         }
         let offset = self.reading.hand_offset();
         let places = [-offset, offset];
-        let lead = if speed.abs() > 0.05 {
-            HAND_LEAD * speed.signum()
-        } else {
-            0.0
-        };
+        if speed.abs() > 0.05 {
+            self.shimmy_holds(places, speed);
+            return;
+        }
         let lagging = (0..2)
             .map(|i| (i, (self.holds[i].along - places[i]).abs()))
             .filter(|(_, off)| *off > HAND_SLACK)
             .max_by(|a, b| a.1.total_cmp(&b.1));
         if let Some((i, _)) = lagging {
-            self.holds[i].shift = Some(HandShift {
-                from: self.holds[i].along,
-                to: places[i] + lead,
-                elapsed: 0.0,
-            });
+            self.move_hand(i, places[i], HAND_SHIFT);
         }
+    }
+
+    /// Hand over hand along the edge at `speed`: once the body has caught up
+    /// with the leading hand, it reaches out `HAND_REACH` past its place;
+    /// when it has borne the weight a moment and the figure has shifted
+    /// towards it, the trailing hand follows, `HAND_CLOSE` nearer it than the
+    /// hands' spacing. Neither hand trails behind the figure, and the moves
+    /// quicken as the shimmy does.
+    fn shimmy_holds(&mut self, places: [f32; 2], speed: f32) {
+        let way = speed.signum();
+        let (lead, trail) = if way > 0.0 { (1, 0) } else { (0, 1) };
+        let duration = (HAND_SHARE * HAND_REACH / speed.abs()).clamp(HAND_QUICKEST, HAND_SHIFT);
+        let closed = places[lead] - places[trail] - way * HAND_CLOSE;
+        let behind = self.holds[lead].along - closed;
+        if (behind - self.holds[trail].along) * way > HAND_SLACK * 0.5
+            && self.holds[lead].planted >= WEIGHT_SHARE * duration
+        {
+            self.move_hand(trail, behind, duration);
+        } else if (self.holds[lead].along - places[lead]) * way <= 0.0 {
+            let to = places[lead] + way * HAND_REACH + speed * duration;
+            self.move_hand(lead, to, duration);
+        }
+    }
+
+    fn move_hand(&mut self, i: usize, to: f32, duration: f32) {
+        self.holds[i].shift = Some(HandShift {
+            from: self.holds[i].along,
+            to,
+            elapsed: 0.0,
+            duration,
+        });
+    }
+
+    /// Midway between where the hands bear the body, along the edge from
+    /// the grip: a hand on its way to a hold bears it where it left.
+    fn weight_along(&self) -> f32 {
+        let bears = |hold: &HandHold| hold.shift.map_or(hold.along, |shift| shift.from);
+        0.5 * (bears(&self.holds[0]) + bears(&self.holds[1]))
     }
 
     /// Where hand `i` (0 left, 1 right) holds this frame: on the lip, or
@@ -309,7 +383,7 @@ impl Hang {
         let hold = &self.holds[i];
         let (along, lift) = match hold.shift {
             Some(shift) => {
-                let t = (shift.elapsed / HAND_SHIFT).clamp(0.0, 1.0);
+                let t = shift.progress();
                 let eased = t * t * (3.0 - 2.0 * t);
                 (shift.from + (shift.to - shift.from) * eased, (PI * t).sin())
             }
@@ -422,7 +496,7 @@ impl Posture {
             held += reading.outward * (CHEST_CLEAR - off_face);
         }
         Self {
-            pelvis_offset: held - shoulders + facing * HANG_IN,
+            pelvis_offset: held - shoulders + facing * HANG_IN + reading.right() * hang.sway,
             torso_pitch,
         }
     }
@@ -721,9 +795,9 @@ pub fn sample_gripping(
         _ => [hang.hand(0), hang.hand(1)],
     };
     let reach = |i: usize| {
-        hang.holds[i].shift.map_or(0.0, |s| {
-            (PI * (s.elapsed / HAND_SHIFT).clamp(0.0, 1.0)).sin()
-        })
+        hang.holds[i]
+            .shift
+            .map_or(0.0, |s| (PI * s.progress()).sin())
     };
     let twist = 0.12 * (reach(0) - reach(1));
     PoseFragment {
@@ -907,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn a_shimmy_goes_hand_over_hand_and_planted_hands_stay_put() {
+    fn a_shimmy_leads_with_the_forward_hand_and_planted_hands_stay_put() {
         let speed = 1.0;
         let mut z = 0.0;
         let mut hang = Hang::begin(
@@ -917,6 +991,8 @@ mod tests {
         let velocity = Vector3::z() * speed;
         let mut was: [Option<Point3<f32>>; 2] = [None, None];
         let mut moves = Vec::new();
+        let (mut furthest_lead, mut worst_trail) = (f32::MIN, f32::MAX);
+        let (mut lead_near, mut trail_far) = (f32::MAX, f32::MIN);
         for _ in 0..(2.0 / DT) as usize {
             z += speed * DT;
             let held = reading(HangPhase::Hang { lean: 0.0 }, z, true);
@@ -942,12 +1018,45 @@ mod tests {
                 }
                 was[i] = Some(now);
                 assert!(now.y >= LIP - 1.0e-4, "hand {i} below the lip");
+                if hang.holds[i].shift.is_none() {
+                    let along = hang.holds[i].along;
+                    // The body starts at full speed, ahead of the first
+                    // step; the trailing hand is judged from the second on.
+                    if i == 1 {
+                        furthest_lead = furthest_lead.max(along);
+                        lead_near = lead_near.min(along - hang.sway);
+                    } else if moves.len() >= 2 {
+                        worst_trail = worst_trail.min(along - hang.sway);
+                        trail_far = trail_far.max(along - hang.sway);
+                    }
+                }
             }
         }
         assert!(moves.len() >= 6, "{} hand moves in 2 m", moves.len());
         assert!(
             moves.windows(2).all(|pair| pair[0] != pair[1]),
             "hands alternate: {moves:?}"
+        );
+        assert_eq!(moves[0], 1, "the leading (right) hand moves first");
+        let offset = hang.reading.hand_offset();
+        assert!(
+            furthest_lead > offset + 0.08,
+            "the leading hand reaches {furthest_lead} m out, its place {offset} m"
+        );
+        assert!(
+            lead_near > offset - 0.03,
+            "the leading hand falls in to {lead_near} m off the figure, its place {offset} m"
+        );
+        // Stretched out a little behind the figure leaning on the leading hand,
+        // before it follows; never across under the head.
+        assert!(
+            worst_trail > -offset - 0.07,
+            "the trailing hand lags to {worst_trail} m off the figure, its place {} m",
+            -offset
+        );
+        assert!(
+            trail_far < 0.0,
+            "the trailing hand crosses to {trail_far} m off the figure"
         );
     }
 
