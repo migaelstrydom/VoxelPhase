@@ -7,6 +7,8 @@ use std::sync::Arc;
 use crate::core::command_buffer::ManagedCommandBuffer;
 use crate::core::error::{EngineError, EngineResult, VkResultExt};
 use crate::core::vulkan_context::VulkanContext;
+use crate::rendering::frame::ManagedBuffer;
+use crate::rendering::texture::ManagedTexture;
 
 /// Service responsible for GPU data transfer operations
 pub struct TransferService {
@@ -120,6 +122,45 @@ impl TransferService {
             })
             .src_access_mask(src_access_mask)
             .dst_access_mask(dst_access_mask)
+    }
+
+    /// Fill a freshly made `texture` from `pixels`, its level 0 as tightly
+    /// packed rows of its format, and leave it ready to sample, its mip chain
+    /// (if it has one) filtered down from level 0.
+    pub fn upload_texture(&self, texture: &ManagedTexture, pixels: &[u8]) -> EngineResult<()> {
+        let staging = ManagedBuffer::new(
+            Arc::clone(&self.vulkan_context.device),
+            pixels.len() as u64,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        unsafe {
+            let ptr = staging.map_memory(0, vk::MemoryMapFlags::empty())?;
+            std::ptr::copy_nonoverlapping(pixels.as_ptr(), ptr as *mut u8, pixels.len());
+            staging.unmap_memory();
+        }
+
+        let image = texture.image.handle();
+        let (width, height, mips) = (texture.width, texture.height, texture.mip_levels);
+        self.transition_image_layout(
+            image,
+            texture.format,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            mips,
+        )?;
+        self.copy_buffer_to_image(staging.buffer, image, width, height)?;
+        if mips > 1 {
+            self.generate_mipmaps(image, texture.format, width, height, mips)
+        } else {
+            self.transition_image_layout(
+                image,
+                texture.format,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                mips,
+            )
+        }
     }
 
     /// Copy data from a buffer to an image

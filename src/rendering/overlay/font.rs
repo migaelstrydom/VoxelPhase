@@ -11,7 +11,6 @@ use nalgebra::{Vector2, Vector4};
 
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
-use crate::rendering::frame::ManagedBuffer;
 use crate::rendering::texture::ManagedTexture;
 use crate::rendering::typeface::JETBRAINS_MONO;
 use crate::resources::transfer_service::TransferService;
@@ -244,57 +243,15 @@ impl FontAtlas {
         height: u32,
     ) -> EngineResult<Arc<ManagedTexture>> {
         let transfer_service = TransferService::new(Arc::clone(&vulkan_context))?;
-        let image_size = data.len() as u64;
-
-        // Create staging buffer
-        let staging_buffer = ManagedBuffer::new(
-            Arc::clone(&vulkan_context.device),
-            image_size,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-
-        // Upload data to staging buffer
-        unsafe {
-            let ptr = staging_buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
-            std::ptr::copy_nonoverlapping(data.as_ptr(), ptr as *mut u8, data.len());
-            staging_buffer.unmap_memory();
-        }
-
-        // Create texture (R8 format for grayscale)
         let texture = ManagedTexture::new(
             Arc::clone(&vulkan_context.device),
             width,
             height,
-            1, // No mipmaps
+            1,
             vk::Format::R8_UNORM,
             vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
         )?;
-
-        // Transition layout and copy from staging
-        transfer_service.transition_image_layout(
-            texture.image.handle(),
-            vk::Format::R8_UNORM,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            1,
-        )?;
-
-        transfer_service.copy_buffer_to_image(
-            staging_buffer.buffer,
-            texture.image.handle(),
-            width,
-            height,
-        )?;
-
-        transfer_service.transition_image_layout(
-            texture.image.handle(),
-            vk::Format::R8_UNORM,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            1,
-        )?;
-
+        transfer_service.upload_texture(&texture, data)?;
         Ok(Arc::new(texture))
     }
 
