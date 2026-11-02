@@ -483,7 +483,8 @@ impl FireRenderer {
             .viewport_count(1)
             .scissor_count(1);
 
-        // No backface culling — camera can be inside the volume
+        // No backface culling — camera can be inside the volume. The shader
+        // marches from the face a ray enters by and discards the other.
         let rasterization = vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
             .cull_mode(vk::CullModeFlags::NONE)
@@ -493,11 +494,12 @@ impl FireRenderer {
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
-        // Depth test enabled (fire occluded by closer geometry), depth write disabled
+        // No depth test: the shader stops each march at the scene's depth. A
+        // camera inside the volume sees it through the faces behind, which
+        // the scene may well hide while the fire in front of it does not.
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(true)
-            .depth_write_enable(false)
-            .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
+            .depth_test_enable(false)
+            .depth_write_enable(false);
 
         // Alpha blending: premultiplied alpha for emissive fire + absorptive smoke
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState {

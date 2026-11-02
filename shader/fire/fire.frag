@@ -102,6 +102,14 @@ void main() {
     vec2 tRange = intersectBox(rayOriginVol, rayDirVol);
     if (tRange.x > tRange.y) discard;
 
+    // Both faces of the box are rasterised, so that a camera inside it still
+    // sees the faces behind. From outside, every pixel is covered twice, by
+    // the face the ray enters through and the face it leaves by, and each
+    // would march the same ray: only the entry face marches.
+    vec3 fragVol = worldToVolume(fragWorldPos);
+    float tFrag = dot(fragVol - rayOriginVol, rayDirVol);
+    if (tRange.x > 0.0 && tFrag > 0.5 * (tRange.x + tRange.y)) discard;
+
     // Clamp near to 0 (camera may be inside volume)
     tRange.x = max(tRange.x, 0.0);
 
@@ -111,7 +119,6 @@ void main() {
     vec2 screenUV = gl_FragCoord.xy / vec2(textureSize(depthSampler, 0));
     float sceneDepthRaw = texture(depthSampler, screenUV).r;
     float sceneZ = linearizeDepth(sceneDepthRaw);
-    float fragZ = linearizeDepth(gl_FragCoord.z);
 
     // Raymarch through the volume
     vec4 accum = vec4(0.0);
