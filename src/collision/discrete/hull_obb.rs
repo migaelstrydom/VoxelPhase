@@ -166,19 +166,13 @@ pub fn hull_obb_manifold(
 
     // Edge-edge SAT with Gauss map filtering (Gregorius, GDC 2013).
     //
-    // For each hull edge, test against each of the 3 OBB edge directions.
-    // An OBB edge along axis i has adjacent face normals on the two
-    // perpendicular axes. All 4 parallel variants of that OBB edge share
-    // the same adjacent normals, so the Minkowski face test is per-axis,
-    // not per-variant.
+    // For each hull edge, test against each of the 12 OBB edges: 3
+    // directions, 4 parallel variants each. An OBB edge along axis i is
+    // bordered by faces on the two perpendicular axes, and which faces
+    // depends on the variant: the edge at signs (s0, s1) lies between the
+    // faces s0·axes[perp0] and s1·axes[perp1]. So the Minkowski face test is
+    // per variant; the variant that passes is the edge the pair meets on.
     let mut best_edge: Option<EdgeEdgeResult> = None;
-
-    // Precompute OBB adjacent face normal pairs (one pair per OBB axis).
-    let obb_adj_normals: [(Vector3<f32>, Vector3<f32>); 3] = [
-        (obb_axes[1], obb_axes[2]), // axis 0: adjacent faces on axes 1, 2
-        (obb_axes[0], obb_axes[2]), // axis 1: adjacent faces on axes 0, 2
-        (obb_axes[0], obb_axes[1]), // axis 2: adjacent faces on axes 0, 1
-    ];
 
     for hull_edge in &hull.edges {
         let na1 = hull_view.rotation * hull_edge.normal_a;
@@ -186,8 +180,11 @@ pub fn hull_obb_manifold(
         let dir_a = hull_view.rotation
             * (hull.vertices[hull_edge.v1 as usize] - hull.vertices[hull_edge.v0 as usize]);
 
-        for obb_axis_idx in 0..3 {
-            let (ob_n1, ob_n2) = obb_adj_normals[obb_axis_idx];
+        for (obb_axis_idx, variant) in (0..3).flat_map(|axis| (0..4).map(move |v| (axis, v))) {
+            let (perp0, perp1) = perpendicular_axes(obb_axis_idx);
+            let (s0, s1) = EDGE_VARIANT_SIGNS[variant];
+            let ob_n1 = obb_axes[perp0] * s0;
+            let ob_n2 = obb_axes[perp1] * s1;
 
             if !is_minkowski_face(na1, na2, -ob_n1, -ob_n2) {
                 continue;
@@ -203,14 +200,10 @@ pub fn hull_obb_manifold(
             let ha0 = hull_view.center + hull_view.rotation * hull.vertices[hull_edge.v0 as usize];
             let ha1 = hull_view.center + hull_view.rotation * hull.vertices[hull_edge.v1 as usize];
 
-            // Pick the OBB edge variant closest to the hull edge (support of
-            // OBB in -axis direction). The OBB edge along `obb_axis_idx` has
-            // 4 parallel variants at different offsets on the two perp axes.
             let mut axis = cross / len_sq.sqrt();
             if axis.dot(&(na1 + na2)) < 0.0 {
                 axis = -axis;
             }
-            let variant = obb_support_edge_variant(&obb_axes, obb_axis_idx, -axis);
             let (b0, b1) = obb_edge_variant(obb, &obb_axes, obb_axis_idx, variant);
 
             let overlap = edge_pair_overlap(axis, ha0, ha1, b0, b1, margin);
@@ -539,24 +532,32 @@ fn edge_edge_contact(
 }
 
 /// Get the endpoints of one of the 4 edge variants for an OBB axis.
+/// The signs, on an OBB axis's two perpendicular axes, of each of the four
+/// edges parallel to it, indexed by variant.
+const EDGE_VARIANT_SIGNS: [(f32, f32); 4] = [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)];
+
+/// The two OBB axes perpendicular to `axis_idx`, in ascending order.
+fn perpendicular_axes(axis_idx: usize) -> (usize, usize) {
+    match axis_idx {
+        0 => (1, 2),
+        1 => (0, 2),
+        _ => (0, 1),
+    }
+}
+
 fn obb_edge_variant(
     obb: &Obb,
     axes: &[Vector3<f32>; 3],
     axis_idx: usize,
     variant: usize,
 ) -> (Point3<f32>, Point3<f32>) {
-    let (perp0, perp1) = match axis_idx {
-        0 => (1, 2),
-        1 => (0, 2),
-        _ => (0, 1),
-    };
+    let (perp0, perp1) = perpendicular_axes(axis_idx);
 
     let edge_dir = axes[axis_idx] * obb.half_extents[axis_idx];
     let he0 = obb.half_extents[perp0];
     let he1 = obb.half_extents[perp1];
 
-    let signs: [(f32, f32); 4] = [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)];
-    let (s0, s1) = signs[variant];
+    let (s0, s1) = EDGE_VARIANT_SIGNS[variant];
     let offset = axes[perp0] * (he0 * s0) + axes[perp1] * (he1 * s1);
 
     (
@@ -629,39 +630,6 @@ fn find_most_opposed_obb_face(axes: &[Vector3<f32>; 3], direction: Vector3<f32>)
         }
     }
     (best_idx, best_sign)
-}
-
-/// Find the OBB edge variant along `axis_idx` that is the support feature
-/// in the given `direction`. Returns the variant index (0..3) for `obb_edge_variant`.
-fn obb_support_edge_variant(
-    axes: &[Vector3<f32>; 3],
-    axis_idx: usize,
-    direction: Vector3<f32>,
-) -> usize {
-    let (perp0, perp1) = match axis_idx {
-        0 => (1, 2),
-        1 => (0, 2),
-        _ => (0, 1),
-    };
-
-    // The support edge variant has signs that maximize projection onto `direction`.
-    let s0: f32 = if direction.dot(&axes[perp0]) >= 0.0 {
-        1.0
-    } else {
-        -1.0
-    };
-    let s1: f32 = if direction.dot(&axes[perp1]) >= 0.0 {
-        1.0
-    } else {
-        -1.0
-    };
-
-    match (s0 > 0.0, s1 > 0.0) {
-        (true, true) => 0,
-        (false, true) => 1,
-        (false, false) => 2,
-        (true, false) => 3,
-    }
 }
 
 #[cfg(test)]
@@ -962,17 +930,52 @@ mod tests {
         }
     }
 
+    /// A box edge rests across a hull edge on each of the four edges that
+    /// run along the box's z: every one is met edge to edge, along the
+    /// diagonal between its two faces, and not on a face of either.
     #[test]
-    fn obb_support_edge_variant_selects_correct_variant() {
-        // For an edge along axis 0, the support in direction (0, -1, 1)
-        // should select the variant with perp signs (-1, +1) = variant 1.
-        let obb_axes = [Vector3::x(), Vector3::y(), Vector3::z()];
-        let direction = Vector3::new(0.0, -1.0, 1.0);
-
-        let variant = obb_support_edge_variant(&obb_axes, 0, direction);
-        assert_eq!(
-            variant, 1,
-            "Expected variant 1 (perp signs: -y, +z) for direction (0, -1, 1)"
+    fn a_hull_edge_across_any_of_four_parallel_box_edges_meets_it_edge_to_edge() {
+        let he = 0.5;
+        let hull = Arc::new(cube_hull(Vector3::new(he, he, he)));
+        let shape = ColliderShape::ConvexHull { hull };
+        let obb = Obb::new(
+            Point3::origin(),
+            UnitQuaternion::identity(),
+            Vector3::new(1.0, 1.0, 1.0),
         );
+        let depth = 0.01;
+
+        for (sx, sy) in [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
+            // The box edge along z at (sx, sy), and a hull edge across it,
+            // its faces turned toward the box.
+            let outward = Vector3::new(sx, sy, 0.0).normalize();
+            let across = Vector3::new(sx, -sy, 0.0).normalize();
+            // The cube's edge along x at local (y, z) = (-he, -he), with
+            // its two faces bisected by (0, -1, -1), is turned onto `across`
+            // with that bisector facing the box.
+            let local = nalgebra::Matrix3::from_columns(&[
+                Vector3::x(),
+                Vector3::new(0.0, -1.0, -1.0).normalize(),
+                Vector3::x().cross(&Vector3::new(0.0, -1.0, -1.0).normalize()),
+            ]);
+            let world =
+                nalgebra::Matrix3::from_columns(&[across, -outward, across.cross(&-outward)]);
+            let rotation = UnitQuaternion::from_matrix(&(world * local.transpose()));
+            let edge_middle = Point3::new(sx, sy, 0.0) - outward * depth;
+            let center = edge_middle - rotation * Vector3::new(0.0, -he, -he);
+            let view = ShapeView {
+                center,
+                rotation,
+                shape: &shape,
+            };
+
+            let manifold = hull_obb_manifold(&view, &obb, 0.0, &mut SatCache::default(), None);
+            assert!(!manifold.is_empty(), "edge ({sx}, {sy}): no contact");
+            let normal = manifold.points[0].normal;
+            assert!(
+                normal.dot(&outward).abs() > 0.99,
+                "edge ({sx}, {sy}): normal {normal} is a face axis, not the edge diagonal"
+            );
+        }
     }
 }
