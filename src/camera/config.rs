@@ -30,7 +30,8 @@ pub struct CameraConfig {
     /// 0.0 = camera stays at target height, 1.0 = camera rises 1 unit per unit of distance
     pub height_gradient: f32,
 
-    /// Minimum height angle (radians) - prevents camera from going below horizon
+    /// Minimum height angle (radians). May be below the horizon, but must stay
+    /// above straight down (-π/2).
     pub min_pitch: f32,
 
     /// Maximum height angle (radians) - prevents camera from going directly overhead
@@ -51,9 +52,29 @@ impl Default for CameraConfig {
             height_sensitivity: 0.003,
             zoom_speed: 5.0,
             height_gradient: 0.3,
-            min_pitch: -2.0,                              // ~6 degrees above horizon
+            // Below the horizon, to look up from low; short of straight down,
+            // past which the orbit crosses under the target and turns the
+            // wrong way, and at which the view has no up.
+            min_pitch: -1.4,                              // ~80 degrees below
             max_pitch: std::f32::consts::FRAC_PI_2 - 0.5, // ~60 degrees
             clearance: CameraClearance::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f32::consts::FRAC_PI_2;
+
+    use super::*;
+
+    /// The orbit's spherical coordinates hold only strictly between straight
+    /// down and straight up.
+    #[test]
+    fn the_pitch_range_stays_short_of_the_poles() {
+        let config = CameraConfig::default();
+        assert!(config.min_pitch > -FRAC_PI_2);
+        assert!(config.max_pitch < FRAC_PI_2);
+        assert!(config.min_pitch < config.max_pitch);
     }
 }
