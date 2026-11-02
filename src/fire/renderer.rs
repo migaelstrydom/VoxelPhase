@@ -25,9 +25,6 @@ mod bytecode {
     pub const FIRE_FRAGMENT: &[u8] = embedded_spirv!("fire/fire.frag");
 }
 
-/// Maximum number of fire volumes that can be rendered simultaneously.
-const MAX_FIRE_VOLUMES: usize = 32;
-
 /// Push constants for the fire raymarching pipeline.
 /// Shared by both vertex and fragment stages.
 #[repr(C)]
@@ -103,7 +100,7 @@ impl FireRenderer {
         render_pass: vk::RenderPass,
         depth_view: vk::ImageView,
     ) -> EngineResult<Self> {
-        let sim_pipelines = FireSimPipelines::new(device.clone())?;
+        let sim_pipelines = FireSimPipelines::new(device.clone(), SIM_POOL_SIZE as u32)?;
 
         let depth_sampler = Self::create_depth_sampler(&device)?;
         let graphics_descriptor_set_layout = Self::create_graphics_descriptor_layout(&device)?;
@@ -552,16 +549,15 @@ impl FireRenderer {
     }
 
     fn create_graphics_descriptor_pool(device: &ManagedDevice) -> EngineResult<vk::DescriptorPool> {
-        // Two sets per fire volume, one per field texture, each with two
+        // Two sets per simulation slot, one per field texture, each with two
         // combined image samplers (volume + depth)
-        let sets = 2 * MAX_FIRE_VOLUMES as u32;
+        let sets = 2 * SIM_POOL_SIZE as u32;
         let pool_size = vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             descriptor_count: 2 * sets,
         };
 
         let create_info = vk::DescriptorPoolCreateInfo::default()
-            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
             .max_sets(sets)
             .pool_sizes(std::slice::from_ref(&pool_size));
 

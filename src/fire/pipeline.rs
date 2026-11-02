@@ -28,9 +28,6 @@ mod bytecode {
 /// Number of Jacobi iterations for pressure projection.
 const JACOBI_ITERATIONS: u32 = 25;
 
-/// Maximum number of simultaneously active fire volumes.
-const MAX_FIRE_VOLUMES: u32 = 32;
-
 /// Push constants shared by all fire simulation shaders.
 ///
 /// These control the look and feel of the volumetric fire. The simulation runs
@@ -144,7 +141,9 @@ pub struct FireSimPipelines {
 }
 
 impl FireSimPipelines {
-    pub fn new(device: Arc<ManagedDevice>) -> EngineResult<Self> {
+    /// The simulation pipelines, with a descriptor pool holding the sets of
+    /// `volumes` fire volumes.
+    pub fn new(device: Arc<ManagedDevice>, volumes: u32) -> EngineResult<Self> {
         let push_constant_range = vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::COMPUTE,
             offset: 0,
@@ -181,7 +180,7 @@ impl FireSimPipelines {
             &push_constant_range,
         )?;
 
-        let descriptor_pool = Self::create_descriptor_pool(&device)?;
+        let descriptor_pool = Self::create_descriptor_pool(&device, volumes)?;
 
         Ok(Self {
             advect,
@@ -483,18 +482,20 @@ impl FireSimPipelines {
         result
     }
 
-    fn create_descriptor_pool(device: &ManagedDevice) -> EngineResult<vk::DescriptorPool> {
+    fn create_descriptor_pool(
+        device: &ManagedDevice,
+        volumes: u32,
+    ) -> EngineResult<vk::DescriptorPool> {
         // Per volume: advect 2 sets of 4 images, then per post-advection
         // half forces (2) + pressure (2 sets of 3) + correct (2): 10 sets,
         // 28 storage images.
-        let max_sets = 10 * MAX_FIRE_VOLUMES;
+        let max_sets = 10 * volumes;
         let pool_size = vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_IMAGE,
-            descriptor_count: 28 * MAX_FIRE_VOLUMES,
+            descriptor_count: 28 * volumes,
         };
 
         let create_info = vk::DescriptorPoolCreateInfo::default()
-            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
             .max_sets(max_sets)
             .pool_sizes(std::slice::from_ref(&pool_size));
 
