@@ -249,6 +249,11 @@ pub struct PhysicsWorld {
     /// Substeps run since the frame's contacts were updated, so the
     /// edge-triggered half of a drive command fires exactly once per frame.
     substeps_taken: u32,
+    /// Whether a substep has solved impulses the manifold cache has not been
+    /// given yet. The cache is read once a frame, by the next
+    /// `update_contacts()`, so it is written once: after the frame's last
+    /// substep, or by that next update if the caller ran fewer.
+    manifold_cache_stale: bool,
     /// SAT axis cache for OBB-OBB dynamic pair early-out.
     sat_cache_map: SatCacheMap,
     /// GJK warm-start cache for wildcard dynamic pairs.
@@ -332,6 +337,7 @@ impl PhysicsWorld {
             narrowphase_ownership: NarrowphaseOwnership::new(),
             substeps_this_frame: 1,
             substeps_taken: 0,
+            manifold_cache_stale: false,
             sat_cache_map: SatCacheMap::new(),
             gjk_cache_map: GjkCacheMap::new(),
             narrowphase_work_buffer: NarrowphaseWorkBuffer::new(),
@@ -1073,6 +1079,9 @@ impl PhysicsWorld {
 
         self.profile.open();
         let lap = Instant::now();
+        if self.manifold_cache_stale {
+            self.flush_manifold_cache();
+        }
         self.substeps_this_frame = substeps.max(1);
         self.frame_index = self.frame_index.wrapping_add(1);
         self.sleep_manager.sync_bodies(&self.bodies);
@@ -1275,10 +1284,9 @@ impl PhysicsWorld {
         self.debugger
             .update_post_solve(&self.bodies, &self.cached_active_manifolds);
 
-        // Write solved impulses back to manifold cache
-        self.manifold_cache
-            .write_back(&self.cached_active_manifolds);
-        self.manifold_cache.prune();
+        // Solved impulses go back to the manifold cache once, after the
+        // frame's last substep: each substep's would overwrite the last's.
+        self.manifold_cache_stale = true;
 
         // Write solved constraint impulses back to persistent constraints
         self.solver.write_back(&mut self.constraints);
@@ -1349,6 +1357,19 @@ impl PhysicsWorld {
         self.cached_all_manifolds = all_manifolds;
         self.profile
             .record(PhysicsStage::SleepUpdate, lap.elapsed());
+
+        if self.substeps_taken >= self.substeps_this_frame {
+            self.flush_manifold_cache();
+        }
+    }
+
+    /// Write the solved impulses back to the manifold cache, for the next
+    /// frame's warm start, and drop the points it has stopped refreshing.
+    fn flush_manifold_cache(&mut self) {
+        self.manifold_cache
+            .write_back(&self.cached_active_manifolds);
+        self.manifold_cache.prune();
+        self.manifold_cache_stale = false;
     }
 
     /// Where the most recent frame's time went: the stages of the last
