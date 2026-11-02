@@ -20,7 +20,9 @@ pub fn generate_cube_vertices(half_extents: Vector3<f32>, colour: Colour) -> Vec
     let hz = half_extents.z;
     let c = colour.to_vec4();
 
-    // Face definitions: (normal, 4 corner positions in CCW order from outside)
+    // Face definitions: (normal, 4 corners). The corners run clockwise seen
+    // from outside; `generate_cube_indices` reverses them into the
+    // counter-clockwise triangles the pipelines take as front faces.
     let faces: [(Vector3<f32>, [Vector3<f32>; 4]); 6] = [
         // +X face
         (
@@ -85,6 +87,9 @@ pub fn generate_cube_vertices(half_extents: Vector3<f32>, colour: Colour) -> Vec
     ];
 
     let mut vertices = Vec::with_capacity(24);
+    // v runs down each face, so a texture stands upright on the sides; u
+    // follows the clockwise corners, so seen from outside every face shows
+    // its texture mirrored left to right.
     let uvs = [
         Vector2::new(0.0, 1.0),
         Vector2::new(1.0, 1.0),
@@ -127,6 +132,18 @@ pub fn generate_cube_indices() -> Vec<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pipelines cull back faces with counter-clockwise front faces, so
+    /// every triangle must wind counter-clockwise seen from outside.
+    #[test]
+    fn every_triangle_winds_counter_clockwise_from_outside() {
+        let verts = generate_cube_vertices(Vector3::new(1.0, 2.0, 3.0), Colour::WHITE);
+        for tri in generate_cube_indices().chunks(3) {
+            let [a, b, c] = [0, 1, 2].map(|k| verts[tri[k] as usize].pos);
+            let facing = (b - a).cross(&(c - a)).dot(&verts[tri[0] as usize].normal);
+            assert!(facing > 0.0, "triangle {tri:?} faces inward");
+        }
+    }
 
     #[test]
     fn cube_vertex_count() {
