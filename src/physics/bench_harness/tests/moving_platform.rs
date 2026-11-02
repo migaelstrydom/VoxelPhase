@@ -587,7 +587,6 @@ fn a_wobbling_deck_still_runs_its_route() {
         },
     );
 
-    let dt = 1.0 / 240.0;
     let mut debug_lines = DebugLines::default();
     let mut reached_far_end = false;
     for _ in 0..2400 {
