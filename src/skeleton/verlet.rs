@@ -213,10 +213,11 @@ impl VerletSystem {
 
     /// Solve all distance constraints.
     fn solve_distance_constraints(&mut self) {
-        for constraint in &self.distance_constraints.clone() {
+        let particles = &mut self.particles;
+        for constraint in &self.distance_constraints {
             let (pos_a, pos_b, inv_mass_a, inv_mass_b) = {
-                let a = &self.particles[constraint.particle_a];
-                let b = &self.particles[constraint.particle_b];
+                let a = &particles[constraint.particle_a];
+                let b = &particles[constraint.particle_b];
                 (a.position, b.position, a.inv_mass, b.inv_mass)
             };
 
@@ -236,8 +237,8 @@ impl VerletSystem {
                 let ratio_a = inv_mass_a / total_inv_mass;
                 let ratio_b = inv_mass_b / total_inv_mass;
 
-                self.particles[constraint.particle_a].position += correction * ratio_a;
-                self.particles[constraint.particle_b].position -= correction * ratio_b;
+                particles[constraint.particle_a].position += correction * ratio_a;
+                particles[constraint.particle_b].position -= correction * ratio_b;
             }
         }
     }

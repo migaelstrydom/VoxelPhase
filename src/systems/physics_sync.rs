@@ -353,6 +353,8 @@ impl<'a> System<'a> for PhysicsSyncSystem {
                     }
                 }
             }
+            self.water_sleep_tracker
+                .retain_existing(|handle| physics.world.body(handle).is_some());
         }
 
         // Debug visualization and logging

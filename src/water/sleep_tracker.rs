@@ -71,9 +71,9 @@ impl WaterSleepTracker {
         }
     }
 
-    /// Remove tracking for a body that no longer exists.
-    pub fn remove(&mut self, handle: RigidBodyHandle) {
-        self.levels.remove(&handle);
+    /// Forget every body `exists` says is gone.
+    pub fn retain_existing(&mut self, exists: impl Fn(RigidBodyHandle) -> bool) {
+        self.levels.retain(|&handle, _| exists(handle));
     }
 }
 
@@ -143,5 +143,15 @@ mod tests {
         let mut tracker = WaterSleepTracker::new();
         tracker.record(handle(0), &POOL, Point3::origin());
         assert!(tracker.should_wake(handle(0), &Dry, Point3::origin(), 0.5));
+    }
+
+    #[test]
+    fn a_despawned_body_is_forgotten_and_a_live_one_kept() {
+        let mut tracker = WaterSleepTracker::new();
+        tracker.record(handle(0), &POOL, Point3::origin());
+        tracker.record(handle(1), &POOL, Point3::origin());
+        tracker.retain_existing(|body| body == handle(1));
+        assert_eq!(tracker.levels.len(), 1);
+        assert!(!tracker.should_wake(handle(1), &POOL, Point3::origin(), 0.5));
     }
 }
