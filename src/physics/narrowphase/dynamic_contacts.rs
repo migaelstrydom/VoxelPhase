@@ -196,12 +196,10 @@ pub fn generate_dynamic_contacts(
             gjk_cache_opt.as_deref_mut(),
         );
 
-        // The dispatch routes mixed pairs to a canonical shape order
-        // (e.g. obb_capsule_manifold always has OBB first), so the contact
-        // normal always points from the "larger" shape toward the "smaller".
-        // The solver convention is normal from A→B, so body_a must be the
-        // larger shape type to match.
-        let (first, second) = if shape_type_rank(&si.shape) >= shape_type_rank(&sj.shape) {
+        // The solver takes normals from body A toward body B; the dispatch's
+        // run from the higher-ranked shape.
+        let (first, second) = if dispatch::shape_rank(&si.shape) >= dispatch::shape_rank(&sj.shape)
+        {
             (si, sj)
         } else {
             (sj, si)
@@ -239,22 +237,6 @@ pub fn prune_pair_caches(
 ) {
     sat_cache_map.prune(&buf.active_sat_pairs);
     gjk_cache_map.prune(&buf.active_gjk_pairs);
-}
-
-/// Rank shape types for deterministic body_a/body_b ordering.
-///
-/// The dispatch module routes mixed-type pairs to manifold functions that
-/// always take the "larger" shape first (e.g. `obb_capsule_manifold(obb, capsule)`).
-/// The resulting contact normal points from the larger shape toward the smaller.
-/// The solver convention is normal from body_a → body_b, so body_a must be the
-/// higher-ranked shape type.
-fn shape_type_rank(shape: &ColliderShape) -> u8 {
-    match shape {
-        ColliderShape::ConvexHull { .. } => 3,
-        ColliderShape::Box { .. } => 2,
-        ColliderShape::Capsule { .. } => 1,
-        ColliderShape::Sphere { .. } => 0,
-    }
 }
 
 fn requires_gjk_fallback(a: &ColliderShape, b: &ColliderShape) -> bool {
@@ -377,9 +359,9 @@ mod tests {
             half_extents: Vector3::new(1.0, 1.0, 1.0),
         };
 
-        assert!(shape_type_rank(&box_shape) > shape_type_rank(&capsule));
-        assert!(shape_type_rank(&capsule) > shape_type_rank(&sphere));
-        assert!(shape_type_rank(&box_shape) > shape_type_rank(&sphere));
+        assert!(dispatch::shape_rank(&box_shape) > dispatch::shape_rank(&capsule));
+        assert!(dispatch::shape_rank(&capsule) > dispatch::shape_rank(&sphere));
+        assert!(dispatch::shape_rank(&box_shape) > dispatch::shape_rank(&sphere));
     }
 
     /// The critical invariant: when a capsule (lower broadphase index) collides
@@ -420,7 +402,7 @@ mod tests {
         assert!(!manifold.is_empty(), "Should have contacts");
 
         // Apply the same ordering logic used in generate_dynamic_contacts.
-        let capsule_is_a = shape_type_rank(&capsule_shape) >= shape_type_rank(&box_shape);
+        let capsule_is_a = dispatch::shape_rank(&capsule_shape) >= dispatch::shape_rank(&box_shape);
 
         for cp in &manifold.points {
             let (pos_a, pos_b) = if capsule_is_a {
@@ -470,7 +452,7 @@ mod tests {
         let manifold = dispatch::generate_manifold(&view_sphere, &view_box, 0.02, None, None);
         assert!(!manifold.is_empty(), "Should have contacts");
 
-        let sphere_is_a = shape_type_rank(&sphere_shape) >= shape_type_rank(&box_shape);
+        let sphere_is_a = dispatch::shape_rank(&sphere_shape) >= dispatch::shape_rank(&box_shape);
 
         for cp in &manifold.points {
             let (pos_a, pos_b) = if sphere_is_a {

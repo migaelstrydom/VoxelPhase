@@ -172,10 +172,8 @@ pub fn generate_manifold(
             hull_capsule_manifold(b, a, &capsule, margin, gjk_cache)
         }
 
-        // GJK/EPA fallback for any shape pair without a specialized fast-path.
-        // The normal convention is a→b, so we must pass the higher-ranked shape
-        // as `a` to match the solver's body_a→body_b expectation (same as the
-        // analytic arms above which always put the "larger" shape first).
+        // GJK/EPA fallback for any shape pair without a specialized fast-path,
+        // given the higher-ranked shape first like the arms above.
         _ => {
             let manifold = if shape_rank(a.shape) >= shape_rank(b.shape) {
                 gjk_epa_manifold_cached(a, b, margin, gjk_cache)
@@ -187,12 +185,11 @@ pub fn generate_manifold(
     }
 }
 
-/// Shape type rank for canonical argument ordering in the GJK/EPA fallback.
-///
-/// Higher-ranked shapes are passed as `a` so the normal points from the "larger"
-/// shape toward the "smaller", matching the analytic paths and the solver's
-/// body_a → body_b convention.
-fn shape_rank(shape: &ColliderShape) -> u8 {
+/// The order `generate_manifold`'s normals follow: every manifold's normal
+/// points from the higher-ranked shape toward the lower, whichever way round
+/// the pair was passed (between equal ranks, from `a` toward `b`). A caller
+/// pairing the manifold with bodies makes the higher-ranked one body A.
+pub fn shape_rank(shape: &ColliderShape) -> u8 {
     match shape {
         ColliderShape::ConvexHull { .. } => 3,
         ColliderShape::Box { .. } => 2,
