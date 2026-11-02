@@ -1,6 +1,6 @@
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
-use generational_arena::Index;
+use generational_arena::{Arena, Index};
 use nalgebra::{Point3, UnitQuaternion};
 
 use crate::physics::body::RigidBody;
@@ -77,8 +77,8 @@ impl SleepTracker {
         self.bodies.remove(&handle.0);
     }
 
-    pub fn retain_indices(&mut self, live: &FxHashSet<Index>) {
-        self.bodies.retain(|idx, _| live.contains(idx));
+    pub fn retain_live(&mut self, bodies: &Arena<RigidBody>) {
+        self.bodies.retain(|idx, _| bodies.contains(*idx));
     }
 
     /// Whether linear and angular rates, squared, are both under threshold.

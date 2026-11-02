@@ -1,6 +1,6 @@
 use rustc_hash::FxHashSet;
 
-use generational_arena::{Arena, Index};
+use generational_arena::Arena;
 use nalgebra::Vector3;
 
 use crate::physics::body::RigidBody;
@@ -65,9 +65,8 @@ impl SleepManager {
     }
 
     pub fn sync_bodies(&mut self, bodies: &Arena<RigidBody>) {
-        let live: FxHashSet<Index> = bodies.iter().map(|(idx, _)| idx).collect();
-        self.sleeping.retain(|handle| live.contains(&handle.0));
-        self.sleep_tracker.retain_indices(&live);
+        self.sleeping.retain(|handle| bodies.contains(handle.0));
+        self.sleep_tracker.retain_live(bodies);
     }
 
     pub fn is_sleeping(&self, handle: RigidBodyHandle) -> bool {
