@@ -177,6 +177,7 @@ impl SleepManager {
             return;
         }
 
+        let kept_awake = kept_awake(constraints);
         let mut candidates: FxHashSet<RigidBodyHandle> = FxHashSet::default();
         for (idx, body) in bodies.iter() {
             if !body.is_dynamic() {
@@ -186,7 +187,7 @@ impl SleepManager {
             if self.is_sleeping(handle) {
                 continue;
             }
-            if is_kept_awake(constraints, handle) {
+            if kept_awake.contains(&handle) {
                 continue;
             }
             if self.sleep_tracker.update_body(handle, body, dt) {
@@ -211,8 +212,9 @@ impl SleepManager {
     }
 }
 
-/// Whether an active constraint on the body forbids it to sleep; each kind
-/// says for itself, through [`ConstraintKind::permits_sleep`].
+/// The bodies an active constraint forbids to sleep; each kind says for
+/// itself, through [`ConstraintKind::permits_sleep`]. One pass over the
+/// constraints, rather than one per awake body.
 ///
 /// Conservative for two-body constraints where both bodies are at rest (e.g.
 /// a "glue" constraint), which keep both awake. The proper fix is
@@ -221,8 +223,10 @@ impl SleepManager {
 /// `CONSTRAINT_SYSTEM_PLAN.md` ("Constraint islands for sleeping").
 ///
 /// [`ConstraintKind::permits_sleep`]: crate::physics::constraint::ConstraintKind::permits_sleep
-fn is_kept_awake(constraints: &Arena<Constraint>, body: RigidBodyHandle) -> bool {
+fn kept_awake(constraints: &Arena<Constraint>) -> FxHashSet<RigidBodyHandle> {
     constraints
         .iter()
-        .any(|(_, c)| c.active && c.kind.references_body(body) && !c.kind.permits_sleep())
+        .filter(|(_, c)| c.active && !c.kind.permits_sleep())
+        .flat_map(|(_, c)| c.kind.referenced_bodies())
+        .collect()
 }
