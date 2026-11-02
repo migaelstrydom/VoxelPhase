@@ -14,7 +14,7 @@
 //! shaders rather than a stand-in.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ash::vk;
 use nalgebra::{Matrix4, Vector2, Vector3};
@@ -271,6 +271,9 @@ pub struct Renderer {
     profile: RenderProfile,
     /// The last frame to finish on the GPU, complete with its GPU times.
     last_profile: RenderProfile,
+    /// How long the CPU waited, on the GPU and for vsync, while it handled
+    /// the frame most recently ended.
+    last_frame_waits: Duration,
     /// The next finished frame as a picture, when asked for.
     pub screenshot: Screenshot,
 }
@@ -451,6 +454,7 @@ impl Renderer {
             current_frame: None,
             profile: RenderProfile::default(),
             last_profile: RenderProfile::default(),
+            last_frame_waits: Duration::ZERO,
             screenshot: Screenshot::default(),
         })
     }
@@ -1598,6 +1602,7 @@ impl Renderer {
         let uploaded = self.resident.take_tally();
         self.profile.counters.uploaded_mesh_bytes += uploaded.bytes;
         self.profile.counters.buffer_growths += uploaded.growths;
+        self.last_frame_waits = self.profile.waits();
         let profile = std::mem::take(&mut self.profile);
         self.frame_mut().park(profile);
         result
@@ -1656,6 +1661,8 @@ impl Renderer {
 
         in_flight.sync.reset()?;
 
+        let queue_submit = Instant::now();
+
         // The shadow map goes first: the probes and the geometry pass sample
         // it, and the ordering plus the shadow pass's own external dependency
         // are what make that read see this frame's contents rather than the
@@ -1674,6 +1681,8 @@ impl Renderer {
                 &signal,
                 &wait_stages,
             )?;
+        let queue_submit = queue_submit.elapsed();
+        self.profile.record(RenderStage::QueueSubmit, queue_submit);
         self.frame_mut().timer.mark_submitted();
 
         // A failed picture must not keep the frame from its present, which
@@ -1694,7 +1703,10 @@ impl Renderer {
         );
         self.profile.record(
             RenderStage::Submit,
-            submit.elapsed().saturating_sub(recording),
+            submit
+                .elapsed()
+                .saturating_sub(recording)
+                .saturating_sub(queue_submit),
         );
         released
     }
@@ -1711,9 +1723,16 @@ impl Renderer {
         &self.last_profile
     }
 
+    /// How long the CPU waited, on the GPU and for vsync, while it handled
+    /// the frame most recently ended. Unlike [`Renderer::profile`] this is the
+    /// frame just recorded, not one still in flight.
+    pub fn frame_waits(&self) -> Duration {
+        self.last_frame_waits
+    }
+
     /// Add CPU time to a stage of the frame being recorded. For the stages a
     /// caller drives; the renderer times its own.
-    pub fn record_stage(&mut self, stage: RenderStage, elapsed: std::time::Duration) {
+    pub fn record_stage(&mut self, stage: RenderStage, elapsed: Duration) {
         self.profile.record(stage, elapsed);
     }
 

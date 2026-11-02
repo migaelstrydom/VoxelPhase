@@ -11,11 +11,18 @@
 ///                │               sorted blended draws + particles)
 ///                └─ Water · Fire · Overlay
 ///   end_frame ───┬─ Probes      (record the reflection probe faces)
-///                └─ Submit      (record shadows, submit and present)
+///                ├─ Submit      (record shadows, close the frame, present)
+///                └─ QueueSubmit (hand the frame to the GPU queue)
 /// ```
 ///
 /// `FenceWait` is time the CPU spent idle on the GPU, not work of its own: a
 /// frame that is GPU-bound shows up there, and nowhere else on this side.
+///
+/// `Acquire` and `QueueSubmit` are where the frame waits for vsync. Which of
+/// the two depends on the driver: MoltenVK's acquire returns at once and its
+/// queue submit blocks until a drawable is free to render into. The driver's
+/// own submit work rides along in `QueueSubmit` and is counted as waiting; an
+/// offscreen run (`render_perf`), which has no vsync, shows it on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RenderStage {
     FenceWait,
@@ -32,10 +39,11 @@ pub enum RenderStage {
     Overlay,
     Probes,
     Submit,
+    QueueSubmit,
 }
 
 impl RenderStage {
-    pub const COUNT: usize = 14;
+    pub const COUNT: usize = 15;
 
     /// Every stage, in the order a frame runs them.
     pub const ALL: [RenderStage; Self::COUNT] = [
@@ -53,6 +61,7 @@ impl RenderStage {
         RenderStage::Overlay,
         RenderStage::Probes,
         RenderStage::Submit,
+        RenderStage::QueueSubmit,
     ];
 
     pub fn label(self) -> &'static str {
@@ -71,12 +80,16 @@ impl RenderStage {
             RenderStage::Overlay => "overlay",
             RenderStage::Probes => "probes",
             RenderStage::Submit => "submit",
+            RenderStage::QueueSubmit => "queue_submit",
         }
     }
 
     /// Whether the stage is the CPU waiting rather than working.
     pub fn is_wait(self) -> bool {
-        matches!(self, RenderStage::FenceWait | RenderStage::Acquire)
+        matches!(
+            self,
+            RenderStage::FenceWait | RenderStage::Acquire | RenderStage::QueueSubmit
+        )
     }
 
     /// Position in [`RenderStage::ALL`], and in any per-stage array.

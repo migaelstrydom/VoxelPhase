@@ -46,6 +46,14 @@ impl RenderProfile {
             .sum()
     }
 
+    /// CPU time spent waiting on the frame: on the GPU, and for vsync.
+    pub fn waits(&self) -> Duration {
+        self.iter()
+            .filter(|(stage, _)| stage.is_wait())
+            .map(|(_, time)| time)
+            .sum()
+    }
+
     /// Every stage with its time, in the order a frame runs them.
     pub fn iter(&self) -> impl Iterator<Item = (RenderStage, Duration)> + '_ {
         RenderStage::ALL
@@ -65,11 +73,13 @@ mod tests {
         profile.record(RenderStage::Models, Duration::from_micros(200));
         profile.record(RenderStage::Terrain, Duration::from_micros(100));
         profile.record(RenderStage::FenceWait, Duration::from_millis(5));
+        profile.record(RenderStage::QueueSubmit, Duration::from_millis(7));
 
         assert_eq!(
             profile.stage(RenderStage::Models),
             Duration::from_micros(500)
         );
         assert_eq!(profile.cpu_work(), Duration::from_micros(600));
+        assert_eq!(profile.waits(), Duration::from_millis(12));
     }
 }

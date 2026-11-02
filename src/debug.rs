@@ -18,8 +18,8 @@ use crate::rendering::Colour;
 pub struct DebugConfig {
     /// If true, display the frame rate as `FPS` in the overlay.
     pub show_fps: bool,
-    /// If true, measure per-frame CPU work (excluding the vsync acquire wait)
-    /// and display it as `CPU ms` in the overlay.
+    /// If true, measure per-frame CPU work (excluding the renderer's waits on
+    /// the GPU and for vsync) and display it as `CPU ms` in the overlay.
     pub show_cpu_ms: bool,
     /// If true, display the whole-frame GPU time, from timestamp queries, as
     /// `GPU ms` in the overlay. Reads back a finished frame, so costs nothing

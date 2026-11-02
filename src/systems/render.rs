@@ -80,6 +80,8 @@ pub struct DebugChannels<'a> {
 
 #[derive(Default)]
 pub struct RenderSystem {
+    /// Smoothed CPU time of a whole frame, simulation and rendering, less
+    /// the renderer's waits on the GPU and for vsync.
     cpu_ms_ema: f32,
     /// Smoothed whole-frame GPU time, as the timestamps last reported it.
     gpu_ms_ema: f32,
@@ -91,7 +93,7 @@ pub struct RenderSystem {
 
 /// Marks the start of a frame's CPU work. Set by `app.rs` immediately before
 /// the dispatcher runs; read by `RenderSystem` to compute total per-frame CPU
-/// time excluding the vsync wait.
+/// time excluding the renderer's waits on the GPU and for vsync.
 #[derive(Default)]
 pub struct FrameStart(pub Option<std::time::Instant>);
 
@@ -321,11 +323,7 @@ impl<'a> System<'a> for RenderSystem {
             }
         }
 
-        let begin_frame_start = std::time::Instant::now();
-        let begin_frame_result = renderer.begin_frame();
-        let vsync_wait = begin_frame_start.elapsed();
-
-        match begin_frame_result {
+        match renderer.begin_frame() {
             Ok((draw_cb, present_index)) => {
                 // Recording the frame is separated from ending it. Anything in
                 // here may bail out, but `end_frame` must still run either way:
@@ -678,7 +676,7 @@ impl<'a> System<'a> for RenderSystem {
 
                 if let Some(start) = frame_start.0 {
                     let total = start.elapsed();
-                    let cpu_work = total.saturating_sub(vsync_wait);
+                    let cpu_work = total.saturating_sub(renderer.frame_waits());
                     self.cpu_ms_ema = smoothed(self.cpu_ms_ema, millis(cpu_work));
                 }
             }
