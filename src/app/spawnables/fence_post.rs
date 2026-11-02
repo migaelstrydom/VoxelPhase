@@ -197,10 +197,13 @@ impl Spawnable for FencePostDef {
 /// Barrel (cylinder sides) with outward normals. UV wraps texture around.
 fn generate_barrel_mesh(half_height: f32, radius: f32, segments: u32) -> (Vec<Vertex>, Vec<u32>) {
     let colour_vec = Colour::WHITE.to_vec4();
-    let mut vertices = Vec::with_capacity((segments * 2) as usize);
+    let mut vertices = Vec::with_capacity(((segments + 1) * 2) as usize);
     let mut indices = Vec::with_capacity((segments * 6) as usize);
 
-    for i in 0..segments {
+    // One column more than there are faces: the seam's two columns share a
+    // position and differ in u, 0 and 1, so the last face runs to the end of
+    // the texture rather than back across all of it.
+    for i in 0..=segments {
         let angle = i as f32 * TAU / segments as f32;
         let cos_a = angle.cos();
         let sin_a = angle.sin();
@@ -226,8 +229,8 @@ fn generate_barrel_mesh(half_height: f32, radius: f32, segments: u32) -> (Vec<Ve
     for i in 0..segments {
         let i0 = i * 2;
         let i1 = i * 2 + 1;
-        let i2 = ((i + 1) % segments) * 2;
-        let i3 = ((i + 1) % segments) * 2 + 1;
+        let i2 = (i + 1) * 2;
+        let i3 = (i + 1) * 2 + 1;
         indices.extend_from_slice(&[i0, i1, i2, i2, i1, i3]);
     }
 
@@ -481,4 +484,19 @@ fn generate_cross_section_texture(seed: u32) -> Vec<u8> {
         }
     }
     pixels
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::widest_u_span;
+
+    /// The texture goes once round: no face spans more than its own share of
+    /// u, the seam's included.
+    #[test]
+    fn the_texture_wraps_once_round_without_a_backwards_face() {
+        let (vertices, indices) = generate_barrel_mesh(1.0, 0.1, 16);
+        let segments = (vertices.len() / 2 - 1) as f32;
+        assert!(widest_u_span(&vertices, &indices) <= 1.0 / segments + 1e-5);
+    }
 }

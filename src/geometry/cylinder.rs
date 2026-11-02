@@ -39,11 +39,14 @@ pub fn generate_cylinder(
     // Build orthonormal basis for the cylinder cross-section
     let (tangent, bitangent) = build_orthonormal_basis(axis_normalized);
 
-    let mut vertices = Vec::with_capacity((segments * 2 + 2) as usize);
+    let mut vertices = Vec::with_capacity(((segments + 1) * 2) as usize);
     let mut indices = Vec::with_capacity((segments * 6) as usize);
 
     // Generate vertices for both caps
-    for i in 0..segments {
+    // One column more than there are faces: the seam's two columns share a
+    // position and differ in u, 0 and 1, so the last face runs to the end of
+    // the texture rather than back across all of it.
+    for i in 0..=segments {
         let angle = i as f32 * TAU / segments as f32;
         let cos_a = angle.cos();
         let sin_a = angle.sin();
@@ -76,8 +79,8 @@ pub fn generate_cylinder(
     for i in 0..segments {
         let i0 = i * 2;
         let i1 = i * 2 + 1;
-        let i2 = ((i + 1) % segments) * 2;
-        let i3 = ((i + 1) % segments) * 2 + 1;
+        let i2 = (i + 1) * 2;
+        let i3 = (i + 1) * 2 + 1;
 
         // Two triangles per quad
         indices.push(i0);
@@ -220,4 +223,39 @@ fn build_orthonormal_basis(direction: Vector3<f32>) -> (Vector3<f32>, Vector3<f3
     let bitangent = direction.cross(&tangent).normalize();
 
     (tangent, bitangent)
+}
+
+/// The widest span of u across any one triangle. A wrapped seam shows as a
+/// triangle spanning almost the whole texture.
+#[cfg(test)]
+pub(crate) fn widest_u_span(vertices: &[Vertex], indices: &[u32]) -> f32 {
+    indices
+        .chunks_exact(3)
+        .map(|triangle| {
+            let us = triangle.iter().map(|&i| vertices[i as usize].tex_coords.x);
+            let (lo, hi) = us.fold((f32::MAX, f32::MIN), |(lo, hi), u| (lo.min(u), hi.max(u)));
+            hi - lo
+        })
+        .fold(0.0, f32::max)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The texture goes once round the cylinder: no face spans more than its
+    /// own share of u, the seam's included.
+    #[test]
+    fn the_texture_wraps_once_round_without_a_backwards_face() {
+        let segments = 16;
+        let (vertices, indices) = generate_cylinder(
+            Point3::origin(),
+            Point3::new(0.0, 2.0, 0.0),
+            0.5,
+            segments,
+            Colour::WHITE,
+        );
+        let share = 1.0 / segments as f32;
+        assert!(widest_u_span(&vertices, &indices) <= share + 1e-5);
+    }
 }
