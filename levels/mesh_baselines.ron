@@ -39,6 +39,7 @@
         (level: "stack_yard.level.ron", triangles: 420300, open_edges: 0),
         (level: "rubble_garden.level.ron", triangles: 257420, open_edges: 0),
         (level: "ledge_garden.level.ron", triangles: 252648, open_edges: 0),
+        (level: "shrub_garden.level.ron", triangles: 245296, open_edges: 0),
         (level: "traversal_garden.level.ron", triangles: 433596, open_edges: 0),
     ],
 )

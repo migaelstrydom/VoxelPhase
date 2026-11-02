@@ -26,6 +26,7 @@ use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::explosion::Explosion;
 use crate::fire::components::{Flammable, OnFire};
 use crate::fire::light::FireLight;
+use crate::foliage::Foliage;
 use crate::force_field::ForceFieldVisual;
 use crate::fracture::{CompoundFracture, Debris, DebrisBudget};
 use crate::glass::BrittleSheet;
@@ -114,6 +115,7 @@ impl WorldBuilder {
         world.register::<BodyMotion>();
         world.register::<MovingPlatform>();
         world.register::<Trampoline>();
+        world.register::<Foliage>();
         world.register::<Grenade>();
         world.register::<HeldGrenade>();
         world.register::<Lifetime>();

@@ -9,6 +9,7 @@ use crate::character::{
 use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::debug::DebugOverlays;
 use crate::drive::{Actuator, BodyMotion, DriveIntent};
+use crate::foliage::{leaf_depth, Foliage, LeafDrag};
 use crate::physics::constraint::keep_attitude;
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::rendering::colour::Colour;
@@ -53,6 +54,7 @@ impl<'a> System<'a> for CharacterControlSystem {
         ReadStorage<'a, AttitudeControl>,
         ReadStorage<'a, Throws>,
         Write<'a, DebugOverlays>,
+        ReadStorage<'a, Foliage>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -74,6 +76,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             attitudes,
             throws,
             mut debug_overlays,
+            foliage,
         ) = data;
         let dt = time.delta_seconds();
 
@@ -187,7 +190,8 @@ impl<'a> System<'a> for CharacterControlSystem {
             // Ground speed is resolved after entering the state, so a long
             // jump's landing frame already sees crouch suppressed.
             let ground_speed =
-                resolve_ground_speed(target, config, state.conditioning.crouch_locked());
+                resolve_ground_speed(target, config, state.conditioning.crouch_locked())
+                    * wading_stride(&foliage, &physics_res.world, character_body);
 
             // --- Yaw drive (physics body → Rotation, input → angular velocity) ---
             // Read against the pitch the body is being held at: a swimmer's
@@ -505,6 +509,21 @@ fn draw_grab_debug(
     }
 }
 
+/// The share of its stride a character keeps for the leaves it is wading
+/// through (`foliage::thicket`): all of it clear of any.
+fn wading_stride(
+    foliage: &ReadStorage<Foliage>,
+    world: &PhysicsWorld,
+    body: RigidBodyHandle,
+) -> f32 {
+    let Some(rigid) = world.body(body) else {
+        return 1.0;
+    };
+    let reach = world.reach(body);
+    let depth = leaf_depth(foliage.join(), world, rigid.position(), reach);
+    LeafDrag::default().stride(depth)
+}
+
 /// Resolve effective ground speed from gait intent. Crouch wins over sprint,
 /// except while the crouch lockout is active (post-long-jump recovery), in
 /// which case crouch is ignored so holding Ctrl doesn't brake the player.
@@ -739,6 +758,7 @@ mod tests {
         world.register::<LocomotionConfig>();
         world.register::<Grounding>();
         world.register::<Immersion>();
+        world.register::<Foliage>();
         world.register::<AttitudeControl>();
         world.register::<Throws>();
         world.register::<Position>();

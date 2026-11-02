@@ -6,9 +6,10 @@
 //! through them (`drag`), but nothing collides with them. A cluster of
 //! spheres, not one ball: a single sphere has nothing to stop it rolling, and
 //! the engine's friction has no rolling resistance, while a lumpy cluster
-//! tumbles like a sack and stops.
+//! tumbles like a sack and stops. The air's drag on it is the drag
+//! provider's (`drag`), quadratic to a low terminal speed.
 
-use nalgebra::{Isometry3, Point3};
+use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
 
 use super::shape::FoliageShape;
 use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
@@ -24,9 +25,6 @@ pub struct LeafCore {
     pub bulk_density: f32,
     /// Grip of the core on whatever it lands on. High: leaves snag.
     pub friction: f32,
-    /// Share of its speed the clump loses per second to the air through its
-    /// leaves.
-    pub linear_damping: f32,
     /// Share of its spin the clump loses per second: leaves brushing the
     /// ground and the air as it tumbles, which is what brings a rolling clump
     /// to rest on a gentle slope.
@@ -37,9 +35,8 @@ impl Default for LeafCore {
     fn default() -> Self {
         Self {
             core_fraction: 0.6,
-            bulk_density: 14.0,
+            bulk_density: 30.0,
             friction: 0.9,
-            linear_damping: 0.15,
             angular_damping: 0.6,
         }
     }
@@ -79,6 +76,82 @@ impl LeafCore {
             .collect()
     }
 
+    /// How the core rests on level ground: the direction, in the clump's
+    /// frame, that points down when it does, and how high its origin then
+    /// sits above the ground.
+    ///
+    /// The origin's height over a plane the spheres rest on, with `d` the
+    /// way down, is the furthest any sphere reaches along `d`:
+    /// `max(c·d + r)`. The clump rests where that is least, on the three
+    /// spheres (or two, or one) it settles onto, found by sampling
+    /// directions and refining round the best.
+    pub fn resting_down(&self, shape: &FoliageShape) -> (Vector3<f32>, f32) {
+        let spheres: Vec<(Vector3<f32>, f32)> = shape
+            .lobes
+            .iter()
+            .map(|l| (l.centre.coords, l.radius * self.core_fraction))
+            .collect();
+        let height = |d: &Vector3<f32>| {
+            spheres
+                .iter()
+                .map(|(c, r)| c.dot(d) + r)
+                .fold(f32::MIN, f32::max)
+        };
+        let golden = std::f32::consts::PI * (3.0 - 5.0f32.sqrt());
+        const SAMPLES: usize = 2000;
+        let mut best = (-Vector3::y(), height(&-Vector3::y()));
+        for i in 0..SAMPLES {
+            let y = 1.0 - 2.0 * (i as f32 + 0.5) / SAMPLES as f32;
+            let ring = (1.0 - y * y).sqrt();
+            let azimuth = golden * i as f32;
+            let d = Vector3::new(ring * azimuth.cos(), y, ring * azimuth.sin());
+            let h = height(&d);
+            if h < best.1 {
+                best = (d, h);
+            }
+        }
+        // Refine: walk downhill in ever smaller steps.
+        let mut step = 0.05;
+        while step > 1e-4 {
+            let (d, h) = best;
+            let a = d
+                .cross(&Vector3::x())
+                .try_normalize(1e-6)
+                .unwrap_or_else(|| d.cross(&Vector3::z()).normalize());
+            let b = d.cross(&a);
+            let improved = [a, -a, b, -b]
+                .iter()
+                .map(|t| (d + t * step).normalize())
+                .map(|n| (n, height(&n)))
+                .filter(|(_, hn)| *hn < h)
+                .min_by(|x, y| x.1.total_cmp(&y.1));
+            match improved {
+                Some(found) => best = found,
+                None => step *= 0.5,
+            }
+        }
+        best
+    }
+
+    /// The pose a loose clump rests in on level ground at `ground`, turned
+    /// `yaw` about the vertical.
+    pub fn resting_pose(
+        &self,
+        shape: &FoliageShape,
+        ground: Point3<f32>,
+        yaw: f32,
+    ) -> Isometry3<f32> {
+        let (down, height) = self.resting_down(shape);
+        let settle = UnitQuaternion::rotation_between(&down, &-Vector3::y()).unwrap_or_else(|| {
+            UnitQuaternion::from_axis_angle(&Vector3::x_axis(), std::f32::consts::PI)
+        });
+        let turn = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), yaw);
+        Isometry3::from_parts(
+            Translation3::from(ground.coords + Vector3::y() * height),
+            turn * settle,
+        )
+    }
+
     /// The clump as a dynamic body at `pose`, its origin at the shape's.
     pub fn spawn(
         &self,
@@ -90,12 +163,42 @@ impl LeafCore {
             RigidBodyDesc::dynamic()
                 .position(Point3::from(pose.translation.vector))
                 .rotation(pose.rotation)
-                .linear_damping(self.linear_damping)
                 .angular_damping(self.angular_damping),
         );
         for collider in self.colliders(shape) {
             world.attach_collider(body, collider);
         }
         body
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::foliage::shape::ShrubSpec;
+
+    /// At its resting pose the lowest core sphere touches the ground, and it
+    /// sits no higher than it would stood upright.
+    #[test]
+    fn a_resting_clump_sits_on_its_spheres() {
+        let core = LeafCore::default();
+        let shape = ShrubSpec::with_radius(0.6).grow(5);
+        let pose = core.resting_pose(&shape, Point3::origin(), 0.3);
+        let lowest = shape
+            .lobes
+            .iter()
+            .map(|l| (pose * l.centre).y - l.radius * core.core_fraction)
+            .fold(f32::MAX, f32::min);
+        assert!(lowest.abs() < 1e-4, "lowest sphere at {lowest}");
+        let upright = shape
+            .lobes
+            .iter()
+            .map(|l| l.radius * core.core_fraction - l.centre.y)
+            .fold(f32::MIN, f32::max);
+        let (_, height) = core.resting_down(&shape);
+        assert!(
+            height <= upright + 1e-5,
+            "it rests higher than it stands upright"
+        );
     }
 }

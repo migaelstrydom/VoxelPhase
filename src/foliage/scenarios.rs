@@ -12,14 +12,18 @@
 //! The physics is the game's: its default world, stepped by its stepper at
 //! 60 Hz frames.
 
+use std::sync::Arc;
+
 use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
 
+use super::drag::{DragVolume, FoliageDrag, LeafDrag, VolumeFrame};
 use super::leaf_core::LeafCore;
 use super::shape::{FoliageShape, Lobe, ShrubSpec};
 use crate::debug::DebugLines;
-use crate::physics::bench_harness::geometry::{FlatQuadGeometry, RampGeometry};
+use crate::physics::bench_harness::geometry::{EmptyGeometry, FlatQuadGeometry, RampGeometry};
 use crate::physics::{
-    PhysicsWorld, RigidBodyHandle, SequentialStepper, StaticGeometry, Stepper, SubstepForceProvider,
+    ColliderDesc, PhysicsImpulse, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, SequentialStepper,
+    StaticGeometry, Stepper,
 };
 
 /// The game's frame and physics step.
@@ -55,16 +59,30 @@ fn tumble(
     let body = core.spawn(&mut world, shape, pose);
     let mass = world.body(body).expect("just made").mass();
     world.apply_impulse(body, velocity * mass);
-    run(&mut world, body, ground, seconds, &[])
+    run(
+        &mut world,
+        body,
+        Arc::new(shape.clone()),
+        ground,
+        seconds,
+        LeafDrag::default(),
+    )
 }
 
+/// Step a clump of `shape` on `body` for `seconds`, its leaves dragged by
+/// the air as the game's are.
 fn run(
     world: &mut PhysicsWorld,
     body: RigidBodyHandle,
+    shape: Arc<FoliageShape>,
     ground: &dyn StaticGeometry,
     seconds: f32,
-    providers: &[&dyn SubstepForceProvider],
+    leaf_drag: LeafDrag,
 ) -> Tumble {
+    let volumes = vec![DragVolume {
+        shape,
+        frame: VolumeFrame::Body(body),
+    }];
     let mut stepper = SequentialStepper::new(PHYSICS_DT, 12);
     let mut lines = DebugLines::default();
     let mut touched_at: Option<f32> = None;
@@ -77,7 +95,8 @@ fn run(
     };
     let frames = (seconds / FRAME_DT).round() as usize;
     for frame in 0..frames {
-        stepper.step(world, FRAME_DT, ground, &[], providers, &mut lines);
+        let drag = FoliageDrag::new(leaf_drag, volumes.clone(), world, [], FRAME_DT);
+        stepper.step(world, FRAME_DT, ground, &[], &[&drag], &mut lines);
         lines.clear();
         let t = (frame + 1) as f32 * FRAME_DT;
         let b = world.body(body).expect("the clump is there");
@@ -241,4 +260,133 @@ fn a_clump_stops_below_a_steep_slope() {
     let stopped = past_the_foot(run.rest);
     assert!(stopped < 3.5, "it ran {stopped:.2} m past the foot");
     assert!(run.slept_at.is_some(), "it never slept");
+}
+
+/// A body thrown along +x at shrub height through `volumes`, unpowered:
+/// its speed when it has crossed `x_exit`.
+fn speed_through(volumes: &[DragVolume], collider: ColliderDesc, speed: f32, x_exit: f32) -> f32 {
+    let mut world = PhysicsWorld::default();
+    let body = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(Point3::new(-2.0, 0.0, 0.0))
+            .gravity_scale(0.0),
+    );
+    world.attach_collider(body, collider);
+    let mass = world.body(body).expect("just made").mass();
+    world.apply_impulse(body, Vector3::x() * speed * mass);
+    let ground = EmptyGeometry;
+    let mut stepper = SequentialStepper::new(PHYSICS_DT, 12);
+    let mut lines = DebugLines::default();
+    for _ in 0..600 {
+        let drag = FoliageDrag::new(
+            LeafDrag::default(),
+            volumes.to_vec(),
+            &world,
+            [body],
+            FRAME_DT,
+        );
+        stepper.step(&mut world, FRAME_DT, &ground, &[], &[&drag], &mut lines);
+        lines.clear();
+        let b = world.body(body).expect("there");
+        if b.position().x > x_exit {
+            return b.linear_velocity().magnitude();
+        }
+    }
+    panic!("the body never got through");
+}
+
+/// A rooted shrub at the origin.
+fn rooted_shrub() -> Vec<DragVolume> {
+    vec![DragVolume {
+        shape: Arc::new(shrub()),
+        frame: VolumeFrame::Fixed(Isometry3::identity()),
+    }]
+}
+
+/// A grenade thrown through a shrub comes out slowed but still going; one
+/// thrown past nothing keeps its speed.
+#[test]
+fn a_grenade_through_a_shrub_comes_out_slowed() {
+    let grenade = || ColliderDesc::sphere(0.2).density(2000.0);
+    let clear = speed_through(&[], grenade(), 12.0, 2.0);
+    let through = speed_through(&rooted_shrub(), grenade(), 12.0, 2.0);
+    println!("grenade at 12 m/s: {clear:.2} m/s past nothing, {through:.2} m/s through a shrub");
+    assert!(
+        (clear - 12.0).abs() < 0.05,
+        "air alone slowed it to {clear:.2}"
+    );
+    assert!(through < 11.0, "the shrub barely slowed it: {through:.2}");
+    assert!(through > 6.0, "the shrub nearly stopped it: {through:.2}");
+}
+
+/// The player's capsule, coasting at walking pace into a shrub, is slowed
+/// more than a grenade is: it is far lighter for its size.
+#[test]
+fn a_coasting_body_wades_into_a_shrub() {
+    let capsule = || ColliderDesc::capsule(0.5, 0.25).density(56.0 / capsule_volume(0.5, 0.25));
+    let clear = speed_through(&[], capsule(), 4.0, 0.0);
+    let through = speed_through(&rooted_shrub(), capsule(), 4.0, 0.0);
+    println!(
+        "capsule at 4 m/s: {clear:.2} m/s past nothing, {through:.2} m/s at the shrub's middle"
+    );
+    assert!(
+        through < 0.8 * clear,
+        "it waded through at {through:.2} m/s"
+    );
+    assert!(
+        through > 0.2 * clear,
+        "it was all but stopped: {through:.2} m/s"
+    );
+}
+
+fn capsule_volume(half_height: f32, radius: f32) -> f32 {
+    let pi = std::f32::consts::PI;
+    pi * radius * radius * 2.0 * half_height + 4.0 / 3.0 * pi * radius.powi(3)
+}
+
+/// A grenade going off a metre and a half from a clump throws it about a
+/// dozen metres; without the air's drag the same shove throws it several
+/// times as far. A blast's shove is an impulse whatever the mass, and it is
+/// the air that makes something this light land nearby.
+#[test]
+fn a_blast_throws_a_clump_a_dozen_metres_not_across_the_level() {
+    let shape = shrub();
+    let ground = FlatQuadGeometry::new(200.0);
+    let blasted = |leaf_drag: LeafDrag| {
+        let mut world = PhysicsWorld::default();
+        let body =
+            LeafCore::default().spawn(&mut world, &shape, standing(&shape, Point3::origin(), 0.01));
+        let blast = PhysicsImpulse::radial(Point3::new(-1.5, 0.0, 0.0), 5.0, 1000.0, 0.5);
+        let kick = blast
+            .impulse_at(world.body(body).unwrap().position())
+            .unwrap();
+        world.apply_impulse(body, kick);
+        let launched = kick.magnitude() / world.body(body).unwrap().mass();
+        (
+            launched,
+            run(
+                &mut world,
+                body,
+                Arc::new(shape.clone()),
+                &ground,
+                12.0,
+                leaf_drag,
+            ),
+        )
+    };
+    let (launched, run) = blasted(LeafDrag::default());
+    let (_, airless) = blasted(LeafDrag {
+        terminal_speed: f32::INFINITY,
+        ..LeafDrag::default()
+    });
+    println!("blasted at {launched:.0} m/s: {run:?}");
+    println!("without air: {airless:?}");
+    assert!(run.rest.x > 2.0, "it barely moved: {:.2} m", run.rest.x);
+    assert!(run.rest.x < 15.0, "it flew {:.2} m", run.rest.x);
+    assert!(
+        airless.rest.x > 3.0 * run.rest.x,
+        "air made little difference: {:.2} m without it",
+        airless.rest.x
+    );
+    assert!(run.slept_at.is_some(), "it never came to rest");
 }

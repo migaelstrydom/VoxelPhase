@@ -33,9 +33,9 @@ use crate::app::spawnables::{
     GoalDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, HoverSledDef, IceBoxDef,
     IceWallDef, IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef,
     MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef,
-    PyramidDef, RockDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef,
-    TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef, BARREL_RADIUS,
-    BEACH_BALL_RADIUS,
+    PyramidDef, RockDef, SeesawDef, ShrubDef, Spawnable, StackDef, StackItemDef, TableDef,
+    TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef,
+    BARREL_RADIUS, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -1157,6 +1157,19 @@ pub enum LevelObject {
         #[serde(default = "RockDef::default_density")]
         density: f32,
     },
+    /// Shrub — a ball of leaves. Rooted, nothing collides with it: bodies
+    /// wade through its leaves, and a blast tears it loose. Loose, it is a
+    /// clump on a light core that tumbles and stops.
+    Shrub {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+        /// Radius of the clump, in metres.
+        #[serde(default = "ShrubDef::default_radius")]
+        radius: f32,
+        /// Whether it starts torn loose.
+        #[serde(default)]
+        loose: bool,
+    },
     /// Vertical post anchored to terrain. Released when terrain is destroyed.
     FencePost {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -1692,6 +1705,7 @@ impl LevelObject {
             LevelObject::Menhir { pos, .. } => ("Menhir", anchored(pos)),
             LevelObject::Rock { pos, .. } => ("Rock", anchored(pos)),
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
+            LevelObject::Shrub { pos, .. } => ("Shrub", anchored(pos)),
             LevelObject::Roller { pos, .. } => ("Roller", anchored(pos)),
             LevelObject::HeartCritter { pos, .. } => ("HeartCritter", anchored(pos)),
             LevelObject::Fish { pos, .. } => ("Fish", anchored(pos)),
@@ -1977,6 +1991,10 @@ impl LevelObject {
                 radius: *bottom_radius,
             },
             LevelObject::FencePost { radius, .. } => Disc { radius: *radius },
+            // Its core is what touches the ground; the leaves round it give.
+            LevelObject::Shrub { radius, .. } => Disc {
+                radius: radius * 0.6,
+            },
             LevelObject::Rock { size, .. } => Disc { radius: size * 0.5 },
             LevelObject::Roller { radius, .. } => Disc { radius: *radius },
             // Small and it moves off immediately; the footprint is only
@@ -2076,6 +2094,7 @@ impl LevelObject {
             // Its pose is drawn from its seed; there is no authored one to turn.
             | LevelObject::Rock { .. }
             | LevelObject::FencePost { .. }
+            | LevelObject::Shrub { .. }
             | LevelObject::Roller { .. }
             | LevelObject::HeartCritter { .. }
             | LevelObject::Fish { .. }
@@ -2202,6 +2221,7 @@ impl LevelObject {
             LevelObject::Menhir { pos, .. } => p2(pos),
             LevelObject::Rock { pos, .. } => p2(pos),
             LevelObject::FencePost { pos, .. } => p2(pos),
+            LevelObject::Shrub { pos, .. } => p2(pos),
             LevelObject::Roller { pos, .. } => p2(pos),
             LevelObject::HeartCritter { pos, .. } => p2(pos),
             LevelObject::Fish { pos, .. } => p2(pos),
@@ -2571,6 +2591,12 @@ impl LevelObject {
                 seed: *seed,
                 bury: *bury,
                 density: *density,
+            }),
+
+            LevelObject::Shrub { pos, radius, loose } => Box::new(ShrubDef {
+                pos: *pos,
+                radius: *radius,
+                loose: *loose,
             }),
 
             LevelObject::FencePost {

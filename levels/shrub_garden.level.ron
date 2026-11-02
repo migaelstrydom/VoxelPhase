@@ -1,0 +1,79 @@
+// Shrub Garden: a play test of soft foliage (`src/foliage/`).
+//
+// The player starts at the south end of a lawn, facing north (+z).
+//
+//   z  6    a hedge row of rooted shrubs across the lawn: walk into it and
+//           wade through; throw a grenade through it
+//   z 14    three big rooted shrubs, well apart: blow one up to tear it
+//           loose and send it tumbling
+//   z 24    loose clumps at the foot of the ramp: kick them along the flat
+//   z 30    the ramp, about 20°, rising north to a terrace at 6 m with loose
+//           clumps along its top edge: push one off, or blast it off, and
+//           watch it tumble down and stop
+//   x 18    a hill, east of the lawn, crowned with rooted shrubs
+Level(
+    name: "Shrub Garden",
+
+    segments: [
+        (
+            name: "garden",
+
+            terrain: Terrain(
+                voxel_size: 0.25,
+                bounds: (min: (-16.0, -6.0, -6.0), max: (32.0, 14.0, 56.0)),
+                base_height: 0.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 2.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+                features: [
+                    Ramp(from: (0.0, 30.0), to: (0.0, 46.5), start_height: 0.0, end_height: 6.0, width: 10.0, flat_width: 9.0),
+                    Plateau(min: (-6.0, 46.0), max: (6.0, 54.0), height: 6.0),
+                    Hill(center: (20.0, 16.0), radius: 8.0, height: 4.0),
+                ],
+                volumes: [],
+            ),
+
+            objects: [
+                // The hedge row.
+                Shrub(pos: (-6.0, 6.0), radius: 0.55),
+                Shrub(pos: (-4.9, 6.1), radius: 0.6),
+                Shrub(pos: (-3.8, 5.9), radius: 0.5),
+                Shrub(pos: (-2.7, 6.0), radius: 0.6),
+                Shrub(pos: (-1.6, 6.1), radius: 0.55),
+                Shrub(pos: (1.6, 5.9), radius: 0.55),
+                Shrub(pos: (2.7, 6.0), radius: 0.6),
+                Shrub(pos: (3.8, 6.1), radius: 0.5),
+                Shrub(pos: (4.9, 5.9), radius: 0.6),
+                Shrub(pos: (6.0, 6.0), radius: 0.55),
+
+                // Big rooted shrubs, apart.
+                Shrub(pos: (-5.0, 14.0), radius: 0.9),
+                Shrub(pos: (0.0, 15.0), radius: 1.0),
+                Shrub(pos: (5.0, 14.0), radius: 0.8),
+
+                // Loose clumps on the flat.
+                Shrub(pos: (-3.0, 24.0), radius: 0.5, loose: true),
+                Shrub(pos: (0.0, 23.0), radius: 0.6, loose: true),
+                Shrub(pos: (3.0, 24.5), radius: 0.45, loose: true),
+
+                // Loose clumps along the terrace's edge, over the ramp.
+                Shrub(pos: (-3.0, 47.5), radius: 0.55, loose: true),
+                Shrub(pos: (0.0, 47.5), radius: 0.65, loose: true),
+                Shrub(pos: (3.0, 47.5), radius: 0.5, loose: true),
+
+                // The hill's crown.
+                Shrub(pos: (20.0, 16.0), radius: 0.8),
+                Shrub(pos: (18.5, 17.5), radius: 0.55),
+                Shrub(pos: (21.5, 14.8), radius: 0.6),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "garden"),
+    ],
+
+    player_spawn: (0.0, 1.0, -2.0),
+)

@@ -44,6 +44,10 @@ pub struct ShrubSpec {
     /// Squash of the clump's height against its width: below 1 a mound,
     /// above it a column.
     pub height_ratio: f32,
+    /// How low round the central lobe the satellites go, as the sine of
+    /// their elevation: -1 all the way round, as a clump that has tumbled;
+    /// near 0 only the sides and top, as a shrub growing from the ground.
+    pub lowest_satellite: f32,
 }
 
 impl Default for ShrubSpec {
@@ -53,6 +57,7 @@ impl Default for ShrubSpec {
             satellites: 5,
             satellite_radius: (0.42, 0.55),
             height_ratio: 0.85,
+            lowest_satellite: -1.0,
         }
     }
 }
@@ -63,6 +68,15 @@ impl ShrubSpec {
         Self {
             radius,
             ..Self::default()
+        }
+    }
+
+    /// The same shrub growing from the ground: its satellites on its sides
+    /// and top, so it stands on a broad base rather than perched on a lobe.
+    pub fn rooted(self) -> Self {
+        Self {
+            lowest_satellite: -0.2,
+            ..self
         }
     }
 
@@ -83,8 +97,9 @@ impl ShrubSpec {
         let golden = std::f32::consts::PI * (3.0 - 5.0f32.sqrt());
         let twist = rng.gen_range(0.0..std::f32::consts::TAU);
         for i in 0..self.satellites {
-            let y = 1.0 - 2.0 * (i as f32 + 0.5) / self.satellites as f32;
-            let y = (y + rng.gen_range(-0.2..0.2)).clamp(-0.9, 0.9);
+            let span = 1.0 - self.lowest_satellite;
+            let y = 1.0 - span * (i as f32 + 0.5) / self.satellites as f32;
+            let y = (y + rng.gen_range(-0.2..0.2)).clamp(self.lowest_satellite.max(-0.9), 0.9);
             let ring = (1.0 - y * y).sqrt();
             let azimuth = twist + golden * i as f32 + rng.gen_range(-0.4..0.4);
             let direction = Vector3::new(ring * azimuth.cos(), y, ring * azimuth.sin());

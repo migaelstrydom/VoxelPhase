@@ -42,6 +42,8 @@ pub struct ParticleConfig {
     pub ember_trail: ParticleSpec,
     /// The glint left where a culled shard was.
     pub shard_glitter: ParticleSpec,
+    /// Leaves knocked off a clump of foliage.
+    pub leaves: ParticleSpec,
 
     /// Gravity in world units per second squared, before each particle's own
     /// `gravity_scale`.
@@ -65,6 +67,7 @@ impl ParticleConfig {
             ParticleEffectType::WaterSplash => &self.splash,
             ParticleEffectType::EmberTrail => &self.ember_trail,
             ParticleEffectType::ShardGlitter => &self.shard_glitter,
+            ParticleEffectType::Leaves => &self.leaves,
         }
     }
 }
@@ -81,6 +84,7 @@ impl Default for ParticleConfig {
             splash: splash(),
             ember_trail: ember_trail(),
             shard_glitter: shard_glitter(),
+            leaves: leaves(),
             gravity: 9.81,
         }
     }
@@ -348,6 +352,36 @@ fn ember_trail() -> ParticleSpec {
     }
 }
 
+/// Leaves knocked off a clump: a light spray that drifts down, flutters
+/// and is gone in a couple of seconds.
+///
+/// Heavy drag and little gravity, so a leaf falls at a leaf's speed whatever
+/// it was thrown at; a fast spin and swirl, so the flecks flutter rather than
+/// drop. Opaque: leaves occlude, they do not glow. The emitter's palette
+/// gives each burst its clump's greens.
+fn leaves() -> ParticleSpec {
+    ParticleSpec {
+        lifetime: Spread::new(1.2, 2.4),
+        size: Spread::new(0.025, 0.055),
+        speed: Spread::new(1.0, 3.5),
+        launch: LaunchPattern::Upward { up_bias: 0.5 },
+        spawn_radius: 0.3,
+        ramp: ColourRamp::new(&[
+            ColourStop::new(0.0, rgba(0.16, 0.27, 0.06, 1.0)),
+            ColourStop::new(0.85, rgba(0.16, 0.27, 0.06, 1.0)),
+            ColourStop::new(1.0, rgba(0.16, 0.27, 0.06, 0.0)),
+        ]),
+        growth: 1.0,
+        spin: Spread::new(4.0, 12.0),
+        additive: 0.0,
+        billow: 0.2,
+        gravity_scale: 0.3,
+        drag: 2.5,
+        turbulence: 1.5,
+        stretch: 0.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,6 +399,7 @@ mod tests {
             ParticleEffectType::WaterSplash,
             ParticleEffectType::EmberTrail,
             ParticleEffectType::ShardGlitter,
+            ParticleEffectType::Leaves,
         ] {
             let spec = config.spec(effect_type);
             assert!(spec.lifetime.min > 0.0, "{effect_type:?} lives no time");

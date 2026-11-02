@@ -8,6 +8,7 @@ mod record;
 mod report;
 mod scenario;
 mod scenarios;
+mod shrub_scenarios;
 mod traversal;
 mod traversal_scenarios;
 mod turning;

@@ -11,6 +11,7 @@ use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::drive::{apply_drive, Actuator, BodyMotion, DriveIntent};
+use crate::foliage::{Foliage, FoliageDrag, LeafDrag};
 use crate::physics::{
     FrameProfile, PhysicsImpulseQueue, PhysicsWorld, SequentialStepper, Stepper,
     SubstepForceProvider,
@@ -255,6 +256,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         Write<'a, DebugOverlays>,
         Write<'a, PhysicsImpulseQueue>,
         Option<Read<'a, WaterWorld>>,
+        ReadStorage<'a, Foliage>,
     );
 
     fn run(
@@ -275,6 +277,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             mut debug_overlays,
             mut impulse_queue,
             water_opt,
+            foliage,
         ): Self::SystemData,
     ) {
         let frame_dt = time.delta_seconds();
@@ -316,10 +319,25 @@ impl<'a> System<'a> for PhysicsSyncSystem {
                 .collect();
             BuoyancyForceProvider::new(query, affected)
         });
-        let providers: Vec<&dyn SubstepForceProvider> = buoyancy_provider
-            .as_ref()
-            .map(|p| vec![p as &dyn SubstepForceProvider])
-            .unwrap_or_default();
+        let foliage_drag = {
+            let volumes: Vec<_> = foliage.join().map(Foliage::drag_volume).collect();
+            (!volumes.is_empty()).then(|| {
+                FoliageDrag::new(
+                    LeafDrag::default(),
+                    volumes,
+                    &physics.world,
+                    (&bodies).join().map(|b| b.0),
+                    frame_dt,
+                )
+            })
+        };
+        let mut providers: Vec<&dyn SubstepForceProvider> = Vec::new();
+        if let Some(p) = buoyancy_provider.as_ref() {
+            providers.push(p);
+        }
+        if let Some(p) = foliage_drag.as_ref().filter(|p| !p.is_idle()) {
+            providers.push(p);
+        }
 
         // Step physics with terrain as static geometry
         let mut physics_substeps = 0u32;

@@ -31,6 +31,8 @@ pub enum ParticleEffectType {
     /// The glint of a small shard vanishing: what the eye is given in place of
     /// a piece of debris the budget has taken away.
     ShardGlitter,
+    /// Leaves knocked off a clump of foliage.
+    Leaves,
 }
 
 /// Component for entities that emit particles.

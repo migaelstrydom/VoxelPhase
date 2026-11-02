@@ -17,6 +17,7 @@ use crate::damage::{
 use crate::explosion::{BlastLightSystem, ExplosionSystem};
 use crate::fire::light::FireLightSystem;
 use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
+use crate::foliage::{FoliageSkinSystem, FoliageUprootSystem};
 use crate::force_field::ForceFieldSystem;
 use crate::fracture::{DebrisCullSystem, FractureSystem};
 use crate::glass::GlassCrackSystem;
@@ -182,6 +183,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         )
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
         .with(TrampolineBedSystem, "trampoline_bed", &["physics_sync"])
+        .with(FoliageSkinSystem, "foliage_skin", &["physics_sync"])
         // Where a throw would land, predicted from this frame's camera and
         // this frame's arm state — the same two things the throw itself reads,
         // so the cursor and the grenade cannot disagree.
@@ -229,6 +231,9 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // the frame's lights are chosen.
         .with(BlastLightSystem, "blast_light", &["explosion"])
         .with(FireIgnitionSystem, "fire_ignition", &["explosion"])
+        // A blast tears shrubs loose after it has queued its shove, so the
+        // next physics step throws the cores it makes.
+        .with(FoliageUprootSystem, "foliage_uproot", &["explosion"])
         .with(FireCleanupSystem, "fire_cleanup", &["fire_ignition"])
         // Firelight tracks OnFire, so it must settle before lights are collected.
         .with(FireLightSystem, "fire_light", &["fire_cleanup"])
