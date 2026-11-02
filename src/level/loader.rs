@@ -166,12 +166,26 @@ fn validate_drop(segment: &str, object: &LevelObject) -> Result<(), LevelError> 
     }
 }
 
+/// A voxel size must be a whole number of 1/this metres, so that every
+/// sample of its lattice has an exact binary position.
+const VOXEL_SIZE_DENOMINATOR: f32 = 1024.0;
+
 fn validate_segment(segment: &super::data::SegmentDef) -> Result<(), LevelError> {
     let name = &segment.name;
     let voxel_size = segment.terrain.voxel_size;
     if voxel_size <= 0.0 {
         return Err(LevelError::Validation(format!(
             "segment '{name}': voxel_size must be positive"
+        )));
+    }
+    // The voxel lattice is addressed by float positions, which the octree
+    // splits at halves. A size with no exact binary form (0.1, 0.2, 0.3) puts
+    // samples a rounding error to either side of those splits, and two of
+    // them land in one leaf: a lattice of 0.3 m lost 29 of 384 samples.
+    if (voxel_size * VOXEL_SIZE_DENOMINATOR).fract() != 0.0 {
+        return Err(LevelError::Validation(format!(
+            "segment '{name}': voxel_size {voxel_size} must be a whole number of \
+             1/{VOXEL_SIZE_DENOMINATOR} m, such as 0.125, 0.25, 0.5, 0.75 or 1.0"
         )));
     }
 
@@ -462,6 +476,28 @@ mod tests {
             "",
         ));
         assert!(validate(&level).is_err());
+    }
+
+    #[test]
+    fn a_voxel_size_needs_an_exact_binary_form() {
+        let with_size = |size: f32| {
+            parse(&one_segment(
+                &format!(
+                    "Terrain(
+                        voxel_size: {size},
+                        bounds: (min: (-16.0, -16.0, -16.0), max: (16.0, 16.0, 16.0)),
+                        base_height: 0.0,
+                        features: [],
+                    )"
+                ),
+                "(0.0, 0.0, 0.0)",
+                "",
+            ))
+        };
+        assert!(validate(&with_size(0.3)).is_err());
+        assert!(validate(&with_size(0.1)).is_err());
+        assert!(validate(&with_size(0.75)).is_ok());
+        assert!(validate(&with_size(0.125)).is_ok());
     }
 
     #[test]
