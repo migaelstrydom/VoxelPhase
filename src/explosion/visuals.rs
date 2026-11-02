@@ -43,8 +43,8 @@ pub struct Stage {
     pub rate: f32,
     /// Seconds after detonation this stage starts.
     pub delay: f32,
-    /// Seconds the stage keeps emitting after it starts. A burst-only stage
-    /// still needs a non-zero span to survive its first frame.
+    /// Seconds the stage keeps emitting after it starts. A burst fires on the
+    /// stage's first frame whatever its span.
     pub duration: f32,
 }
 

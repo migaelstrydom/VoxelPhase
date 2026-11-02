@@ -53,12 +53,15 @@ pub fn step_emitter(
         return EmitterState::Running;
     }
 
-    if let Some(ref mut lifetime) = emitter.lifetime {
+    // The lifetime bounds the continuous emission only. The initial burst
+    // fires on the emitter's first frame however long that frame was: a
+    // burst-only emitter has a span shorter than a slow frame, and checking
+    // the span first lost the burst outright on exactly the hitch a blast
+    // causes.
+    let expired = emitter.lifetime.as_mut().is_some_and(|lifetime| {
         *lifetime -= dt;
-        if *lifetime <= 0.0 {
-            return EmitterState::Finished;
-        }
-    }
+        *lifetime <= 0.0
+    });
 
     let scale = emitter.scale;
     let palette = emitter.palette;
@@ -77,6 +80,10 @@ pub fn step_emitter(
             spawn(motion.current, rng);
         }
         emitter.burst_spawned = true;
+    }
+
+    if expired {
+        return EmitterState::Finished;
     }
 
     if emitter.spawn_rate > 0.0 {
@@ -197,9 +204,39 @@ impl<'a> System<'a> for ParticleUpdateSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::particles::ParticleEffectType;
 
     fn distance(a: Vector3<f32>, b: Vector3<f32>) -> f32 {
         (b - a).magnitude()
+    }
+
+    /// A burst-only emitter's span is shorter than a slow frame; the burst
+    /// still fires, and the emitter is then done.
+    #[test]
+    fn a_burst_fires_on_a_frame_longer_than_its_emitters_span() {
+        let config = ParticleConfig::default();
+        let effect = ParticleEffectType::Debris;
+        let mut emitter = ParticleEmitter::new(effect)
+            .with_burst(12)
+            .with_lifetime(0.05);
+        let mut pool = ParticlePool::new(100);
+        let motion = EmitterMotion {
+            previous: Vector3::zeros(),
+            current: Vector3::zeros(),
+            inherited_velocity: Vector3::zeros(),
+        };
+
+        let state = step_emitter(
+            &mut emitter,
+            config.spec(effect),
+            0.1,
+            motion,
+            &mut pool,
+            &mut rand::thread_rng(),
+        );
+
+        assert_eq!(pool.count(), 12);
+        assert_eq!(state, EmitterState::Finished);
     }
 
     #[test]
