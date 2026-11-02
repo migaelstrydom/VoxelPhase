@@ -14,6 +14,7 @@ const DEBUG_HULL_CONTACTS: bool = false;
 use super::discrete::capsule_capsule::capsule_capsule_manifold;
 use super::discrete::gjk::GjkCache;
 use super::discrete::gjk_epa_manifold::gjk_epa_manifold_cached;
+use super::discrete::hull_capsule::hull_capsule_manifold;
 use super::discrete::hull_hull::hull_hull_manifold;
 use super::discrete::hull_obb::hull_obb_manifold;
 use super::discrete::obb_capsule::obb_capsule_manifold;
@@ -154,6 +155,30 @@ pub fn generate_manifold(
                 validate_hull_hull_contacts(&manifold, a, b, margin);
             }
             manifold
+        }
+
+        // A hull against a capsule, the hull first whichever way round the
+        // pair came: the normal runs from hull to capsule, as the fallback's
+        // ranking below would have it.
+        (
+            ColliderShape::ConvexHull { .. },
+            ColliderShape::Capsule {
+                half_height,
+                radius,
+            },
+        ) => {
+            let capsule = Capsule::new(b.center, b.rotation, *half_height, *radius);
+            hull_capsule_manifold(a, b, &capsule, margin, gjk_cache)
+        }
+        (
+            ColliderShape::Capsule {
+                half_height,
+                radius,
+            },
+            ColliderShape::ConvexHull { .. },
+        ) => {
+            let capsule = Capsule::new(a.center, a.rotation, *half_height, *radius);
+            hull_capsule_manifold(b, a, &capsule, margin, gjk_cache)
         }
 
         // GJK/EPA fallback for any shape pair without a specialized fast-path.
