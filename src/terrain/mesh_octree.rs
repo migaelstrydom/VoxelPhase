@@ -1268,36 +1268,6 @@ mod tests {
         assert_eq!(octree.query_aabb(&query).len(), 1);
     }
 
-    /// Collect all neighbor refs from the octree as a sorted Vec for comparison.
-    fn collect_all_neighbor_refs(octree: &MeshOctree) -> Vec<(u64, u8, u64, u8, u32)> {
-        let mut refs = Vec::new();
-        collect_refs_recursive(&octree.root, 0, 0, &mut refs);
-        refs.sort();
-        refs
-    }
-
-    fn collect_refs_recursive(
-        node: &MeshNode,
-        depth: u8,
-        path: u64,
-        out: &mut Vec<(u64, u8, u64, u8, u32)>,
-    ) {
-        match &node.content {
-            MeshNodeContent::Empty => {}
-            MeshNodeContent::Leaf(leaf) => {
-                for r in &leaf.neighbor_refs {
-                    out.push((path, depth, r.path, r.depth, r.triangle_index));
-                }
-            }
-            MeshNodeContent::Interior(children) => {
-                for (i, child) in children.iter().enumerate() {
-                    let child_path = path | ((i as u64) << (depth * 3));
-                    collect_refs_recursive(child, depth + 1, child_path, out);
-                }
-            }
-        }
-    }
-
     #[test]
     fn test_query_filters_neighbor_refs_by_triangle_aabb() {
         // Regression test: query_aabb must filter neighbor ref triangles

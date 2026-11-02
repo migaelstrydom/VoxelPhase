@@ -1382,8 +1382,11 @@ mod falling_tests {
         let mut config = PhysicsConfig::default();
         config.sleep.enabled = false;
         let mut world = PhysicsWorld::new(config);
-        let body =
-            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, 50.0, 0.0)));
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(0.0, 50.0, 0.0))
+                .gravity_scale(if gravity { 1.0 } else { 0.0 }),
+        );
         world.attach_collider(body, ColliderDesc::sphere(RADIUS).density(mass / volume));
         world.wake_body(body);
         let floor = FlatQuadGeometry::new(20.0);
