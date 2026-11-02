@@ -16,6 +16,7 @@
 //! ```
 
 use nalgebra::{Point3, Vector3};
+use rustc_hash::FxHashSet;
 use smallvec::{smallvec, SmallVec};
 
 use crate::collision::contact::FeatureId;
@@ -93,7 +94,7 @@ impl CcdStrategy for SweepClampCcd {
         }
         self.dynamic
             .impacts_into(ctx, &candidates, &mut self.impacts);
-        retain_earliest_per_candidate(&mut self.impacts, candidates.len());
+        retain_earliest_per_body(&mut self.impacts);
 
         // Moved out so the resolve loop can borrow `self` mutably; handed
         // back at the end so its capacity survives to the next substep.
@@ -267,33 +268,32 @@ fn single_point_contact(impact: &SweptImpact) -> SolverContact {
 
 /// Keep only each candidate's earliest impact, in time-of-impact order.
 ///
-/// A candidate can find several impacts in one substep — the terrain sweep and
-/// the body sweep are independent, and one sweep can meet two obstacles. But a
-/// body can only be rewound to one point in time. Clamping it more than once
-/// leaves it wherever the last impact happened to put it, which for any impact
-/// but the earliest is somewhere it never reached, and applies an impulse for
-/// a collision that never happened.
+/// A body can find several impacts in one substep — the terrain sweep and the
+/// body sweep are independent, one sweep can meet two obstacles, and a
+/// compound body is swept once per collider, each one a candidate of its own.
+/// But a body can only be rewound to one point in time. Clamping it more than
+/// once leaves it wherever the last impact happened to put it, which for any
+/// impact but the earliest is somewhere it never reached, and applies an
+/// impulse for a collision that never happened.
 ///
-/// This does mean a candidate that genuinely meets two obstacles at once — the
-/// inside of a corner — resolves against one of them per substep, and needs the
-/// next substep for the other. Sorting earliest-first is what makes that
+/// This does mean a body that genuinely meets two obstacles at once — the
+/// inside of a corner — resolves against one of them per substep, and needs
+/// the next substep for the other. Sorting earliest-first is what makes that
 /// harmless: the obstacle it would have reached first is the one it stops on.
 ///
-/// Reaching the multi-impact case at all is harder than it sounds, and no
-/// scenario in the bench harness manages it. Two obstacles in a line cannot
-/// both be hit, since reaching the second means already being inside the first,
-/// and at a substep of 1/240 a sweep is short enough that anything else has to
-/// be arranged very deliberately. This is a guard on an invariant — a body can
-/// be rewound to one time, not several — rather than a repair of an observed
-/// fault.
-fn retain_earliest_per_candidate(impacts: &mut Vec<(usize, SweptImpact)>, candidate_count: usize) {
+/// For a single collider, reaching the multi-impact case is harder than it
+/// sounds: two obstacles in a line cannot both be hit, since reaching the
+/// second means already being inside the first. A compound reaches it easily:
+/// a brick-built boulder landing fast meets the ground with several bricks in
+/// the same substep.
+fn retain_earliest_per_body(impacts: &mut Vec<(usize, SweptImpact)>) {
     if impacts.len() < 2 {
         return;
     }
     impacts.sort_by(|(_, a), (_, b)| a.toi.total_cmp(&b.toi));
 
-    let mut resolved = vec![false; candidate_count];
-    impacts.retain(|(index, _)| !std::mem::replace(&mut resolved[*index], true));
+    let mut resolved = FxHashSet::default();
+    impacts.retain(|(_, impact)| resolved.insert(impact.clamped));
 }
 
 #[cfg(test)]
@@ -330,25 +330,41 @@ mod tests {
         )
     }
 
-    fn survivors(mut impacts: Vec<(usize, SweptImpact)>, count: usize) -> Vec<(usize, f32)> {
-        retain_earliest_per_candidate(&mut impacts, count);
+    fn survivors(mut impacts: Vec<(usize, SweptImpact)>) -> Vec<(usize, f32)> {
+        retain_earliest_per_body(&mut impacts);
         impacts.into_iter().map(|(i, im)| (i, im.toi)).collect()
+    }
+
+    /// An impact found by `candidate`, a collider of body `owner`.
+    fn impact_of(candidate: usize, owner: usize, toi: f32) -> (usize, SweptImpact) {
+        let (index, mut found) = impact(candidate, toi);
+        found.header.body_b = body(owner);
+        found.clamped = body(owner);
+        (index, found)
     }
 
     #[test]
     fn a_candidate_keeps_only_its_earliest_impact() {
         let impacts = vec![impact(0, 0.8), impact(0, 0.2), impact(0, 0.5)];
-        assert_eq!(survivors(impacts, 1), vec![(0, 0.2)]);
+        assert_eq!(survivors(impacts), vec![(0, 0.2)]);
     }
 
     #[test]
     fn distinct_candidates_all_survive_in_time_order() {
         let impacts = vec![impact(1, 0.9), impact(0, 0.1), impact(2, 0.5)];
-        assert_eq!(survivors(impacts, 3), vec![(0, 0.1), (2, 0.5), (1, 0.9)]);
+        assert_eq!(survivors(impacts), vec![(0, 0.1), (2, 0.5), (1, 0.9)]);
+    }
+
+    /// Two colliders of one compound both hit in a substep: the body is
+    /// rewound once, to the earlier.
+    #[test]
+    fn a_compound_keeps_only_its_earliest_impact_across_its_colliders() {
+        let impacts = vec![impact_of(0, 7, 0.6), impact_of(1, 7, 0.3), impact(2, 0.5)];
+        assert_eq!(survivors(impacts), vec![(1, 0.3), (2, 0.5)]);
     }
 
     #[test]
     fn a_lone_impact_is_left_alone() {
-        assert_eq!(survivors(vec![impact(0, 0.4)], 1), vec![(0, 0.4)]);
+        assert_eq!(survivors(vec![impact(0, 0.4)]), vec![(0, 0.4)]);
     }
 }
