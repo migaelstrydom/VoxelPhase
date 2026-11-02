@@ -267,8 +267,7 @@ impl Spawnable for PendulumDef {
             .with(ModelInstance::new(frame_model))
             .with(Renderable)
             .with(TerrainAnchored {
-                anchor_handle: frame_constraint,
-                upright_handle: frame_constraint,
+                constraints: vec![frame_constraint],
                 anchor_points: vec![anchor_check],
                 released_model: None,
             })
@@ -323,8 +322,7 @@ impl Spawnable for PendulumDef {
             .with(ModelInstance::new(ball_model))
             .with(Renderable)
             .with(TerrainAnchored {
-                anchor_handle: ball_constraint,
-                upright_handle: ball_constraint,
+                constraints: vec![ball_constraint],
                 anchor_points: vec![anchor_check],
                 released_model: Some(build_ball_model(self.ball_radius, ball_mat)),
             })

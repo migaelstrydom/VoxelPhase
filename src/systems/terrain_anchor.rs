@@ -47,8 +47,9 @@ impl<'a> System<'a> for TerrainAnchorSystem {
                         .map_or(true, |surface_y| surface_y < p.y)
                 });
             if terrain_gone {
-                physics.world.remove_constraint(anchor.anchor_handle);
-                physics.world.remove_constraint(anchor.upright_handle);
+                for &constraint in &anchor.constraints {
+                    physics.world.remove_constraint(constraint);
+                }
                 physics.world.set_ignores_static(body.0, false);
 
                 if let Some(released_model) = anchor.released_model.take() {
@@ -171,7 +172,7 @@ mod tests {
             .read_storage::<TerrainAnchored>()
             .get(menhir)
             .unwrap()
-            .anchor_handle;
+            .constraints[0];
         blast(&mut world, Point3::new(MENHIR.0, 0.0, MENHIR.1));
         TerrainAnchorSystem.run_now(&world);
 

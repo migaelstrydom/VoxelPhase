@@ -500,8 +500,7 @@ constraints when the terrain beneath is destroyed:
 
 ```rust
 .with(TerrainAnchored {
-    anchor_handle: fixed_handle,    // ConstraintHandle
-    upright_handle: fixed_handle,   // same handle (second remove is harmless)
+    constraints: vec![fixed_handle], // every constraint holding it down
     anchor_points: vec![Point3::new( // checked after the terrain changes near
         x,                           // them; released when any one is exposed
         surface_y - 0.1,             // slightly below surface

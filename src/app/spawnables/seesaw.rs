@@ -277,8 +277,7 @@ impl Spawnable for SeesawDef {
             .with(ModelInstance::new(beam_model))
             .with(Renderable)
             .with(TerrainAnchored {
-                anchor_handle: beam_anchor,
-                upright_handle: beam_upright,
+                constraints: vec![beam_anchor, beam_upright],
                 anchor_points: vec![anchor_check],
                 released_model: None,
             })
@@ -347,8 +346,7 @@ impl Spawnable for SeesawDef {
             .with(ModelInstance::new(fulcrum_model))
             .with(Renderable)
             .with(TerrainAnchored {
-                anchor_handle: fulcrum_fixed_h,
-                upright_handle: fulcrum_fixed_h,
+                constraints: vec![fulcrum_fixed_h],
                 anchor_points: vec![anchor_check],
                 released_model: None,
             })

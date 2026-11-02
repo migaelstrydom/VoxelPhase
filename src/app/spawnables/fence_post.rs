@@ -186,8 +186,7 @@ impl Spawnable for FencePostDef {
             .with(ModelInstance::new(model))
             .with(Renderable)
             .with(TerrainAnchored {
-                anchor_handle,
-                upright_handle,
+                constraints: vec![anchor_handle, upright_handle],
                 anchor_points: vec![anchor_check],
                 released_model: None,
             })

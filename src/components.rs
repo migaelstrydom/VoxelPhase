@@ -93,17 +93,16 @@ pub struct MaterialModulation(pub SurfaceModulation);
 
 /// Anchors an entity to a fixed world-space position via physics constraints.
 ///
-/// When the terrain beneath any of its anchor points is destroyed, both
+/// When the terrain beneath any of its anchor points is destroyed, its
 /// constraints are removed, a body welded into the ground stops passing through
 /// it (`RigidBody::ignores_static`), and this component is removed — releasing
 /// the body to fall freely.
 #[derive(Component)]
 #[storage(DenseVecStorage)]
 pub struct TerrainAnchored {
-    /// Handle to the constraint pinning the body's position.
-    pub anchor_handle: ConstraintHandle,
-    /// Handle to the KeepUpright constraint locking orientation.
-    pub upright_handle: ConstraintHandle,
+    /// The constraints holding the body to the ground (a fixed weld, or a
+    /// pin and a KeepUpright), all removed on release.
+    pub constraints: Vec<ConstraintHandle>,
     /// World-space positions to check for terrain solidity. The body is
     /// released as soon as the ground at any one of them is gone: a post needs
     /// one, under its foot; a stone bedded in the ground is loose once the
@@ -117,8 +116,7 @@ pub struct TerrainAnchored {
 impl std::fmt::Debug for TerrainAnchored {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TerrainAnchored")
-            .field("anchor_handle", &self.anchor_handle)
-            .field("upright_handle", &self.upright_handle)
+            .field("constraints", &self.constraints)
             .field("anchor_points", &self.anchor_points)
             .field("released_model", &self.released_model.is_some())
             .finish()

@@ -196,8 +196,7 @@ impl Spawnable for RockDef {
             .with(ModelInstance::new(model))
             .with(Renderable)
             .with(TerrainAnchored {
-                anchor_handle,
-                upright_handle: anchor_handle,
+                constraints: vec![anchor_handle],
                 anchor_points,
                 released_model: None,
             })
