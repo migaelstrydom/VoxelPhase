@@ -55,6 +55,11 @@ struct SimSlot {
     render_descriptor_sets: [vk::DescriptorSet; 2],
     /// Random noise seed so each slot evolves differently.
     noise_seed: f32,
+    /// The volume holds nothing of any fire yet: it is cleared before it is
+    /// next simulated. True for a new slot and for one handed to a fire
+    /// while no other fire was using it, which would otherwise inherit the
+    /// last fire's smoke.
+    fresh: bool,
 }
 
 /// Lightweight metadata for an active fire instance.
@@ -138,6 +143,7 @@ impl FireRenderer {
                 sim_descriptors,
                 render_descriptor_sets,
                 noise_seed: i as f32 * 200.0,
+                fresh: true,
             });
         }
 
@@ -155,13 +161,18 @@ impl FireRenderer {
         })
     }
 
-    /// Assign a sim slot to a new fire using least-used allocation.
-    pub fn assign_slot(&self, existing_fires: &[(specs::Entity, ActiveFire)]) -> usize {
+    /// Assign a sim slot to a new fire using least-used allocation. A slot no
+    /// fire was using starts the new one from an empty volume.
+    pub fn assign_slot(&mut self, existing_fires: &[(specs::Entity, ActiveFire)]) -> usize {
         let mut counts = [0usize; SIM_POOL_SIZE];
         for (_, fire) in existing_fires {
             counts[fire.sim_slot] += 1;
         }
-        counts.iter().enumerate().min_by_key(|(_, &c)| c).unwrap().0
+        let (slot, &users) = counts.iter().enumerate().min_by_key(|(_, &c)| c).unwrap();
+        if users == 0 {
+            self.sim_slots[slot].fresh = true;
+        }
+        slot
     }
 
     /// Simulation time scale. Values > 1.0 make fire evolve faster
@@ -202,7 +213,11 @@ impl FireRenderer {
             params.source_intensity = slot_intensities[i];
             params.noise_seed = slot.noise_seed;
 
-            transition_volumes_for_compute(device, cb, &slot.volume);
+            if std::mem::take(&mut slot.fresh) {
+                clear_volume_for_compute(device, cb, &slot.volume);
+            } else {
+                transition_volumes_for_compute(device, cb, &slot.volume);
+            }
             self.sim_pipelines
                 .simulate(cb, &mut slot.volume, &slot.sim_descriptors, &params);
         }
@@ -643,35 +658,114 @@ impl Drop for FireRenderer {
 // These are free functions (not methods) so they can be called while
 // `sim_slots` is borrowed mutably in `simulate()`.
 
-fn transition_volumes_for_compute(
-    device: &ash::Device,
-    cb: vk::CommandBuffer,
-    volume: &FireVolume,
-) {
-    let images: Vec<vk::Image> = volume
+/// Every image of a volume: the field, velocity and pressure pairs.
+fn volume_images(volume: &FireVolume) -> impl Iterator<Item = vk::Image> + '_ {
+    volume
         .field
         .iter()
         .chain(volume.velocity.iter())
         .chain(volume.pressure.iter())
         .map(|tex| tex.image)
-        .collect();
+}
 
-    let barriers: Vec<vk::ImageMemoryBarrier> = images
-        .iter()
-        .map(|&image| {
+/// The one colour mip and layer each volume image has.
+const VOLUME_RANGE: vk::ImageSubresourceRange = vk::ImageSubresourceRange {
+    aspect_mask: vk::ImageAspectFlags::COLOR,
+    base_mip_level: 0,
+    level_count: 1,
+    base_array_layer: 0,
+    layer_count: 1,
+};
+
+/// Start a volume empty: zero every image and leave it in `GENERAL` for the
+/// simulation. Whatever the images held — nothing defined, for a new slot, or
+/// the last fire's smoke — is discarded.
+fn clear_volume_for_compute(device: &ash::Device, cb: vk::CommandBuffer, volume: &FireVolume) {
+    let to_transfer: Vec<vk::ImageMemoryBarrier> = volume_images(volume)
+        .map(|image| {
             vk::ImageMemoryBarrier::default()
                 .image(image)
                 .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .src_access_mask(vk::AccessFlags::empty())
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .subresource_range(VOLUME_RANGE)
+        })
+        .collect();
+    let to_compute: Vec<vk::ImageMemoryBarrier> = volume_images(volume)
+        .map(|image| {
+            vk::ImageMemoryBarrier::default()
+                .image(image)
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                 .new_layout(vk::ImageLayout::GENERAL)
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
                 .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
-                .subresource_range(vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    base_mip_level: 0,
-                    level_count: 1,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                })
+                .subresource_range(VOLUME_RANGE)
+        })
+        .collect();
+    let zero = vk::ClearColorValue { float32: [0.0; 4] };
+
+    unsafe {
+        // A frame still on the GPU may be sampling or simulating this volume
+        // for the fire that last used it: let it finish first.
+        device.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &to_transfer,
+        );
+        for image in volume_images(volume) {
+            device.cmd_clear_color_image(
+                cb,
+                image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &zero,
+                &[VOLUME_RANGE],
+            );
+        }
+        device.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &to_compute,
+        );
+    }
+}
+
+/// Hand a simulated volume back to the simulation, keeping what it holds.
+///
+/// Every image is in `GENERAL` except the field the last simulation left as
+/// the source, which `transition_field_for_read` moved to
+/// `SHADER_READ_ONLY_OPTIMAL` for the fire pass.
+fn transition_volumes_for_compute(
+    device: &ash::Device,
+    cb: vk::CommandBuffer,
+    volume: &FireVolume,
+) {
+    let sampled = volume.field[volume.src()].image;
+    let barriers: Vec<vk::ImageMemoryBarrier> = volume_images(volume)
+        .map(|image| {
+            let (old_layout, src_access) = if image == sampled {
+                (
+                    vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    vk::AccessFlags::SHADER_READ,
+                )
+            } else {
+                (vk::ImageLayout::GENERAL, vk::AccessFlags::SHADER_WRITE)
+            };
+            vk::ImageMemoryBarrier::default()
+                .image(image)
+                .old_layout(old_layout)
+                .new_layout(vk::ImageLayout::GENERAL)
+                .src_access_mask(src_access)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
+                .subresource_range(VOLUME_RANGE)
         })
         .collect();
 

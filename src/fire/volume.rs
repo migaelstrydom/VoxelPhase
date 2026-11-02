@@ -54,7 +54,10 @@ impl FireVolume {
         height: u32,
         depth: u32,
     ) -> EngineResult<Self> {
-        let field_usage = vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED;
+        // Transfer destination for the clear that starts a volume empty.
+        let field_usage = vk::ImageUsageFlags::STORAGE
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_DST;
         let format = vk::Format::R16G16B16A16_SFLOAT;
 
         let field = [
