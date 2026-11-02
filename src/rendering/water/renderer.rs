@@ -707,7 +707,7 @@ impl WaterRenderer {
         );
         let buffer = &self.ripple_slots[self.slot].buffer;
         unsafe {
-            let ptr = buffer.map_memory(0, vk::MemoryMapFlags::empty())? as *mut f32;
+            let ptr = buffer.mapped()? as *mut f32;
             for (layer, tile) in tiles.iter().take(ripple_layers()).enumerate() {
                 let base = ptr.add(layer * RIPPLE_TILE_STRIDE);
                 tile.write_heights(std::slice::from_raw_parts_mut(base, PADDED_CELLS_PER_TILE));
@@ -732,7 +732,6 @@ impl WaterRenderer {
                     },
                 );
             }
-            buffer.unmap_memory();
         }
         Ok(layers)
     }
@@ -784,12 +783,11 @@ impl WaterRenderer {
             ],
         };
         unsafe {
-            let ptr = slot.wind.map_memory(0, vk::MemoryMapFlags::empty())? as *mut f32;
+            let ptr = slot.wind.mapped()? as *mut f32;
             std::ptr::copy_nonoverlapping(header.as_ptr(), ptr, WIND_HEADER);
             if let Some(w) = wind {
                 std::ptr::copy_nonoverlapping(w.peak.as_ptr(), ptr.add(WIND_HEADER), texels);
             }
-            slot.wind.unmap_memory();
         }
         slot.wind_written = Some(key);
         Ok(())
@@ -810,14 +808,13 @@ impl WaterRenderer {
         let slopes = self.chop.at(time);
         let slot = &mut self.ripple_slots[self.slot];
         unsafe {
-            let ptr = slot.chop.map_memory(0, vk::MemoryMapFlags::empty())? as *mut f32;
+            let ptr = slot.chop.mapped()? as *mut f32;
             std::ptr::copy_nonoverlapping(header.as_ptr(), ptr, CHOP_HEADER);
             std::ptr::copy_nonoverlapping(
                 slopes.as_ptr() as *const f32,
                 ptr.add(CHOP_HEADER),
                 2 * slopes.len(),
             );
-            slot.chop.unmap_memory();
         }
         Ok(())
     }

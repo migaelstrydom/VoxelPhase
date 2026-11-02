@@ -109,9 +109,8 @@ pub fn read_back_image(
     let byte_count = (extent.width * extent.height * BYTES_PER_PIXEL) as usize;
 
     unsafe {
-        let mapped = buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
+        let mapped = buffer.mapped()?;
         let pixels = std::slice::from_raw_parts(mapped as *const u8, byte_count).to_vec();
-        buffer.unmap_memory();
         Ok(pixels)
     }
 }

@@ -135,9 +135,8 @@ impl TransferService {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         unsafe {
-            let ptr = staging.map_memory(0, vk::MemoryMapFlags::empty())?;
+            let ptr = staging.mapped()?;
             std::ptr::copy_nonoverlapping(pixels.as_ptr(), ptr as *mut u8, pixels.len());
-            staging.unmap_memory();
         }
 
         let image = texture.image.handle();

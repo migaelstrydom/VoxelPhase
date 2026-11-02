@@ -12,8 +12,9 @@
 //! The deletion queue should be flushed at frame start, after the fence wait
 //! ensures the GPU has finished with previous frames.
 
+use std::ffi::c_void;
 use std::mem;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
 use nalgebra::{Matrix4, Vector3};
@@ -267,7 +268,18 @@ pub struct ManagedBuffer {
     pub memory: vk::DeviceMemory,
     pub size: vk::DeviceSize,
     device: Arc<ManagedDevice>,
+    /// The whole buffer mapped for the CPU, by the first [`ManagedBuffer::mapped`]
+    /// call. It stays mapped: freeing the memory unmaps it.
+    mapping: Mutex<Option<Mapping>>,
 }
+
+/// Where a buffer's memory is mapped into the CPU's address space.
+struct Mapping(*mut c_void);
+
+// SAFETY: the pointer is an address in mapped device memory, which any thread
+// may write through; `ManagedBuffer::mapped`'s callers own the synchronisation
+// of what they write, as they would with any shared mapping.
+unsafe impl Send for Mapping {}
 
 impl std::fmt::Debug for ManagedBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -340,35 +352,38 @@ impl ManagedBuffer {
                 memory,
                 size,
                 device,
+                mapping: Mutex::new(None),
             })
         }
     }
 
-    /// Map buffer memory for CPU access.
+    /// The start of the buffer's memory as the CPU sees it. Mapped on the
+    /// first call and kept mapped, so a buffer written every frame pays for
+    /// one `vkMapMemory` in its life. The buffer must be host-visible; every
+    /// one we map is host-coherent too, so a write needs no flush.
     ///
     /// # Safety
-    /// Caller must ensure proper usage of the returned pointer and call unmap_memory when done.
-    pub unsafe fn map_memory(
-        &self,
-        offset: vk::DeviceSize,
-        flags: vk::MemoryMapFlags,
-    ) -> EngineResult<*mut std::ffi::c_void> {
-        self.device
+    /// The pointer is valid for `size` bytes while the buffer lives. The
+    /// caller must not write memory the GPU may be reading.
+    pub unsafe fn mapped(&self) -> EngineResult<*mut c_void> {
+        let mut mapping = self
+            .mapping
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(Mapping(ptr)) = *mapping {
+            return Ok(ptr);
+        }
+        let ptr = self
             .device
-            .map_memory(self.memory, offset, self.size, flags)
+            .device
+            .map_memory(self.memory, 0, self.size, vk::MemoryMapFlags::empty())
             .map_err(|e| EngineError::Buffer {
                 operation: BufferOperation::Map,
                 size: self.size,
                 reason: format!("{:?}", e),
-            })
-    }
-
-    /// Unmap previously mapped buffer memory.
-    ///
-    /// # Safety
-    /// Must only be called after a successful map_memory call.
-    pub unsafe fn unmap_memory(&self) {
-        self.device.device.unmap_memory(self.memory);
+            })?;
+        *mapping = Some(Mapping(ptr));
+        Ok(ptr)
     }
 }
 
@@ -465,10 +480,9 @@ impl FrameData {
         // whatever bytes the host-visible page happened to hold — an
         // uninitialised count could otherwise drive a near-unbounded shader loop.
         unsafe {
-            let ptr = light_ubo_buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
+            let ptr = light_ubo_buffer.mapped()?;
             let slice = std::slice::from_raw_parts_mut(ptr as *mut LightUbo, 1);
             slice[0] = LightUbo::default();
-            light_ubo_buffer.unmap_memory();
         }
 
         Ok(Self {
@@ -533,11 +547,9 @@ impl FrameData {
         }
 
         unsafe {
-            let src = from.map_memory(0, vk::MemoryMapFlags::empty())?;
-            let dst = to.map_memory(0, vk::MemoryMapFlags::empty())?;
+            let src = from.mapped()?;
+            let dst = to.mapped()?;
             std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, used_bytes);
-            to.unmap_memory();
-            from.unmap_memory();
         }
 
         Ok(())
@@ -616,22 +628,16 @@ impl FrameData {
 
         // Append vertex data at current offset
         unsafe {
-            let ptr = self
-                .vertex_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
+            let ptr = self.vertex_buffer.mapped()?;
             let dst = (ptr as *mut u8).add(vertex_byte_offset);
             std::ptr::copy_nonoverlapping(vertices.as_ptr() as *const u8, dst, vertex_size);
-            self.vertex_buffer.unmap_memory();
         }
 
         // Append index data at current offset
         unsafe {
-            let ptr = self
-                .index_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
+            let ptr = self.index_buffer.mapped()?;
             let dst = (ptr as *mut u8).add(index_byte_offset);
             std::ptr::copy_nonoverlapping(indices.as_ptr() as *const u8, dst, index_size);
-            self.index_buffer.unmap_memory();
         }
 
         // Build draw info before updating offsets
@@ -687,12 +693,9 @@ impl FrameData {
         };
 
         unsafe {
-            let ptr = self
-                .scene_ubo_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
+            let ptr = self.scene_ubo_buffer.mapped()?;
             let slice = std::slice::from_raw_parts_mut(ptr as *mut SceneUbo, 1);
             slice[0] = ubo;
-            self.scene_ubo_buffer.unmap_memory();
         }
 
         Ok(())
@@ -707,12 +710,9 @@ impl FrameData {
         let ubo = LightUbo::from_active_lights(active);
 
         unsafe {
-            let ptr = self
-                .light_ubo_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
+            let ptr = self.light_ubo_buffer.mapped()?;
             let slice = std::slice::from_raw_parts_mut(ptr as *mut LightUbo, 1);
             slice[0] = ubo;
-            self.light_ubo_buffer.unmap_memory();
         }
 
         Ok(())

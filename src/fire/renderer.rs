@@ -616,21 +616,19 @@ impl FireRenderer {
 
         // Upload cube geometry
         unsafe {
-            let ptr = vertex_buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
+            let ptr = vertex_buffer.mapped()?;
             std::ptr::copy_nonoverlapping(
                 vertices.as_ptr() as *const u8,
                 ptr as *mut u8,
                 vertex_size as usize,
             );
-            vertex_buffer.unmap_memory();
 
-            let ptr = index_buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
+            let ptr = index_buffer.mapped()?;
             std::ptr::copy_nonoverlapping(
                 indices.as_ptr() as *const u8,
                 ptr as *mut u8,
                 index_size as usize,
             );
-            index_buffer.unmap_memory();
         }
 
         Ok((vertex_buffer, index_buffer))

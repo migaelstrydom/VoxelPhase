@@ -94,10 +94,8 @@ impl SurfaceBuffer {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
 
-        // Mapped once and never unmapped: freeing mapped memory is legal, and
-        // a map/unmap pair per draw would cost more than the write it guards.
-        let mapped =
-            unsafe { buffer.map_memory(0, vk::MemoryMapFlags::empty())? } as *mut GpuSurface;
+        // The buffer stays mapped, so the pointer holds for its whole life.
+        let mapped = unsafe { buffer.mapped()? } as *mut GpuSurface;
 
         // Vulkan does not guarantee zeroed memory, and entry 0 is what an
         // overflowing draw falls back to. Write one honest entry so that even a

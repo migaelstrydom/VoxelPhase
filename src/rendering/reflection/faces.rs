@@ -81,9 +81,7 @@ impl FaceUniforms {
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )
         })?;
-        let mapped = PerFrame::try_new(|slot| unsafe {
-            Ok(buffers[slot].map_memory(0, vk::MemoryMapFlags::empty())? as *mut u8)
-        })?;
+        let mapped = PerFrame::try_new(|slot| unsafe { Ok(buffers[slot].mapped()? as *mut u8) })?;
 
         let frames = FRAMES_IN_FLIGHT as u32;
         let pool_sizes = [vk::DescriptorPoolSize::default()

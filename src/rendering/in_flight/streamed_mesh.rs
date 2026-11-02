@@ -50,25 +50,19 @@ impl StreamedMesh {
         debug_assert!(index_bytes as vk::DeviceSize <= self.index_buffer.size);
 
         unsafe {
-            let ptr = self
-                .vertex_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
+            let ptr = self.vertex_buffer.mapped()?;
             std::ptr::copy_nonoverlapping(
                 vertices.as_ptr() as *const u8,
                 ptr as *mut u8,
                 vertex_bytes,
             );
-            self.vertex_buffer.unmap_memory();
 
-            let ptr = self
-                .index_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
+            let ptr = self.index_buffer.mapped()?;
             std::ptr::copy_nonoverlapping(
                 indices.as_ptr() as *const u8,
                 ptr as *mut u8,
                 index_bytes,
             );
-            self.index_buffer.unmap_memory();
         }
         Ok(())
     }

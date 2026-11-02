@@ -360,10 +360,9 @@ fn write_at<T: Copy>(buffer: &ManagedBuffer, offset: u64, items: &[T]) -> Engine
         return Ok(());
     }
     unsafe {
-        let ptr = buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
+        let ptr = buffer.mapped()?;
         let dst = (ptr as *mut u8).add(offset as usize * mem::size_of::<T>());
         std::ptr::copy_nonoverlapping(items.as_ptr() as *const u8, dst, mem::size_of_val(items));
-        buffer.unmap_memory();
     }
     Ok(())
 }
