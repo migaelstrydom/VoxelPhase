@@ -24,11 +24,15 @@ use super::frame::run_frame;
 use super::game_world::GameWorld;
 use super::spawners::spawn_camera;
 
+/// Fields drop in declaration order, so the order here is load-bearing: the
+/// world holds the renderer, whose surface and swapchain present to the
+/// window, and a surface must be destroyed before the window it was made
+/// from. The window goes last.
 pub struct App<'a, 'b> {
     event_loop: Option<EventLoop<()>>,
-    window: Window,
     world: World,
     dispatcher: Dispatcher<'a, 'b>,
+    window: Window,
 }
 
 impl<'a, 'b> App<'a, 'b> {
@@ -54,9 +58,9 @@ impl<'a, 'b> App<'a, 'b> {
 
         Ok(Self {
             event_loop: Some(event_loop),
-            window,
             world,
             dispatcher,
+            window,
         })
     }
 
