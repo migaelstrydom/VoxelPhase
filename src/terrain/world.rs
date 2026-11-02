@@ -744,23 +744,6 @@ impl TerrainWorld {
         self.texture.as_ref()
     }
 
-    /// Get render data with frustum culling.
-    ///
-    /// `frustum_planes` should be 6 planes: left, right, bottom, top, near, far.
-    /// Each plane is (normal, distance) where dot(normal, point) + distance >= 0 inside.
-    #[allow(dead_code)]
-    pub fn get_render_data_culled(
-        &self,
-        frustum_planes: &[(Vector3<f32>, f32); 6],
-    ) -> (Vec<Vertex>, Vec<u32>) {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        for segment in &self.segments {
-            segment.append_render_data_culled(frustum_planes, &mut vertices, &mut indices);
-        }
-        (vertices, indices)
-    }
-
     // === Statistics ===
 
     /// Number of mesh edges belonging to exactly one triangle.

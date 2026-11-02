@@ -842,49 +842,6 @@ impl MeshOctree {
         }
     }
 
-    /// Get render data for leaves intersecting a frustum (for frustum culling).
-    ///
-    /// `frustum_planes` should be 6 planes in the order: left, right, bottom, top, near, far.
-    /// Each plane is (normal, distance) where the plane equation is dot(normal, point) + distance >= 0
-    /// for points inside the frustum.
-    #[allow(dead_code)]
-    pub fn get_render_data_frustum_culled(
-        &self,
-        frustum_planes: &[(Vector3<f32>, f32); 6],
-    ) -> (Vec<Vertex>, Vec<u32>) {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-        Self::collect_render_data_culled(&self.root, frustum_planes, &mut vertices, &mut indices);
-        (vertices, indices)
-    }
-
-    #[allow(dead_code)]
-    fn collect_render_data_culled(
-        node: &MeshNode,
-        frustum_planes: &[(Vector3<f32>, f32); 6],
-        vertices: &mut Vec<Vertex>,
-        indices: &mut Vec<u32>,
-    ) {
-        // Test AABB against frustum
-        if !aabb_intersects_frustum(&node.bounds, frustum_planes) {
-            return;
-        }
-
-        match &node.content {
-            MeshNodeContent::Empty => {}
-            MeshNodeContent::Leaf(leaf) => {
-                let base = vertices.len() as u32;
-                vertices.extend_from_slice(&leaf.vertices);
-                indices.extend(leaf.indices.iter().map(|i| i + base));
-            }
-            MeshNodeContent::Interior(children) => {
-                for child in children.iter() {
-                    Self::collect_render_data_culled(child, frustum_planes, vertices, indices);
-                }
-            }
-        }
-    }
-
     // === Statistics ===
 
     /// Count total triangles in the octree.
@@ -989,36 +946,6 @@ fn child_bounds(parent: &AABB, octant: usize) -> AABB {
         },
     );
     AABB::new(min, max)
-}
-
-/// Test if an AABB intersects a frustum defined by 6 planes.
-fn aabb_intersects_frustum(aabb: &AABB, planes: &[(Vector3<f32>, f32); 6]) -> bool {
-    for (normal, distance) in planes {
-        // Find the corner of the AABB most in the direction of the plane normal
-        let p = Point3::new(
-            if normal.x >= 0.0 {
-                aabb.max.x
-            } else {
-                aabb.min.x
-            },
-            if normal.y >= 0.0 {
-                aabb.max.y
-            } else {
-                aabb.min.y
-            },
-            if normal.z >= 0.0 {
-                aabb.max.z
-            } else {
-                aabb.min.z
-            },
-        );
-
-        // If this corner is outside the plane, the AABB is outside the frustum
-        if normal.dot(&p.coords) + distance < 0.0 {
-            return false;
-        }
-    }
-    true
 }
 
 #[cfg(test)]

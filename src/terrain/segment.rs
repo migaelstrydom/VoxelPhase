@@ -616,38 +616,6 @@ impl Segment {
         timings
     }
 
-    /// As [`Self::append_render_data`], but only the chunks' geometry that
-    /// survives a frustum test.
-    pub fn append_render_data_culled(
-        &self,
-        frustum_planes: &[(Vector3<f32>, f32); 6],
-        vertices: &mut Vec<Vertex>,
-        indices: &mut Vec<u32>,
-    ) {
-        for coord in self.grid.coords() {
-            let Some(chunk) = self.grid.chunk(coord) else {
-                continue;
-            };
-            let (v, i) = chunk.mesh().get_render_data_frustum_culled(frustum_planes);
-            let base = vertices.len() as u32;
-            vertices.extend(v.into_iter().map(|vert| self.to_world_vertex(vert)));
-            indices.extend(i.into_iter().map(|idx| idx + base));
-        }
-    }
-
-    /// Lift a mesh vertex into world space. Position and normal both rotate;
-    /// the homogeneous `w` and the shading attributes do not.
-    fn to_world_vertex(&self, mut vertex: Vertex) -> Vertex {
-        let pos = self
-            .frame
-            .to_world(Point3::new(vertex.pos.x, vertex.pos.y, vertex.pos.z));
-        vertex.pos.x = pos.x;
-        vertex.pos.y = pos.y;
-        vertex.pos.z = pos.z;
-        vertex.normal = self.frame.rotate_to_world(vertex.normal);
-        vertex
-    }
-
     // === Statistics ===
 
     pub fn triangle_count(&self) -> usize {
