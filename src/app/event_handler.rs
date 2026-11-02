@@ -48,12 +48,13 @@ impl EventHandler {
                             KeyEvent {
                                 physical_key: PhysicalKey::Code(key_code),
                                 state,
+                                repeat,
                                 ..
                             },
                         ..
                     },
                 ..
-            } => Self::handle_keyboard(key_code, state, window, world, elwt),
+            } => Self::handle_keyboard(key_code, state, repeat, window, world, elwt),
 
             Event::WindowEvent {
                 event: WindowEvent::MouseInput { state, button, .. },
@@ -103,21 +104,21 @@ impl EventHandler {
     fn handle_keyboard(
         key_code: KeyCode,
         state: ElementState,
+        repeat: bool,
         window: &Window,
         world: &mut World,
         elwt: &EventLoopWindowTarget<()>,
     ) -> EventResult {
         if key_code == KeyCode::Escape && state == ElementState::Pressed {
-            let input = world.read_resource::<InputState>();
-            let is_captured = input.is_mouse_captured();
-            drop(input);
-
-            if is_captured {
-                set_mouse_captured(window, world, false);
-            } else {
-                log::info!("Escape pressed - exiting");
-                elwt.exit();
-                return EventResult::Exit;
+            let captured = world.read_resource::<InputState>().is_mouse_captured();
+            match escape_action(captured, repeat) {
+                EscapeAction::ReleaseMouse => set_mouse_captured(window, world, false),
+                EscapeAction::Quit => {
+                    log::info!("Escape pressed - exiting");
+                    elwt.exit();
+                    return EventResult::Exit;
+                }
+                EscapeAction::Nothing => {}
             }
             return EventResult::Continue;
         }
@@ -155,6 +156,28 @@ impl EventHandler {
             input.handle_mouse_motion(delta.0, delta.1);
         }
         EventResult::Continue
+    }
+}
+
+/// What a press of Escape does.
+#[derive(Debug, PartialEq, Eq)]
+enum EscapeAction {
+    /// Give the mouse back to the system.
+    ReleaseMouse,
+    /// Leave the game.
+    Quit,
+    /// Nothing.
+    Nothing,
+}
+
+/// The first press releases a captured mouse and the next quits. Only a fresh
+/// press counts: held, the system's key repeat would deliver a second press
+/// after the first released the mouse, and that one would quit.
+fn escape_action(mouse_captured: bool, repeat: bool) -> EscapeAction {
+    match (repeat, mouse_captured) {
+        (true, _) => EscapeAction::Nothing,
+        (false, true) => EscapeAction::ReleaseMouse,
+        (false, false) => EscapeAction::Quit,
     }
 }
 
@@ -230,4 +253,17 @@ pub fn set_mouse_captured(window: &Window, world: &mut World, captured: bool) {
         input.release_all();
     }
     input.set_mouse_captured(captured);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Holding Escape releases the mouse and stops there.
+    #[test]
+    fn a_held_escape_releases_the_mouse_and_does_not_quit() {
+        assert_eq!(escape_action(true, false), EscapeAction::ReleaseMouse);
+        assert_eq!(escape_action(false, true), EscapeAction::Nothing);
+        assert_eq!(escape_action(false, false), EscapeAction::Quit);
+    }
 }
