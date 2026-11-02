@@ -157,7 +157,7 @@ pub struct ConstraintRow {
     pub ang_jac_a: Vector3<f32>,
     pub lin_jac_b: Vector3<f32>,
     pub ang_jac_b: Vector3<f32>,
-    pub effective_mass_inv: f32,
+    pub effective_mass: f32,
     pub bias: f32,
     pub accumulated_impulse: f32,
     pub bounds: (f32, f32),

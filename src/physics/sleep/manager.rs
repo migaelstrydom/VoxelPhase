@@ -20,8 +20,9 @@ pub struct SleepManagerConfig {
     pub linear_threshold: f32,
     /// Angular velocity threshold (rad/s) below which a body is a sleep candidate.
     pub angular_threshold: f32,
-    /// Frames a body must remain below both thresholds before sleeping.
-    pub delay_frames: u32,
+    /// Physics substeps (1/240 s) a body must remain below both thresholds
+    /// before sleeping.
+    pub delay_substeps: u32,
 }
 
 impl Default for SleepManagerConfig {
@@ -30,7 +31,7 @@ impl Default for SleepManagerConfig {
             enabled: true,
             linear_threshold: 0.1,
             angular_threshold: 0.15,
-            delay_frames: 30,
+            delay_substeps: 30,
         }
     }
 }
@@ -55,7 +56,7 @@ impl SleepManager {
             sleep_tracker: SleepTracker::new(
                 config.linear_threshold,
                 config.angular_threshold,
-                config.delay_frames,
+                config.delay_substeps,
             ),
             island_builder: IslandBuilder,
             wake_events: WakeEvents::new(),

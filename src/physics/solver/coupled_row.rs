@@ -157,7 +157,7 @@ fn load_share(row: &ConstraintRow) -> f32 {
 /// The impulse that would satisfy the row with no bound at all.
 fn unbounded_delta(bodies: &SolverBodies, slots: RowSlots, row: &ConstraintRow) -> f32 {
     let cdot = jacobian_dot_velocity(bodies, slots, row);
-    row.effective_mass_inv * -(cdot + row.bias + row.softness * row.accumulated_impulse)
+    row.effective_mass * -(cdot + row.bias + row.softness * row.accumulated_impulse)
 }
 
 /// Move the row's accumulated impulse to `accumulated`, applying the
@@ -200,7 +200,7 @@ mod tests {
             ang_jac_a: Vector3::zeros(),
             lin_jac_b: axis,
             ang_jac_b: Vector3::zeros(),
-            effective_mass_inv: MASS,
+            effective_mass: MASS,
             bias: 0.0,
             softness: 0.0,
             accumulated_impulse: 0.0,

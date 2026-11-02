@@ -511,11 +511,11 @@ pub struct ConstraintRow {
     /// Angular Jacobian for body B (world-space).
     pub ang_jac_b: Vector3<f32>,
     /// Precomputed 1 / (J·M⁻¹·Jᵀ + compliance/dt²).
-    pub effective_mass_inv: f32,
+    pub effective_mass: f32,
     /// Velocity bias (position correction or motor target).
     pub bias: f32,
     /// Softness: `compliance / dt²`, the same term that softens
-    /// `effective_mass_inv`. Zero for a rigid row.
+    /// `effective_mass`. Zero for a rigid row.
     ///
     /// It appears a second time in the solve, multiplying the accumulated
     /// impulse, and that is what makes a compliant row a spring: the row

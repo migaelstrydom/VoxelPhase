@@ -18,15 +18,15 @@ pub struct SleepTracker {
     /// Squared angular speed threshold for sleep candidacy.
     angular_threshold_sq: f32,
     /// Substeps below threshold required to qualify for sleep.
-    delay_frames: u32,
+    delay_substeps: u32,
     /// Per-body record of how long it has been still, and where it was.
     bodies: FxHashMap<Index, Stillness>,
 }
 
 /// One body's record.
 struct Stillness {
-    /// Consecutive updates the body has been still for.
-    frames_below: u32,
+    /// Consecutive substeps the body has been still for.
+    substeps_still: u32,
     /// Where the body was at the last update.
     position: Point3<f32>,
     /// How the body was turned at the last update.
@@ -34,11 +34,11 @@ struct Stillness {
 }
 
 impl SleepTracker {
-    pub fn new(linear_threshold: f32, angular_threshold: f32, delay_frames: u32) -> Self {
+    pub fn new(linear_threshold: f32, angular_threshold: f32, delay_substeps: u32) -> Self {
         Self {
             linear_threshold_sq: linear_threshold * linear_threshold,
             angular_threshold_sq: angular_threshold * angular_threshold,
-            delay_frames,
+            delay_substeps,
             bodies: FxHashMap::default(),
         }
     }
@@ -59,18 +59,18 @@ impl SleepTracker {
             self.is_below(travelled / (dt * dt), turned / (dt * dt))
         });
         let record = self.bodies.entry(handle.0).or_insert(Stillness {
-            frames_below: 0,
+            substeps_still: 0,
             position,
             rotation,
         });
-        record.frames_below = if slow && unmoved {
-            record.frames_below.saturating_add(1)
+        record.substeps_still = if slow && unmoved {
+            record.substeps_still.saturating_add(1)
         } else {
             0
         };
         record.position = position;
         record.rotation = rotation;
-        record.frames_below >= self.delay_frames
+        record.substeps_still >= self.delay_substeps
     }
 
     pub fn clear_body(&mut self, handle: RigidBodyHandle) {

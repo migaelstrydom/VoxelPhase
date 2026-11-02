@@ -85,8 +85,7 @@ pub(crate) fn solve_constraint_row(
 ) {
     let cdot = jacobian_dot_velocity(bodies, slots, row);
 
-    let lambda =
-        row.effective_mass_inv * -(cdot + row.bias + row.softness * row.accumulated_impulse);
+    let lambda = row.effective_mass * -(cdot + row.bias + row.softness * row.accumulated_impulse);
 
     let old_accumulated = row.accumulated_impulse;
     row.accumulated_impulse = (old_accumulated + lambda).clamp(row.bounds.0, row.bounds.1);

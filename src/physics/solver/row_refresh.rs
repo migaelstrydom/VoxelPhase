@@ -76,7 +76,7 @@ mod tests {
             ang_jac_a: Vector3::zeros(),
             lin_jac_b: Vector3::y(),
             ang_jac_b: Vector3::new(0.0, 0.0, 0.5),
-            effective_mass_inv: 1.0,
+            effective_mass: 1.0,
             bias: 7.0,
             softness: 0.0,
             accumulated_impulse: 0.0,
