@@ -6,10 +6,8 @@
 //! - **Adaptive subdivision**: Leaves split when triangle count exceeds threshold
 //! - **Complete spatial queries**: Each leaf stores references to ALL triangles
 //!   that intersect its bounds, not just those it "owns"
-//! - **Efficient updates**: Only affected regions are rebuilt when terrain changes
-//! - **Region-scoped collection**: Triangles in a specific AABB can be collected
-//!   efficiently via `collect_triangles_in_region`, enabling incremental adjacency
-//!   updates without walking the entire tree
+//! - **One per chunk**: a chunk that remeshes fills a fresh octree
+//!   (`generate_block`); nothing is edited in place
 //!
 //! Triangle ownership (for canonical storage) uses the "minimum vertex" rule:
 //! each triangle is owned by the leaf containing its lexicographically smallest

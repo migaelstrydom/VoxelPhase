@@ -1,8 +1,8 @@
 //! Hull vs OBB collision using SAT with native OBB support functions.
 //!
-//! Dedicated fast-path for ConvexHull-Box pairs. Uses the OBB's
+//! Dedicated path for ConvexHull-Box pairs. Uses the OBB's
 //! `project_half_extent()` for SAT overlap and `obb_face()` for clipping,
-//! avoiding the per-frame `Arc<ConvexHull>` allocation of the generic path.
+//! rather than treating the box as an eight-vertex hull.
 //!
 //! Normal convention: hull is `a`, OBB is `b`, normal points A→B (hull→OBB).
 

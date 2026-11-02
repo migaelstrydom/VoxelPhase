@@ -2,13 +2,12 @@
 //!
 //! Computes buoyancy, linear drag, and angular drag forces for rigid bodies
 //! partially submerged in water, and the drag of falling water striking
-//! them. No ECS dependency — the ECS system in
-//! `src/systems/buoyancy.rs` bridges between the physics world and these
-//! functions.
+//! them. No ECS dependency: `BuoyancyForceProvider` is a
+//! `SubstepForceProvider`, which `PhysicsSyncSystem` hands the physics world
+//! each frame.
 //!
-//! Returns forces (N) and torques (N·m), not impulses. The caller sets these
-//! as persistent forces on the rigid body so they integrate per substep
-//! alongside gravity.
+//! Returns forces (N) and torques (N·m), not impulses, computed afresh every
+//! substep and integrated alongside gravity.
 
 use std::f32::consts::PI;
 
