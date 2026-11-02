@@ -1,4 +1,5 @@
-// textures.rs - Enhanced texture manager with handle-based lifecycle management
+//! Textures behind reference-counted handles: created from pixels, released
+//! when the last handle drops.
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult, ImageOperation};
@@ -7,11 +8,7 @@ use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::texture::ManagedTexture;
 use crate::resources::texture_encoding::TextureEncoding;
 use crate::resources::texture_registry::{ReleaseOutcome, TextureRegistry};
-use crate::utils::noise::fbm_2d_periodic;
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
 
@@ -119,217 +116,6 @@ impl TextureFactory {
             device,
             transfer_service,
         }
-    }
-
-    pub fn create_from_file<P: AsRef<Path>>(
-        &self,
-        file_path: P,
-        generate_mipmaps: Option<bool>,
-    ) -> EngineResult<ManagedTexture> {
-        // ... existing implementation unchanged ...
-        let generate_mipmaps = generate_mipmaps.unwrap_or(true);
-
-        let img = image::open(file_path.as_ref())?;
-        let img_rgba = img.to_rgba8();
-        let width = img.width();
-        let height = img.height();
-        let image_data = img_rgba.into_raw();
-        let image_size = image_data.len() as u64;
-
-        let mip_levels = if generate_mipmaps {
-            ((width.max(height) as f32).log2().floor() as u32) + 1
-        } else {
-            1
-        };
-
-        let staging_buffer = crate::rendering::frame::ManagedBuffer::new(
-            self.device.clone(),
-            image_size,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .map_err(|e| EngineError::Buffer {
-            operation: crate::core::error::BufferOperation::Create,
-            size: image_size,
-            reason: e.to_string(),
-        })?;
-
-        unsafe {
-            let data_ptr = self.device.device.map_memory(
-                staging_buffer.memory,
-                0,
-                image_size,
-                vk::MemoryMapFlags::empty(),
-            )? as *mut u8;
-
-            std::ptr::copy_nonoverlapping(image_data.as_ptr(), data_ptr, image_data.len());
-            self.device.device.unmap_memory(staging_buffer.memory);
-        }
-
-        let texture = ManagedTexture::new(
-            self.device.clone(),
-            width,
-            height,
-            mip_levels,
-            vk::Format::R8G8B8A8_SRGB,
-            vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::TRANSFER_DST
-                | vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::SAMPLED,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            vk::ImageAspectFlags::COLOR,
-        )
-        .map_err(|e| EngineError::Image {
-            operation: ImageOperation::Create,
-            width,
-            height,
-            reason: e.to_string(),
-        })?;
-
-        self.transfer_service.transition_image_layout(
-            texture.image,
-            vk::Format::R8G8B8A8_SRGB,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            mip_levels,
-        )?;
-
-        self.transfer_service.copy_buffer_to_image(
-            staging_buffer.buffer,
-            texture.image,
-            width,
-            height,
-        )?;
-
-        if generate_mipmaps {
-            self.transfer_service.generate_mipmaps(
-                texture.image,
-                vk::Format::R8G8B8A8_SRGB,
-                width,
-                height,
-                mip_levels,
-            )?;
-        } else {
-            self.transfer_service.transition_image_layout(
-                texture.image,
-                vk::Format::R8G8B8A8_SRGB,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                mip_levels,
-            )?;
-        }
-
-        Ok(texture)
-    }
-
-    /// Create a procedural noise texture.
-    ///
-    /// - `width, height`: Texture dimensions (e.g., 512x512)
-    /// - `octaves`: Layers of noise (3-5 recommended)
-    /// - `scale`: Noise frequency (higher = finer patterns, e.g., 16.0-24.0)
-    /// - `seed`: Random seed for variation
-    pub fn create_noise_texture(
-        &self,
-        width: u32,
-        height: u32,
-        octaves: u32,
-        scale: f32,
-        seed: u32,
-    ) -> EngineResult<ManagedTexture> {
-        let mut image_data = Vec::with_capacity((width * height * 4) as usize);
-
-        // Use periodic noise for seamless tiling
-        let period = scale as i32;
-
-        for y in 0..height {
-            for x in 0..width {
-                let nx = x as f32 / width as f32 * scale;
-                let ny = y as f32 / height as f32 * scale;
-
-                let noise_value = fbm_2d_periodic(nx, ny, octaves, 0.5, 2.0, seed, Some(period));
-
-                // Map noise from [0, 1] to [0.85, 1.0] for subtle, light variation
-                let remapped = 0.85 + noise_value * 0.15;
-                let intensity = (remapped * 255.0) as u8;
-
-                image_data.push(intensity);
-                image_data.push(intensity);
-                image_data.push(intensity);
-                image_data.push(255);
-            }
-        }
-
-        let image_size = image_data.len() as u64;
-        let mip_levels = ((width.max(height) as f32).log2().floor() as u32) + 1;
-
-        let staging_buffer = crate::rendering::frame::ManagedBuffer::new(
-            self.device.clone(),
-            image_size,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .map_err(|e| EngineError::Buffer {
-            operation: crate::core::error::BufferOperation::Create,
-            size: image_size,
-            reason: e.to_string(),
-        })?;
-
-        unsafe {
-            let data_ptr = self.device.device.map_memory(
-                staging_buffer.memory,
-                0,
-                image_size,
-                vk::MemoryMapFlags::empty(),
-            )? as *mut u8;
-
-            std::ptr::copy_nonoverlapping(image_data.as_ptr(), data_ptr, image_data.len());
-            self.device.device.unmap_memory(staging_buffer.memory);
-        }
-
-        let texture = ManagedTexture::new(
-            self.device.clone(),
-            width,
-            height,
-            mip_levels,
-            vk::Format::R8G8B8A8_SRGB,
-            vk::ImageTiling::OPTIMAL,
-            vk::ImageUsageFlags::TRANSFER_DST
-                | vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::SAMPLED,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            vk::ImageAspectFlags::COLOR,
-        )
-        .map_err(|e| EngineError::Image {
-            operation: ImageOperation::Create,
-            width,
-            height,
-            reason: e.to_string(),
-        })?;
-
-        self.transfer_service.transition_image_layout(
-            texture.image,
-            vk::Format::R8G8B8A8_SRGB,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            mip_levels,
-        )?;
-
-        self.transfer_service.copy_buffer_to_image(
-            staging_buffer.buffer,
-            texture.image,
-            width,
-            height,
-        )?;
-
-        self.transfer_service.generate_mipmaps(
-            texture.image,
-            vk::Format::R8G8B8A8_SRGB,
-            width,
-            height,
-            mip_levels,
-        )?;
-
-        Ok(texture)
     }
 
     /// Create a texture from raw RGBA pixel data.
@@ -637,16 +423,6 @@ impl TextureManager {
         Ok(descriptor_set)
     }
 
-    /// Load a texture and return a handle to it.
-    ///
-    /// The texture and its descriptor set will be automatically cleaned up
-    /// when the last handle is dropped - no manual cleanup required!
-    pub fn load_texture<P: AsRef<Path>>(&self, path: P) -> EngineResult<TextureHandle> {
-        let texture = self.texture_factory.create_from_file(&path, None)?;
-
-        Ok(self.register(texture))
-    }
-
     /// Create a colour texture from raw sRGB-encoded RGBA pixel data.
     ///
     /// The overwhelmingly common case, and the one every hand-authored albedo
@@ -711,32 +487,6 @@ impl TextureManager {
         log::debug!(
             "Created {:?} RGBA texture {}x{} (id={})",
             encoding,
-            width,
-            height,
-            handle.id()
-        );
-
-        Ok(handle)
-    }
-
-    /// Create a procedural noise texture.
-    ///
-    /// Generates a tileable noise pattern useful for terrain variation.
-    pub fn create_noise_texture(
-        &self,
-        width: u32,
-        height: u32,
-        octaves: u32,
-        scale: f32,
-        seed: u32,
-    ) -> EngineResult<TextureHandle> {
-        let texture = self
-            .texture_factory
-            .create_noise_texture(width, height, octaves, scale, seed)?;
-        let handle = self.register(texture);
-
-        log::debug!(
-            "Created noise texture {}x{} (id={})",
             width,
             height,
             handle.id()
