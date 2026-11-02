@@ -66,10 +66,10 @@ impl<'a> System<'a> for CameraControlSystem {
 
             // Handle keyboard zoom
             if actions.zoom_in {
-                follow.distance += config.zoom_speed * dt;
+                follow.distance -= config.zoom_speed * dt;
             }
             if actions.zoom_out {
-                follow.distance -= config.zoom_speed * dt;
+                follow.distance += config.zoom_speed * dt;
             }
 
             // Clamp distance
@@ -117,16 +117,6 @@ impl<'a> System<'a> for CameraControlSystem {
                     dt,
                 );
             }
-
-            // // Debug logging (every ~60 frames to avoid spam)
-            // if time.frame_count() % 60 == 0 {
-            //     log::debug!(
-            //         "Camera: pos=({:.1}, {:.1}, {:.1}) target=({:.1}, {:.1}, {:.1}) pitch={:.2} orbit={:.2}",
-            //         cam.position.x, cam.position.y, cam.position.z,
-            //         cam.target.x, cam.target.y, cam.target.z,
-            //         follow.pitch, follow.orbit_angle
-            //     );
-            // }
         }
     }
 }

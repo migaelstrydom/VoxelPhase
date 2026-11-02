@@ -33,9 +33,9 @@ pub struct GameplayActions {
     /// Camera look delta (mouse movement)
     pub camera_delta: (f32, f32),
 
-    /// Zoom camera in (Q key)
+    /// Zoom camera in (E key)
     pub zoom_in: bool,
-    /// Zoom camera out (E key)
+    /// Zoom camera out (Q key)
     pub zoom_out: bool,
 
     /// Throw action (just pressed this frame). Context-dependent: grab-throw
@@ -77,8 +77,8 @@ impl GameplayActions {
 
             // Camera control
             camera_delta: input.mouse_delta(),
-            zoom_in: input.is_key_pressed(KeyCode::KeyQ),
-            zoom_out: input.is_key_pressed(KeyCode::KeyE),
+            zoom_in: input.is_key_pressed(KeyCode::KeyE),
+            zoom_out: input.is_key_pressed(KeyCode::KeyQ),
 
             // Combat actions
             throw: input.is_mouse_button_just_pressed(MouseButton::Left)

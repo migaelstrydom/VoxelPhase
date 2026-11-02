@@ -619,15 +619,6 @@ impl<'a> System<'a> for RenderSystem {
                         }
                     }
                     log_render_profile(renderer.profile(), &mut debug.log);
-                    // if !renderer.active_fires.is_empty() {
-                    //     let fire_count = renderer.active_fires.len();
-                    //     let mut slot_counts = [0usize; crate::fire::renderer::SIM_POOL_SIZE];
-                    //     for (_, f) in &renderer.active_fires {
-                    //         slot_counts[f.sim_slot] += 1;
-                    //     }
-                    //     let active_slots = slot_counts.iter().filter(|&&c| c > 0).count();
-                    //     debug_lines.add("Fires", format!("{} ({} slots)", fire_count, active_slots));
-                    // }
 
                     // Debug text and HUD go out as one batch: the overlay
                     // owns a single vertex buffer, so a second upload before
