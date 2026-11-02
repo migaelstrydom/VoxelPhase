@@ -17,6 +17,7 @@ use specs::{Builder, Entity, World, WorldExt};
 use super::shared::textures::seed_from_ground;
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
+use crate::collision::convex_hull::prism_hull;
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, TerrainAnchored, Velocity,
 };
@@ -132,7 +133,11 @@ impl Spawnable for FencePostDef {
         ])];
         let model = Arc::new(Model::flat(parts));
 
-        let collider = ColliderDesc::capsule(self.half_height, self.radius).of(&self.substance());
+        // A prism of the mesh's own sides, not a capsule: a capsule's domed
+        // top sits a full radius below the drawn flat one at its rim, and
+        // anything set on the post would balance on the dome and roll off.
+        let post = prism_hull(MESH_SEGMENTS as u16, self.radius, self.half_height);
+        let collider = ColliderDesc::convex_hull(Arc::new(post)).of(&self.substance());
 
         let (body_handle, anchor_handle, upright_handle) = {
             let mut physics = world.write_resource::<PhysicsResource>();

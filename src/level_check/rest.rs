@@ -609,6 +609,28 @@ mod tests {
         assert!(outcome.settled_after.is_some());
     }
 
+    /// A fence post is flat-topped to physics as it is drawn: its collider
+    /// reaches the drawn top across its whole width, not a domed cap.
+    #[test]
+    fn a_fence_post_is_flat_topped() {
+        let level = flat_level("FencePost(pos: (4.0, 4.0))");
+        let trial = RestTrial::spawn(&level, build_terrain(&level));
+        let physics = trial.physics_mut();
+        let (body, _, _) = trial.objects()[0].bodies[0];
+        let body = physics.world.body(body).unwrap();
+        let collider = physics.world.collider(body.colliders()[0]).unwrap();
+        let crate::physics::ColliderShape::ConvexHull { hull } = collider.shape() else {
+            panic!("a fence post's collider is a {:?}", collider.shape());
+        };
+        let top = hull.vertices.iter().map(|v| v.y).fold(f32::MIN, f32::max);
+        let at_top = hull
+            .vertices
+            .iter()
+            .filter(|v| (v.y - top).abs() < 1e-5)
+            .count();
+        assert!(at_top >= 3, "the top is a point or an edge, not a face");
+    }
+
     /// A body's origin is its centre of mass: every dynamic body a table, a
     /// plank bridge or a temple spawns is already centred on its colliders.
     #[test]
