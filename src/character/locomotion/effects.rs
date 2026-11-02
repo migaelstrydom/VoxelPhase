@@ -10,13 +10,17 @@ use crate::character::ledge::SensedEdge;
 pub struct EntryEffects {
     /// Upward speed to leave with, in m/s: a jump's or a hop's impulse.
     pub vertical_speed: Option<f32>,
-    /// Velocity across the ground to leave with, in m/s: a back-jump's push
-    /// off the wall.
-    pub planar_velocity: Option<Vector3<f32>>,
+    /// Velocity to leave with, whole, in m/s: a back-jump's push off the
+    /// wall and up.
+    pub launch: Option<Vector3<f32>>,
     /// Take the velocity of this edge's body at the grip: catching a ledge,
     /// so the grip has nothing to stop, and stepping off a pull-up, so the
     /// grip's last correction is not carried onto the top.
     pub match_edge: Option<SensedEdge>,
+    /// The edge a `launch` pushes off. Whatever velocity entering this state
+    /// sets, the edge's body takes the equal and opposite impulse at the
+    /// grip, as it does from `match_edge`'s.
+    pub push_against: Option<SensedEdge>,
     /// The horizontal speed cap air steering latches, in m/s.
     pub air_speed: Option<f32>,
     /// The buffered jump press was spent.

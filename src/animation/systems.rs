@@ -212,7 +212,7 @@ fn ledge_reading(
         phase,
         hands: at.hands,
         outward,
-        face: grip + outward * timing.grip_depth,
+        face: at.face(),
         stand: at.stand,
         edge_velocity,
         wall_below,

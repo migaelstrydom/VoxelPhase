@@ -1,5 +1,6 @@
-//! The edge test on voxel terrain: the roof over the Traversal Garden's cave
-//! lip, its lip 2.5 m up, meshed as the game meshes it.
+//! The edge test on voxel terrain, meshed as the game meshes it: the roof
+//! over the Traversal Garden's cave lip, 2.5 m up, and the Ledge Garden's
+//! bevelled box.
 
 use std::path::Path;
 
@@ -66,5 +67,30 @@ fn the_cave_roof_is_held_through_the_catch_band() {
     let terrain = garden();
     for below in [0.25, 0.4, 0.6] {
         assert_held(&terrain, 66.0, 2.5, below);
+    }
+}
+
+/// The Ledge Garden's 0.72 m box, whose lip the voxel mesh bevels over a
+/// voxel: held at its top wherever on the bevel's slope a body pushing into
+/// it has been lifted to. Found from where the bevel enters the band, the
+/// lip moved with the body, and a body riding up the bevel lost it.
+#[test]
+fn a_bevelled_lip_is_held_at_its_top_wherever_the_body_rides() {
+    let level = load_level(Path::new("levels/ledge_garden.level.ron")).expect("the ledge garden");
+    let terrain = build_terrain(&level);
+    let world = PhysicsWorld::new(PhysicsConfig::default());
+    for x in [6.5, 6.6, 6.73] {
+        for y in [0.5, 0.55, 0.6, 0.65] {
+            let edge = edge_at(&terrain, &world, Point3::new(x, y, 12.16))
+                .unwrap_or_else(|| panic!("no edge from ({x}, {y})"));
+            for hand in edge.hands {
+                assert!(
+                    (hand.y - 0.72).abs() < 0.02,
+                    "held at {} from ({x}, {y})",
+                    hand.y
+                );
+            }
+            assert!(edge.climbable());
+        }
     }
 }

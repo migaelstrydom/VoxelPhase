@@ -135,15 +135,22 @@ impl Jump {
                 air_speed: Some(config.walk_speed * config.long_jump_speed_mul),
                 ..launch
             },
+            // Pushed off the edge, which takes the push back: the whole launch
+            // is set at once, a tap's cut rise included, rather than conjured
+            // as a jump with nothing under it would be.
             JumpKind::BackJump => {
                 let push = config.ledge.back_jump_speed;
+                let rise = if cut_rise {
+                    config.jump_speed * config.jump_cutoff_factor
+                } else {
+                    config.jump_speed
+                };
                 EntryEffects {
-                    vertical_speed: Some(config.jump_speed),
-                    planar_velocity: requests
+                    launch: requests
                         .edge
-                        .map(|sensed| sensed.at.outward.into_inner() * push),
+                        .map(|sensed| sensed.at.outward.into_inner() * push + Vector3::y() * rise),
+                    push_against: requests.edge,
                     air_speed: Some(push.max(config.walk_speed)),
-                    cut_rise,
                     ..launch
                 }
             }

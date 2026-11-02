@@ -103,7 +103,7 @@ impl Default for LedgeConfig {
             mantle_low: 0.05,
             reach_ahead: 0.25,
             hand_offset: 0.15,
-            grip_slope_degrees: 45.0,
+            grip_slope_degrees: 40.0,
             grip_depth: 0.04,
             hand_clearance: 0.05,
             hand_step: 0.04,

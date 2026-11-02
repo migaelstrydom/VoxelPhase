@@ -174,11 +174,11 @@ fn hang_anchor(config: &LocomotionConfig) -> Vector3<f32> {
 }
 
 /// Where the hanger's end of the joint hangs: level with the hands, out
-/// from the face so the capsule hangs `face_gap` clear of it.
+/// from the face (which a bevelled lip sets back from the hands) so the
+/// capsule hangs `face_gap` clear of it.
 fn hang_point(edge: &WorldEdge, config: &LocomotionConfig) -> Point3<f32> {
     let ledge = &config.ledge;
-    let out = config.collider_radius + ledge.face_gap + ledge.grip_depth;
-    edge.grip() + edge.outward.into_inner() * out
+    edge.face() + edge.outward.into_inner() * (config.collider_radius + ledge.face_gap)
 }
 
 /// The shimmy's velocity: along the edge with the stick, where the edge

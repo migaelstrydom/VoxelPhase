@@ -1,5 +1,5 @@
 use crate::character::grab::{self, GrabConfig, ReachFrame};
-use crate::character::ledge::{Grip, GripFrame};
+use crate::character::ledge::{Grip, GripFrame, SensedEdge};
 use crate::character::locomotion::{AirSteering, Jump, JumpKind};
 use crate::character::{
     approach, facing_from_rotation, ArmState, AttitudeControl, CharacterIntent, CharacterState,
@@ -560,30 +560,35 @@ fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule, left_still_g
     }
 }
 
-/// The velocity an entry sets outright: a back-jump's push off the wall
-/// across the ground, and the velocity of an edge's body at its grip on
-/// catching or leaving it.
+/// The velocity an entry sets outright: a back-jump's launch off the wall,
+/// and the velocity of an edge's body at its grip on catching or leaving it.
+/// The edge's body takes the equal and opposite impulse at the grip: a light
+/// crate is yanked by a catch and kicked away by a back-jump, as it is by a
+/// jump from its top.
 fn set_velocity_for_entry(world: &mut PhysicsWorld, body: RigidBodyHandle, effects: &EntryEffects) {
-    let Some(current) = world
+    let Some((before, angular, mass)) = world
         .body(body)
-        .map(|b| (b.linear_velocity(), b.angular_velocity()))
+        .map(|b| (b.linear_velocity(), b.angular_velocity(), b.mass()))
     else {
         return;
     };
-    let (mut linear, angular) = current;
-    if let Some(sensed) = effects.match_edge {
-        let grip = sensed.at.grip();
-        linear = sensed
+    let edge = effects.match_edge.or(effects.push_against);
+    let edge_velocity = |world: &PhysicsWorld, sensed: &SensedEdge| {
+        sensed
             .edge
             .body
             .and_then(|edge| world.body(edge))
-            .map_or(Vector3::zeros(), |edge| edge.velocity_at(grip));
-    }
-    if let Some(planar) = effects.planar_velocity {
-        linear = Vector3::new(planar.x, linear.y, planar.z);
-    }
-    if effects.match_edge.is_some() || effects.planar_velocity.is_some() {
-        world.set_body_velocity(body, linear, angular);
+            .map_or(Vector3::zeros(), |edge| edge.velocity_at(sensed.at.grip()))
+    };
+    let after = match (effects.launch, effects.match_edge) {
+        (Some(launch), _) => launch,
+        (None, Some(sensed)) => edge_velocity(world, &sensed),
+        (None, None) => return,
+    };
+    world.set_body_velocity(body, after, angular);
+    if let Some((edge_body, sensed)) = edge.and_then(|s| s.edge.body.map(|b| (b, s))) {
+        let reaction = -(after - before) * mass;
+        world.apply_impulse_at_point(edge_body, reaction, sensed.at.grip());
     }
 }
 
@@ -614,11 +619,15 @@ fn wrap_angle(angle: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::character::locomotion::{Jump, TakeoffPhase};
+    use crate::character::ledge::{Edge, WorldEdge};
+    use crate::character::locomotion::{Jump, Ledge, LedgePhase, TakeoffPhase};
     use crate::character::Grounding;
     use crate::components::Orientation;
+    use crate::physics::ColliderDesc;
     use crate::physics::RigidBodyDesc;
+    use nalgebra::Unit;
     use specs::{Builder, Entity, RunNow, World, WorldExt};
+    use traversal_planner::section::Footing;
 
     /// The gait rule the FSM hands to the driver while walking east.
     fn walk_east(steer_accel: f32) -> MovementRule {
@@ -953,5 +962,91 @@ mod tests {
         let drive = intent_of(&world, entity);
         assert_eq!(drive.jump_speed, None);
         assert_eq!(drive.linear_target, Vector3::zeros());
+    }
+
+    /// A hanger on a light box's edge pressing jump leaves with the back-jump's
+    /// launch, and the box takes the equal and opposite push at the grip, as
+    /// it would from a jump off its top.
+    #[test]
+    fn a_back_jump_pushes_the_edge_it_leaves_away() {
+        let (world, entity) = character_world(true);
+        set_grounding(&world, entity, Grounding::default());
+        let player = world
+            .read_storage::<RigidBodyComponent>()
+            .get(entity)
+            .unwrap()
+            .0;
+        let (sensed, crate_body) = {
+            let mut physics = world.write_resource::<PhysicsResource>();
+            physics
+                .world
+                .attach_collider(player, ColliderDesc::capsule(0.5, 0.25));
+            let crate_body = physics
+                .world
+                .create_body(RigidBodyDesc::dynamic().position(Point3::new(1.0, 0.0, 0.0)));
+            physics.world.attach_collider(
+                crate_body,
+                ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5)),
+            );
+            let at = WorldEdge {
+                hands: [Point3::new(0.54, 0.5, -0.15), Point3::new(0.54, 0.5, 0.15)],
+                outward: Unit::new_normalize(-Vector3::x()),
+                face_depth: 0.04,
+                stand: None,
+            };
+            let edge = Edge::from_world(&physics.world, Some(crate_body), &at, Footing::Fixed)
+                .expect("the crate is there");
+            let sensed = SensedEdge {
+                edge,
+                at,
+                room: [true; 2],
+            };
+            (sensed, crate_body)
+        };
+        world
+            .write_storage::<CharacterState>()
+            .get_mut(entity)
+            .unwrap()
+            .locomotion = LocomotionState::Ledge(Ledge {
+            edge: sensed.edge,
+            phase: LedgePhase::Hang { lean: None },
+        });
+        {
+            let mut intents = world.write_storage::<CharacterIntent>();
+            let intent = intents.get_mut(entity).unwrap();
+            intent.edge = Some(sensed);
+            intent.jump = true;
+        }
+
+        CharacterControlSystem.run_now(&world);
+
+        assert!(matches!(
+            locomotion_of(&world, entity),
+            LocomotionState::Jump(Jump {
+                kind: JumpKind::BackJump,
+                ..
+            })
+        ));
+        let physics = world.read_resource::<PhysicsResource>();
+        let (hanger, crate_box) = (
+            physics.world.body(player).unwrap(),
+            physics.world.body(crate_body).unwrap(),
+        );
+        assert!(
+            hanger.linear_velocity().x < -1.0,
+            "left the wall at {}",
+            hanger.linear_velocity()
+        );
+        assert!(
+            crate_box.linear_velocity().x > 0.0,
+            "the crate pushed back at {}",
+            crate_box.linear_velocity()
+        );
+        let momentum = hanger.linear_velocity() * hanger.mass()
+            + crate_box.linear_velocity() * crate_box.mass();
+        assert!(
+            momentum.norm() < 1.0e-3,
+            "momentum made from nothing: {momentum}"
+        );
     }
 }

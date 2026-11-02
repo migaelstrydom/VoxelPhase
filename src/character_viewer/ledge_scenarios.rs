@@ -128,6 +128,18 @@ pub fn catalogue() -> Vec<Scenario> {
             18.0,
             hang_then(&[Beat::walk(1.2).named("strain").towards(INTO)]),
         ),
+        Scenario {
+            start: (6.7, 12.16),
+            ..at_wall(
+                "ledge_mantle_standing",
+                "Ledge: standing at a box at the chest, push into it and climb onto it",
+                12.16,
+                Script::new()
+                    .then(Beat::stand(0.5))
+                    .then(Beat::walk(2.5).named("mantle").towards(INTO))
+                    .then(Beat::stand(0.5).named("after")),
+            )
+        },
         walk_in(
             "ledge_light_mantle",
             "Ledge: walk into a light box at the chest and climb onto it",
@@ -145,6 +157,16 @@ pub fn catalogue() -> Vec<Scenario> {
             hang_then(&[
                 Beat::stand(1.5).named("hang"),
                 Beat::walk(1.2).named("pull").towards(INTO),
+            ]),
+        ),
+        at_wall(
+            "ledge_light_back_jump",
+            "Ledge: hang from a light box too tall to clear, and kick it away with a back-jump",
+            30.0,
+            hang_then(&[
+                Beat::stand(1.0).named("hang"),
+                Beat::jump(0.5).named("back").towards(Vector3::zeros()),
+                Beat::stand(1.0).named("land"),
             ]),
         ),
         at_wall(

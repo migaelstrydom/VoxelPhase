@@ -23,6 +23,7 @@ fn lip(lip: f32, climbable: bool) -> SensedEdge {
     let at = WorldEdge {
         hands: [Point3::new(0.34, y, -0.15), Point3::new(0.34, y, 0.15)],
         outward: Unit::new_normalize(OUT),
+        face_depth: 0.04,
         stand: climbable.then(|| Point3::new(0.65, y + 0.5, 0.0)),
     };
     SensedEdge {
@@ -30,6 +31,7 @@ fn lip(lip: f32, climbable: bool) -> SensedEdge {
             body: None,
             hands: at.hands,
             outward: at.outward,
+            face_depth: at.face_depth,
             stand: at.stand,
             footing: Footing::Fixed,
         },
@@ -316,10 +318,14 @@ fn a_back_jump_goes_straight_out_unless_the_stick_steers_it() {
             },
             "stick {stick}"
         );
-        assert_eq!(effects.planar_velocity, Some(OUT * push));
+        let player = LocomotionConfig::player();
+        let tap = player.jump_speed * player.jump_cutoff_factor;
+        assert_eq!(effects.launch, Some(OUT * push + Vector3::y() * tap));
+        assert_eq!(effects.vertical_speed, None, "the launch is set whole");
         assert_eq!(
-            effects.vertical_speed,
-            Some(LocomotionConfig::player().jump_speed)
+            effects.push_against,
+            Some(hang_lip()),
+            "it pushes off the edge"
         );
     }
     for stick in [OUT, ALONG] {

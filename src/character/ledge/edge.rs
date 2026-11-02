@@ -15,6 +15,9 @@ pub struct Edge {
     /// Horizontal at the grab, pointing out of the face, away from the top:
     /// the way a drop or a back-jump leaves. In the body's frame.
     pub outward: UnitVector3<f32>,
+    /// How far behind the face the hands hold, in metres: the face is this
+    /// far out from them, along `outward`.
+    pub face_depth: f32,
     /// Where the body's axis stands after a pull-up, on the top, in the
     /// body's frame; `None` if the top is too narrow, too steep or too low
     /// under a roof to stand on.
@@ -42,6 +45,8 @@ pub struct WorldEdge {
     pub hands: [Point3<f32>; 2],
     /// Out of the face, away from the top.
     pub outward: UnitVector3<f32>,
+    /// How far behind the face the hands hold, in metres.
+    pub face_depth: f32,
     /// Where the body's axis stands after a pull-up.
     pub stand: Option<Point3<f32>>,
 }
@@ -60,6 +65,7 @@ impl Edge {
             body,
             hands: found.hands.map(|hand| to_local * hand),
             outward: Unit::new_unchecked(to_local * found.outward.into_inner()),
+            face_depth: found.face_depth,
             stand: found.stand.map(|stand| to_local * stand),
             footing,
         })
@@ -71,6 +77,7 @@ impl Edge {
         Some(WorldEdge {
             hands: self.hands.map(|hand| to_world * hand),
             outward: Unit::new_unchecked(to_world * self.outward.into_inner()),
+            face_depth: self.face_depth,
             stand: self.stand.map(|stand| to_world * stand),
         })
     }
@@ -85,6 +92,11 @@ impl WorldEdge {
     /// Midway between the hands: where the grip holds.
     pub fn grip(&self) -> Point3<f32> {
         nalgebra::center(&self.hands[0], &self.hands[1])
+    }
+
+    /// On the face, level with the grip and out from it.
+    pub fn face(&self) -> Point3<f32> {
+        self.grip() + self.outward.into_inner() * self.face_depth
     }
 
     /// Along the edge, from the first hand to the second, level and unit

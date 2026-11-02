@@ -159,14 +159,22 @@ Each hand feels from the body's axis, moved `hand_offset` (0.15 m) to its
 side, with spheres of 2 cm radius (`src/character/ledge/probe.rs`):
 
 1. **A top ahead.** Casts down through the catch band, 5 cm apart from the
-   capsule's surface out to `reach_ahead` (0.25 m) beyond it. The nearest top
-   the fingers hold gives the lip's height.
-2. **The face.** A cast forward, 6 cm under the lip (below the rounding a
-   voxel mesh gives it), finds the face. It must be steeper than
-   `face_slope` and face the body. Looking just under the lip, rather than
-   low down, finds the face of a free slab's edge too.
-3. **The hold.** A cast down `grip_depth` behind the face must find the top
-   again, within a few centimetres of the lip. That is where the hand holds.
+   capsule's surface out to `reach_ahead` (0.25 m) beyond it and a bevel's
+   width (0.3 m) further. The nearest top the fingers hold (within
+   `grip_slope`, 40°), followed up while it keeps rising, gives the lip: a
+   voxel mesh bevels a lip over about a voxel, and a shallow bevel is held
+   at its crest, not wherever it first enters the band, which moved with the
+   body (a body pushing into the Ledge Garden's box rode up the bevel, lost
+   the edge and bobbed).
+2. **The face.** A cast forward finds the face, nearest first at 6 cm, 15 cm
+   and 30 cm under the lip: just under a free slab's sharp edge, and below a
+   bevel. It must be steeper than `face_slope`, face the body, and be no
+   further out than the top.
+3. **The hold.** A cast down `grip_depth` behind the face, or where the top
+   begins if that is further in, must find the top again, within a few
+   centimetres of the lip. That is where the hand holds; how far it is
+   behind the face (`Edge::face_depth`) places the hanging body off the
+   face, not off the hands.
 4. **Room for the hand.** A cast forward `hand_clearance` above the hold must
    be clear to the hand. Otherwise the top is a step in a wall that carries
    on up.
@@ -396,6 +404,14 @@ pull-up rising at 4 m/s now reports 4.2.
   the top, its contacts ground it, and the state is OnFoot.
 - **Leaving.** Drop, back-jump or a lost edge removes the joint, and the body
   leaves with the velocity it has. On a platform, that is the platform's.
+
+Whatever velocity entering a state sets on the body (the catch's match to
+the edge, the back-jump's whole launch, the pull-up's match at the end), the
+edge's body takes the equal and opposite impulse at the grip
+(`EntryEffects::push_against`, `match_edge`). A catch yanks a light crate, and
+a back-jump kicks it away, as a jump from its top does; a back-jump off the
+Ledge Garden's light tall box topples it. The back-jump's rise is set with
+the launch, not conjured as a jump with nothing under it would be.
 
 If the edge's body is removed, `PhysicsWorld::remove_body` already removes
 every constraint that references it. `Grip` finds its handle gone, and the

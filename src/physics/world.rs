@@ -412,6 +412,25 @@ impl PhysicsWorld {
         true
     }
 
+    /// Apply an instantaneous impulse to one body at a world point, which
+    /// also turns it about its centre, waking it. See
+    /// [`apply_impulse`](Self::apply_impulse) for why this exists.
+    ///
+    /// Returns false if the handle refers to no body.
+    pub fn apply_impulse_at_point(
+        &mut self,
+        handle: RigidBodyHandle,
+        impulse: Vector3<f32>,
+        point: Point3<f32>,
+    ) -> bool {
+        let Some(body) = self.body_mut(handle) else {
+            return false;
+        };
+        body.apply_impulse_at_point(impulse, point);
+        self.wake_body(handle);
+        true
+    }
+
     /// Apply an instantaneous angular impulse to one body, waking it.
     ///
     /// See [`apply_impulse`](Self::apply_impulse) for why this exists.
