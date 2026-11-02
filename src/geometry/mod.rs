@@ -9,6 +9,7 @@ mod cylinder;
 mod dome;
 mod fissured_shell;
 mod heart;
+mod icosphere;
 mod sphere;
 mod tube;
 
@@ -22,6 +23,7 @@ pub use fissured_shell::{
     generate_fissured_shell, FissureBand, FissuredShell, FissuredShellConfig,
 };
 pub use heart::{generate_heart, HeartSpec};
+pub use icosphere::{generate_icosphere, Icosphere};
 pub use sphere::{
     generate_magic_sphere_vertices, generate_sphere_indices, generate_sphere_vertices,
     MagicSphereConfig,

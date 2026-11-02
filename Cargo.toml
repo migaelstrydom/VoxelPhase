@@ -42,6 +42,7 @@ water_scenarios = []
 rubble_scenarios = []
 level_scenarios = []
 traversal_scenarios = []
+foliage_scenarios = []
 
 
 [dev-dependencies]

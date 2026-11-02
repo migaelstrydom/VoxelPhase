@@ -15,6 +15,7 @@ pub mod debug;
 pub mod drive;
 pub mod explosion;
 pub mod fire;
+pub mod foliage;
 pub mod force_field;
 pub mod fracture;
 pub mod geometry;
