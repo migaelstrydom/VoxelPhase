@@ -3,14 +3,9 @@
 //! Routes shape pairs to specialized collision functions (analytic/SAT fast-paths)
 //! based on `ColliderShape` variants. Unknown pairs fall through to GJK/EPA.
 
-use nalgebra::{Point3, UnitQuaternion};
-
 use super::capsule::Capsule;
 use super::contact::ContactManifold;
-use super::convex_hull::ConvexHull;
 
-/// Enable to log phantom contact diagnostics for hull-hull pairs to stderr.
-const DEBUG_HULL_CONTACTS: bool = false;
 use super::discrete::capsule_capsule::capsule_capsule_manifold;
 use super::discrete::gjk::GjkCache;
 use super::discrete::gjk_epa_manifold::gjk_epa_manifold_cached;
@@ -150,11 +145,7 @@ pub fn generate_manifold(
                 Some(c) => c,
                 None => &mut SatCache::default(),
             };
-            let manifold = hull_hull_manifold(a, b, margin, cache, gjk_cache);
-            if DEBUG_HULL_CONTACTS {
-                validate_hull_hull_contacts(&manifold, a, b, margin);
-            }
-            manifold
+            hull_hull_manifold(a, b, margin, cache, gjk_cache)
         }
 
         // A hull against a capsule, the hull first whichever way round the
@@ -194,108 +185,6 @@ pub fn generate_manifold(
             manifold
         }
     }
-}
-
-/// Maximum face-plane violation (signed distance) of a world-space point against
-/// a convex hull. Returns the largest `(point - face_vertex).dot(face_normal)`
-/// across all faces. Negative means inside, zero means on surface, positive means
-/// outside.
-fn max_face_plane_violation(
-    point: &Point3<f32>,
-    hull: &ConvexHull,
-    center: &Point3<f32>,
-    rotation: &UnitQuaternion<f32>,
-) -> f32 {
-    let mut max_violation = f32::NEG_INFINITY;
-    for face in &hull.faces {
-        let world_normal = rotation * face.normal;
-        let ref_vertex_local = hull.vertices[face.vertex_indices[0] as usize];
-        let ref_vertex_world = center + rotation * ref_vertex_local;
-        let violation = (point - ref_vertex_world).dot(&world_normal);
-        if violation > max_violation {
-            max_violation = violation;
-        }
-    }
-    max_violation
-}
-
-/// Validate hull-hull contact points against face planes and log offenders.
-fn validate_hull_hull_contacts(
-    manifold: &ContactManifold,
-    a: &ShapeView,
-    b: &ShapeView,
-    margin: f32,
-) {
-    let hull_a = match a.shape {
-        ColliderShape::ConvexHull { hull } => hull,
-        _ => return,
-    };
-    let hull_b = match b.shape {
-        ColliderShape::ConvexHull { hull } => hull,
-        _ => return,
-    };
-
-    let tolerance = margin + 0.05;
-    let mut geometry_printed = false;
-
-    for (i, cp) in manifold.points.iter().enumerate() {
-        let violation_a = max_face_plane_violation(&cp.point, hull_a, &a.center, &a.rotation);
-        let violation_b = max_face_plane_violation(&cp.point, hull_b, &b.center, &b.rotation);
-
-        if violation_a > tolerance || violation_b > tolerance {
-            eprintln!("=== PHANTOM CONTACT DETECTED (point {i}) ===");
-            eprintln!(
-                "  contact: point=({:.4}, {:.4}, {:.4}), normal=({:.4}, {:.4}, {:.4}), raw_depth={:.4}",
-                cp.point.x, cp.point.y, cp.point.z,
-                cp.raw_normal.x, cp.raw_normal.y, cp.raw_normal.z,
-                cp.raw_depth,
-            );
-            eprintln!(
-                "  face-plane violation: hull_a={:.4}, hull_b={:.4} (tolerance={:.4})",
-                violation_a, violation_b, tolerance,
-            );
-            if !geometry_printed {
-                eprintln!("  --- Hull A (for unit test) ---");
-                print_hull_geometry(hull_a, &a.center, &a.rotation);
-                eprintln!("  --- Hull B (for unit test) ---");
-                print_hull_geometry(hull_b, &b.center, &b.rotation);
-                eprintln!("  margin: {margin:.4}");
-                geometry_printed = true;
-            }
-            eprintln!("=== END PHANTOM CONTACT ===");
-        }
-    }
-}
-
-/// Print hull geometry in a format that can be pasted into a unit test.
-fn print_hull_geometry(hull: &ConvexHull, center: &Point3<f32>, rotation: &UnitQuaternion<f32>) {
-    eprintln!(
-        "  center: Point3::new({:.6}, {:.6}, {:.6})",
-        center.x, center.y, center.z,
-    );
-    let (x, y, z, w) = {
-        let q = rotation.as_ref();
-        (q.i, q.j, q.k, q.w)
-    };
-    eprintln!(
-        "  rotation: UnitQuaternion::from_quaternion(Quaternion::new({:.6}, {:.6}, {:.6}, {:.6}))",
-        w, x, y, z,
-    );
-    eprintln!("  vertices: vec![");
-    for v in &hull.vertices {
-        eprintln!("    Vector3::new({:.6}, {:.6}, {:.6}),", v.x, v.y, v.z);
-    }
-    eprintln!("  ]");
-    eprintln!("  faces: vec![");
-    for face in &hull.faces {
-        let indices: Vec<String> = face.vertex_indices.iter().map(|i| i.to_string()).collect();
-        eprintln!(
-            "    HullFace {{ vertex_indices: SmallVec::from_slice(&[{}]), normal: Vector3::new({:.6}, {:.6}, {:.6}) }},",
-            indices.join(", "),
-            face.normal.x, face.normal.y, face.normal.z,
-        );
-    }
-    eprintln!("  ]");
 }
 
 /// Shape type rank for canonical argument ordering in the GJK/EPA fallback.
@@ -352,6 +241,26 @@ mod tests {
     use crate::collision::SurfaceId;
     use nalgebra::{Point3, UnitQuaternion, Vector3};
     use smallvec::SmallVec;
+
+    /// Maximum face-plane violation (signed distance) of a world-space point
+    /// against a convex hull: the largest `(point - face_vertex)·face_normal`
+    /// across all faces. Negative means inside, zero on the surface, positive
+    /// outside.
+    fn max_face_plane_violation(
+        point: &Point3<f32>,
+        hull: &ConvexHull,
+        center: &Point3<f32>,
+        rotation: &UnitQuaternion<f32>,
+    ) -> f32 {
+        hull.faces
+            .iter()
+            .map(|face| {
+                let world_normal = rotation * face.normal;
+                let reference = center + rotation * hull.vertices[face.vertex_indices[0] as usize];
+                (point - reference).dot(&world_normal)
+            })
+            .fold(f32::NEG_INFINITY, f32::max)
+    }
 
     fn view_from(
         center: Point3<f32>,
