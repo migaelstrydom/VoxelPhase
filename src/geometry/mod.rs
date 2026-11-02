@@ -14,9 +14,9 @@ mod tube;
 
 pub use capsule::generate_capsule;
 pub use cube::{generate_cube_indices, generate_cube_vertices};
+pub use cylinder::generate_cylinder;
 #[cfg(test)]
 pub(crate) use cylinder::widest_u_span;
-pub use cylinder::{generate_capped_cylinder, generate_cylinder};
 pub use dome::{generate_dome, DomeSpec};
 pub use fissured_shell::{
     generate_fissured_shell, FissureBand, FissuredShell, FissuredShellConfig,
