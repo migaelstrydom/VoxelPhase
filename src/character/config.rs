@@ -1,5 +1,6 @@
 use specs::{Component, DenseVecStorage};
 
+use super::ledge::LedgeConfig;
 use super::swim::SwimConfig;
 
 /// Movement tuning for one character.
@@ -101,6 +102,9 @@ pub struct LocomotionConfig {
     pub collider_half_height: f32,
     /// How the character takes to the water.
     pub swim: SwimConfig,
+    /// What the hands catch, and how the character hangs and climbs. Only a
+    /// body with a `LedgeSensor` finds edges at all.
+    pub ledge: LedgeConfig,
 }
 
 impl LocomotionConfig {
@@ -130,6 +134,7 @@ impl LocomotionConfig {
             collider_radius: 0.25,
             collider_half_height: 0.5,
             swim: SwimConfig::default(),
+            ledge: LedgeConfig::default(),
         }
     }
 

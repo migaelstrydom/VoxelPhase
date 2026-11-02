@@ -195,7 +195,8 @@ An edge at the hands is grabbed automatically when all of these hold:
   capsule's centre) and the overhead reach (0.57 m above it), plus
   `catch_stretch` (8 cm) for a hand that just snags it. Above the shoulders
   the grab is a hang. Below them, with the stick pushing towards the edge, it
-  is a mantle (see *Input*).
+  is a mantle (see *Input*), which reaches down to `mantle_low` (0.05 m
+  above the centre).
 - **The body is not rising fast.** Vertical speed must be at most `catch_rise`
   (1 m/s). A jump rising past a ledge carries on to its apex and lands on top
   if it clears it. It is caught only if it comes back down past the lip.
@@ -342,26 +343,44 @@ upright, and the yaw drive turns it to face `-outward` about its own axis,
 which is where the anchor is.
 
 Every phase moves only the edge-side anchor, so every path is in the edge's
-frame:
+frame. Each frame the anchor stands where the body should be, and the
+joint's `anchor_velocity` (new on `BallJoint`) says how fast it moves on to
+the next point of its path. The joint's rows carry the body along at that
+speed, and the position correction meets only drift.
+
+Moving the anchor in one step a frame instead led the body by a frame's
+travel, and it worked out badly. The joints' velocity term
+(`−β/dt · error`, the same in every joint) then pushes the body *away* from
+the anchor, and only the position correction (NGS) moves it there. A body
+carried up at 1 m/s that way reported −1.46 m/s, and a pull-up −6 m/s while
+rising. With the velocity stated, the signs are right, but the magnitude
+still reads low (a pull-up rising at about 3 m/s reports about 1.1 m/s). The
+remaining error term accounts for that. Whether the joints' velocity term
+has the wrong sign is a question for the physics engine, open.
 
 - **Grab.** The joint is rigid from the start. A spring catch dips by about
   speed × time constant: 0.6 m at 5 m/s with a 0.12 s constant, and 1.4 m at
   12 m/s. Stiffening it afterwards would then yank the body back up. Instead,
   entering a Ledge sets the body's velocity to the edge body's velocity at the
-  anchor (a new entry effect, `EntryEffects::match_velocity`), so the rigid
-  joint starts with nothing to stop. The dip is the pose's job, a transient in
-  the arms and knees.
+  anchor (`EntryEffects::match_edge`), so the rigid joint starts with nothing
+  to stop. The joint is made where the body was caught, and its end eases to
+  the hang over the `settle`: in the Ledge Garden the body sinks 0.3 m onto
+  its arms with no snap.
 - **Hang.** The body's weight goes into the edge's body: a light crate is
   pulled off its shelf, and a platform carries the hanger and feels them.
-  With the catch's speed already matched, the joint's largest load is a hit
-  while hanging. So it is breakable at `grip_strength` (four body weights,
-  turned into `max_impulse` per substep). Rubble landing on a hanger tears
-  them off rather than being solved between a rigid joint and its contacts.
-  The solver only marks a broken joint inactive, and `Grip` reports that as a
-  lost grip.
-- **Shimmy.** The anchor slides along the edge at `shimmy_speed`. Each frame
-  the sensor tests the edge at the hands' next position. Where it fails (a
-  corner, the end of the lip, a gap), the anchor stops there.
+  The joint is unbreakable. A breakable joint's limit is an impulse per
+  substep, and moving the edge end once a frame (the catch's ease, a shimmy,
+  a pull-up) asks for a velocity change within one substep: about 24 g to
+  start a 1 m/s shimmy, far past any limit a hit should tear at. Tearing the
+  grip under a hit (rubble landing on a hanger) is open; it needs the load
+  measured over a frame, not a substep. The solver marks a broken joint
+  inactive, and `Grip` reports that as a lost grip, so a limit can come back
+  without changing the state.
+- **Shimmy.** The anchor slides along the edge at `shimmy_speed`, keeping
+  its own place along the edge rather than re-centring on the body (which ran
+  the shimmy at 0.8 of its speed). Each frame the sensor tests the edge
+  `shimmy_probe` (0.1 m) either way. Where it fails (a corner, the end of the
+  lip, a gap), the anchor stops.
 - **PullUp.** The anchor moves along a lift path:
   - first up, until the capsule's bottom is `lip_clearance` (3 cm) above the
     lip, keeping `face_gap` off the face;
@@ -369,9 +388,9 @@ frame:
     climbable test checked (`stand_depth` behind the lip).
 
   It takes `pull_up_time` (0.6 s), or `mantle_time` (0.3 s) for a mantle. The
-  joint is the motor, so the climb pushes down on whatever it climbs. The
-  path's velocity is the target, and the joint's position correction only
-  trims drift. At the end the joint is removed. Entering OnFoot from a Ledge
+  joint is the motor, so the climb pushes down on whatever it climbs. A
+  mantle starts from where the body stands, so its path starts there. At the
+  end the joint is removed. Entering OnFoot from a Ledge
   matches the body's velocity to the edge's, as the catch did, which drops
   whatever correction velocity the joint built up. The body then stands on
   the top, its contacts ground it, and the state is OnFoot.
@@ -390,16 +409,16 @@ wildcards.
 | Consumer | Ledge |
 |---|---|
 | Planner (`PlanRole`) | Off |
-| Legs | Off. The pose hangs them from the hips, knees bent a little towards the wall. |
-| Arms (`UpperState`) | Grip: each hand held to its `Edge::hands` point, read through the edge's body each frame, with the elbows solved to them (the hand clamp from c553979). In Jump and Fall, a predicted edge turns Brace into Reach towards it. |
-| Pose | By phase: the Grab catch, the Hang with its lean, and the PullUp following the lift path |
+| Legs | Off. Step 7: the pose hangs them from the hips, knees bent a little towards the wall. |
+| Arms (`UpperState`) | Braced for now. Step 7: Grip, each hand held to its `Edge::hands` point, read through the edge's body each frame, with the elbows solved to them (the hand clamp from c553979). In Jump and Fall, a predicted edge turns Brace into Reach towards it. |
+| Pose | A fall's for now. Step 7: by phase, the Grab catch, the Hang with its lean, and the PullUp following the lift path |
 | Grab system | `arm_state_allowed`: only `Idle` in a Ledge; entering one releases what is held |
 
 ## Testing
 
-**Unit tests**, in `src/character/ledge/` and `locomotion/tests.rs`:
-- The edge test on synthetic geometry (`SolidsGeometry` blocks):
-  - wall tops at heights through the band;
+**Unit tests** (done):
+- The edge test on synthetic geometry, `src/character/ledge/tests.rs`:
+  - wall tops at heights through the band, and outside it;
   - a 2 cm lip, which is not grippable;
   - a 6 cm lip, which is grippable and not climbable;
   - a top under a low roof, which is grippable and not climbable;
@@ -407,36 +426,46 @@ wildcards.
   - a free slab edge;
   - a terrain wall, as static geometry;
   - two hands at lip heights that differ by 2 cm and by 6 cm;
-  - an edge carried by its body when the body moves and turns
-  (done, `src/character/ledge/tests.rs`).
-- The prediction finds an edge the arc will meet, and no edge on an arc that
-  clears the wall.
-- The state machine, on scripted facts and requests:
-  - settle, then commit, then release early;
-  - the mantle shortcut;
-  - a back-jump on the first frame of Hang;
-  - edge lost to Fall;
-  - the regrab lock;
-  - `hands_free` from every state.
+  - an edge carried by its body when the body moves and turns.
+- The same on the Traversal Garden's cave roof as voxel terrain,
+  `garden_tests.rs` (`traversal_scenarios`).
+- The state machine on scripted facts, `locomotion/ledge_tests.rs`:
+  - catching from a fall, not from a Hop or a jump still launching;
+  - the water giving up a swimmer to an edge, and never taking a hanger;
+  - the mantle, on foot and from the air, and what does not mantle;
+  - the settle, a drop committed and one let go early;
+  - a pull-up committed only where the body can stand;
+  - a shimmy leaning nowhere;
+  - crouch dropping at once;
+  - the back-jump, straight or steered by the stick;
+  - an edge lost, or found on another body;
+  - a pull-up run onto its feet at the edge's velocity;
+  - `hands_free`.
 
-**`character_viewer` scenarios** (real game, scripted pilot):
+**`character_viewer` scenarios** in the Ledge Garden
+(`levels/ledge_garden.level.ron`, `character_viewer/ledge_scenarios.rs`):
 
-| Scenario | Checks |
+| Scenario | Result |
 |---|---|
-| `ledge_short_jump` | a jump that falls short of a 1.6 m wall catches it and hangs at rest within 0.5 s |
-| `ledge_fall_past` | a fall down a wall's face, facing it, catches its lip; facing away, it doesn't |
-| `ledge_drop`, `ledge_pull_up`, `ledge_back_jump` | each exit, with its timing; a stick released before `commit_hold` doesn't commit |
-| `ledge_shimmy` | shimmies to the lip's end and stops |
-| `ledge_narrow_lip` | hangs from a lip it can't stand on; pushing towards it never commits |
-| `ledge_mantle` | runs and jumps late into a chest-high box: on top without a hang |
-| `ledge_from_water` | swims to a 1 m bank and climbs out |
-| `ledge_platform` | catches a moving platform's rim, rides it, drops off with its velocity |
-| `ledge_light_crate` | hangs from a light crate on a shelf, which comes down |
-| `ledge_blasted` | a blast takes the lip under the hands, and the body falls |
+| `ledge_hang` | a full jump at a 3.2 m wall (its top meshes at 3.05 m) catches the lip falling from the apex and hangs at rest, the centre 0.53 m under the lip |
+| `ledge_jump_mantle` | the same jump pushing into the wall climbs it from the top of the jump |
+| `ledge_drop` | the stick held away drops after 0.2 s |
+| `ledge_crouch_drop` | crouch drops on the press |
+| `ledge_pull_up` | the stick held in pulls up after 0.2 s, onto the top in 0.6 s |
+| `ledge_back_jump` | jump leaves straight out from the wall |
+| `ledge_shimmy` | 1.5 m along the lip in 1.5 s |
+| `ledge_no_room` | under a roof, pushing in only strains |
+| `ledge_mantle` | walking into a 0.72 m box climbs onto it |
 
-These need stations: a small level, `ledge_garden`, with walls at a few
-heights, a narrow lip, a low-roofed ledge, a chest-high box, a crate on a
-shelf, a moving platform, and a pool with a 1 m bank.
+The Traversal Garden's `ledge_walk` (its 0.7 m ledge) now crosses on 5 of 5
+starts by mantling. Its baseline in `docs/traversal/BASELINE.md` was 0 of 5,
+bouncing against the wall.
+
+Still to build, with step 8: `ledge_from_water` (swim to a 1 m bank and
+climb out), `ledge_platform` (catch a moving platform's rim, ride it, drop
+off with its velocity), `ledge_light_crate` (hang from a light crate on a
+shelf, which comes down), `ledge_blasted` (a blast takes the lip, and the
+body falls), and a fall down a wall's face that catches its lip.
 
 ## Steps
 
@@ -453,11 +482,11 @@ Each step ships with the game working, and its tests.
    movement rule and entry effects, and every consumer's mapping. The
    sensor's catch conditions (rise, facing, speed, the regrab lock) and the
    held edge always seen, which need the state. Unit tests on scripted
-   facts.
+   facts (done).
 4. **The grip.** Catch, hang, drop and back-jump, and `ledge_garden`'s first
-   walls.
-5. **Shimmy.**
-6. **Pull-up and mantle.**
+   walls (done).
+5. **Shimmy** (done).
+6. **Pull-up and mantle** (done).
 7. **Arms and pose.** Hands on the edge, the arc prediction and the reach
    ahead (cosmetic, so it waits until here), and the hang and lean poses.
 8. **Water, platforms, loose bodies and blasts**, and their scenarios.
@@ -465,20 +494,23 @@ Each step ships with the game working, and its tests.
 Steps 1 to 6 need no input except feel. Step 7 is about looks, and is best
 judged in play.
 
-## Open questions
+## Decisions
 
-1. **Back-jump steering.** Straight out along `outward`, or steerable by the
-   stick at the press, as a wall-kick?
-2. **Swinging under a free lip.** `KeepAttitude` holds the body upright, but
-   the ball joint still lets it swing like a pendulum about the hands. Under a
-   free lip (a slab's edge, a platform's rim) there is no face to stop it.
-   Should it swing freely, or be damped?
-3. **Is the mantle band too narrow?** With a 1 m body and a 2.5 m jump, a
-   chest-high box is cleared by any jump that reaches it. The mantle band
-   (lip between the chest and the shoulders) is 5 cm deep. A mantle happens
-   only when a jump meets the box's face and drops back down it. Options:
-   - let OnFoot mantle a box at the chest when the stick pushes into it;
-   - widen the band down to the waist;
-   - accept it as rare.
-4. **Crouch to drop.** A button press as well as the stick held away? It's
-   faster and needs no hold, but it takes away the effort the hold gives.
+Taken with the user on 2026-11-02:
+
+1. **Back-jump steering.** With the stick neutral or pushed towards the
+   ledge at the press, the back-jump goes straight out along `outward`,
+   locked for `back_jump_lock`. With the stick pushed any other way, it
+   leaves along `outward` and is steered by the stick, as any jump is.
+2. **Swinging under a free lip.** It swings freely on the ball joint.
+3. **Mantle from OnFoot.** A body on its feet, pushing the stick into a
+   climbable edge under its shoulders, mantles it: OnFoot enters a Ledge
+   straight into PullUp. The sensor therefore runs on foot too, and
+   `hands_free` is true in OnFoot. A jump that reaches a chest-high box
+   clears it, so this is how mantles mostly happen. A mantle reaches lower
+   than a catch: from `mantle_low` (0.05 m above the capsule's centre, lips
+   from 0.55 m above the feet), because on foot a 0.7 m box's lip measured
+   right at the chest bound and was missed. A grab from the air still needs
+   the lip at the chest (`catch_low`).
+4. **Crouch drops at once.** Pressing crouch while hanging drops
+   immediately. Holding the stick away still takes `commit_hold`.

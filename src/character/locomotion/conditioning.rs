@@ -66,6 +66,8 @@ impl Conditioning {
             long_jump_armed: self.crouch_buffer.active(),
             takeoff: intent.takeoff,
             landing: intent.landing,
+            edge: intent.edge,
+            drop: intent.crouch_just_pressed,
         }
     }
 

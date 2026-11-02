@@ -1,4 +1,4 @@
-use nalgebra::{Isometry3, Point3, Unit, UnitVector3};
+use nalgebra::{Isometry3, Point3, Unit, UnitVector3, Vector3};
 use traversal_planner::section::Footing;
 
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
@@ -21,6 +21,18 @@ pub struct Edge {
     pub stand: Option<Point3<f32>>,
     /// What the body is as footing.
     pub footing: Footing,
+}
+
+/// An edge the hands found this frame, as the locomotion state reads it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SensedEdge {
+    /// The edge, in its body's frame.
+    pub edge: Edge,
+    /// Where it is this frame.
+    pub at: WorldEdge,
+    /// Whether the edge carries on past each hand far enough to shimmy
+    /// that way: `room[i]` is towards `at.hands[i]`.
+    pub room: [bool; 2],
 }
 
 /// An [`Edge`] read in the world this frame.
@@ -74,11 +86,22 @@ impl WorldEdge {
     pub fn grip(&self) -> Point3<f32> {
         nalgebra::center(&self.hands[0], &self.hands[1])
     }
+
+    /// Along the edge, from the first hand to the second, level and unit
+    /// length.
+    pub fn along(&self) -> Vector3<f32> {
+        let level = Vector3::y().cross(&self.outward).normalize();
+        if level.dot(&(self.hands[1] - self.hands[0])) < 0.0 {
+            -level
+        } else {
+            level
+        }
+    }
 }
 
 /// The pose of `body` in the world: the identity for static geometry, and
 /// `None` for a body that is gone.
-fn frame_of(world: &PhysicsWorld, body: Option<RigidBodyHandle>) -> Option<Isometry3<f32>> {
+pub fn frame_of(world: &PhysicsWorld, body: Option<RigidBodyHandle>) -> Option<Isometry3<f32>> {
     match body {
         None => Some(Isometry3::identity()),
         Some(handle) => world

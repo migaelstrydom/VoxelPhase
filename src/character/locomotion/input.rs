@@ -3,6 +3,7 @@ use nalgebra::{Point3, Vector3};
 use super::requests::{PlannedLanding, PlannedTakeoff};
 use crate::character::config::LocomotionConfig;
 use crate::character::immersion::Immersion;
+use crate::character::ledge::SensedEdge;
 
 /// Per-frame inputs to `LocomotionState::tick` and `enter`.
 pub struct LocomotionInput<'a> {
@@ -59,4 +60,9 @@ pub struct Requests {
     pub takeoff: Option<PlannedTakeoff>,
     /// Where the plan now lands a Hop under way.
     pub landing: Option<PlannedLanding>,
+    /// The edge at the hands: one they may catch, or the one they hold,
+    /// found again. `None` while holding is an edge lost.
+    pub edge: Option<SensedEdge>,
+    /// Crouch pressed this frame: a drop, hanging.
+    pub drop: bool,
 }

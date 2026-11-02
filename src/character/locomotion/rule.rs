@@ -79,6 +79,10 @@ pub struct MovementRule {
     /// Cancel positive vy, so a character walking off a crest does not rise
     /// off it on the climb it carried over the top.
     pub clamp_up: bool,
+    /// Ask nothing of the supports: their contacts keep only the surface's
+    /// own friction, with no drive pushing through them, and `target` is
+    /// zero. For a body something else moves (a grip on a ledge).
+    pub slack: bool,
 }
 
 impl MovementRule {
@@ -90,6 +94,7 @@ impl MovementRule {
             target: Vector3::new(move_dir.x * speed, 0.0, move_dir.z * speed),
             steer_accel: Some(accel),
             clamp_up: false,
+            slack: false,
         }
     }
 
@@ -100,6 +105,18 @@ impl MovementRule {
             target: velocity,
             steer_accel: None,
             clamp_up: false,
+            slack: false,
+        }
+    }
+
+    /// No authority anywhere: no steering in the air and no drive at the
+    /// contacts.
+    pub fn slack() -> Self {
+        Self {
+            target: Vector3::zeros(),
+            steer_accel: None,
+            clamp_up: false,
+            slack: true,
         }
     }
 

@@ -717,7 +717,9 @@ fn map_upper_state(arm: &ArmState, state: &LocomotionState) -> UpperState {
     match arm {
         ArmState::Idle => match state {
             LocomotionState::OnFoot(_) | LocomotionState::Hop(_) => UpperState::Swinging,
-            LocomotionState::Jump(_) | LocomotionState::Fall(_) => UpperState::Braced,
+            LocomotionState::Jump(_) | LocomotionState::Fall(_) | LocomotionState::Ledge(_) => {
+                UpperState::Braced
+            }
             LocomotionState::Swim(_) => UpperState::Stroking,
         },
         ArmState::Reaching { elapsed, target } => UpperState::Reaching {
@@ -750,9 +752,10 @@ fn leg_mode(state: &LocomotionState) -> LegMode {
             in_seconds: landing.in_seconds,
             footfall: landing.footfall.map(StepId),
         })),
-        LocomotionState::Jump(_) | LocomotionState::Fall(_) | LocomotionState::Swim(_) => {
-            LegMode::Off
-        }
+        LocomotionState::Jump(_)
+        | LocomotionState::Fall(_)
+        | LocomotionState::Swim(_)
+        | LocomotionState::Ledge(_) => LegMode::Off,
     }
 }
 
@@ -775,7 +778,7 @@ fn next_pose_state(
         air_speed: character.air_speed,
     });
     let jump_kind = |kind: JumpKind| match kind {
-        JumpKind::Jump | JumpKind::OutOfWater => AirKind::Jump,
+        JumpKind::Jump | JumpKind::OutOfWater | JumpKind::BackJump => AirKind::Jump,
         JumpKind::LongJump => AirKind::LongJump,
     };
 
@@ -812,7 +815,7 @@ fn next_pose_state(
                 }
             }
         },
-        LocomotionState::Fall(_) => PoseState::Airborne {
+        LocomotionState::Fall(_) | LocomotionState::Ledge(_) => PoseState::Airborne {
             kind: AirKind::Fall,
             takeoff,
         },

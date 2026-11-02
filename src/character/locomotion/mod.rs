@@ -1,5 +1,5 @@
 //! The character's locomotion state machine: what the character is doing
-//! (`OnFoot`, `Hop`, `Jump`, `Fall`, `Swim`), when that changes, and what
+//! (`OnFoot`, `Hop`, `Jump`, `Fall`, `Swim`, `Ledge`), when that changes, and what
 //! changing it does. Design: `docs/LOCOMOTION_STATES.md`.
 //!
 //! ```text
@@ -21,6 +21,7 @@ mod fall;
 mod hop;
 mod input;
 mod jump;
+mod ledge;
 mod on_foot;
 mod requests;
 mod rule;
@@ -28,6 +29,8 @@ mod state;
 mod swim;
 mod takeoff;
 
+#[cfg(test)]
+mod ledge_tests;
 #[cfg(test)]
 mod tests;
 
@@ -37,6 +40,7 @@ pub use fall::Fall;
 pub use hop::Hop;
 pub use input::{Facts, LocomotionInput, Requests};
 pub use jump::{Jump, JumpKind};
+pub use ledge::{Lean, LeanTowards, Ledge, LedgePhase, StickOnEdge};
 pub use on_foot::OnFoot;
 pub use requests::{Foot, PlannedLanding, PlannedTakeoff};
 pub use rule::{AirSteering, MovementRule, RuleSpeeds};

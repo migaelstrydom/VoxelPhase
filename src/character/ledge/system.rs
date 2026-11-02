@@ -1,26 +1,37 @@
+use nalgebra::Vector3;
 use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 
-use crate::character::{facing_from_rotation, ArmState, CharacterState, LocomotionConfig};
+use crate::character::locomotion::{Ledge, LedgePhase};
+use crate::character::{
+    facing_from_rotation, ArmState, CharacterIntent, CharacterState, LocomotionConfig,
+    LocomotionState,
+};
 use crate::components::{RigidBodyComponent, Rotation};
 use crate::debug::DebugOverlays;
-use crate::physics::RigidBodyHandle;
+use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::platform::MovingPlatform;
 use crate::rendering::Colour;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
+use crate::time::Time;
 use crate::traversal::{carriers, TraversalPlanState, WorldCaster};
 
-use super::edge::WorldEdge;
+use super::config::LedgeConfig;
+use super::edge::{SensedEdge, WorldEdge};
 use super::probe::{edge_at_hands, Reach};
 use super::sensor::LedgeSensor;
 
 /// Finds the edge at each sensing body's hands, from the world as last
-/// stepped, and draws it with the traversal plan's overlay (F6).
+/// stepped, and hands it to the locomotion state through the intent: while
+/// the hands are free, an edge they may catch; while they hold one, that
+/// edge found again, with whether it carries on either way for a shimmy.
+/// Draws it with the traversal plan's overlay (F6).
 pub struct LedgeSensorSystem;
 
 impl<'a> System<'a> for LedgeSensorSystem {
     type SystemData = (
         WriteStorage<'a, LedgeSensor>,
+        WriteStorage<'a, CharacterIntent>,
         ReadStorage<'a, RigidBodyComponent>,
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, LocomotionConfig>,
@@ -28,6 +39,7 @@ impl<'a> System<'a> for LedgeSensorSystem {
         ReadStorage<'a, MovingPlatform>,
         Read<'a, PhysicsResource>,
         Option<Read<'a, TerrainWorld>>,
+        Read<'a, Time>,
         Read<'a, TraversalPlanState>,
         Write<'a, DebugOverlays>,
     );
@@ -36,6 +48,7 @@ impl<'a> System<'a> for LedgeSensorSystem {
         &mut self,
         (
             mut sensors,
+            mut intents,
             bodies,
             rotations,
             configs,
@@ -43,6 +56,7 @@ impl<'a> System<'a> for LedgeSensorSystem {
             platforms,
             physics,
             terrain,
+            time,
             plan_state,
             mut overlays,
         ): Self::SystemData,
@@ -51,34 +65,143 @@ impl<'a> System<'a> for LedgeSensorSystem {
             return;
         };
         let carriers = carriers(&platforms, &bodies);
-        for (sensor, body, rotation, config, state) in
-            (&mut sensors, &bodies, &rotations, &configs, &states).join()
+        let dt = time.delta_seconds();
+        for (sensor, intent, body, rotation, config, state) in (
+            &mut sensors,
+            &mut intents,
+            &bodies,
+            &rotations,
+            &configs,
+            &states,
+        )
+            .join()
         {
-            let Some(rigid) = physics.world.body(body.0) else {
-                sensor.edge = None;
+            let ledge = &config.ledge;
+            let holding = matches!(state.locomotion, LocomotionState::Ledge(_));
+            let let_go = sensor.was_holding
+                && !holding
+                && !matches!(state.locomotion, LocomotionState::OnFoot(_));
+            sensor.regrab_lock = if let_go {
+                ledge.regrab_lock
+            } else {
+                (sensor.regrab_lock - dt).max(0.0)
+            };
+            sensor.was_holding = holding;
+
+            let world = &physics.world;
+            let Some(rigid) = world.body(body.0) else {
+                intent.edge = None;
                 continue;
             };
             let exclude = excluded(body.0, &state.arm);
+            let mut seen = carriers.clone();
+            if let LocomotionState::Ledge(Ledge {
+                edge: held_edge, ..
+            }) = state.locomotion
+            {
+                seen.extend(held_edge.body);
+            }
             let caster = WorldCaster {
-                world: &physics.world,
+                world,
                 scenery: &*terrain,
                 exclude: &exclude,
-                carriers: &carriers,
+                carriers: &seen,
             };
-            let reach = Reach {
+            let reach = |heading: Vector3<f32>| Reach {
                 centre: rigid.position(),
-                heading: facing_from_rotation(rotation.0),
+                heading,
                 radius: config.collider_radius,
                 half_height: config.collider_half_height,
             };
-            sensor.edge = edge_at_hands(&caster, &reach, &sensor.config);
+            intent.edge = match state.locomotion {
+                LocomotionState::Ledge(held) => {
+                    let grip_holds = state.grip.is_some_and(|grip| grip.holds(world));
+                    let started = state.grip.is_none();
+                    (grip_holds || started)
+                        .then(|| found_again(&caster, &held, &reach, ledge))
+                        .flatten()
+                }
+                _ if state.locomotion.hands_free() && sensor.regrab_lock <= 0.0 => {
+                    let heading = facing_from_rotation(rotation.0);
+                    edge_at_hands(&caster, &reach(heading), ledge)
+                        .and_then(|edge| sensed(world, edge, [false; 2]))
+                        .filter(|sensed| {
+                            catchable(world, body.0, sensed, heading, &state.locomotion, ledge)
+                        })
+                }
+                _ => None,
+            };
             if plan_state.overlay {
-                if let Some(edge) = sensor.edge.and_then(|edge| edge.in_world(&physics.world)) {
-                    draw(&mut overlays, &edge);
+                if let Some(sensed) = &intent.edge {
+                    draw(&mut overlays, &sensed.at);
                 }
             }
         }
     }
+}
+
+/// The held edge found again on the same body, facing it from where the
+/// body is now, and whether it carries on either way. A pull-up is
+/// committed: its edge is the one held, wherever its body has taken it.
+fn found_again(
+    caster: &WorldCaster,
+    held: &Ledge,
+    reach: &dyn Fn(Vector3<f32>) -> Reach,
+    config: &LedgeConfig,
+) -> Option<SensedEdge> {
+    let world = caster.world;
+    let at = held.edge.in_world(world)?;
+    if let LedgePhase::PullUp { .. } = held.phase {
+        return sensed(world, held.edge, [false; 2]);
+    }
+    let heading = -at.outward.into_inner();
+    let here = reach(heading);
+    let same_body = |edge: &super::Edge| edge.body == held.edge.body;
+    let edge = edge_at_hands(caster, &here, config).filter(same_body)?;
+    let along = at.along() * config.shimmy_probe;
+    let room = [-along, along].map(|step| {
+        let moved = Reach {
+            centre: here.centre + step,
+            ..here
+        };
+        edge_at_hands(caster, &moved, config).is_some_and(|edge| same_body(&edge))
+    });
+    sensed(world, edge, room)
+}
+
+fn sensed(world: &PhysicsWorld, edge: super::Edge, room: [bool; 2]) -> Option<SensedEdge> {
+    Some(SensedEdge {
+        edge,
+        at: edge.in_world(world)?,
+        room,
+    })
+}
+
+/// Whether the free hands catch `sensed`: the body faces it, is not rising
+/// past it nor moving too fast against it. On foot the body is not rising,
+/// whatever the contacts make of its vertical speed.
+fn catchable(
+    world: &PhysicsWorld,
+    body: RigidBodyHandle,
+    sensed: &SensedEdge,
+    heading: Vector3<f32>,
+    state: &LocomotionState,
+    config: &LedgeConfig,
+) -> bool {
+    let facing = heading.dot(&-sensed.at.outward.into_inner())
+        >= config.catch_facing_degrees.to_radians().cos();
+    let grip = sensed.at.grip();
+    let edge_velocity = sensed
+        .edge
+        .body
+        .and_then(|handle| world.body(handle))
+        .map_or(Vector3::zeros(), |edge| edge.velocity_at(grip));
+    let relative = world
+        .body(body)
+        .map_or(Vector3::zeros(), |body| body.linear_velocity())
+        - edge_velocity;
+    let on_foot = matches!(state, LocomotionState::OnFoot(_));
+    facing && (on_foot || relative.y <= config.catch_rise) && relative.norm() <= config.catch_speed
 }
 
 /// The bodies the hands feel through: their own, and whatever they hold.

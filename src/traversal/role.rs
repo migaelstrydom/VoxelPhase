@@ -16,9 +16,10 @@ impl PlanRole {
     pub fn of(state: &LocomotionState) -> Self {
         match state {
             LocomotionState::OnFoot(_) | LocomotionState::Hop(_) => Self::On,
-            LocomotionState::Jump(_) | LocomotionState::Fall(_) | LocomotionState::Swim(_) => {
-                Self::Off
-            }
+            LocomotionState::Jump(_)
+            | LocomotionState::Fall(_)
+            | LocomotionState::Swim(_)
+            | LocomotionState::Ledge(_) => Self::Off,
         }
     }
 }

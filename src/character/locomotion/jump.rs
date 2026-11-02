@@ -2,11 +2,13 @@ use nalgebra::Vector3;
 
 use super::effects::EntryEffects;
 use super::input::{Facts, LocomotionInput, Requests};
+use super::ledge::StickOnEdge;
 use super::on_foot::OnFoot;
 use super::rule::{AirSteering, MovementRule, RuleSpeeds};
 use super::state::LocomotionState;
 use super::takeoff::TakeoffPhase;
 use crate::character::config::LocomotionConfig;
+use crate::character::ledge::{LedgeConfig, SensedEdge};
 
 /// What kind of jump the player pressed for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +21,9 @@ pub enum JumpKind {
     /// or back in. Lower than a jump from the ground; releasing the key
     /// early cuts it the same way.
     OutOfWater,
+    /// Off a ledge, out from the wall it hangs on. Releasing the key early
+    /// cuts it as a jump's.
+    BackJump,
 }
 
 /// A jump the player pressed for. The plan has no say in its arc or its
@@ -62,6 +67,25 @@ impl Jump {
             kind: JumpKind::OutOfWater,
             phase: TakeoffPhase::Flight,
             steering: AirSteering::Responsive,
+        }
+    }
+
+    /// Off the ledge `sensed`, already in flight: straight out from the wall,
+    /// unsteered for a while, with the stick neutral or pushed at the wall;
+    /// steered by the stick otherwise.
+    pub fn back_jump(requests: &Requests, sensed: &SensedEdge, config: &LedgeConfig) -> Self {
+        let outward = sensed.at.outward.into_inner();
+        let steering = match StickOnEdge::of(requests.move_dir, outward, config) {
+            StickOnEdge::Neutral | StickOnEdge::Towards => AirSteering::Locked {
+                velocity: outward * config.back_jump_speed,
+                remaining: config.back_jump_lock,
+            },
+            StickOnEdge::Away | StickOnEdge::Along => AirSteering::Responsive,
+        };
+        Self {
+            kind: JumpKind::BackJump,
+            phase: TakeoffPhase::Flight,
+            steering,
         }
     }
 
@@ -111,6 +135,18 @@ impl Jump {
                 air_speed: Some(config.walk_speed * config.long_jump_speed_mul),
                 ..launch
             },
+            JumpKind::BackJump => {
+                let push = config.ledge.back_jump_speed;
+                EntryEffects {
+                    vertical_speed: Some(config.jump_speed),
+                    planar_velocity: requests
+                        .edge
+                        .map(|sensed| sensed.at.outward.into_inner() * push),
+                    air_speed: Some(push.max(config.walk_speed)),
+                    cut_rise,
+                    ..launch
+                }
+            }
         }
     }
 
@@ -135,7 +171,7 @@ impl Jump {
     /// water; a long jump is committed.
     pub fn allows_cutoff(&self) -> bool {
         match self.kind {
-            JumpKind::Jump | JumpKind::OutOfWater => true,
+            JumpKind::Jump | JumpKind::OutOfWater | JumpKind::BackJump => true,
             JumpKind::LongJump => false,
         }
     }

@@ -1,6 +1,7 @@
 use nalgebra::{Point3, Vector3};
 use specs::{Component, DenseVecStorage};
 
+use super::ledge::{Grip, SensedEdge};
 use super::locomotion::{Conditioning, LocomotionState, PlannedLanding, PlannedTakeoff};
 use crate::physics::RigidBodyHandle;
 
@@ -51,14 +52,17 @@ pub struct CharacterState {
     /// heading, in radians. Eased toward the swimming state's pitch and back;
     /// handed to the engine by `AttitudeControl`.
     pub body_pitch: f32,
+    /// The hands' hold on a ledge: the joint, while the state is a Ledge.
+    pub grip: Option<Grip>,
 }
 
 impl CharacterState {
     /// Whether the given arm state is permitted with the current locomotion.
     pub fn arm_state_allowed(&self, arm: &ArmState) -> bool {
         match self.locomotion {
-            // A swimmer's arms are stroking: nothing can be held.
-            LocomotionState::Swim(_) => matches!(arm, ArmState::Idle),
+            // A swimmer's arms are stroking and a hanger's are on the edge:
+            // nothing can be held.
+            LocomotionState::Swim(_) | LocomotionState::Ledge(_) => matches!(arm, ArmState::Idle),
             LocomotionState::OnFoot(_)
             | LocomotionState::Hop(_)
             | LocomotionState::Jump(_)
@@ -110,6 +114,9 @@ pub struct CharacterIntent {
     /// Where the plan now lands a Hop under way. Consumed by
     /// `CharacterControlSystem`.
     pub landing: Option<PlannedLanding>,
+    /// The edge at the hands, from `LedgeSensorSystem`. Consumed by
+    /// `CharacterControlSystem`.
+    pub edge: Option<SensedEdge>,
 }
 
 impl Default for CharacterIntent {
@@ -130,6 +137,7 @@ impl Default for CharacterIntent {
             aim: None,
             takeoff: None,
             landing: None,
+            edge: None,
         }
     }
 }

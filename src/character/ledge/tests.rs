@@ -99,9 +99,14 @@ fn a_wall_top_in_the_catch_band_is_held_and_climbed() {
     }
 }
 
+/// The band runs from a mantle's lowest lip, below the chest, to the
+/// highest a hand catches.
 #[test]
 fn a_top_outside_the_catch_band_is_no_edge() {
-    for lip in [0.1, 0.75] {
+    let mut low = world();
+    wall(&mut low, 0.1);
+    assert!(edge(&low).is_some(), "a lip a mantle climbs");
+    for lip in [0.0, 0.75] {
         let mut world = world();
         wall(&mut world, lip);
         assert!(edge(&world).is_none(), "an edge at {lip} m");

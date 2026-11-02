@@ -215,7 +215,9 @@ impl Body {
     pub fn is_airborne(&self) -> bool {
         match self.state.locomotion {
             LocomotionState::Hop(_) | LocomotionState::Jump(_) | LocomotionState::Fall(_) => true,
-            LocomotionState::OnFoot(_) | LocomotionState::Swim(_) => false,
+            LocomotionState::OnFoot(_) | LocomotionState::Swim(_) | LocomotionState::Ledge(_) => {
+                false
+            }
         }
     }
 

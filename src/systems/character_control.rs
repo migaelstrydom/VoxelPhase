@@ -1,13 +1,15 @@
 use crate::character::grab::{self, GrabConfig, ReachFrame};
+use crate::character::ledge::{Grip, GripFrame};
 use crate::character::{
     approach, facing_from_rotation, ArmState, AttitudeControl, CharacterIntent, CharacterState,
-    Facts, Grounding, Immersion, LocomotionConfig, LocomotionInput, LocomotionState, MovementRule,
-    RuleSpeeds, Throws,
+    EntryEffects, Facts, Grounding, Immersion, LocomotionConfig, LocomotionInput, LocomotionState,
+    MovementRule, RuleSpeeds, Throws,
 };
 use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::debug::DebugOverlays;
 use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::physics::constraint::keep_attitude;
+use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::rendering::colour::Colour;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
@@ -129,6 +131,8 @@ impl<'a> System<'a> for CharacterControlSystem {
             let requests = state.conditioning.requests(target, dt, config);
             target.takeoff = None;
             target.landing = None;
+            target.edge = None;
+            let sensed_edge = requests.edge;
             let input = LocomotionInput {
                 dt,
                 facts: Facts {
@@ -153,6 +157,20 @@ impl<'a> System<'a> for CharacterControlSystem {
             if effects.cut_rise {
                 drive.cut_rise(config.jump_cutoff_factor);
             }
+            set_velocity_for_entry(&mut physics_res.world, character_body, &effects);
+            let hanging = matches!(state.locomotion, LocomotionState::Ledge(_));
+            Grip::reconcile(
+                &mut state.grip,
+                &mut physics_res.world,
+                &GripFrame {
+                    body: character_body,
+                    state: &state.locomotion,
+                    sensed: sensed_edge.as_ref(),
+                    move_dir,
+                    config,
+                    dt,
+                },
+            );
 
             // Variable-height jump: cut upward velocity on early release. The
             // cut acts on a rise only, so there is nothing to test here — a
@@ -178,10 +196,16 @@ impl<'a> System<'a> for CharacterControlSystem {
             };
             rotation.0 = current_yaw;
 
-            // A thrower faces its throw, whichever way it is moving.
-            let heading = match throws.and_then(Throws::facing) {
-                Some(aim) => Some((aim, config.throw_turn_aggression)),
-                None => {
+            // A hanger faces the wall it hangs on, whichever way the stick
+            // shimmies it; a thrower faces its throw, whichever way it is
+            // moving.
+            let wall = sensed_edge
+                .filter(|_| hanging)
+                .map(|sensed| -sensed.at.outward.into_inner());
+            let heading = match (wall, throws.and_then(Throws::facing)) {
+                (Some(wall), _) => Some((wall, config.turn_aggression)),
+                (None, Some(aim)) => Some((aim, config.throw_turn_aggression)),
+                (None, None) => {
                     (move_dir.magnitude() > 0.001).then_some((move_dir, config.turn_aggression))
                 }
             };
@@ -249,7 +273,13 @@ impl<'a> System<'a> for CharacterControlSystem {
             let rate = config
                 .swim
                 .pitch_rate_toward(state.body_pitch, target_pitch);
-            state.body_pitch = approach(state.body_pitch, target_pitch, rate, dt);
+            // A swimmer caught by an edge hangs upright at once rather than
+            // easing up from the stroke.
+            state.body_pitch = if hanging {
+                0.0
+            } else {
+                approach(state.body_pitch, target_pitch, rate, dt)
+            };
             if let Some(attitude) = attitude {
                 attitude.hold(&mut physics_res.world, state.body_pitch);
             }
@@ -509,8 +539,36 @@ pub fn resolve_ground_speed(
 fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule, left_still_ground: bool) {
     drive.linear_target = rule.target;
     drive.steer_accel = rule.steer_accel;
+    drive.slack = rule.slack;
     if rule.clamp_up && left_still_ground {
         drive.clamp_rise();
+    }
+}
+
+/// The velocity an entry sets outright: a back-jump's push off the wall
+/// across the ground, and the velocity of an edge's body at its grip on
+/// catching or leaving it.
+fn set_velocity_for_entry(world: &mut PhysicsWorld, body: RigidBodyHandle, effects: &EntryEffects) {
+    let Some(current) = world
+        .body(body)
+        .map(|b| (b.linear_velocity(), b.angular_velocity()))
+    else {
+        return;
+    };
+    let (mut linear, angular) = current;
+    if let Some(sensed) = effects.match_edge {
+        let grip = sensed.at.grip();
+        linear = sensed
+            .edge
+            .body
+            .and_then(|edge| world.body(edge))
+            .map_or(Vector3::zeros(), |edge| edge.velocity_at(grip));
+    }
+    if let Some(planar) = effects.planar_velocity {
+        linear = Vector3::new(planar.x, linear.y, planar.z);
+    }
+    if effects.match_edge.is_some() || effects.planar_velocity.is_some() {
+        world.set_body_velocity(body, linear, angular);
     }
 }
 
@@ -553,6 +611,7 @@ mod tests {
             target: Vector3::new(5.0, 0.0, 0.0),
             steer_accel: Some(steer_accel),
             clamp_up: false,
+            slack: false,
         }
     }
 

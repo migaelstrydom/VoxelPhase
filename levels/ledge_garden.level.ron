@@ -1,0 +1,55 @@
+// Ledge Garden: one station per lane for the character_viewer's ledge
+// scenarios (`src/character_viewer/ledge_scenarios.rs`).
+//
+// Every lane runs along +x, its face at x = 7. A scenario starts a little
+// west of it on flat ground, facing +x. Lanes, by z:
+//
+//   z  0    a wall 3.2 m high: a full jump peaks with the body's centre
+//           about 3 m up, so the lip comes to the hands at the top of it
+//   z  12   a box 0.72 m high, at the chest of a body standing: a mantle
+//   z  18   a wall 3.2 m high with a roof 0.6 m over its top: a lip to hang
+//           from with no room to stand on it
+//
+// The player's capsule is 1 m tall and 0.5 m across.
+Level(
+    name: "Ledge Garden",
+
+    segments: [
+        (
+            name: "garden",
+
+            terrain: Terrain(
+                voxel_size: 0.25,
+                bounds: (min: (-8.0, -8.0, -8.0), max: (24.0, 16.0, 28.0)),
+                base_height: 0.0,
+                material_layers: [
+                    (depth: 1.0,  material: Grass),
+                    (depth: 4.0,  material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+                features: [],
+                volumes: [
+                    // The wall to jump and hang from.
+                    Platform(center: (11.0, 3.2, 0.0), half_extents: (4.0, 3.0), thickness: 4.0),
+
+                    // The box to mantle.
+                    Platform(center: (11.0, 0.72, 12.0), half_extents: (4.0, 2.0), thickness: 1.0),
+
+                    // The wall under a roof: the roof starts half a metre in
+                    // from the lip, over where a body pulled up would stand,
+                    // its underside 0.6 m over the top.
+                    Platform(center: (11.0, 3.2, 18.0), half_extents: (4.0, 2.0), thickness: 4.0),
+                    Platform(center: (11.25, 4.4, 18.0), half_extents: (3.75, 2.0), thickness: 0.6),
+                ],
+            ),
+
+            objects: [],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "garden"),
+    ],
+
+    player_spawn: (4.0, 1.0, 0.0),
+)

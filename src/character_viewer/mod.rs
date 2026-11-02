@@ -2,6 +2,7 @@
 
 mod contract;
 mod driver;
+mod ledge_scenarios;
 mod pilot;
 mod record;
 mod report;

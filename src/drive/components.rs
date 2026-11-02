@@ -46,6 +46,10 @@ pub struct DriveIntent {
     /// steering at all — a committed long jump, whose arc is ballistic and
     /// wants no correcting.
     pub steer_accel: Option<f32>,
+    /// Ask nothing of the supports: their contacts keep only the surface's
+    /// own friction (the actuator's drive gain is set aside). For a body
+    /// something else moves, such as a grip on a ledge.
+    pub slack: bool,
 }
 
 impl DriveIntent {

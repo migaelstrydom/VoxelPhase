@@ -43,7 +43,11 @@ pub fn resolve_drive(
         angular_target: intent.angular_target,
         max_accel: actuator.max_accel,
         angular_max_accel: actuator.angular_max_accel,
-        drive_gain: actuator.drive_gain,
+        drive_gain: if intent.slack {
+            1.0
+        } else {
+            actuator.drive_gain
+        },
         patch_radius: actuator.support_patch_radius,
         allowance: actuator.allowance_command(verbs, intent.steer_accel),
     }

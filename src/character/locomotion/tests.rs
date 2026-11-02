@@ -111,7 +111,7 @@ fn hop(phase: TakeoffPhase, landing: PlannedLanding) -> LocomotionState {
 }
 fn jump(kind: JumpKind, phase: TakeoffPhase) -> LocomotionState {
     let steering = match kind {
-        JumpKind::Jump | JumpKind::OutOfWater => AirSteering::Responsive,
+        JumpKind::Jump | JumpKind::OutOfWater | JumpKind::BackJump => AirSteering::Responsive,
         JumpKind::LongJump => AirSteering::Locked {
             velocity: Vector3::new(12.5, 0.0, 0.0),
             remaining: 2.0,
@@ -346,6 +346,7 @@ fn a_jump_leaves_with_its_impulse() {
             cancel_forgiveness: true,
             cut_rise: true,
             arm_crouch_lockout: false,
+            ..EntryEffects::default()
         }
     );
     let mut held = ground().jump();
@@ -403,6 +404,7 @@ fn a_jump_out_of_the_water_leaves_with_its_impulse() {
             cancel_forgiveness: true,
             cut_rise: true,
             arm_crouch_lockout: false,
+            ..EntryEffects::default()
         }
     );
     assert!(state.allows_jump_cutoff());

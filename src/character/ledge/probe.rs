@@ -17,8 +17,12 @@ const TOP_STEP: f32 = 0.05;
 /// How far a hand's top may lie from the lip first found, in metres: it is
 /// felt for a few centimetres further in, and a top may rise or fall there.
 const TOP_MATCH: f32 = 0.08;
-/// How far the top under the body may lie from the lip, in metres.
-const STAND_MATCH: f32 = 0.1;
+/// How far the top under the body may lie below the lip, in metres.
+const STAND_BELOW: f32 = 0.1;
+/// How far the top under the body may rise above the lip, in metres: a voxel
+/// mesh rounds a lip over about a voxel, so the hands find it lower than the
+/// top behind it.
+const STAND_ABOVE: f32 = 0.3;
 
 /// Where a body looks for an edge: its capsule, and the way it faces.
 #[derive(Debug, Clone, Copy)]
@@ -34,8 +38,9 @@ pub struct Reach {
 }
 
 /// The edge at the hands of a body reaching as `reach` does, if both hands
-/// find a lip on one body: grippable, and climbable if the top takes the
-/// body standing. `docs/LEDGE_GRABS.md`, *The edge*.
+/// find a lip on one body, from a mantle's lowest lip to the highest a hand
+/// catches: grippable, and climbable if the top takes the body standing.
+/// `docs/LEDGE_GRABS.md`, *The edge*.
 pub fn edge_at_hands(caster: &WorldCaster, reach: &Reach, config: &LedgeConfig) -> Option<Edge> {
     let side = reach.heading.cross(&Vector3::y());
     let left = hand_hold(caster, reach, side * config.hand_offset, config)?;
@@ -73,7 +78,7 @@ fn hand_hold(
     config: &LedgeConfig,
 ) -> Option<HandHold> {
     let origin = reach.centre + offset;
-    let lowest = origin.y + config.catch_low;
+    let lowest = origin.y + config.catch_low.min(config.mantle_low);
     let highest = origin.y + config.catch_high;
     let grips =
         |hit: &WorldHit| hit.contact.normal.y >= config.grip_slope_degrees.to_radians().cos();
@@ -151,12 +156,11 @@ fn stand_point(
     let outward = edge.outward.into_inner();
     let lip = edge.grip() + outward * config.grip_depth;
     let over = lip - outward * config.stand_depth;
-    let drop = reach.radius + 2.0 * STAND_MATCH;
-    let from = Point3::new(over.x, lip.y + reach.radius + STAND_MATCH, over.z);
+    let from = Point3::new(over.x, lip.y + STAND_ABOVE + reach.radius, over.z);
     let floor = caster
-        .cast(from, -Vector3::y(), drop, reach.radius)
-        .filter(|hit| hit.contact.normal.y >= config.stand_slope_degrees.to_radians().cos())
-        .filter(|hit| (hit.contact.point.y - lip.y).abs() <= STAND_MATCH)?;
+        .cast(from, -Vector3::y(), STAND_ABOVE + STAND_BELOW, reach.radius)
+        .filter(|hit| hit.contact.distance > 0.0)
+        .filter(|hit| hit.contact.normal.y >= config.stand_slope_degrees.to_radians().cos())?;
     let column = 2.0 * (reach.half_height - reach.radius);
     if caster
         .cast(floor.centre, Vector3::y(), column, reach.radius)
