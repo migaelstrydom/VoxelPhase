@@ -75,13 +75,24 @@ impl SurfaceInfo {
 /// Holds nothing but the presentation chain — the depth buffer, HDR scene
 /// target and framebuffers that used to live here now belong to `FrameTargets`,
 /// which is built the same way whether the output is this or an offscreen image.
+///
+/// The chain is rebuilt at a new size by [`FrameOutput::resize`]; the surface
+/// it presents to lives as long as this does.
 pub struct SwapchainOutput {
-    handle: vk::SwapchainKHR,
+    /// The current chain, its images and their semaphores.
+    chain: Chain,
     loader: swapchain::Device,
     surface_loader: surface::Instance,
     surface: vk::SurfaceKHR,
+    surface_format: vk::SurfaceFormatKHR,
+    physical_device: vk::PhysicalDevice,
+    device: Arc<ManagedDevice>,
+}
+
+/// One swapchain and what is made per image of it.
+struct Chain {
+    handle: vk::SwapchainKHR,
     extent: vk::Extent2D,
-    format: vk::Format,
     images: Vec<vk::Image>,
     image_views: Vec<vk::ImageView>,
     /// One per image, signalled by the submit that draws into it and waited on
@@ -90,7 +101,6 @@ pub struct SwapchainOutput {
     /// consumed it, and the only proof of that is the image being acquired
     /// again.
     rendering_complete: Vec<vk::Semaphore>,
-    device: Arc<ManagedDevice>,
 }
 
 impl SwapchainOutput {
@@ -100,17 +110,37 @@ impl SwapchainOutput {
         window_width: u32,
         window_height: u32,
     ) -> EngineResult<Self> {
+        let SurfaceInfo {
+            surface,
+            surface_loader,
+            format,
+        } = surface_info;
         let device = Arc::clone(&vulkan_context.device);
+        let loader = swapchain::Device::new(&vulkan_context.instance.instance, &device.device);
+        let mut output = Self {
+            chain: Chain::empty(),
+            loader,
+            surface_loader,
+            surface,
+            surface_format: format,
+            physical_device: vulkan_context.physical_device(),
+            device,
+        };
+        output.chain = output.create_chain(window_width, window_height)?;
+        Ok(output)
+    }
+
+    /// Build a chain for the surface as it is now, sized to the window where
+    /// the surface leaves the size to the swapchain.
+    fn create_chain(&self, window_width: u32, window_height: u32) -> EngineResult<Chain> {
+        let device = &self.device;
+        let surface = self.surface;
+        let format = self.surface_format;
 
         unsafe {
-            let SurfaceInfo {
-                surface,
-                surface_loader,
-                format,
-            } = surface_info;
-
-            let capabilities = surface_loader
-                .get_physical_device_surface_capabilities(vulkan_context.physical_device(), surface)
+            let capabilities = self
+                .surface_loader
+                .get_physical_device_surface_capabilities(self.physical_device, surface)
                 .map_err(|e| EngineError::Surface(format!("get capabilities: {:?}", e)))?;
 
             let mut image_count = capabilities.min_image_count + 1;
@@ -120,8 +150,14 @@ impl SwapchainOutput {
 
             let extent = if capabilities.current_extent.width == u32::MAX {
                 vk::Extent2D {
-                    width: window_width,
-                    height: window_height,
+                    width: window_width.clamp(
+                        capabilities.min_image_extent.width,
+                        capabilities.max_image_extent.width,
+                    ),
+                    height: window_height.clamp(
+                        capabilities.min_image_extent.height,
+                        capabilities.max_image_extent.height,
+                    ),
                 }
             } else {
                 capabilities.current_extent
@@ -136,11 +172,9 @@ impl SwapchainOutput {
                 capabilities.current_transform
             };
 
-            let present_modes = surface_loader
-                .get_physical_device_surface_present_modes(
-                    vulkan_context.physical_device(),
-                    surface,
-                )
+            let present_modes = self
+                .surface_loader
+                .get_physical_device_surface_present_modes(self.physical_device, surface)
                 .map_err(|e| EngineError::Surface(format!("get present modes: {:?}", e)))?;
 
             let present_mode = present_modes
@@ -148,8 +182,6 @@ impl SwapchainOutput {
                 .copied()
                 .find(|&m| m == vk::PresentModeKHR::MAILBOX)
                 .unwrap_or(vk::PresentModeKHR::FIFO);
-
-            let loader = swapchain::Device::new(&vulkan_context.instance.instance, &device.device);
 
             let create_info = vk::SwapchainCreateInfoKHR::default()
                 .surface(surface)
@@ -169,81 +201,143 @@ impl SwapchainOutput {
                 .present_mode(present_mode)
                 .clipped(true);
 
-            let handle = loader
+            let handle = self
+                .loader
                 .create_swapchain(&create_info, None)
                 .map_err(|e| EngineError::Swapchain(format!("creation: {:?}", e)))?;
+            let mut chain = Chain {
+                handle,
+                extent,
+                ..Chain::empty()
+            };
 
-            let images = loader
+            chain.images = self
+                .loader
                 .get_swapchain_images(handle)
                 .map_err(|e| EngineError::Swapchain(format!("get images: {:?}", e)))?;
 
-            let image_views = images
-                .iter()
-                .map(|&image| {
-                    let view_info = vk::ImageViewCreateInfo::default()
-                        .image(image)
-                        .view_type(vk::ImageViewType::TYPE_2D)
-                        .format(format.format)
-                        .components(vk::ComponentMapping {
-                            r: vk::ComponentSwizzle::R,
-                            g: vk::ComponentSwizzle::G,
-                            b: vk::ComponentSwizzle::B,
-                            a: vk::ComponentSwizzle::A,
-                        })
-                        .subresource_range(vk::ImageSubresourceRange {
-                            aspect_mask: vk::ImageAspectFlags::COLOR,
-                            base_mip_level: 0,
-                            level_count: 1,
-                            base_array_layer: 0,
-                            layer_count: 1,
-                        });
+            for &image in &chain.images {
+                let view_info = vk::ImageViewCreateInfo::default()
+                    .image(image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(format.format)
+                    .components(vk::ComponentMapping {
+                        r: vk::ComponentSwizzle::R,
+                        g: vk::ComponentSwizzle::G,
+                        b: vk::ComponentSwizzle::B,
+                        a: vk::ComponentSwizzle::A,
+                    })
+                    .subresource_range(vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    });
+                match device.device.create_image_view(&view_info, None) {
+                    Ok(view) => chain.image_views.push(view),
+                    Err(e) => {
+                        self.destroy_chain(&mut chain);
+                        return Err(EngineError::Swapchain(format!(
+                            "create image views: {:?}",
+                            e
+                        )));
+                    }
+                }
+            }
 
-                    device.device.create_image_view(&view_info, None)
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| EngineError::Swapchain(format!("create image views: {:?}", e)))?;
+            for _ in &chain.images {
+                match device
+                    .device
+                    .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                {
+                    Ok(semaphore) => chain.rendering_complete.push(semaphore),
+                    Err(e) => {
+                        self.destroy_chain(&mut chain);
+                        return Err(EngineError::Swapchain(format!(
+                            "create semaphores: {:?}",
+                            e
+                        )));
+                    }
+                }
+            }
 
-            let rendering_complete = images
-                .iter()
-                .map(|_| {
-                    device
-                        .device
-                        .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| EngineError::Swapchain(format!("create semaphores: {:?}", e)))?;
+            Ok(chain)
+        }
+    }
 
-            Ok(Self {
-                handle,
-                loader,
-                surface_loader,
-                surface,
-                extent,
-                format: format.format,
-                images,
-                image_views,
-                rendering_complete,
-                device,
-            })
+    /// Whether the surface's extent differs from the chain's. A surface that
+    /// leaves its extent to the swapchain never has.
+    fn surface_changed_size(&self) -> bool {
+        let capabilities = unsafe {
+            self.surface_loader
+                .get_physical_device_surface_capabilities(self.physical_device, self.surface)
+        };
+        capabilities.is_ok_and(|capabilities| {
+            let current = capabilities.current_extent;
+            current.width != u32::MAX && current != self.chain.extent
+        })
+    }
+
+    /// Destroy a chain's views, semaphores and swapchain. The device must be
+    /// done with all of them.
+    fn destroy_chain(&self, chain: &mut Chain) {
+        unsafe {
+            for view in chain.image_views.drain(..) {
+                self.device.device.destroy_image_view(view, None);
+            }
+            for semaphore in chain.rendering_complete.drain(..) {
+                self.device.device.destroy_semaphore(semaphore, None);
+            }
+            if chain.handle != vk::SwapchainKHR::null() {
+                self.loader.destroy_swapchain(chain.handle, None);
+                chain.handle = vk::SwapchainKHR::null();
+            }
+        }
+    }
+}
+
+impl Chain {
+    fn empty() -> Self {
+        Self {
+            handle: vk::SwapchainKHR::null(),
+            extent: vk::Extent2D::default(),
+            images: Vec::new(),
+            image_views: Vec::new(),
+            rendering_complete: Vec::new(),
         }
     }
 }
 
 impl FrameOutput for SwapchainOutput {
     fn extent(&self) -> vk::Extent2D {
-        self.extent
+        self.chain.extent
     }
 
     fn format(&self) -> vk::Format {
-        self.format
+        self.surface_format.format
     }
 
     fn images(&self) -> &[vk::Image] {
-        &self.images
+        &self.chain.images
     }
 
     fn image_views(&self) -> &[vk::ImageView] {
-        &self.image_views
+        &self.chain.image_views
+    }
+
+    /// Replace the chain with one sized to the surface as it is now. The
+    /// caller must have waited for the device to finish with the old one.
+    ///
+    /// The old chain is destroyed first and the new one made from nothing,
+    /// not handed the old as `old_swapchain`: on MoltenVK a chain made that
+    /// way mid-run presented a single flat colour from then on.
+    fn resize(&mut self, width: u32, height: u32) -> EngineResult<()> {
+        let mut old = std::mem::replace(&mut self.chain, Chain::empty());
+        self.destroy_chain(&mut old);
+        let created = self.create_chain(width, height);
+        self.chain = created?;
+        Ok(())
     }
 
     fn final_layout(&self) -> vk::ImageLayout {
@@ -253,10 +347,11 @@ impl FrameOutput for SwapchainOutput {
     fn acquire(&self, sync: &FrameSync) -> EngineResult<AcquiredFrame> {
         unsafe {
             // A suboptimal image still presents correctly, so it is drawn to
-            // rather than discarded; only an outright out-of-date swapchain
-            // needs the frame skipped.
+            // rather than discarded; its present reports it, and the chain is
+            // rebuilt after. Only an outright out-of-date swapchain needs the
+            // frame skipped.
             let (index, _suboptimal) = match self.loader.acquire_next_image(
-                self.handle,
+                self.chain.handle,
                 u64::MAX,
                 sync.present_complete,
                 vk::Fence::null(),
@@ -271,14 +366,14 @@ impl FrameOutput for SwapchainOutput {
             Ok(AcquiredFrame {
                 index,
                 wait: Some(sync.present_complete),
-                signal: Some(self.rendering_complete[index as usize]),
+                signal: Some(self.chain.rendering_complete[index as usize]),
             })
         }
     }
 
     fn release(&self, frame: &AcquiredFrame, queue: vk::Queue) -> EngineResult<()> {
         let wait_semaphores: Vec<vk::Semaphore> = frame.signal.into_iter().collect();
-        let swapchains = [self.handle];
+        let swapchains = [self.chain.handle];
         let indices = [frame.index];
 
         let present_info = vk::PresentInfoKHR::default()
@@ -288,7 +383,17 @@ impl FrameOutput for SwapchainOutput {
 
         unsafe {
             match self.loader.queue_present(queue, &present_info) {
-                Ok(_) => {}
+                Ok(false) => {}
+                // Presented, but suboptimal. Rebuilt only if the surface has
+                // changed size since the chain was made: MoltenVK reports
+                // suboptimal for as long as the window is larger than its
+                // screen allows, and a chain rebuilt at the surface's own
+                // extent would be rebuilt every frame.
+                Ok(true) => {
+                    if self.surface_changed_size() {
+                        return Err(EngineError::SwapchainOutOfDate);
+                    }
+                }
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                     return Err(EngineError::SwapchainOutOfDate)
                 }
@@ -302,14 +407,9 @@ impl FrameOutput for SwapchainOutput {
 
 impl Drop for SwapchainOutput {
     fn drop(&mut self) {
+        let mut chain = std::mem::replace(&mut self.chain, Chain::empty());
+        self.destroy_chain(&mut chain);
         unsafe {
-            for &view in &self.image_views {
-                self.device.device.destroy_image_view(view, None);
-            }
-            for &semaphore in &self.rendering_complete {
-                self.device.device.destroy_semaphore(semaphore, None);
-            }
-            self.loader.destroy_swapchain(self.handle, None);
             self.surface_loader.destroy_surface(self.surface, None);
         }
     }

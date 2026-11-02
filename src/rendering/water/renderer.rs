@@ -333,6 +333,13 @@ impl WaterRenderer {
         self.rivers.set_budget(budget);
     }
 
+    /// Sample a rebuilt refraction copy. The device must be done with the
+    /// frames that sampled the old one.
+    pub fn point_refraction(&self, refraction: &RefractionCopy) {
+        self.pipeline
+            .point_refraction(refraction.depth_view(), refraction.colour_view());
+    }
+
     /// Point uploads at this frame's buffers, and forget last frame's plan.
     pub fn begin_frame(&mut self, slot: FrameSlot) {
         self.slot = slot;

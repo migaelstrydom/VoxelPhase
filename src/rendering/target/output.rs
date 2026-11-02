@@ -53,6 +53,14 @@ pub trait FrameOutput: Send + Sync {
     /// than a constant.
     fn final_layout(&self) -> vk::ImageLayout;
 
+    /// Rebuild at the size the output's surface now has, given the window's
+    /// size for a surface that leaves it to the output. An output with no
+    /// surface keeps the size it was made at. The caller must have waited for
+    /// the device to finish with the images being replaced.
+    fn resize(&mut self, _width: u32, _height: u32) -> EngineResult<()> {
+        Ok(())
+    }
+
     /// Choose the image for this frame.
     fn acquire(&self, sync: &FrameSync) -> EngineResult<AcquiredFrame>;
 

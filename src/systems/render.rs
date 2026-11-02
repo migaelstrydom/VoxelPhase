@@ -231,7 +231,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, Orientation>,
         ReadStorage<'a, Renderable>,
-        ReadStorage<'a, CameraComponent>,
+        WriteStorage<'a, CameraComponent>,
         RebuiltMeshes<'a>,
         ReadStorage<'a, OnFire>,
         ReadStorage<'a, RigidBodyComponent>,
@@ -260,7 +260,7 @@ impl<'a> System<'a> for RenderSystem {
             rotations,
             orientations,
             renderables,
-            camera_components,
+            mut camera_components,
             mut rebuilt,
             on_fires,
             rigid_bodies,
@@ -271,12 +271,21 @@ impl<'a> System<'a> for RenderSystem {
             force_fields,
         ) = data;
 
-        let camera = camera_components.join().next();
-        if camera.is_none() {
+        // A resized window rebuilds the output before the camera is read, so
+        // this frame is projected at the size it is drawn at.
+        if let Err(e) = renderer.refresh_output() {
+            log::error!("RenderSystem: Failed to rebuild the output: {}", e);
+        }
+        let extent = renderer.extent();
+
+        let Some(camera) = (&mut camera_components).join().next() else {
             log::error!("RenderSystem: No CameraComponent found in world!");
             return;
+        };
+        if extent.width > 0 && extent.height > 0 {
+            camera.0.aspect_ratio = extent.width as f32 / extent.height as f32;
         }
-        let camera_data = &camera.unwrap().0;
+        let camera_data = &camera.0;
         let view_matrix = camera_data.get_view_matrix();
         let proj_matrix = camera_data.get_projection_matrix();
 
@@ -666,8 +675,8 @@ impl<'a> System<'a> for RenderSystem {
                 match renderer.end_frame(draw_cb, present_index) {
                     Ok(()) => {}
                     // A resize or display change invalidated the swapchain
-                    // mid-frame. Expected, and recovered by the rebuild on the
-                    // next acquire — not worth an error line.
+                    // mid-frame. Expected, and recovered by the rebuild before
+                    // the next frame — not worth an error line.
                     Err(EngineError::SwapchainOutOfDate) => {
                         log::debug!("RenderSystem: swapchain out of date on present");
                     }

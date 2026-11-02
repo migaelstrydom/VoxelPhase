@@ -53,9 +53,7 @@ impl OverlayRenderer {
     ) -> EngineResult<Self> {
         let device = Arc::clone(&vulkan_context.device);
 
-        // Orthographic projection: (0,0) top-left, (width, height) bottom-right
-        let ortho_matrix =
-            Matrix4::new_orthographic(0.0, width as f32, 0.0, height as f32, -1.0, 1.0);
+        let ortho_matrix = screen_projection(width, height);
 
         let font_atlas = FontAtlas::new(Arc::clone(&vulkan_context))?;
 
@@ -89,6 +87,12 @@ impl OverlayRenderer {
     /// Point uploads at this frame's buffers.
     pub fn begin_frame(&mut self, slot: FrameSlot) {
         self.slot = slot;
+    }
+
+    /// Lay the overlay out on a screen of a new size.
+    pub fn set_screen_size(&mut self, width: u32, height: u32) {
+        self.ortho_matrix = screen_projection(width, height);
+        self.screen_size = Vector2::new(width as f32, height as f32);
     }
 
     /// Screen size the overlay's orthographic projection was built for, in
@@ -190,4 +194,10 @@ impl OverlayRenderer {
                 .cmd_draw_indexed(cb, index_count, 1, 0, 0, 0);
         }
     }
+}
+
+/// Orthographic projection of a screen in pixels: (0, 0) top-left,
+/// (width, height) bottom-right.
+fn screen_projection(width: u32, height: u32) -> Matrix4<f32> {
+    Matrix4::new_orthographic(0.0, width as f32, 0.0, height as f32, -1.0, 1.0)
 }

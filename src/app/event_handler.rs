@@ -12,6 +12,7 @@ use super::placer_recording::toggle_nearest_recording;
 use super::slow_motion::next_speed;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::input::InputState;
+use crate::rendering::renderer::Renderer;
 use crate::time::Time;
 
 /// Result of handling an event
@@ -58,6 +59,19 @@ impl EventHandler {
                 event: WindowEvent::MouseInput { state, button, .. },
                 ..
             } => Self::handle_mouse_button(button, state, window, world),
+
+            // The output and everything sized to it are rebuilt before the
+            // next frame; a minimised window (no area) draws nothing until it
+            // comes back.
+            Event::WindowEvent {
+                event: WindowEvent::Resized(size),
+                ..
+            } => {
+                world
+                    .write_resource::<Renderer>()
+                    .request_resize(size.width, size.height);
+                EventResult::Continue
+            }
 
             // Focus loss strands anything currently held: the matching release
             // is delivered to whoever took focus, never to us.

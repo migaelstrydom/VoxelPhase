@@ -284,6 +284,22 @@ impl FireRenderer {
 
     // --- Descriptor set management (static helpers for use during init) ---
 
+    /// Test against a rebuilt depth buffer. The device must be done with the
+    /// frames that sampled the old one.
+    pub fn point_depth(&self, depth_view: vk::ImageView) {
+        for slot in &self.sim_slots {
+            for (field, &set) in slot.render_descriptor_sets.iter().enumerate() {
+                Self::write_render_descriptor_set(
+                    &self.device,
+                    set,
+                    &slot.volume.field[field],
+                    self.depth_sampler,
+                    depth_view,
+                );
+            }
+        }
+    }
+
     fn allocate_render_descriptor_set_from_pool(
         device: &ManagedDevice,
         pool: vk::DescriptorPool,

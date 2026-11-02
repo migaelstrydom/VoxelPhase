@@ -276,6 +276,13 @@ pub struct Renderer {
     last_frame_waits: Duration,
     /// The next finished frame as a picture, when asked for.
     pub screenshot: Screenshot,
+    /// The window's size in pixels, for an output whose surface leaves its
+    /// size to the swapchain.
+    window_size: vk::Extent2D,
+    /// The output no longer matches its surface — the window was resized, or
+    /// an acquire or present said so — and it and everything sized to it are
+    /// rebuilt before the next frame.
+    output_stale: bool,
 }
 
 impl Renderer {
@@ -456,7 +463,70 @@ impl Renderer {
             last_profile: RenderProfile::default(),
             last_frame_waits: Duration::ZERO,
             screenshot: Screenshot::default(),
+            window_size: extent,
+            output_stale: false,
         })
+    }
+
+    /// The window is now `width` × `height` pixels: rebuild the output and
+    /// everything sized to it before the next frame.
+    pub fn request_resize(&mut self, width: u32, height: u32) {
+        self.window_size = vk::Extent2D { width, height };
+        self.output_stale = true;
+    }
+
+    /// Rebuild the output, and everything sized to it, if it has gone stale.
+    /// Returns whether there is an output to draw into: there is none while
+    /// the window has no area, minimised, and the rebuild waits for it.
+    ///
+    /// Waits for the device to go idle, which a resize can afford: it frees
+    /// every image the frames in flight might still be using.
+    pub fn refresh_output(&mut self) -> EngineResult<bool> {
+        if self.window_size.width == 0 || self.window_size.height == 0 {
+            return Ok(false);
+        }
+        if !self.output_stale {
+            return Ok(true);
+        }
+
+        unsafe {
+            self.vulkan_context
+                .device()
+                .device_wait_idle()
+                .map_err(|e| EngineError::Swapchain(format!("wait idle for resize: {e:?}")))?;
+        }
+        self.output
+            .resize(self.window_size.width, self.window_size.height)?;
+        let extent = self.output.extent();
+        if extent.width == 0 || extent.height == 0 {
+            return Ok(false);
+        }
+
+        self.targets = FrameTargets::new(
+            &self.vulkan_context,
+            self.output.as_ref(),
+            self.pipeline.renderpass,
+            self.pipeline.transparent_renderpass,
+            SCENE_HDR_FORMAT,
+        )?;
+        let post = self.post_process.config;
+        self.post_process = PostProcessRenderer::new(
+            &self.vulkan_context,
+            self.targets.color_target.view,
+            self.output.image_views(),
+            extent,
+            self.output.format(),
+            self.output.final_layout(),
+        )?;
+        self.post_process.config = post;
+        self.overlay.set_screen_size(extent.width, extent.height);
+        self.water_renderer
+            .point_refraction(&self.targets.refraction);
+        self.fire_renderer
+            .point_depth(self.targets.depth_buffer.view);
+        self.output_stale = false;
+        log::info!("Output rebuilt at {}x{}", extent.width, extent.height);
+        Ok(true)
     }
 
     /// The extent every pass renders at.
@@ -476,6 +546,9 @@ impl Renderer {
     /// The wait is for the frame before last, not the last one: that one may
     /// still be drawing while this one is recorded.
     pub fn begin_frame(&mut self) -> EngineResult<(vk::CommandBuffer, u32)> {
+        if !self.refresh_output()? {
+            return Err(EngineError::SwapchainOutOfDate);
+        }
         self.slot = self.slot.next();
         self.frames_begun += 1;
         let slot = self.slot;
@@ -533,7 +606,14 @@ impl Renderer {
             .begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
 
         let acquire = Instant::now();
-        let acquired = self.output.acquire(&frame.sync)?;
+        let acquired = match self.output.acquire(&frame.sync) {
+            Ok(acquired) => acquired,
+            Err(EngineError::SwapchainOutOfDate) => {
+                self.output_stale = true;
+                return Err(EngineError::SwapchainOutOfDate);
+            }
+            Err(e) => return Err(e),
+        };
         self.profile.record(RenderStage::Acquire, acquire.elapsed());
         let image_index = acquired.index;
         self.current_frame = Some(acquired);
@@ -1599,6 +1679,9 @@ impl Renderer {
     /// its slot and published once the slot's fence is next waited on.
     pub fn end_frame(&mut self, cb: vk::CommandBuffer, image_index: u32) -> EngineResult<()> {
         let result = self.submit_frame(cb, image_index);
+        if matches!(result, Err(EngineError::SwapchainOutOfDate)) {
+            self.output_stale = true;
+        }
         let uploaded = self.resident.take_tally();
         self.profile.counters.uploaded_mesh_bytes += uploaded.bytes;
         self.profile.counters.buffer_growths += uploaded.growths;

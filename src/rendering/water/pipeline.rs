@@ -149,6 +149,19 @@ impl WaterPipeline {
         })
     }
 
+    /// Sample a new refraction copy, after the frame targets were rebuilt.
+    /// The device must be done with the frames that sampled the old one.
+    pub fn point_refraction(&self, depth_view: vk::ImageView, color_view: vk::ImageView) {
+        Self::update_descriptor_set(
+            &self.device,
+            self.descriptor_set,
+            depth_view,
+            color_view,
+            self.color_sampler,
+            self.depth_sampler,
+        );
+    }
+
     fn create_color_sampler(device: &ManagedDevice) -> EngineResult<vk::Sampler> {
         let sampler_info = vk::SamplerCreateInfo::default()
             .mag_filter(vk::Filter::LINEAR)
