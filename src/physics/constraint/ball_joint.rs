@@ -17,6 +17,8 @@ use super::types::ConstraintRow;
 /// Expand a BallJoint constraint into 3 solver rows.
 ///
 /// Rows 0-2: positional (X, Y, Z). Error = anchor_b_world - anchor_a_world.
+/// Each row drives the anchors' relative velocity along its axis to the
+/// moving anchor's `anchor_velocity`, less the correction for the error.
 ///
 /// `beta` is the position correction factor (from solver config).
 #[allow(clippy::too_many_arguments)]
@@ -25,6 +27,7 @@ pub fn expand(
     body_b: &RigidBody,
     handle_b: RigidBodyHandle,
     local_anchor_a: &Vector3<f32>,
+    anchor_velocity: &Vector3<f32>,
     local_anchor_b: &Vector3<f32>,
     compliance: f32,
     max_impulse: f32,
@@ -73,7 +76,7 @@ pub fn expand(
 
     for i in 0..3 {
         let positional_error = error.dot(&axes[i]);
-        let bias = -(beta / dt) * positional_error;
+        let bias = -anchor_velocity.dot(&axes[i]) - (beta / dt) * positional_error;
 
         rows.push(primitives::lock_linear_axis(
             &side_a,

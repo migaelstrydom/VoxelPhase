@@ -107,6 +107,13 @@ pub enum ConstraintKind {
         body_b: RigidBodyHandle,
         /// Body-local anchor on body_a (or world position if body_a is None).
         local_anchor_a: Vector3<f32>,
+        /// How fast anchor a is being moved over body_a (or the world), in
+        /// world space, m/s: zero for a fixed anchor. An owner that moves
+        /// the anchor each frame states its speed here, so the rows carry
+        /// body_b along at it; otherwise only the position correction moves
+        /// body_b, while the rows hold its velocity to the anchor standing
+        /// still.
+        anchor_velocity: Vector3<f32>,
         /// Body-local anchor on body_b.
         local_anchor_b: Vector3<f32>,
         /// Positional compliance (0 = perfectly rigid).
@@ -223,6 +230,7 @@ impl ConstraintKind {
             body_a: None,
             body_b: body,
             local_anchor_a: world_anchor.coords,
+            anchor_velocity: Vector3::zeros(),
             local_anchor_b: local_anchor,
             compliance,
             max_impulse,
