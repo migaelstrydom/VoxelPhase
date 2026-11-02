@@ -2,20 +2,22 @@
 // swim, and come ashore.
 //
 // Land at 1 m to the west shelves down a beach into a sea 3 m deep. A pier
-// 2 m above the water stands out into the deep end to the south.
+// 2 m above the water stands out into the deep end to the south, and a quay
+// 0.3 m above it, low enough to jump out onto, closes the deep end to the
+// east.
 //
 //                     north (+z)
-//   ┌──────────────┬──────────────────────────────────┐
-//   │              │                                  │
-//   │  land (1 m)  │ beach ─▶ 1 m down to 3 m under   │  sea (0 m),
-//   │   spawn      │   (x -8 → 12, z -8 → 8)          │  floor at -3 m
-//   │              ├───────────┐                      │
-//   │              │ pier (2 m)│ ─▶ deep water        │
-//   │              └───────────┘ (x -8 → 8, z -20 → -12)
-//   └──────────────────────────────────────────────────┘
+//   ┌──────────────┬────────────────────────────┬──────────┐
+//   │              │                            │          │
+//   │  land (1 m)  │ beach ─▶ 1 m down to 3 m   │   quay   │
+//   │   spawn      │   (x -8 → 12, z -8 → 8)    │  (0.3 m) │
+//   │              ├───────────┐                │  x 20 →  │
+//   │              │ pier (2 m)│ ─▶ deep water  ├──────────┤
+//   │              └───────────┘ (x -8 → 8, z -20 → -12)   │
+//   └──────────────────────────────────────────────────────┘
 //
-// The water's edge on the beach is at x = -3. Chest deep (0.75 m) is x ≈ 0.75;
-// the floor reaches -3 m at x = 12.
+// The sea is at 0 m, its floor at -3 m. The water's edge on the beach is at
+// x = -3. Chest deep (0.75 m) is x ≈ 0.75; the floor reaches -3 m at x = 12.
 Level(
     name: "Swim Test",
 
@@ -39,6 +41,8 @@ Level(
                     Ramp(from: (-8.0, 0.0), to: (12.0, 0.0), start_height: 1.0, end_height: -3.0, width: 16.0, flat_width: 12.0),
                     // The pier, standing out into the deep end.
                     Plateau(min: (-8.0, -20.0), max: (8.0, -12.0), height: 2.0),
+                    // The quay, across the deep end.
+                    Plateau(min: (20.0, -8.0), max: (32.0, 8.0), height: 0.3),
                 ],
             ),
         ),

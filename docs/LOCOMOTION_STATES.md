@@ -523,6 +523,22 @@ Each step ships with the game working, and its tests.
    flight, as the gait's own stride gain now applies from touchdown, not
    the walk preset's through a landing pose.
 5. **Out of the water.** Jump from Swim.
+
+   Done (2026-11-01). A jump pressed while swimming at the surface (the
+   centre at most `SwimConfig::jump_depth`, 0.5 m, under the level; a
+   floating swimmer's is 0.15-0.3 m) is a `Jump` of kind `OutOfWater`, in
+   flight at once. It leaves at `SwimConfig::jump_speed` (6.1 m/s), of which
+   the water takes about 1.5 m/s on the way out: held, the centre rises
+   1.3 m from treading, half a jump from land (2.5 m), and a little more
+   from a stroke, which leaves lying flat. Releasing the key early cuts it
+   as on land: a tap rises 0.5 m. The body stands up from the stroke's 80°
+   in the air, at `stand_rate`, and is upright by the top of the arc. The
+   pose goes straight to Airborne: there is no ground to wind up against.
+
+   `water_jump` (treading: a tap, then held), `water_jump_stroke`
+   (mid-crawl) and `jump_ashore` (onto the quay 0.3 m over `swim_test`'s
+   deep end, the lip cleared by 8 cm) are the `character_viewer`
+   scenarios. A bank higher than that is a Ledge.
 6. **Ledges.** The hand sensor, then `Ledge` with Grab, Hang and PullUp, from
    the air and from the water.
 

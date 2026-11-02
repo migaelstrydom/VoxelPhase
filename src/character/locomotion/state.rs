@@ -21,6 +21,7 @@ use super::swim::Swim;
 ///      └──(grace runs out)──► Fall ──(down)──► OnFoot
 ///   OnFoot, Hop, Fall, a falling Jump ──(deep water)──► Swim
 ///   Swim ──(feet down, wadeable)──► OnFoot    Swim ──(out over a drop)──► Fall
+///   Swim ──(jump pressed at the surface)──► Jump
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LocomotionState {

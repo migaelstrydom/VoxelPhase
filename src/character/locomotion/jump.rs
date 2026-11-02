@@ -15,6 +15,10 @@ pub enum JumpKind {
     Jump,
     /// Crouch, then jump: low, long and committed.
     LongJump,
+    /// From swimming at the surface: up out of the water, onto a low bank
+    /// or back in. Lower than a jump from the ground; releasing the key
+    /// early cuts it the same way.
+    OutOfWater,
 }
 
 /// A jump the player pressed for. The plan has no say in its arc or its
@@ -51,6 +55,16 @@ impl Jump {
         }
     }
 
+    /// Up out of the water: in flight at once, as nothing holds a swimmer
+    /// up to launch from.
+    pub fn out_of_water() -> Self {
+        Self {
+            kind: JumpKind::OutOfWater,
+            phase: TakeoffPhase::Flight,
+            steering: AirSteering::Responsive,
+        }
+    }
+
     /// Down: on its feet.
     pub fn tick(self, input: &LocomotionInput) -> LocomotionState {
         let grounded = input.facts.grounded;
@@ -77,11 +91,19 @@ impl Jump {
             cancel_forgiveness: true,
             ..EntryEffects::default()
         };
+        let cut_rise = !requests.jump_held;
+        let air_speed = Some(facts.horizontal_speed().max(config.walk_speed));
         match self.kind {
             JumpKind::Jump => EntryEffects {
                 vertical_speed: Some(config.jump_speed),
-                air_speed: Some(facts.horizontal_speed().max(config.walk_speed)),
-                cut_rise: !requests.jump_held,
+                air_speed,
+                cut_rise,
+                ..launch
+            },
+            JumpKind::OutOfWater => EntryEffects {
+                vertical_speed: Some(config.swim.jump_speed),
+                air_speed,
+                cut_rise,
                 ..launch
             },
             JumpKind::LongJump => EntryEffects {
@@ -109,10 +131,11 @@ impl Jump {
         !facts.rising()
     }
 
-    /// Releasing the key cuts a jump's rise; a long jump is committed.
+    /// Releasing the key cuts a jump's rise, from the ground or out of the
+    /// water; a long jump is committed.
     pub fn allows_cutoff(&self) -> bool {
         match self.kind {
-            JumpKind::Jump => true,
+            JumpKind::Jump | JumpKind::OutOfWater => true,
             JumpKind::LongJump => false,
         }
     }

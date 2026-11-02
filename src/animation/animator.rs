@@ -749,7 +749,7 @@ fn next_pose_state(
         air_speed: character.air_speed,
     });
     let jump_kind = |kind: JumpKind| match kind {
-        JumpKind::Jump => AirKind::Jump,
+        JumpKind::Jump | JumpKind::OutOfWater => AirKind::Jump,
         JumpKind::LongJump => AirKind::LongJump,
     };
 
@@ -841,6 +841,28 @@ mod tests {
     }
 
     const WALK: PoseState = PoseState::Grounded { gait: Gait::Walk };
+
+    /// A jump out of the water flies at once: there is no ground under a
+    /// swimmer to wind up against.
+    #[test]
+    fn a_jump_out_of_the_water_flies_without_a_wind_up() {
+        let next = pose_in(
+            LocomotionState::Jump(Jump::out_of_water()),
+            PoseState::Swimming {
+                stroke: Stroke::Crawl,
+            },
+        );
+        assert!(
+            matches!(
+                next,
+                PoseState::Airborne {
+                    kind: AirKind::Jump,
+                    ..
+                }
+            ),
+            "{next:?}"
+        );
+    }
 
     /// A hop a plan took off on is a running leap: the capsule is already
     /// rising as it begins, so a wind-up crouch would sink the body into the

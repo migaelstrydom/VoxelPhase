@@ -26,6 +26,12 @@ pub struct SwimConfig {
     /// left the water, in metres. A jump off a wave, or the water draining out
     /// from under it.
     pub leave_height: f32,
+    /// How far below the still level a swimmer's centre may be and still
+    /// jump out, in metres: a swimmer at the surface can, a diver cannot.
+    pub jump_depth: f32,
+    /// Upward speed a jump out of the water leaves with, in m/s. The water
+    /// takes about 1.5 m/s of it as the body leaves.
+    pub jump_speed: f32,
     /// Swimming speed, in m/s, relative to the water.
     pub swim_speed: f32,
     /// Swimming speed with sprint held, in m/s.
@@ -57,6 +63,8 @@ impl Default for SwimConfig {
         Self {
             swim_depth: 0.6,
             leave_height: 0.45,
+            jump_depth: 0.5,
+            jump_speed: 6.1,
             swim_speed: 2.0,
             sprint_swim_speed: 3.0,
             swim_accel: 14.0,
@@ -110,6 +118,14 @@ impl SwimConfig {
         immersion
             .water
             .map_or(true, |water| -water.below_level(body_y) > self.leave_height)
+    }
+
+    /// Whether a swimmer centred at `body_y` is near enough the surface to
+    /// jump out.
+    pub fn can_jump(&self, immersion: &Immersion, body_y: f32) -> bool {
+        immersion
+            .water
+            .is_some_and(|water| water.below_level(body_y) <= self.jump_depth)
     }
 
     /// Swimming speed, sprinting or not.

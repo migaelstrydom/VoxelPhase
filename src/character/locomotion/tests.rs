@@ -111,7 +111,7 @@ fn hop(phase: TakeoffPhase, landing: PlannedLanding) -> LocomotionState {
 }
 fn jump(kind: JumpKind, phase: TakeoffPhase) -> LocomotionState {
     let steering = match kind {
-        JumpKind::Jump => AirSteering::Responsive,
+        JumpKind::Jump | JumpKind::OutOfWater => AirSteering::Responsive,
         JumpKind::LongJump => AirSteering::Locked {
             velocity: Vector3::new(12.5, 0.0, 0.0),
             remaining: 2.0,
@@ -262,6 +262,12 @@ fn the_transitions_are_the_designs() {
             "swim jump",
             LocomotionState::Swim(Swim),
             air().in_sea(3.0, -0.2).jump(),
+            "jump",
+        ),
+        (
+            "jump from under",
+            LocomotionState::Swim(Swim),
+            air().in_sea(3.0, -1.0).jump(),
             "swim",
         ),
         (
@@ -372,6 +378,38 @@ fn a_long_jump_is_committed() {
     );
     assert_eq!(effects.air_speed, Some(speed));
     assert!(!effects.cut_rise && !state.allows_jump_cutoff());
+}
+
+/// A jump out of the water is in flight at once, at the swim jump's speed
+/// with the walk's air speed; a tap already released is cut up front, as on
+/// the ground.
+#[test]
+fn a_jump_out_of_the_water_leaves_with_its_impulse() {
+    let config = LocomotionConfig::player();
+    let (state, effects) = advance(
+        LocomotionState::Swim(Swim),
+        air()
+            .in_sea(3.0, -0.2)
+            .jump()
+            .moving(Vector3::new(2.0, 0.0, 0.0)),
+    );
+    assert_eq!(state, LocomotionState::Jump(Jump::out_of_water()));
+    assert_eq!(
+        effects,
+        EntryEffects {
+            vertical_speed: Some(config.swim.jump_speed),
+            air_speed: Some(config.walk_speed),
+            consume_jump: true,
+            cancel_forgiveness: true,
+            cut_rise: true,
+            arm_crouch_lockout: false,
+        }
+    );
+    assert!(state.allows_jump_cutoff());
+    let mut held = air().in_sea(3.0, -0.2).jump();
+    held.requests.jump_held = true;
+    let (_, effects) = advance(LocomotionState::Swim(Swim), held);
+    assert!(!effects.cut_rise);
 }
 
 /// A hop leaves with the plan's climb and planar speed; a roll-off with the

@@ -3,7 +3,8 @@
 //! Every scenario is set in `levels/swim_test.level.ron`, whose beach runs
 //! along z = 0 from dry land at x = -8 down to a 3 m sea floor at x = 12. The
 //! water's edge is at x = -3 and the depth grows 0.2 m per metre east of it.
-//! The pier stands 2 m over the deep end at x -8..8, z -20..-12.
+//! The pier stands 2 m over the deep end at x -8..8, z -20..-12, and the
+//! quay 0.3 m over it east of x = 20.
 //!
 //! The exception is `climb_ramp`, in the Rubble Garden: the way up its cliff
 //! to the lips, a ramp at x = 92 from the floor at z = 95 to the top (12 m) at
@@ -265,6 +266,51 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(5.0).named("swim").towards(Vector3::z()))
                 .then(Beat::stand(2.0).named("fall")),
             camera: CameraRig::side().with_distance(7.0).with_elevation(10.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "water_jump",
+            summary: "tread water in the deep end, tap jump, then hold it: a short jump out \
+                      of the water and a full one",
+            level: LEVEL,
+            start: (14.0, 0.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(1.5).named("tread"))
+                .then(Beat::jump(0.05).named("tap"))
+                .then(Beat::stand(2.5).named("back_in"))
+                .then(Beat::jump(0.6).named("hold"))
+                .then(Beat::stand(2.5).named("back_in")),
+            camera: CameraRig::side().with_distance(5.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "water_jump_stroke",
+            summary: "swim along the deep end and jump out of the water mid-stroke",
+            level: LEVEL,
+            start: (13.0, 4.0),
+            yaw: 0.0,
+            script: Script::new()
+                .then(Beat::stand(1.0).named("tread"))
+                .then(Beat::walk(1.5).named("stroke").towards(-Vector3::z()))
+                .then(Beat::jump(0.6).named("jump").towards(-Vector3::z()))
+                .then(Beat::walk(2.5).named("back_in").towards(-Vector3::z())),
+            camera: CameraRig::side().with_distance(5.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "jump_ashore",
+            summary: "swim up to the quay and jump out of the water onto it",
+            level: LEVEL,
+            start: (16.0, 0.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(1.0).named("tread"))
+                .then(Beat::walk(1.2).named("swim").towards(Vector3::x()))
+                .then(Beat::jump(0.6).named("jump").towards(Vector3::x()))
+                .then(Beat::walk(1.5).named("ashore").towards(Vector3::x()))
+                .then(Beat::stand(1.0)),
+            camera: CameraRig::side().with_distance(5.0),
             judged: Judged::Motion,
         },
         Scenario {
