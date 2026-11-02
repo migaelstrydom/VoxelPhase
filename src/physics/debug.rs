@@ -791,7 +791,7 @@ fn compute_raw_stats(bodies: &Arena<RigidBody>, manifolds: &[PairManifold]) -> C
                 point: cp.point,
                 normal: cp.normal,
                 depth: cp.depth.max(0.0),
-                raw_depth: cp.depth,
+                raw_depth: cp.raw_depth,
                 warm_normal_impulse: 0.0,
             })
         })
@@ -953,3 +953,34 @@ fn compute_post_solve_body_stats(
 
 const PATCH_COLOUR: Colour = Colour::new(0.2, 0.8, 0.3, 0.25);
 const COLLIDER_COLOUR: Colour = Colour::new(1.0, 0.4, 0.7, 0.25);
+
+#[cfg(test)]
+mod tests {
+    use nalgebra::{Point3, Vector3};
+
+    use super::*;
+    use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
+    use crate::physics::handle::RigidBodyHandle;
+    use crate::physics::pipeline::pair::PairHeader;
+
+    /// A margin-only contact, short of touching, counts as a negative raw
+    /// depth: the count reads the contact's raw depth, not its solver depth,
+    /// which is never negative.
+    #[test]
+    fn a_margin_contact_counts_as_negative_raw_depth() {
+        let contact = ContactPoint::new(Point3::origin(), Vector3::y(), -0.01, FeatureId::SINGLE);
+        let manifold = PairManifold {
+            header: PairHeader {
+                body_a: None,
+                body_b: RigidBodyHandle(generational_arena::Index::from_raw_parts(0, 0)),
+                collider_a: None,
+                collider_b: None,
+                restitution: 0.0,
+                friction: 0.5,
+            },
+            manifold: ContactManifold::single(contact),
+        };
+        let stats = compute_raw_stats(&Arena::new(), &[manifold]);
+        assert_eq!(stats.neg_raw, 1);
+    }
+}
