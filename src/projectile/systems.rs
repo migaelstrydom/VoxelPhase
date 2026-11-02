@@ -23,7 +23,8 @@ use crate::model::Model;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 
-/// System that updates entity lifetimes and removes expired entities.
+/// System that updates entity lifetimes and removes expired entities, with
+/// the physics body any of them had.
 pub struct LifetimeSystem;
 
 impl<'a> System<'a> for LifetimeSystem {
@@ -31,9 +32,11 @@ impl<'a> System<'a> for LifetimeSystem {
         Entities<'a>,
         ReadExpect<'a, Time>,
         WriteStorage<'a, Lifetime>,
+        ReadStorage<'a, RigidBodyComponent>,
+        Write<'a, PhysicsResource>,
     );
 
-    fn run(&mut self, (entities, time, mut lifetimes): Self::SystemData) {
+    fn run(&mut self, (entities, time, mut lifetimes, bodies, mut physics): Self::SystemData) {
         let delta = time.delta_seconds();
 
         // Collect entities to delete (can't delete while iterating)
@@ -46,8 +49,12 @@ impl<'a> System<'a> for LifetimeSystem {
             }
         }
 
-        // Delete expired entities
+        // Delete expired entities. A body left behind would go on being
+        // simulated, unseen, for the rest of the level.
         for entity in to_delete {
+            if let Some(body) = bodies.get(entity) {
+                let _ = physics.world.remove_body(body.0);
+            }
             let _ = entities.delete(entity);
         }
     }
@@ -269,5 +276,48 @@ impl<'a> System<'a> for ProjectileDetonationSystem {
 
             let _ = entities.delete(entity);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nalgebra::Point3;
+    use specs::{Builder, RunNow, World, WorldExt};
+
+    use super::*;
+    use crate::physics::{ColliderDesc, RigidBodyDesc};
+
+    /// An entity that outlives its lifetime takes its physics body with it.
+    #[test]
+    fn an_expired_entity_takes_its_body_with_it() {
+        let mut world = World::new();
+        world.register::<Lifetime>();
+        world.register::<RigidBodyComponent>();
+        world.insert(Time::fixed(0.1));
+        world.insert(PhysicsResource::default());
+        let body = {
+            let mut physics = world.write_resource::<PhysicsResource>();
+            let body = physics
+                .world
+                .create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+            physics
+                .world
+                .attach_collider(body, ColliderDesc::sphere(0.1).density(1000.0));
+            body
+        };
+        world
+            .create_entity()
+            .with(Lifetime::new(0.05))
+            .with(RigidBodyComponent(body))
+            .build();
+
+        LifetimeSystem.run_now(&world);
+        world.maintain();
+
+        assert!(world
+            .read_resource::<PhysicsResource>()
+            .world
+            .body(body)
+            .is_none());
     }
 }
