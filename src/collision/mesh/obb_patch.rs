@@ -32,7 +32,7 @@ use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::discrete::clipping::{clip_polygon, obb_face, ClipPolygon, ObbFace};
 use crate::collision::mesh::crease_contacts::{crease_edge_contacts, SolidPlane};
 use crate::collision::mesh::crease_edges::{PatchRidges, Ridge};
-use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
+use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
 use crate::collision::mesh::solid_side::pushing_faces;
 use crate::collision::obb::Obb;
 use crate::collision::segment::segment_segment_closest_points;
@@ -391,14 +391,12 @@ fn obb_vs_boundary_edges(obb: &Obb, patch: &FilteredPatch, contact_margin: f32) 
                 continue;
             }
 
+            // A gap, never a depth: the edges have not crossed while their
+            // closest points are this far apart, as every other path counts
+            // it (zero touching, down to -margin at the reach of a contact).
             let dist = dist_sq.sqrt();
-            let normal = if dist > 1e-6 {
-                delta / dist
-            } else {
-                Vector3::y()
-            };
-
-            let raw_depth = -dist - contact_margin;
+            let raw_depth = -dist;
+            let normal = boundary_push(obb, boundary_edge, pb, delta, dist);
 
             if best.as_ref().map_or(true, |b| raw_depth > b.1) {
                 let point = Point3::from((pa.coords + pb.coords) * 0.5);
@@ -414,6 +412,31 @@ fn obb_vs_boundary_edges(obb: &Obb, patch: &FilteredPatch, contact_margin: f32) 
     match best {
         Some((contact, _)) => ContactManifold::single(contact),
         None => ContactManifold::empty(),
+    }
+}
+
+/// Which way a boundary-edge contact pushes the box: from the terrain edge
+/// towards the box's closest point, turned to the box's own side of the edge.
+/// Once the edges cross, the closest points swap sides and their difference
+/// points into the terrain; and where they coincide it is no direction at all,
+/// so the box's centre, or failing that the edge's face, decides.
+fn boundary_push(
+    obb: &Obb,
+    edge: &ContactEdge,
+    on_edge: Point3<f32>,
+    delta: Vector3<f32>,
+    dist: f32,
+) -> Vector3<f32> {
+    let towards_box = obb.center - on_edge;
+    let normal = if dist > 1e-6 {
+        delta / dist
+    } else {
+        towards_box.try_normalize(1e-6).unwrap_or(edge.normal_a)
+    };
+    if normal.dot(&towards_box) < 0.0 {
+        -normal
+    } else {
+        normal
     }
 }
 
@@ -486,6 +509,66 @@ mod tests {
     use crate::collision::mesh_patch::{MeshPatch, PatchTriangle};
     use crate::collision::{SurfaceId, Triangle};
     use nalgebra::UnitQuaternion;
+
+    /// A lone terrain edge, along z at the origin, belonging to a face that
+    /// faces up.
+    fn lone_edge() -> FilteredPatch {
+        FilteredPatch {
+            faces: SmallVec::new(),
+            boundary_edges: SmallVec::from_vec(vec![ContactEdge {
+                a: Point3::new(0.0, 0.0, -5.0),
+                b: Point3::new(0.0, 0.0, 5.0),
+                feature_id: FeatureId::from_face(0),
+                normal_a: Vector3::y(),
+                normal_b: None,
+                surface: SurfaceId::UNSPECIFIED,
+            }]),
+        }
+    }
+
+    /// A box edge lying across a terrain edge, its lowest edge at `height`.
+    fn box_edge_across(height: f32) -> Obb {
+        // Turned 45 degrees about x, so its lowest edge runs along x, across
+        // the terrain edge (along z) at a right angle.
+        let half = 0.5;
+        let rotation =
+            UnitQuaternion::from_axis_angle(&Vector3::x_axis(), std::f32::consts::FRAC_PI_4);
+        let reach = half * std::f32::consts::SQRT_2;
+        Obb::new(
+            Point3::new(0.0, height + reach, 0.0),
+            rotation,
+            Vector3::new(half, half, half),
+        )
+    }
+
+    /// A box edge touching a terrain edge is a contact at no depth, with a
+    /// gap counted as a gap, and pushes the box away from the terrain.
+    #[test]
+    fn a_box_on_a_terrain_edge_touches_at_its_gap() {
+        let margin = 0.02;
+        for (height, depth) in [(0.0, 0.0), (0.01, -0.01)] {
+            let manifold = obb_vs_boundary_edges(&box_edge_across(height), &lone_edge(), margin);
+            let contact = manifold
+                .points
+                .first()
+                .expect("a contact within the margin");
+            assert!(
+                (contact.raw_depth - depth).abs() < 1e-4,
+                "{height} m up: depth {} where {depth} was due",
+                contact.raw_depth
+            );
+            assert!(contact.normal.y > 0.99, "normal {:?}", contact.normal);
+        }
+    }
+
+    /// Sunk a little through the edge, the box is still pushed out, up its
+    /// own side, not further in.
+    #[test]
+    fn a_box_sunk_through_a_terrain_edge_is_pushed_back_out() {
+        let manifold = obb_vs_boundary_edges(&box_edge_across(-0.01), &lone_edge(), 0.02);
+        let contact = manifold.points.first().expect("a contact");
+        assert!(contact.normal.y > 0.0, "normal {:?}", contact.normal);
+    }
 
     fn large_flat_patch() -> FilteredPatch {
         FilteredPatch {
