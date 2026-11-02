@@ -20,7 +20,6 @@ use super::constraint::suspension::{
 use super::constraint::types::Constraint;
 use super::constraint::{ConstraintHandle, ConstraintKind};
 use super::contact_event::{ContactEvent, ContactSource};
-use super::contact_exemptions::ContactExemptions;
 use super::contact_work::ContactWorkLedger;
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::drive::{
@@ -198,8 +197,6 @@ pub struct PhysicsWorld {
     bodies: Arena<RigidBody>,
     colliders: Arena<Collider>,
     manifold_cache: ManifoldCache,
-    /// Pairs of bodies whose contacts are switched off.
-    contact_exemptions: ContactExemptions,
     last_contacts: Vec<ContactEvent>,
     /// Normal impulses delivered to each body this frame.
     impacts: ImpactLedger,
@@ -318,7 +315,6 @@ impl PhysicsWorld {
             bodies: Arena::new(),
             colliders: Arena::new(),
             manifold_cache,
-            contact_exemptions: ContactExemptions::default(),
             last_contacts: Vec::new(),
             impacts: ImpactLedger::default(),
             contact_work: ContactWorkLedger::default(),
@@ -416,17 +412,6 @@ impl PhysicsWorld {
         true
     }
 
-    /// Switch off contacts between bodies `a` and `b`: they pass through
-    /// each other until [`restore_contacts`](Self::restore_contacts).
-    pub fn exempt_contacts(&mut self, a: RigidBodyHandle, b: RigidBodyHandle) {
-        self.contact_exemptions.insert(a, b);
-    }
-
-    /// Switch contacts between `a` and `b` back on.
-    pub fn restore_contacts(&mut self, a: RigidBodyHandle, b: RigidBodyHandle) {
-        self.contact_exemptions.remove(a, b);
-    }
-
     /// Apply an instantaneous impulse to one body at a world point, which
     /// also turns it about its centre, waking it. See
     /// [`apply_impulse`](Self::apply_impulse) for why this exists.
@@ -517,7 +502,6 @@ impl PhysicsWorld {
             return false;
         };
         self.pose_epoch += 1;
-        self.contact_exemptions.forget(handle);
 
         for collider_handle in body.colliders() {
             self.manifold_cache.remove_collider(*collider_handle);
@@ -1058,7 +1042,6 @@ impl PhysicsWorld {
             generate_dynamic_contacts(
                 &self.bodies,
                 &self.colliders,
-                &self.contact_exemptions,
                 &narrowphase_config,
                 horizon,
                 scope,
@@ -1368,7 +1351,6 @@ impl PhysicsWorld {
                 contact_events: &mut self.last_contacts,
                 impacts: &mut self.impacts,
                 narrowphase_ownership: &narrowphase_ownership,
-                contact_exemptions: &self.contact_exemptions,
                 sleeping,
                 pre_states: &pre_states,
                 contact_margin: self.config.contact_margin,

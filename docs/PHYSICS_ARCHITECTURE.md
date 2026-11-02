@@ -113,11 +113,6 @@ another pass generates contacts for exactly the bodies it woke, until a pass wak
 A stack touched at the top is therefore solved whole, down to the ground, on the frame it
 wakes, rather than one layer per frame.
 
-**Exemptions** (`contact_exemptions.rs`): a pair of bodies given to
-`PhysicsWorld::exempt_contacts` passes through each other, in the narrowphase and in CCD,
-until `restore_contacts`. For a pair something else holds in relation: a climber and the
-light crate it climbs, whose contacts would only shove one against the other.
-
 **Against static geometry** (`static_contacts.rs`, in parallel per collider): query the
 patch around the collider, then run the mesh pipeline in `collision/mesh/`:
 
