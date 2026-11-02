@@ -179,6 +179,16 @@ impl HoneycombWallDef {
 }
 
 impl Spawnable for HoneycombWallDef {
+    fn validate(&self) -> Result<(), String> {
+        if self.columns == 0 || self.rows == 0 {
+            return Err(format!(
+                "a honeycomb wall needs at least one column and one row, got {} by {}",
+                self.columns, self.rows
+            ));
+        }
+        Ok(())
+    }
+
     fn material_count(&self) -> usize {
         self.total_cells()
     }

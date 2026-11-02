@@ -65,6 +65,19 @@ impl CapsuleDef {
 }
 
 impl Spawnable for CapsuleDef {
+    fn validate(&self) -> Result<(), String> {
+        // `half_height` runs from the centre to the tip of a cap, so it
+        // cannot be shorter than the cap's radius.
+        if self.radius <= 0.0 || self.half_height < self.radius {
+            return Err(format!(
+                "a capsule needs a positive radius and a half_height of at least its radius, \
+                 got half_height {} and radius {}",
+                self.half_height, self.radius
+            ));
+        }
+        Ok(())
+    }
+
     fn material_count(&self) -> usize {
         1
     }

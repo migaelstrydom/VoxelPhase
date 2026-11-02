@@ -200,6 +200,17 @@ impl TempleLayout {
 }
 
 impl Spawnable for TempleDef {
+    fn validate(&self) -> Result<(), String> {
+        if self.front_columns < 2 || self.side_columns < 2 {
+            return Err(format!(
+                "a temple needs at least 2 columns on each side, got front_columns {} and \
+                 side_columns {}",
+                self.front_columns, self.side_columns
+            ));
+        }
+        Ok(())
+    }
+
     fn material_count(&self) -> usize {
         MATERIAL_COUNT
     }

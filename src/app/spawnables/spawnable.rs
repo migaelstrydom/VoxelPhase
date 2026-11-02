@@ -110,6 +110,14 @@ impl MaterialCtx<'_> {
 /// 2. Create those materials during init.
 /// 3. Spawn itself into the world using the pre-created materials.
 pub trait Spawnable {
+    /// Why this instance's parameters cannot be built, if they cannot: a
+    /// count too small to lay out, a shape with no volume. Checked when the
+    /// level loads, so a bad parameter is a load error rather than a panic,
+    /// a runaway allocation or a body that silently cannot move.
+    fn validate(&self) -> Result<(), String> {
+        Ok(())
+    }
+
     /// How many materials this instance needs.
     fn material_count(&self) -> usize;
 

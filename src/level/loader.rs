@@ -201,6 +201,10 @@ fn validate_segment(segment: &super::data::SegmentDef) -> Result<(), LevelError>
 
     for object in &segment.objects {
         validate_drop(name, object)?;
+        object
+            .to_spawnable()
+            .validate()
+            .map_err(|why| LevelError::Validation(format!("segment '{name}': {why}")))?;
     }
 
     for layer in &segment.terrain.material_layers {
@@ -296,6 +300,38 @@ mod tests {
             info.placement,
             ObjectPlacement::Dropped(Point3::new(1.0, 3.0, 2.0))
         );
+    }
+
+    /// Parameters an object cannot be built from are a load error, naming the
+    /// segment, not a panic or a runaway allocation at spawn.
+    #[test]
+    fn objects_that_cannot_be_built_are_load_errors() {
+        for (object, complaint) in [
+            ("Temple(pos: (0.0, 0.0, 0.0), side_columns: 0)", "temple"),
+            (
+                "Dropped(Capsule(pos: (0.0, 3.0, 0.0), half_height: 0.2, radius: 0.5))",
+                "capsule",
+            ),
+            (
+                "HoneycombWall(base: (0.0, 0.0, 0.0), columns: 0, rows: 2)",
+                "honeycomb",
+            ),
+        ] {
+            let error = parse_level(&one_segment(FLAT, "(0.0, 2.0, 0.0)", object))
+                .err()
+                .unwrap_or_else(|| panic!("{object} loaded"));
+            let message = error.to_string();
+            assert!(
+                message.contains("segment 'main'") && message.contains(complaint),
+                "{object}: {message}"
+            );
+        }
+        parse_level(&one_segment(
+            FLAT,
+            "(0.0, 2.0, 0.0)",
+            "Capsule(pos: (0.0, 3.0, 0.0), half_height: 0.5, radius: 0.5)",
+        ))
+        .expect("a capsule that is all caps is still a capsule");
     }
 
     #[test]
