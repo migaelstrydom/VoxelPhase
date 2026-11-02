@@ -257,8 +257,11 @@ impl FireSimPipelines {
 
     /// Point one half's post-advection sets at field[k] and velocity[k].
     fn write_step_descriptors(&self, sets: &FireStepSets, volume: &FireVolume, k: usize) {
-        let velocity = volume.velocity[k].image_view;
-        self.write_storage_images(sets.forces, &[volume.field[k].image_view, velocity]);
+        let velocity = volume.velocity[k].image_view.handle();
+        self.write_storage_images(
+            sets.forces,
+            &[volume.field[k].image_view.handle(), velocity],
+        );
 
         // Jacobi ping-pong: an even iteration reads pressure[0] and writes
         // pressure[1], an odd one the reverse.
@@ -266,16 +269,16 @@ impl FireSimPipelines {
             sets.pressure[0],
             &[
                 velocity,
-                volume.pressure[0].image_view,
-                volume.pressure[1].image_view,
+                volume.pressure[0].image_view.handle(),
+                volume.pressure[1].image_view.handle(),
             ],
         );
         self.write_storage_images(
             sets.pressure[1],
             &[
                 velocity,
-                volume.pressure[1].image_view,
-                volume.pressure[0].image_view,
+                volume.pressure[1].image_view.handle(),
+                volume.pressure[0].image_view.handle(),
             ],
         );
 
@@ -284,7 +287,7 @@ impl FireSimPipelines {
         let solved = (JACOBI_ITERATIONS % 2) as usize;
         self.write_storage_images(
             sets.correct,
-            &[velocity, volume.pressure[solved].image_view],
+            &[velocity, volume.pressure[solved].image_view.handle()],
         );
     }
 
@@ -396,10 +399,10 @@ impl FireSimPipelines {
         self.write_storage_images(
             set,
             &[
-                volume.field[src].image_view,
-                volume.field[dst].image_view,
-                volume.velocity[src].image_view,
-                volume.velocity[dst].image_view,
+                volume.field[src].image_view.handle(),
+                volume.field[dst].image_view.handle(),
+                volume.velocity[src].image_view.handle(),
+                volume.velocity[dst].image_view.handle(),
             ],
         );
     }

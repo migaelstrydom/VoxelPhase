@@ -7,10 +7,10 @@ use ash::vk;
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult, ImageOperation};
 use crate::core::vulkan_context::VulkanContext;
+use crate::rendering::device_image::{DeviceImage, ImageSpec, ImageView};
 use crate::rendering::reflection::config::ProbeConfig;
 use crate::rendering::reflection::face::CubeFace;
 use crate::rendering::reflection::pool::ProbeSlot;
-use crate::rendering::target::images::allocate_and_bind;
 
 /// Format of a probe's faces: the same HDR radiance the scene target holds,
 /// so a reflection of a glowing object glows.
@@ -65,19 +65,22 @@ pub const PROBE_LAYOUT: vk::ImageLayout = vk::ImageLayout::GENERAL;
 /// rewritten only after the render pass's incoming dependency has waited for
 /// every earlier sampling of it.
 pub struct ProbeAtlas {
-    image: vk::Image,
-    memory: vk::DeviceMemory,
     /// Every probe as a cube, every mip: what the scene samples.
-    pub view: vk::ImageView,
+    pub view: ImageView,
     pub sampler: vk::Sampler,
-    /// One per layer, mip 0 only: what a face is rendered into.
-    face_views: Vec<vk::ImageView>,
+    /// One per layer, mip 0 only: what a face is rendered into. Held for
+    /// the framebuffers built on them.
+    #[allow(dead_code)]
+    face_views: Vec<ImageView>,
     /// One per mip level, every layer: what the mip filter reads and writes.
-    level_views: Vec<vk::ImageView>,
+    level_views: Vec<ImageView>,
     framebuffers: Vec<vk::Framebuffer>,
-    depth_image: vk::Image,
-    depth_memory: vk::DeviceMemory,
-    depth_view: vk::ImageView,
+    image: DeviceImage,
+    /// The depth faces are captured against, held for the framebuffers.
+    #[allow(dead_code)]
+    depth_view: ImageView,
+    #[allow(dead_code)]
+    depth_image: DeviceImage,
     pub render_pass: vk::RenderPass,
     pub extent: vk::Extent2D,
     device: Arc<ManagedDevice>,
@@ -93,87 +96,50 @@ impl ProbeAtlas {
         let layers = config.capacity * CubeFace::COUNT as u32;
         let mip_levels = PROBE_MIP_LEVELS;
 
-        let image = create_image(
+        let image = DeviceImage::new(
             &device,
-            extent,
-            PROBE_FORMAT,
-            layers,
-            mip_levels,
-            vk::ImageCreateFlags::CUBE_COMPATIBLE,
-            vk::ImageUsageFlags::COLOR_ATTACHMENT
-                | vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::STORAGE,
+            ImageSpec::new_2d(
+                PROBE_FORMAT,
+                extent,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::STORAGE,
+            )
+            .mip_levels(mip_levels)
+            .array_layers(layers, vk::ImageCreateFlags::CUBE_COMPATIBLE),
         )?;
-        let memory = allocate_and_bind(&device, image, extent)?;
-        let view = create_view(
-            &device,
-            image,
-            vk::ImageViewType::CUBE_ARRAY,
-            PROBE_FORMAT,
-            vk::ImageAspectFlags::COLOR,
-            0,
-            layers,
-            0,
-            mip_levels,
-        )?;
+        let colour = vk::ImageAspectFlags::COLOR;
+        let view = image.full_view(vk::ImageViewType::CUBE_ARRAY, colour)?;
         let face_views = (0..layers)
-            .map(|layer| {
-                create_view(
-                    &device,
-                    image,
-                    vk::ImageViewType::TYPE_2D,
-                    PROBE_FORMAT,
-                    vk::ImageAspectFlags::COLOR,
-                    layer,
-                    1,
-                    0,
-                    1,
-                )
-            })
+            .map(|layer| image.view(vk::ImageViewType::TYPE_2D, colour, 0..1, layer..layer + 1))
             .collect::<EngineResult<Vec<_>>>()?;
         let level_views = (0..mip_levels)
             .map(|level| {
-                create_view(
-                    &device,
-                    image,
+                image.view(
                     vk::ImageViewType::TYPE_2D_ARRAY,
-                    PROBE_FORMAT,
-                    vk::ImageAspectFlags::COLOR,
-                    0,
-                    layers,
-                    level,
-                    1,
+                    colour,
+                    level..level + 1,
+                    0..layers,
                 )
             })
             .collect::<EngineResult<Vec<_>>>()?;
 
-        let depth_image = create_image(
+        let depth_image = DeviceImage::new(
             &device,
-            extent,
-            PROBE_DEPTH_FORMAT,
-            1,
-            1,
-            vk::ImageCreateFlags::empty(),
-            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            ImageSpec::new_2d(
+                PROBE_DEPTH_FORMAT,
+                extent,
+                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+            ),
         )?;
-        let depth_memory = allocate_and_bind(&device, depth_image, extent)?;
-        let depth_view = create_view(
-            &device,
-            depth_image,
-            vk::ImageViewType::TYPE_2D,
-            PROBE_DEPTH_FORMAT,
-            vk::ImageAspectFlags::DEPTH,
-            0,
-            1,
-            0,
-            1,
-        )?;
+        let depth_view =
+            depth_image.full_view(vk::ImageViewType::TYPE_2D, vk::ImageAspectFlags::DEPTH)?;
 
         let render_pass = create_render_pass(&device)?;
         let framebuffers = face_views
             .iter()
-            .map(|&face_view| {
-                let attachments = [face_view, depth_view];
+            .map(|face_view| {
+                let attachments = [face_view.handle(), depth_view.handle()];
                 let info = vk::FramebufferCreateInfo::default()
                     .render_pass(render_pass)
                     .attachments(&attachments)
@@ -187,16 +153,14 @@ impl ProbeAtlas {
         let sampler = create_sampler(&device, mip_levels)?;
 
         let atlas = Self {
-            image,
-            memory,
             view,
             sampler,
             face_views,
             level_views,
             framebuffers,
-            depth_image,
-            depth_memory,
+            image,
             depth_view,
+            depth_image,
             render_pass,
             extent,
             device,
@@ -219,7 +183,7 @@ impl ProbeAtlas {
             .command_buffer_manager
             .submit_graphics_commands_and_wait(&commands, |device, cb| {
                 let barrier = vk::ImageMemoryBarrier::default()
-                    .image(self.image)
+                    .image(self.image.handle())
                     .old_layout(vk::ImageLayout::UNDEFINED)
                     .new_layout(PROBE_LAYOUT)
                     .dst_access_mask(vk::AccessFlags::SHADER_READ)
@@ -245,7 +209,7 @@ impl ProbeAtlas {
 
     /// Every layer at one mip `level`, as a 2D array.
     pub fn level_view(&self, level: u32) -> vk::ImageView {
-        self.level_views[level as usize]
+        self.level_views[level as usize].handle()
     }
 
     /// The layer holding `face` of the probe in `slot`.
@@ -297,79 +261,8 @@ impl Drop for ProbeAtlas {
             }
             device.destroy_render_pass(self.render_pass, None);
             device.destroy_sampler(self.sampler, None);
-            for &view in self.face_views.iter().chain(&self.level_views) {
-                device.destroy_image_view(view, None);
-            }
-            device.destroy_image_view(self.view, None);
-            device.destroy_image(self.image, None);
-            device.free_memory(self.memory, None);
-            device.destroy_image_view(self.depth_view, None);
-            device.destroy_image(self.depth_image, None);
-            device.free_memory(self.depth_memory, None);
         }
     }
-}
-
-fn create_image(
-    device: &ManagedDevice,
-    extent: vk::Extent2D,
-    format: vk::Format,
-    layers: u32,
-    mip_levels: u32,
-    flags: vk::ImageCreateFlags,
-    usage: vk::ImageUsageFlags,
-) -> EngineResult<vk::Image> {
-    let info = vk::ImageCreateInfo::default()
-        .flags(flags)
-        .image_type(vk::ImageType::TYPE_2D)
-        .format(format)
-        .extent(extent.into())
-        .mip_levels(mip_levels)
-        .array_layers(layers)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .tiling(vk::ImageTiling::OPTIMAL)
-        .usage(usage)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-    unsafe { device.device.create_image(&info, None) }.map_err(|e| EngineError::Image {
-        operation: ImageOperation::Create,
-        width: extent.width,
-        height: extent.height,
-        reason: format!("reflection probe atlas: {:?}", e),
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn create_view(
-    device: &ManagedDevice,
-    image: vk::Image,
-    view_type: vk::ImageViewType,
-    format: vk::Format,
-    aspect: vk::ImageAspectFlags,
-    base_layer: u32,
-    layers: u32,
-    base_mip: u32,
-    mip_levels: u32,
-) -> EngineResult<vk::ImageView> {
-    let info = vk::ImageViewCreateInfo::default()
-        .image(image)
-        .view_type(view_type)
-        .format(format)
-        .subresource_range(
-            vk::ImageSubresourceRange::default()
-                .aspect_mask(aspect)
-                .base_mip_level(base_mip)
-                .level_count(mip_levels)
-                .base_array_layer(base_layer)
-                .layer_count(layers),
-        );
-
-    unsafe { device.device.create_image_view(&info, None) }.map_err(|e| EngineError::Image {
-        operation: ImageOperation::CreateView,
-        width: 0,
-        height: 0,
-        reason: format!("reflection probe atlas: {:?}", e),
-    })
 }
 
 /// Trilinear, so a roughness between two mips blends them rather than

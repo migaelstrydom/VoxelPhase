@@ -178,12 +178,9 @@ impl TextureFactory {
             height,
             mip_levels,
             format,
-            vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::TRANSFER_DST
                 | vk::ImageUsageFlags::TRANSFER_SRC
                 | vk::ImageUsageFlags::SAMPLED,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            vk::ImageAspectFlags::COLOR,
         )
         .map_err(|e| EngineError::Image {
             operation: ImageOperation::Create,
@@ -193,7 +190,7 @@ impl TextureFactory {
         })?;
 
         self.transfer_service.transition_image_layout(
-            texture.image,
+            texture.image.handle(),
             format,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -202,14 +199,14 @@ impl TextureFactory {
 
         self.transfer_service.copy_buffer_to_image(
             staging_buffer.buffer,
-            texture.image,
+            texture.image.handle(),
             width,
             height,
         )?;
 
         if generate_mipmaps {
             self.transfer_service.generate_mipmaps(
-                texture.image,
+                texture.image.handle(),
                 format,
                 width,
                 height,
@@ -217,7 +214,7 @@ impl TextureFactory {
             )?;
         } else {
             self.transfer_service.transition_image_layout(
-                texture.image,
+                texture.image.handle(),
                 format,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -272,10 +269,7 @@ impl TextureFactory {
             height,
             mip_levels,
             vk::Format::R8G8B8A8_SRGB,
-            vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            vk::ImageAspectFlags::COLOR,
         )
         .map_err(|e| EngineError::Image {
             operation: ImageOperation::Create,
@@ -285,7 +279,7 @@ impl TextureFactory {
         })?;
 
         self.transfer_service.transition_image_layout(
-            texture.image,
+            texture.image.handle(),
             vk::Format::R8G8B8A8_SRGB,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -294,13 +288,13 @@ impl TextureFactory {
 
         self.transfer_service.copy_buffer_to_image(
             staging_buffer.buffer,
-            texture.image,
+            texture.image.handle(),
             width,
             height,
         )?;
 
         self.transfer_service.transition_image_layout(
-            texture.image,
+            texture.image.handle(),
             vk::Format::R8G8B8A8_SRGB,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -406,7 +400,7 @@ impl TextureManager {
         let texture = texture_handle.texture();
         inner.descriptor_manager.update_texture_set(
             descriptor_set,
-            texture.image_view,
+            texture.image_view.handle(),
             texture.sampler,
         );
 

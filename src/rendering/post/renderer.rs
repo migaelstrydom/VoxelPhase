@@ -163,8 +163,8 @@ impl PostProcessRenderer {
         // `ping_set` by the blur and the bloom overlay — every stage samples a
         // single texture through the same layout.
         Self::write_set(&device, scene_set, 0, sampler, scene_view);
-        Self::write_set(&device, ping_set, 0, sampler, ping.view);
-        Self::write_set(&device, pong_set, 0, sampler, pong.view);
+        Self::write_set(&device, ping_set, 0, sampler, ping.view.handle());
+        Self::write_set(&device, pong_set, 0, sampler, pong.view.handle());
 
         let composite_framebuffers = output_views
             .iter()

@@ -57,8 +57,8 @@ impl OffscreenOutput {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
 
-        let images = vec![target.image];
-        let image_views = vec![target.view];
+        let images = vec![target.image.handle()];
+        let image_views = vec![target.view.handle()];
 
         Ok(Self {
             vulkan_context,
@@ -110,7 +110,7 @@ impl FrameOutput for OffscreenOutput {
         // The image is left in `TRANSFER_SRC_OPTIMAL` by `final_layout`.
         read_back_image(
             &self.vulkan_context,
-            self.target.image,
+            self.target.image.handle(),
             self.final_layout(),
             self.extent,
             &self.readback,

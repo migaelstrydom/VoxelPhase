@@ -347,7 +347,7 @@ impl FireRenderer {
     ) {
         let volume_info = vk::DescriptorImageInfo::default()
             .sampler(field.sampler)
-            .image_view(field.image_view)
+            .image_view(field.image_view.handle())
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
 
         let depth_info = vk::DescriptorImageInfo::default()
@@ -668,7 +668,7 @@ fn volume_images(volume: &FireVolume) -> impl Iterator<Item = vk::Image> + '_ {
         .iter()
         .chain(volume.velocity.iter())
         .chain(volume.pressure.iter())
-        .map(|tex| tex.image)
+        .map(|tex| tex.image.handle())
 }
 
 /// The one colour mip and layer each volume image has.
@@ -751,7 +751,7 @@ fn transition_volumes_for_compute(
     cb: vk::CommandBuffer,
     volume: &FireVolume,
 ) {
-    let sampled = volume.field[volume.src()].image;
+    let sampled = volume.field[volume.src()].image.handle();
     let barriers: Vec<vk::ImageMemoryBarrier> = volume_images(volume)
         .map(|image| {
             let (old_layout, src_access) = if image == sampled {
@@ -790,7 +790,7 @@ fn transition_volumes_for_compute(
 fn transition_field_for_read(device: &ash::Device, cb: vk::CommandBuffer, volume: &FireVolume) {
     let src = volume.src();
     let barrier = vk::ImageMemoryBarrier::default()
-        .image(volume.field[src].image)
+        .image(volume.field[src].image.handle())
         .old_layout(vk::ImageLayout::GENERAL)
         .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
         .src_access_mask(vk::AccessFlags::SHADER_WRITE)

@@ -6,7 +6,8 @@ use ash::vk;
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult, ImageOperation};
-use crate::core::vulkan_context::{find_memorytype_index, VulkanContext};
+use crate::core::vulkan_context::VulkanContext;
+use crate::rendering::device_image::{DeviceImage, ImageSpec, ImageView};
 
 /// Depth format for the shadow map.
 ///
@@ -26,13 +27,12 @@ pub const SHADOW_SAMPLED_LAYOUT: vk::ImageLayout = vk::ImageLayout::DEPTH_STENCI
 /// Owns no pipeline: what is drawn into it is the caller's business, which is
 /// what lets the shadow pass replay the scene's ordinary draw calls.
 pub struct ShadowMap {
-    pub image: vk::Image,
-    pub view: vk::ImageView,
+    pub view: ImageView,
+    pub image: DeviceImage,
     pub sampler: vk::Sampler,
     pub render_pass: vk::RenderPass,
     pub framebuffer: vk::Framebuffer,
     pub extent: vk::Extent2D,
-    memory: vk::DeviceMemory,
     device: Arc<ManagedDevice>,
 }
 
@@ -44,13 +44,19 @@ impl ShadowMap {
             height: resolution,
         };
 
-        let image = create_image(&device, extent)?;
-        let memory = allocate_and_bind(&device, image, extent)?;
-        let view = create_view(&device, image, extent)?;
+        let image = DeviceImage::new(
+            &device,
+            ImageSpec::new_2d(
+                SHADOW_DEPTH_FORMAT,
+                extent,
+                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+            ),
+        )?;
+        let view = image.full_view(vk::ImageViewType::TYPE_2D, vk::ImageAspectFlags::DEPTH)?;
         let sampler = create_comparison_sampler(&device)?;
         let render_pass = create_render_pass(&device)?;
 
-        let attachments = [view];
+        let attachments = [view.handle()];
         let fb_info = vk::FramebufferCreateInfo::default()
             .render_pass(render_pass)
             .attachments(&attachments)
@@ -68,7 +74,6 @@ impl ShadowMap {
             render_pass,
             framebuffer,
             extent,
-            memory,
             device,
         })
     }
@@ -126,102 +131,8 @@ impl Drop for ShadowMap {
                 .device
                 .destroy_render_pass(self.render_pass, None);
             self.device.device.destroy_sampler(self.sampler, None);
-            self.device.device.destroy_image_view(self.view, None);
-            self.device.device.destroy_image(self.image, None);
-            self.device.device.free_memory(self.memory, None);
         }
     }
-}
-
-fn create_image(device: &ManagedDevice, extent: vk::Extent2D) -> EngineResult<vk::Image> {
-    let image_info = vk::ImageCreateInfo::default()
-        .image_type(vk::ImageType::TYPE_2D)
-        .format(SHADOW_DEPTH_FORMAT)
-        .extent(extent.into())
-        .mip_levels(1)
-        .array_layers(1)
-        .samples(vk::SampleCountFlags::TYPE_1)
-        .tiling(vk::ImageTiling::OPTIMAL)
-        .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-    unsafe { device.device.create_image(&image_info, None) }.map_err(|e| EngineError::Image {
-        operation: ImageOperation::Create,
-        width: extent.width,
-        height: extent.height,
-        reason: format!("shadow map: {:?}", e),
-    })
-}
-
-fn allocate_and_bind(
-    device: &ManagedDevice,
-    image: vk::Image,
-    extent: vk::Extent2D,
-) -> EngineResult<vk::DeviceMemory> {
-    unsafe {
-        let requirements = device.device.get_image_memory_requirements(image);
-        let memory_type_index = find_memorytype_index(
-            &requirements,
-            &device.device_memory_properties,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )
-        .ok_or_else(|| EngineError::Image {
-            operation: ImageOperation::AllocateMemory,
-            width: extent.width,
-            height: extent.height,
-            reason: "shadow map: no suitable memory type".to_string(),
-        })?;
-
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(requirements.size)
-            .memory_type_index(memory_type_index);
-
-        let memory = device
-            .device
-            .allocate_memory(&alloc_info, None)
-            .map_err(|e| EngineError::Image {
-                operation: ImageOperation::AllocateMemory,
-                width: extent.width,
-                height: extent.height,
-                reason: format!("shadow map: {:?}", e),
-            })?;
-
-        device
-            .device
-            .bind_image_memory(image, memory, 0)
-            .map_err(|e| EngineError::Image {
-                operation: ImageOperation::Bind,
-                width: extent.width,
-                height: extent.height,
-                reason: format!("shadow map: {:?}", e),
-            })?;
-
-        Ok(memory)
-    }
-}
-
-fn create_view(
-    device: &ManagedDevice,
-    image: vk::Image,
-    extent: vk::Extent2D,
-) -> EngineResult<vk::ImageView> {
-    let view_info = vk::ImageViewCreateInfo::default()
-        .image(image)
-        .view_type(vk::ImageViewType::TYPE_2D)
-        .format(SHADOW_DEPTH_FORMAT)
-        .subresource_range(
-            vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::DEPTH)
-                .level_count(1)
-                .layer_count(1),
-        );
-
-    unsafe { device.device.create_image_view(&view_info, None) }.map_err(|e| EngineError::Image {
-        operation: ImageOperation::CreateView,
-        width: extent.width,
-        height: extent.height,
-        reason: format!("shadow map: {:?}", e),
-    })
 }
 
 /// A sampler that compares rather than fetches.

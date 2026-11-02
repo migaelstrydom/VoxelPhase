@@ -46,7 +46,7 @@ impl ResourceManager {
 
         let grain = grain::create_grain_texture(&textures)?;
         descriptor_manager
-            .update_grain_texture(grain.texture().image_view, grain.texture().sampler);
+            .update_grain_texture(grain.texture().image_view.handle(), grain.texture().sampler);
         textures.keep_resident(grain);
 
         Ok(textures)

@@ -208,7 +208,7 @@ impl FontAtlas {
         // Update descriptor set with texture
         let image_info = vk::DescriptorImageInfo {
             sampler: texture.sampler,
-            image_view: texture.image_view,
+            image_view: texture.image_view.handle(),
             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         };
 
@@ -268,15 +268,12 @@ impl FontAtlas {
             height,
             1, // No mipmaps
             vk::Format::R8_UNORM,
-            vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            vk::ImageAspectFlags::COLOR,
         )?;
 
         // Transition layout and copy from staging
         transfer_service.transition_image_layout(
-            texture.image,
+            texture.image.handle(),
             vk::Format::R8_UNORM,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -285,13 +282,13 @@ impl FontAtlas {
 
         transfer_service.copy_buffer_to_image(
             staging_buffer.buffer,
-            texture.image,
+            texture.image.handle(),
             width,
             height,
         )?;
 
         transfer_service.transition_image_layout(
-            texture.image,
+            texture.image.handle(),
             vk::Format::R8_UNORM,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,

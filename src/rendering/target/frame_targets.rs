@@ -66,7 +66,7 @@ impl FrameTargets {
         let refraction =
             RefractionCopy::new(vulkan_context, extent, scene_color_format, DEPTH_FORMAT)?;
 
-        let opaque_attachments = [color_target.view, depth_buffer.view];
+        let opaque_attachments = [color_target.view.handle(), depth_buffer.view.handle()];
         let opaque_fb_info = vk::FramebufferCreateInfo::default()
             .render_pass(opaque_renderpass)
             .attachments(&opaque_attachments)
@@ -81,7 +81,7 @@ impl FrameTargets {
             .image_views()
             .iter()
             .map(|&view| {
-                let attachments = [view, depth_buffer.view];
+                let attachments = [view, depth_buffer.view.handle()];
                 let fb_info = vk::FramebufferCreateInfo::default()
                     .render_pass(transparent_renderpass)
                     .attachments(&attachments)

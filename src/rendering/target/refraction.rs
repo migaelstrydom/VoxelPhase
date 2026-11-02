@@ -45,11 +45,11 @@ impl RefractionCopy {
     }
 
     pub fn colour_view(&self) -> vk::ImageView {
-        self.colour.view
+        self.colour.view.handle()
     }
 
     pub fn depth_view(&self) -> vk::ImageView {
-        self.depth.view
+        self.depth.view.handle()
     }
 
     /// Copy the scene's colour and depth within `region`, as the scene pass
@@ -92,7 +92,7 @@ impl RefractionCopy {
             ),
             // The old contents are last frame's, and are being replaced.
             barrier(
-                self.colour.image,
+                self.colour.image.handle(),
                 colour,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -100,7 +100,7 @@ impl RefractionCopy {
                 vk::AccessFlags::TRANSFER_WRITE,
             ),
             barrier(
-                self.depth.image,
+                self.depth.image.handle(),
                 depth,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
@@ -110,7 +110,7 @@ impl RefractionCopy {
         ];
         let after = [
             barrier(
-                self.colour.image,
+                self.colour.image.handle(),
                 colour,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -118,7 +118,7 @@ impl RefractionCopy {
                 vk::AccessFlags::SHADER_READ,
             ),
             barrier(
-                self.depth.image,
+                self.depth.image.handle(),
                 depth,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -146,7 +146,7 @@ impl RefractionCopy {
                 cb,
                 scene_colour,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                self.colour.image,
+                self.colour.image.handle(),
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &[copy_region(colour, region)],
             );
@@ -154,7 +154,7 @@ impl RefractionCopy {
                 cb,
                 scene_depth,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                self.depth.image,
+                self.depth.image.handle(),
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &[copy_region(depth, region)],
             );

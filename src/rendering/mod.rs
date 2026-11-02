@@ -6,6 +6,7 @@ pub mod compute;
 pub mod debug_render;
 pub mod deletion_queue;
 pub mod descriptors;
+pub mod device_image;
 pub mod engraving;
 pub mod frame;
 pub mod geometry_draw;

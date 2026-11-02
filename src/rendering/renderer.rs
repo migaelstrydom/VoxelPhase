@@ -351,7 +351,7 @@ impl Renderer {
         // Post-processing resolves the HDR scene target onto the output image.
         let post_process = PostProcessRenderer::new(
             &vulkan_context,
-            targets.color_target.view,
+            targets.color_target.view.handle(),
             output.image_views(),
             extent,
             output.format(),
@@ -400,8 +400,8 @@ impl Renderer {
             );
             descriptors.update_surface_table(slot, frame.surfaces.buffer(), SurfaceBuffer::SIZE);
         }
-        descriptors.update_shadow_map(shadow.map().view, SHADOW_SAMPLED_LAYOUT);
-        descriptors.update_reflection_probes(probes.atlas().view, probes.atlas().sampler);
+        descriptors.update_shadow_map(shadow.map().view.handle(), SHADOW_SAMPLED_LAYOUT);
+        descriptors.update_reflection_probes(probes.atlas().view.handle(), probes.atlas().sampler);
 
         // Create overlay renderer for debug text (transparent pass)
         let overlay = OverlayRenderer::new(
@@ -429,7 +429,7 @@ impl Renderer {
         let fire_renderer = FireRenderer::new(
             Arc::clone(&vulkan_context.device),
             pipeline.transparent_renderpass,
-            targets.depth_buffer.view,
+            targets.depth_buffer.view.handle(),
         )?;
 
         Ok(Self {
@@ -514,7 +514,7 @@ impl Renderer {
         let post = self.post_process.config;
         self.post_process = PostProcessRenderer::new(
             &self.vulkan_context,
-            self.targets.color_target.view,
+            self.targets.color_target.view.handle(),
             self.output.image_views(),
             extent,
             self.output.format(),
@@ -525,7 +525,7 @@ impl Renderer {
         self.water_renderer
             .point_refraction(&self.targets.refraction);
         self.fire_renderer
-            .point_depth(self.targets.depth_buffer.view);
+            .point_depth(self.targets.depth_buffer.view.handle());
         self.output_stale = false;
         log::info!("Output rebuilt at {}x{}", extent.width, extent.height);
         Ok(true)
@@ -1412,8 +1412,8 @@ impl Renderer {
         self.targets.refraction.capture(
             device,
             cb,
-            self.targets.color_target.image,
-            self.targets.depth_buffer.image,
+            self.targets.color_target.image.handle(),
+            self.targets.depth_buffer.image.handle(),
             footprint,
         );
         let resume = vk::RenderPassBeginInfo::default()

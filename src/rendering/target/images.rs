@@ -1,19 +1,15 @@
 //! Device-local images owned by the frame targets.
 
-use std::sync::Arc;
-
 use ash::vk;
 
-use crate::core::device::ManagedDevice;
-use crate::core::error::{EngineError, EngineResult, ImageOperation};
-use crate::core::vulkan_context::{find_memorytype_index, VulkanContext};
+use crate::core::error::EngineResult;
+use crate::core::vulkan_context::VulkanContext;
+use crate::rendering::device_image::{DeviceImage, ImageSpec, ImageView};
 
 /// Depth buffer resources.
 pub struct DepthBuffer {
-    pub image: vk::Image,
-    pub view: vk::ImageView,
-    pub memory: vk::DeviceMemory,
-    device: Arc<ManagedDevice>,
+    pub view: ImageView,
+    pub image: DeviceImage,
 }
 
 impl DepthBuffer {
@@ -40,67 +36,19 @@ impl DepthBuffer {
         format: vk::Format,
         usage: vk::ImageUsageFlags,
     ) -> EngineResult<Self> {
-        let device = Arc::clone(&vulkan_context.device);
+        let image = DeviceImage::new(
+            &vulkan_context.device,
+            ImageSpec::new_2d(format, extent, usage),
+        )?;
 
-        unsafe {
-            let image_info = vk::ImageCreateInfo::default()
-                .image_type(vk::ImageType::TYPE_2D)
-                .format(format)
-                .extent(extent.into())
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(usage)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let image =
-                device
-                    .device
-                    .create_image(&image_info, None)
-                    .map_err(|e| EngineError::Image {
-                        operation: ImageOperation::Create,
-                        width: extent.width,
-                        height: extent.height,
-                        reason: format!("{:?}", e),
-                    })?;
-
-            let memory = allocate_and_bind(&device, image, extent)?;
-
-            // A depth attachment starts in the layout the scene pass expects;
-            // anything else is transitioned by whoever first writes it.
-            if usage.contains(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT) {
-                Self::transition_layout(vulkan_context, image)?;
-            }
-
-            let view_info = vk::ImageViewCreateInfo::default()
-                .image(image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(format)
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::DEPTH)
-                        .level_count(1)
-                        .layer_count(1),
-                );
-
-            let view = device
-                .device
-                .create_image_view(&view_info, None)
-                .map_err(|e| EngineError::Image {
-                    operation: ImageOperation::CreateView,
-                    width: extent.width,
-                    height: extent.height,
-                    reason: format!("{:?}", e),
-                })?;
-
-            Ok(Self {
-                image,
-                view,
-                memory,
-                device,
-            })
+        // A depth attachment starts in the layout the scene pass expects;
+        // anything else is transitioned by whoever first writes it.
+        if usage.contains(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT) {
+            Self::transition_layout(vulkan_context, image.handle())?;
         }
+
+        let view = image.full_view(vk::ImageViewType::TYPE_2D, vk::ImageAspectFlags::DEPTH)?;
+        Ok(Self { view, image })
     }
 
     /// Transitions a depth image from `UNDEFINED` to `DEPTH_STENCIL_ATTACHMENT_OPTIMAL` layout.
@@ -153,16 +101,6 @@ impl DepthBuffer {
     }
 }
 
-impl Drop for DepthBuffer {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.device.destroy_image_view(self.view, None);
-            self.device.device.destroy_image(self.image, None);
-            self.device.device.free_memory(self.memory, None);
-        }
-    }
-}
-
 /// A colour image the engine owns outright, usable as a render target, as a
 /// sampled texture, and as a transfer source.
 ///
@@ -173,10 +111,8 @@ impl Drop for DepthBuffer {
 /// union of what those two need, which is small enough not to be worth
 /// splitting.
 pub struct ColorTarget {
-    pub image: vk::Image,
-    pub view: vk::ImageView,
-    pub memory: vk::DeviceMemory,
-    device: Arc<ManagedDevice>,
+    pub view: ImageView,
+    pub image: DeviceImage,
 }
 
 impl ColorTarget {
@@ -201,120 +137,11 @@ impl ColorTarget {
         format: vk::Format,
         usage: vk::ImageUsageFlags,
     ) -> EngineResult<Self> {
-        let device = Arc::clone(&vulkan_context.device);
-
-        unsafe {
-            let image_info = vk::ImageCreateInfo::default()
-                .image_type(vk::ImageType::TYPE_2D)
-                .format(format)
-                .extent(extent.into())
-                .mip_levels(1)
-                .array_layers(1)
-                .samples(vk::SampleCountFlags::TYPE_1)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(usage)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-
-            let image =
-                device
-                    .device
-                    .create_image(&image_info, None)
-                    .map_err(|e| EngineError::Image {
-                        operation: ImageOperation::Create,
-                        width: extent.width,
-                        height: extent.height,
-                        reason: format!("{:?}", e),
-                    })?;
-
-            let memory = allocate_and_bind(&device, image, extent)?;
-
-            let view_info = vk::ImageViewCreateInfo::default()
-                .image(image)
-                .view_type(vk::ImageViewType::TYPE_2D)
-                .format(format)
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .level_count(1)
-                        .layer_count(1),
-                );
-
-            let view = device
-                .device
-                .create_image_view(&view_info, None)
-                .map_err(|e| EngineError::Image {
-                    operation: ImageOperation::CreateView,
-                    width: extent.width,
-                    height: extent.height,
-                    reason: format!("{:?}", e),
-                })?;
-
-            Ok(Self {
-                image,
-                view,
-                memory,
-                device,
-            })
-        }
-    }
-}
-
-impl Drop for ColorTarget {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.device.destroy_image_view(self.view, None);
-            self.device.device.destroy_image(self.image, None);
-            self.device.device.free_memory(self.memory, None);
-        }
-    }
-}
-
-/// Allocate device-local memory for `image` and bind it.
-///
-/// `extent` is carried only so a failure can report which image it was.
-pub(crate) fn allocate_and_bind(
-    device: &ManagedDevice,
-    image: vk::Image,
-    extent: vk::Extent2D,
-) -> EngineResult<vk::DeviceMemory> {
-    unsafe {
-        let memory_req = device.device.get_image_memory_requirements(image);
-        let memory_type_index = find_memorytype_index(
-            &memory_req,
-            &device.device_memory_properties,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )
-        .ok_or_else(|| EngineError::Image {
-            operation: ImageOperation::AllocateMemory,
-            width: extent.width,
-            height: extent.height,
-            reason: "no suitable memory type".to_string(),
-        })?;
-
-        let alloc_info = vk::MemoryAllocateInfo::default()
-            .allocation_size(memory_req.size)
-            .memory_type_index(memory_type_index);
-
-        let memory = device
-            .device
-            .allocate_memory(&alloc_info, None)
-            .map_err(|e| EngineError::Image {
-                operation: ImageOperation::AllocateMemory,
-                width: extent.width,
-                height: extent.height,
-                reason: format!("{:?}", e),
-            })?;
-
-        device
-            .device
-            .bind_image_memory(image, memory, 0)
-            .map_err(|e| EngineError::Image {
-                operation: ImageOperation::Bind,
-                width: extent.width,
-                height: extent.height,
-                reason: format!("{:?}", e),
-            })?;
-
-        Ok(memory)
+        let image = DeviceImage::new(
+            &vulkan_context.device,
+            ImageSpec::new_2d(format, extent, usage),
+        )?;
+        let view = image.full_view(vk::ImageViewType::TYPE_2D, vk::ImageAspectFlags::COLOR)?;
+        Ok(Self { view, image })
     }
 }
