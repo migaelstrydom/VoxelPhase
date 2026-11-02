@@ -57,7 +57,8 @@ pub struct FireSimParams {
     /// Temperature gained per unit of fuel burned.
     /// Higher = brighter, hotter core. Range: 2–10.
     pub combustion_rate: f32,
-    /// Fraction of voxel fuel consumed per second (when above ignition threshold).
+    /// Fuel a voxel burns per second while above the ignition temperature,
+    /// as an amount, not a fraction: a source voxel holds at most 0.95.
     /// Lower = each voxel burns longer, flame has time to rise. Range: 0.02–0.5.
     pub burn_rate: f32,
     /// Curl noise velocity magnitude scaled by temperature.
