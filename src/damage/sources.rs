@@ -107,9 +107,7 @@ impl<'a> System<'a> for BurnDamageSystem {
 ///
 /// Only speed lost counts, never speed gained. Being flung does not hurt —
 /// landing does. Without that asymmetry a grenade would damage its target
-/// twice: once as blast, then again for the knockback it just imparted, and
-/// `ExplosionSystem` adds knockback straight to `Velocity` in amounts that
-/// would be instantly lethal.
+/// twice: once as blast, then again for the speed its shove just imparted.
 ///
 /// The previous velocity lives in a `LastVelocity` component rather than in the
 /// system so it survives the system being reordered or run in parallel.
