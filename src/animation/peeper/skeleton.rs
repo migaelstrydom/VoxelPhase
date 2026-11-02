@@ -14,7 +14,6 @@ use nalgebra::{Point3, Vector3};
 
 use crate::animation::rig::{right_vector, DroopPair, Frame, Leg};
 use crate::animation::FootSide;
-use crate::skeleton::fabrik::FABRIKSolver;
 
 use super::config::PeeperRigConfig;
 
@@ -48,8 +47,6 @@ pub struct PeeperSkeleton {
     /// Left leg, then right.
     pub legs: [Leg; 2],
     pub feelers: DroopPair,
-
-    solver: FABRIKSolver,
 }
 
 impl PeeperSkeleton {
@@ -81,7 +78,6 @@ impl PeeperSkeleton {
             facing,
             legs,
             feelers,
-            solver: FABRIKSolver::default(),
         }
     }
 
@@ -109,7 +105,7 @@ impl PeeperSkeleton {
         for (index, side) in [FootSide::Left, FootSide::Right].into_iter().enumerate() {
             let hip = self.pelvis + right * (side.side_sign() * config.hip_width);
             let foot = feet[index];
-            self.legs[index].solve(&mut self.solver, hip, foot.position, bend, Vector3::y());
+            self.legs[index].solve(hip, foot.position, bend, Vector3::y());
             self.legs[index].foot_forward = foot.forward;
             self.legs[index].foot_up = foot.up;
         }

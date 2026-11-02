@@ -14,7 +14,6 @@ use nalgebra::{Point3, Vector3};
 
 use crate::animation::rig::{right_vector, DroopPair, Frame, Leg};
 use crate::animation::FootSide;
-use crate::skeleton::fabrik::FABRIKSolver;
 
 use super::config::CritterRigConfig;
 
@@ -50,8 +49,6 @@ pub struct CritterSkeleton {
     /// Left leg, then right.
     pub legs: [Leg; 2],
     pub ears: DroopPair,
-
-    solver: FABRIKSolver,
 }
 
 impl CritterSkeleton {
@@ -80,7 +77,6 @@ impl CritterSkeleton {
             facing,
             legs,
             ears,
-            solver: FABRIKSolver::default(),
         }
     }
 
@@ -103,7 +99,7 @@ impl CritterSkeleton {
         for (index, side) in [FootSide::Left, FootSide::Right].into_iter().enumerate() {
             let hip = self.pelvis + right * (side.side_sign() * config.hip_width);
             let foot = feet[index];
-            self.legs[index].solve(&mut self.solver, hip, foot.position, bend, Vector3::y());
+            self.legs[index].solve(hip, foot.position, bend, Vector3::y());
             self.legs[index].foot_forward = foot.forward;
             self.legs[index].foot_up = foot.up;
         }

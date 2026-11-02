@@ -10,7 +10,6 @@ use crate::animation::pose::PoseFragment;
 use crate::animation::rig::{right_vector, solve_knee, within_reach, FootShape, RigMesh};
 use crate::animation::state::AnimationState;
 use crate::rendering::vertex::Vertex;
-use crate::skeleton::fabrik::FABRIKSolver;
 
 /// Visible foot dimensions. Independent from `foot_radius` (which keeps
 /// its physics / gait meaning).
@@ -53,9 +52,6 @@ pub struct Skeleton {
     pub right_hand: Point3<f32>,
     pub neck: Point3<f32>,
     pub head: Point3<f32>,
-
-    // IK solver
-    ik_solver: FABRIKSolver,
 }
 
 impl Skeleton {
@@ -123,7 +119,6 @@ impl Skeleton {
             right_hand,
             neck,
             head,
-            ik_solver: FABRIKSolver::new(),
         }
     }
 
@@ -253,10 +248,8 @@ impl Skeleton {
 
         // Left leg IK
         self.left_knee = solve_knee(
-            &mut self.ik_solver,
             self.left_hip,
             self.left_foot,
-            self.left_knee,
             config.upper_leg_length,
             config.lower_leg_length,
             left_bend,
@@ -265,10 +258,8 @@ impl Skeleton {
 
         // Right leg IK
         self.right_knee = solve_knee(
-            &mut self.ik_solver,
             self.right_hip,
             self.right_foot,
-            self.right_knee,
             config.upper_leg_length,
             config.lower_leg_length,
             right_bend,
