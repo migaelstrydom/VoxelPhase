@@ -1651,7 +1651,7 @@ impl PhysicsWorld {
                         ray_vs_sphere(origin, direction, length, center, *r)
                     }
                     ColliderShape::Box { half_extents } => {
-                        let obb = Obb::new(center, body_rot, *half_extents);
+                        let obb = Obb::new(center, world_xform.rotation, *half_extents);
                         ray_vs_obb(origin, end, &obb, *half_extents)
                     }
                     ColliderShape::Capsule {
@@ -1662,7 +1662,7 @@ impl PhysicsWorld {
                         direction,
                         length,
                         center,
-                        body_rot,
+                        world_xform.rotation,
                         *half_height,
                         *cap_radius,
                     ),
@@ -1908,6 +1908,11 @@ fn ray_vs_convex_hull(
     if t_enter < 0.0 || t_enter > length || t_enter > t_exit {
         return None;
     }
+    // No face was entered: the ray starts inside the hull, which, as for the
+    // sphere and the box, is no hit — there is no surface to report.
+    if enter_normal == Vector3::zeros() {
+        return None;
+    }
 
     let local_point = local_origin + local_dir * t_enter;
     let point = Point3::from(world_xform.translation.vector) + world_xform.rotation * local_point;
@@ -2001,7 +2006,11 @@ impl PhysicsWorld {
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::FRAC_PI_2;
+    use std::sync::Arc;
+
     use super::*;
+    use crate::collision::convex_hull::cube_hull;
 
     /// A body placed at rest, which `create_body` starts asleep.
     ///
@@ -2016,6 +2025,57 @@ mod tests {
              this test is meaningless otherwise"
         );
         handle
+    }
+
+    /// A body at the origin wearing one collider, turned a quarter about z
+    /// by the collider's own offset, not the body's.
+    fn turned_collider(world: &mut PhysicsWorld, desc: ColliderDesc) -> RigidBodyHandle {
+        let handle = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+        let quarter = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), FRAC_PI_2);
+        world.attach_collider(handle, desc.density(1000.0).offset_rotation(quarter));
+        handle
+    }
+
+    /// A long box along x, turned upright by its offset, is hit where it
+    /// stands and not where it would lie unturned.
+    #[test]
+    fn a_ray_sees_a_box_turned_by_its_collider_offset() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        turned_collider(
+            &mut world,
+            ColliderDesc::box_shape(Vector3::new(2.0, 0.1, 0.1)),
+        );
+        let up_the_post = world.raycast(Point3::new(0.0, 1.5, -5.0), Vector3::z(), 10.0);
+        assert!(up_the_post.is_some(), "missed the upright box");
+        let along_x = world.raycast(Point3::new(1.5, 0.0, -5.0), Vector3::z(), 10.0);
+        assert!(along_x.is_none(), "hit the box where it would lie unturned");
+    }
+
+    /// A capsule along y, turned onto its side by its offset, is hit along x.
+    #[test]
+    fn a_ray_sees_a_capsule_turned_by_its_collider_offset() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        turned_collider(&mut world, ColliderDesc::capsule(2.0, 0.1));
+        let along_x = world.raycast(Point3::new(1.5, 0.0, -5.0), Vector3::z(), 10.0);
+        assert!(along_x.is_some(), "missed the capsule lying on its side");
+        let up_y = world.raycast(Point3::new(0.0, 1.5, -5.0), Vector3::z(), 10.0);
+        assert!(
+            up_y.is_none(),
+            "hit the capsule where it would stand unturned"
+        );
+    }
+
+    /// A ray starting inside a hull reports nothing, as one inside a sphere
+    /// or a box does, rather than a hit with no normal.
+    #[test]
+    fn a_ray_from_inside_a_hull_is_no_hit() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let hull = Arc::new(cube_hull(Vector3::new(1.0, 1.0, 1.0)));
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+        world.attach_collider(body, ColliderDesc::convex_hull(hull).density(1000.0));
+        assert!(world.raycast(Point3::origin(), Vector3::x(), 5.0).is_none());
+        let from_outside = world.raycast(Point3::new(-3.0, 0.0, 0.0), Vector3::x(), 5.0);
+        assert!(from_outside.is_some_and(|hit| hit.normal.x < -0.9));
     }
 
     /// A jump commanded on a frame no substep took survives the next frame's
