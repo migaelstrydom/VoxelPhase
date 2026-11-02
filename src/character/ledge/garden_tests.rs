@@ -32,6 +32,7 @@ fn edge_at(terrain: &TerrainWorld, world: &PhysicsWorld, centre: Point3<f32>) ->
         heading: Vector3::x(),
         radius: 0.25,
         half_height: 0.5,
+        mass: 70.0,
     };
     edge_at_hands(&caster, &reach, &LedgeConfig::default())
 }

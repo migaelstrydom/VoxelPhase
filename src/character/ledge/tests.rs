@@ -1,6 +1,6 @@
 //! The edge test on boxes: walls through the catch band, narrow lips, a roof
 //! over the top, a free slab, tilted tops, hands at two heights, and an edge
-//! carried by its body.
+//! carried by its body, and a loose body too light to hold.
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
@@ -23,6 +23,7 @@ fn reach() -> Reach {
         heading: Vector3::x(),
         radius: 0.25,
         half_height: 0.5,
+        mass: 70.0,
     }
 }
 
@@ -289,4 +290,52 @@ fn an_edge_goes_where_its_body_takes_it() {
         );
     }
     assert!((carried.outward.into_inner() - turn * held.outward.into_inner()).norm() < 1.0e-4);
+}
+
+/// A loose box `density` kg/m³ in front of the body, 2 m³, its lip in the
+/// catch band.
+fn loose_box(world: &mut PhysicsWorld, density: f32) -> RigidBodyHandle {
+    let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+        FRONT + 0.5,
+        CENTRE.y - 0.1,
+        0.0,
+    )));
+    world.attach_collider(
+        body,
+        ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 1.0)).density(density),
+    );
+    body
+}
+
+/// The reach's 70 kg body is borne by a box three times as heavy, and not
+/// by a lighter one.
+#[test]
+fn only_a_body_that_bears_the_hanger_has_an_edge() {
+    let mut light = world();
+    loose_box(&mut light, 100.0);
+    assert!(edge(&light).is_none(), "a 200 kg box is held");
+    let mut heavy = world();
+    loose_box(&mut heavy, 110.0);
+    assert!(edge(&heavy).is_some(), "a 220 kg box is not held");
+}
+
+/// A lip found again keeps its height and way out as found, and the hands'
+/// place along it as held, moved on by a shimmy's slide.
+#[test]
+fn a_held_edge_keeps_its_place_along_the_lip_found_again() {
+    let mut world = world();
+    wall(&mut world, 0.4);
+    let held = edge(&world).unwrap();
+    let mut found = held;
+    let drift = Vector3::new(0.0, 0.02, 0.3);
+    found.hands = held.hands.map(|hand| hand + drift);
+    let towards_second = (held.hands[1] - held.hands[0]).normalize();
+    let kept = held.held_along(&found, 0.1);
+    for (hand, before) in kept.hands.iter().zip(held.hands) {
+        let expected = before + Vector3::y() * drift.y + towards_second * 0.1;
+        assert!(
+            (hand - expected).norm() < 1.0e-4,
+            "{hand} against {expected}"
+        );
+    }
 }

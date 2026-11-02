@@ -120,7 +120,14 @@ impl Ledge {
         else {
             return LocomotionState::Fall(Fall);
         };
-        let edge = self.edge.followed(&sensed.edge, config.shimmy_probe * 0.2);
+        let edge = match self.phase {
+            LedgePhase::PullUp { .. } => self.edge,
+            LedgePhase::Grab { .. } => self.edge.held_along(&sensed.edge, 0.0),
+            LedgePhase::Hang { .. } => {
+                let slide = shimmy_speed(requests.move_dir, &sensed, config) * dt;
+                self.edge.held_along(&sensed.edge, slide)
+            }
+        };
         let held = |phase| LocomotionState::Ledge(Self { edge, phase });
         let let_go = || {
             if input.facts.grounded {
@@ -219,4 +226,25 @@ fn leaned(
         _ => dt,
     };
     Some(Lean { towards, held })
+}
+
+/// How fast the hands shimmy towards `sensed.at.hands[1]`, in m/s (negative
+/// towards the other hand): with the stick along the edge, where the edge
+/// carries on that way.
+fn shimmy_speed(move_dir: Vector3<f32>, sensed: &SensedEdge, config: &LedgeConfig) -> f32 {
+    let outward = sensed.at.outward.into_inner();
+    if StickOnEdge::of(move_dir, outward, config) != StickOnEdge::Along {
+        return 0.0;
+    }
+    let way = move_dir.dot(&sensed.at.along());
+    let room = if way > 0.0 {
+        sensed.room[1]
+    } else {
+        sensed.room[0]
+    };
+    if room {
+        way.signum() * config.shimmy_speed
+    } else {
+        0.0
+    }
 }

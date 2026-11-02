@@ -112,6 +112,7 @@ impl<'a> System<'a> for LedgeSensorSystem {
                 heading,
                 radius: config.collider_radius,
                 half_height: config.collider_half_height,
+                mass: rigid.mass(),
             };
             intent.edge = match state.locomotion {
                 LocomotionState::Ledge(held) => {

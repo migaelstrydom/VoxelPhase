@@ -16,9 +16,11 @@ hang. This document is the design. The state machine it slots into is
   (higher than `jump_ashore`'s 0.3 m quay) is a Ledge, grabbed from Swim.
 - **Destruction.** A ledge blasted away under the hands drops the player. A
   blast that opens a new edge makes a new way up.
-- **Loose bodies.** The grip is a physics joint, so a light crate on a shelf
-  is dragged down by the body hanging from it, and a swinging platform swings
-  the hanger.
+- **Loose bodies.** The grip is a physics joint, so a crate on a shelf is
+  dragged down by the body hanging from it, and a swinging platform swings
+  the hanger. Only a body that bears the hanger has an edge to hold: a
+  moving one must weigh `bearing_mass_ratio` (3) times the hanger. A lighter
+  one would be dragged about by the grip, as a cardboard box would crumple.
 
 Out of scope for the first version: turning corners while shimmying (the
 shimmy stops at one), climbing walls or ladders, grabbing from a walk with no
@@ -374,7 +376,7 @@ pull-up rising at 4 m/s now reports 4.2.
   to stop. The joint is made where the body was caught, and its end eases to
   the hang over the `settle`: in the Ledge Garden the body sinks 0.3 m onto
   its arms with no snap.
-- **Hang.** The body's weight goes into the edge's body: a light crate is
+- **Hang.** The body's weight goes into the edge's body: a crate is
   pulled off its shelf, and a platform carries the hanger and feels them.
   The joint is unbreakable. A breakable joint's limit is an impulse per
   substep, and moving the edge end once a frame (the catch's ease, a shimmy,
@@ -384,11 +386,14 @@ pull-up rising at 4 m/s now reports 4.2.
   measured over a frame, not a substep. The solver marks a broken joint
   inactive, and `Grip` reports that as a lost grip, so a limit can come back
   without changing the state.
-- **Shimmy.** The anchor slides along the edge at `shimmy_speed`, keeping
-  its own place along the edge rather than re-centring on the body (which ran
-  the shimmy at 0.8 of its speed). Each frame the sensor tests the edge
-  `shimmy_probe` (0.1 m) either way. Where it fails (a corner, the end of the
-  lip, a gap), the anchor stops.
+- **Shimmy.** The held edge's hands slide along it at `shimmy_speed`, and
+  the anchor hangs under them. The Ledge state's edge is the one place the
+  hands are: each frame the sensor finds the lip again, which gives its
+  height, face and way out, and the state keeps its own place along it
+  (`Edge::held_along`). Re-centred on the body instead, the hands would
+  follow it as it drifts behind a moving edge, and slip along the lip. Each
+  frame the sensor tests the edge `shimmy_probe` (0.1 m) either way. Where
+  it fails (a corner, the end of the lip, a gap), the hands stop.
 - **PullUp.** The anchor moves along a lift path:
   - first up, until the capsule's bottom is `lip_clearance` (3 cm) above the
     lip, keeping `face_gap` off the face;
@@ -405,34 +410,22 @@ pull-up rising at 4 m/s now reports 4.2.
 - **Leaving.** Drop, back-jump or a lost edge removes the joint, and the body
   leaves with the velocity it has. On a platform, that is the platform's.
 
-**Light edge bodies.** The joint is anchored to the edge's body only if that
-body outweighs the hanger by `anchor_mass_ratio` (3), or doesn't move. The
-Ledge Garden's 8 kg and 70 kg boxes and its 81 kg platform decks are lighter.
-Anchored to them, the climb's path turned with the box, dragged the hanger
-round and turned the box further, flinging the 8 kg box off the world. So a
-lighter body's joint is anchored to the world at the edge, following it, and:
-
-- the body takes the hanger's weight at the grip each frame;
-- the hanger and the body pass through each other for the whole hold
-  (`PhysicsWorld::exempt_contacts`). Otherwise the world-anchored joint pulls
-  the hanger to the face, contact pushes the body away, the anchor follows
-  it, and the hanger follows that: a pump that rocked the tall light box;
-- the hands' place along the edge is held in the edge's frame, so a platform
-  carries its hanger along.
-
-Any moving edge body also passes through its climber from a climb's start:
-the path is built to clear the lip, and contacts along it would only shove
-the body out from under the climb. A held edge stays as caught in its
-body's frame until the hands move along it (`Edge::followed`); found afresh
-every frame, it wandered with the casts that found it.
+**Bodies too light to hold.** An edge on a moving body lighter than
+`bearing_mass_ratio` (3) times the hanger is not sensed (`probe::bears`).
+The joint moves the hanger along paths in the edge's frame with whatever
+force it takes, so a light body is the one that moves: an 8 kg box turned
+under a mantle, turned its path with it and was flung off the world, and a
+70 kg box rocked against the hanger's capsule. A body that heavy still
+answers a hold: a fast mantle onto the 250 kg box tips it towards the
+climber, and it settles in half a second.
 
 Whatever velocity entering a state sets on the body (the catch's match to
 the edge, the back-jump's whole launch, the pull-up's match at the end), the
 edge's body takes the equal and opposite impulse at the grip
 (`EntryEffects::push_against`, `match_edge`), unless the body is on its
-feet: a mantle begun walking stops on its feet, not its hands. A catch yanks a light crate, and
-a back-jump kicks it away, as a jump from its top does; a back-jump off the
-Ledge Garden's light tall box topples it. The back-jump's rise is set with
+feet: a mantle begun walking stops on its feet, not its hands. A catch
+tugs a platform's deck, and a back-jump kicks it away, as a jump from its
+top does. The back-jump's rise is set with
 the launch, not conjured as a jump with nothing under it would be.
 
 If the edge's body is removed, `PhysicsWorld::remove_body` already removes
@@ -524,13 +517,15 @@ physics-free. Nothing is a canned clip:
 | `ledge_pull_up` | the stick held in pulls up after 0.2 s, onto the top in 0.6 s |
 | `ledge_back_jump` | jump leaves straight out from the wall |
 | `ledge_shimmy` | 1.5 m along the lip in 1.5 s |
+| `ledge_heavy_shimmy` | along a 14 t box's lip until the hands reach its end |
 | `ledge_no_room` | under a roof, pushing in only strains |
 | `ledge_mantle` | walking into a 0.72 m box climbs onto it |
-| `ledge_light_mantle`, `ledge_heavy_mantle` | walking into an 8 kg and a 250 kg box 0.66 m high climbs onto each |
-| `ledge_light_tall` | a 70 kg box 3.1 m high holds a hanger, and tips over towards them as they pull up; they end standing on it on its side |
+| `ledge_light_mantle` | walking into an 8 kg box 0.66 m high shoves it: too light to hold |
+| `ledge_heavy_mantle` | walking into a 250 kg box 0.66 m high climbs onto it; the box tips under the climb and settles |
+| `ledge_light_tall` | a jump at a 70 kg box 3.1 m high does not catch it: too light to hold |
 | `ledge_heavy_tall` | a 14 t box 3.1 m high: hang, pull up, stand on top |
 | `ledge_platform_lift` | catches the rim of a platform rising from 1 m to 3.5 m, rides it up and back down, and stands when its feet reach the ground |
-| `ledge_platform_side`, `ledge_platform_diagonal` | catches the rim of a platform going side to side, and one going diagonally to the side and up, and rides it; at a reversal the hanger's momentum tugs the deck's edge and turns the deck (its yaw resistance is the neutral one), carrying the hanger round with it |
+| `ledge_platform_side`, `ledge_platform_diagonal` | catches the rim of a platform going side to side, and one going diagonally to the side and up, and rides it; at a reversal the hanger's momentum tugs the deck's edge and turns the 270 kg deck a little |
 | `ledge_platform_still` | hangs from a platform holding still, pulls up and stands on the deck, which tips under them |
 
 The Traversal Garden's `ledge_walk` (its 0.7 m ledge) now crosses on 5 of 5
@@ -539,7 +534,8 @@ bouncing against the wall.
 
 Still to build, with step 8: `ledge_from_water` (swim to a 1 m bank and
 climb out), dropping off a moving platform with its velocity,
-`ledge_light_crate` (hang from a light crate on a shelf, which comes down),
+`ledge_crate` (hang from a crate on a shelf, heavy enough to hold, which
+comes down),
 `ledge_blasted` (a blast takes the lip, and the body falls), and a fall down
 a wall's face that catches its lip.
 

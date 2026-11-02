@@ -172,7 +172,6 @@ impl<'a> System<'a> for CharacterControlSystem {
                     body: character_body,
                     state: &state.locomotion,
                     sensed: sensed_edge.as_ref(),
-                    move_dir,
                     config,
                     dt,
                 },
@@ -568,7 +567,7 @@ fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule, left_still_g
 /// The velocity an entry sets outright: a back-jump's launch off the wall,
 /// and the velocity of an edge's body at its grip on catching or leaving it.
 /// Off the ground, the edge's body takes the equal and opposite impulse at
-/// the grip: a light crate is yanked by a catch and kicked away by a
+/// the grip: a platform's deck is tugged by a catch and kicked away by a
 /// back-jump, as it is by a jump from its top. A body on its feet (a mantle
 /// begun walking) stops on its feet, not its hands.
 fn set_velocity_for_entry(
@@ -978,7 +977,7 @@ mod tests {
         assert_eq!(drive.linear_target, Vector3::zeros());
     }
 
-    /// A hanger on a light box's edge pressing jump leaves with the back-jump's
+    /// A hanger on a loose box's edge pressing jump leaves with the back-jump's
     /// launch, and the box takes the equal and opposite push at the grip, as
     /// it would from a jump off its top.
     #[test]

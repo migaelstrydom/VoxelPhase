@@ -39,6 +39,9 @@ pub struct Reach {
     pub radius: f32,
     /// Half the capsule's height, caps included.
     pub half_height: f32,
+    /// The body's mass, in kg: only a body that outweighs it
+    /// `bearing_mass_ratio` times over, or does not move, bears a hold.
+    pub mass: f32,
 }
 
 /// The edge at the hands of a body reaching as `reach` does, if both hands
@@ -52,6 +55,9 @@ pub fn edge_at_hands(caster: &WorldCaster, reach: &Reach, config: &LedgeConfig) 
     if left.body != right.body || (left.at.y - right.at.y).abs() > config.hand_step {
         return None;
     }
+    if !bears(caster, left.body, reach.mass, config) {
+        return None;
+    }
     let outward = Unit::try_new(left.outward + right.outward, 1.0e-3)?;
     let mut found = WorldEdge {
         hands: [left.at, right.at],
@@ -61,6 +67,19 @@ pub fn edge_at_hands(caster: &WorldCaster, reach: &Reach, config: &LedgeConfig) 
     };
     found.stand = stand_point(caster, reach, &found, config);
     Edge::from_world(caster.world, left.body, &found, left.footing)
+}
+
+/// Whether `body` bears a hanger of `mass`: static, or heavy enough that the
+/// hanger's weight and its pulls barely move it. A crate lighter than that
+/// would only be dragged about by the grip, as a cardboard box would crumple.
+fn bears(
+    caster: &WorldCaster,
+    body: Option<RigidBodyHandle>,
+    mass: f32,
+    config: &LedgeConfig,
+) -> bool {
+    body.and_then(|handle| caster.world.body(handle))
+        .is_none_or(|body| !body.is_dynamic() || body.mass() >= mass * config.bearing_mass_ratio)
 }
 
 /// Where one hand holds a lip.

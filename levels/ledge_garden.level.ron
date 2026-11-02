@@ -9,10 +9,10 @@
 //   z  12   a box 0.72 m high, at the chest of a body standing: a mantle
 //   z  18   a wall 3.2 m high with a roof 0.6 m over its top: a lip to hang
 //           from with no room to stand on it
-//   z  24   a light box 0.66 m high (8 kg): mantled, and shoved by it
+//   z  24   a light box 0.66 m high (8 kg): too light to hold; walked into,
+//           it is shoved, not mantled
 //   z  30   a light box 3.1 m high (70 kg, 1.5 m square): too high to jump
-//           onto; it holds a hanger, and tips over towards them when they
-//           pull up onto it
+//           onto, and too light to hang from
 //   z  36   a heavy box 0.66 m high (250 kg)
 //   z  42   a heavy box 3.1 m high (14 t)
 //   z  50   a platform rising from 1 m to 3.5 m and back
@@ -22,7 +22,9 @@
 //           tipping under a body on its edge
 //
 // Each box's and platform's face is at x = 7. The player's capsule is 1 m
-// tall and 0.5 m across, and weighs 56 kg.
+// tall and 0.5 m across, and weighs 56 kg; a moving body bears a hold only
+// at three times that (`LedgeConfig::bearing_mass_ratio`), so the decks
+// weigh 270 kg.
 Level(
     name: "Ledge Garden",
 
@@ -64,21 +66,25 @@ Level(
                 MovingPlatform(
                     waypoints: [(8.5, 0.85, 50.0), (8.5, 3.35, 50.0)],
                     half_extents: (1.5, 0.15, 1.5),
+                    density: 100.0,
                     speed: 0.8,
                 ),
                 MovingPlatform(
                     waypoints: [(8.5, 2.85, 55.5), (8.5, 2.85, 60.5)],
                     half_extents: (1.5, 0.15, 1.5),
+                    density: 100.0,
                     speed: 1.0,
                 ),
                 MovingPlatform(
                     waypoints: [(8.5, 1.35, 63.5), (8.5, 3.35, 68.5)],
                     half_extents: (1.5, 0.15, 1.5),
+                    density: 100.0,
                     speed: 1.0,
                 ),
                 MovingPlatform(
                     waypoints: [(8.5, 2.85, 74.0)],
                     half_extents: (1.5, 0.15, 1.5),
+                    density: 100.0,
                 ),
             ],
         ),

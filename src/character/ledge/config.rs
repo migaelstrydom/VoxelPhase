@@ -70,10 +70,9 @@ pub struct LedgeConfig {
     pub hang_reach: f32,
     /// Gap between the hanging capsule and the face, in metres.
     pub face_gap: f32,
-    /// How many times the hanger's mass an edge's body must weigh for the
-    /// grip's joint to anchor to it; a lighter one takes the hanger's weight
-    /// instead (`Grip`).
-    pub anchor_mass_ratio: f32,
+    /// How many times the hanger's mass a moving body must weigh for its
+    /// edges to be held: a lighter one would be dragged about by the grip.
+    pub bearing_mass_ratio: f32,
     /// Seconds a pull-up from a hang takes.
     pub pull_up_time: f32,
     /// Seconds a mantle takes.
@@ -126,7 +125,7 @@ impl Default for LedgeConfig {
             shimmy_probe: 0.1,
             hang_reach: 0.53,
             face_gap: 0.01,
-            anchor_mass_ratio: 3.0,
+            bearing_mass_ratio: 3.0,
             pull_up_time: 0.6,
             mantle_time: 0.3,
             lip_clearance: 0.03,

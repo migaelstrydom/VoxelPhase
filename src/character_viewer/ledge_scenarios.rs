@@ -171,7 +171,7 @@ pub fn catalogue() -> Vec<Scenario> {
         },
         walk_in(
             "ledge_light_mantle",
-            "Ledge: walk into a light box at the chest and climb onto it",
+            "Ledge: walk into a light box at the chest: too light to hold, it is shoved",
             24.0,
         ),
         walk_in(
@@ -181,21 +181,11 @@ pub fn catalogue() -> Vec<Scenario> {
         ),
         at_wall(
             "ledge_light_tall",
-            "Ledge: jump at a light box too tall to clear, hang from it, and pull up",
+            "Ledge: jump at a light box too tall to clear: too light to hold, it is not caught",
             30.0,
             hang_then(&[
                 Beat::stand(1.5).named("hang"),
                 Beat::walk(1.2).named("pull").towards(INTO),
-            ]),
-        ),
-        at_wall(
-            "ledge_light_back_jump",
-            "Ledge: hang from a light box too tall to clear, and kick it away with a back-jump",
-            30.0,
-            hang_then(&[
-                Beat::stand(1.0).named("hang"),
-                Beat::jump(0.5).named("back").towards(Vector3::zeros()),
-                Beat::stand(1.0).named("land"),
             ]),
         ),
         at_wall(
@@ -206,6 +196,12 @@ pub fn catalogue() -> Vec<Scenario> {
                 Beat::stand(1.5).named("hang"),
                 Beat::walk(1.2).named("pull").towards(INTO),
             ]),
+        ),
+        at_wall(
+            "ledge_heavy_shimmy",
+            "Ledge: hang from a heavy box and shimmy along its lip to the end",
+            42.0,
+            hang_then(&[Beat::walk(2.0).named("shimmy").towards(ALONG)]),
         ),
         at_wall(
             "ledge_platform_lift",

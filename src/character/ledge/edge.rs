@@ -87,17 +87,23 @@ impl Edge {
         self.stand.is_some()
     }
 
-    /// This edge, or `found` in its place once the hands have moved along
-    /// the edge by more than `slack`. Both are in the same body's frame, where
-    /// a lip does not move; taken afresh every frame, it would wander with
-    /// the casts that found it, and the grip's anchor with it.
-    pub fn followed(&self, found: &Edge, slack: f32) -> Self {
+    /// `found`, this lip found again, with the hands where this edge has
+    /// them along it and then `slide` metres on towards `found.hands[1]`: its
+    /// height, face and way out as found, its place along it as held. Taken
+    /// from the casts alone, the place would follow the body, which drifts
+    /// behind an edge that moves, and the hands would slip along the lip.
+    pub fn held_along(&self, found: &Edge, slide: f32) -> Self {
         let mid = |e: &Edge| nalgebra::center(&e.hands[0], &e.hands[1]);
-        let along = Vector3::y().cross(&self.outward).normalize();
-        if (mid(found) - mid(self)).dot(&along).abs() > slack {
-            *found
-        } else {
-            *self
+        let span = found.hands[1] - found.hands[0];
+        let outward = found.outward.into_inner();
+        let Some(along) = (span - outward * span.dot(&outward)).try_normalize(1.0e-4) else {
+            return *found;
+        };
+        let shift = along * ((mid(self) - mid(found)).dot(&along) + slide);
+        Self {
+            hands: found.hands.map(|hand| hand + shift),
+            stand: found.stand.map(|stand| stand + shift),
+            ..*found
         }
     }
 }
