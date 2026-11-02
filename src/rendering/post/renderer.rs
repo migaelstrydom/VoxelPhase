@@ -25,6 +25,7 @@ use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::post::pipeline::PostPipelines;
 use crate::rendering::post::target::PostTarget;
+use crate::rendering::viewport::set_full_viewport;
 
 /// Bloom is computed at this fraction of the screen resolution in each axis.
 /// Quarter resolution is invisible after blurring and cuts the cost 16x.
@@ -396,16 +397,7 @@ impl PostProcessRenderer {
 
             device.cmd_begin_render_pass(cb, &begin_info, vk::SubpassContents::INLINE);
 
-            let viewport = vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: extent.width as f32,
-                height: extent.height as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            };
-            device.cmd_set_viewport(cb, 0, &[viewport]);
-            device.cmd_set_scissor(cb, 0, &[extent.into()]);
+            set_full_viewport(device, cb, extent);
 
             device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, pipeline);
             device.cmd_bind_descriptor_sets(

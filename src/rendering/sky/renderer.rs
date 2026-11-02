@@ -10,6 +10,7 @@ use nalgebra::{Matrix4, Vector3};
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
+use crate::rendering::viewport::set_full_viewport;
 
 use super::pipeline::SkyPipeline;
 
@@ -84,15 +85,13 @@ impl SkyRenderer {
     /// * `cb` - Command buffer to record draw commands into
     /// * `view_matrix` - Camera view matrix
     /// * `proj_matrix` - Camera projection matrix
-    /// * `viewport` - Viewport for rendering
-    /// * `scissor` - Scissor rect for rendering
+    /// * `extent` - The target, all of which the sky covers
     pub fn render(
         &self,
         cb: vk::CommandBuffer,
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
-        viewport: vk::Viewport,
-        scissor: vk::Rect2D,
+        extent: vk::Extent2D,
     ) -> EngineResult<()> {
         // Calculate inverse view matrix (for transforming view-space rays to world-space)
         let inv_view = view_matrix.try_inverse().unwrap_or_else(Matrix4::identity);
@@ -125,9 +124,7 @@ impl SkyRenderer {
                 self.pipeline.pipeline(),
             );
 
-            // Set viewport and scissor
-            self.device.device.cmd_set_viewport(cb, 0, &[viewport]);
-            self.device.device.cmd_set_scissor(cb, 0, &[scissor]);
+            set_full_viewport(&self.device.device, cb, extent);
 
             // Push constants
             let push_bytes: &[u8] = std::slice::from_raw_parts(

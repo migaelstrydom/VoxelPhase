@@ -8,6 +8,7 @@ use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult, ImageOperation};
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::device_image::{DeviceImage, ImageSpec, ImageView};
+use crate::rendering::viewport::set_full_viewport;
 
 /// Depth format for the shadow map.
 ///
@@ -93,23 +94,12 @@ impl ShadowMap {
             .render_area(self.extent.into())
             .clear_values(&clear_values);
 
-        let viewports = [vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: self.extent.width as f32,
-            height: self.extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        }];
-        let scissors = [self.extent.into()];
-
         unsafe {
             self.device
                 .device
                 .cmd_begin_render_pass(cb, &begin_info, vk::SubpassContents::INLINE);
-            self.device.device.cmd_set_viewport(cb, 0, &viewports);
-            self.device.device.cmd_set_scissor(cb, 0, &scissors);
         }
+        set_full_viewport(&self.device.device, cb, self.extent);
     }
 
     /// End the depth-only pass. The render pass leaves the image in

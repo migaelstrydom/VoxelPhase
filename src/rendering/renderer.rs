@@ -56,6 +56,7 @@ use crate::rendering::target::{
 use crate::rendering::transparency::{BlendedDraw, BlendedShading, MeshBounds, TransparentQueue};
 use crate::rendering::vertex::Vertex;
 use crate::rendering::view_volume::ViewVolume;
+use crate::rendering::viewport::set_full_viewport;
 use crate::rendering::water::{Side, WaterDivide, WaterRenderer, WaterScene, WaterView, NO_CLIP};
 use crate::resources::textures::{TextureHandle, TextureManager};
 
@@ -772,22 +773,8 @@ impl Renderer {
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
     ) -> EngineResult<()> {
-        let extent = self.targets.extent;
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent,
-        };
-
         self.sky_renderer
-            .render(cb, view_matrix, proj_matrix, viewport, scissor)
+            .render(cb, view_matrix, proj_matrix, self.targets.extent)
     }
 
     /// Draw a complete model with per-part transforms applied.
@@ -1273,21 +1260,7 @@ impl Renderer {
 
     /// Set the dynamic viewport and scissor to the whole target.
     fn set_full_viewport(&self, cb: vk::CommandBuffer) {
-        let extent = self.targets.extent;
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-
-        unsafe {
-            let device = self.vulkan_context.device();
-            device.cmd_set_viewport(cb, 0, &[viewport]);
-            device.cmd_set_scissor(cb, 0, &[extent.into()]);
-        }
+        set_full_viewport(self.vulkan_context.device(), cb, self.targets.extent);
     }
 
     /// The buffer pairs this frame's draws read from, as they stand now.
@@ -1589,28 +1562,7 @@ impl Renderer {
             return;
         }
 
-        let extent = self.targets.extent;
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent,
-        };
-
-        unsafe {
-            self.vulkan_context
-                .device()
-                .cmd_set_viewport(cb, 0, &[viewport]);
-            self.vulkan_context
-                .device()
-                .cmd_set_scissor(cb, 0, &[scissor]);
-        }
+        self.set_full_viewport(cb);
 
         let fires: Vec<&ActiveFire> = self.active_fires.iter().map(|(_, f)| f).collect();
         self.fire_renderer
@@ -1677,28 +1629,7 @@ impl Renderer {
         cb: vk::CommandBuffer,
         geometry: &OverlayGeometry,
     ) -> EngineResult<()> {
-        let extent = self.targets.extent;
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent,
-        };
-
-        unsafe {
-            self.vulkan_context
-                .device()
-                .cmd_set_viewport(cb, 0, &[viewport]);
-            self.vulkan_context
-                .device()
-                .cmd_set_scissor(cb, 0, &[scissor]);
-        }
+        self.set_full_viewport(cb);
 
         self.overlay.render(cb, geometry)
     }

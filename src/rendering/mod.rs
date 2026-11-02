@@ -36,6 +36,7 @@ pub mod triplanar;
 pub mod typeface;
 pub mod vertex;
 pub mod view_volume;
+pub mod viewport;
 pub mod visual_bench;
 pub mod water;
 

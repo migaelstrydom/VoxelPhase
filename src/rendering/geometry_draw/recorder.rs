@@ -3,6 +3,7 @@ use ash::vk;
 use crate::rendering::geometry_draw::{GeometryDraw, GeometryPush};
 use crate::rendering::mesh_source::{MeshBindings, MeshSource};
 use crate::rendering::renderer::PUSH_CONSTANT_STAGES;
+use crate::rendering::viewport::set_full_viewport;
 
 /// What every geometry draw in a frame binds the same: the viewport and the
 /// scene descriptor set, and the buffer pairs its meshes come from.
@@ -131,18 +132,8 @@ impl<'a> GeometryRecorder<'a> {
             return;
         }
         let shared = &self.shared;
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: shared.extent.width as f32,
-            height: shared.extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
+        set_full_viewport(self.device, self.cb, shared.extent);
         unsafe {
-            self.device.cmd_set_viewport(self.cb, 0, &[viewport]);
-            self.device
-                .cmd_set_scissor(self.cb, 0, &[shared.extent.into()]);
             self.device.cmd_bind_descriptor_sets(
                 self.cb,
                 vk::PipelineBindPoint::GRAPHICS,
