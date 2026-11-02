@@ -43,6 +43,7 @@ mod collider;
 mod collider_bounds;
 pub mod constraint;
 mod contact_event;
+mod contact_exemptions;
 mod contact_work;
 mod debug;
 pub mod drive;
@@ -77,6 +78,7 @@ pub use constraint::suspension::{
 };
 pub use constraint::{Constraint, ConstraintHandle, ConstraintKind};
 pub use contact_event::{ContactEvent, ContactSource};
+pub use contact_exemptions::ContactExemptions;
 pub use contact_work::ContactWorkLedger;
 pub use debug::add_suspension_overlay;
 pub use drive::{

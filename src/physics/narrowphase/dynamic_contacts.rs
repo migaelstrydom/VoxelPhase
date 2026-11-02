@@ -10,6 +10,7 @@ use crate::collision::dispatch;
 use crate::collision::sat::SatCache;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderMaterial, ColliderShape};
+use crate::physics::contact_exemptions::ContactExemptions;
 use crate::physics::handle::ColliderHandle;
 use crate::physics::pipeline::pair::{PairHeader, PairManifold};
 
@@ -112,6 +113,7 @@ impl GjkCacheMap {
 pub fn generate_dynamic_contacts(
     bodies: &Arena<RigidBody>,
     colliders: &Arena<Collider>,
+    exemptions: &ContactExemptions,
     config: &NarrowphaseConfig,
     horizon: ContactHorizon,
     scope: ContactScope<'_>,
@@ -158,7 +160,7 @@ pub fn generate_dynamic_contacts(
         let si = &buf.states[i];
         let sj = &buf.states[j];
 
-        if si.body_handle == sj.body_handle {
+        if si.body_handle == sj.body_handle || exemptions.exempts(si.body_handle, sj.body_handle) {
             continue;
         }
 

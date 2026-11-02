@@ -130,7 +130,7 @@ impl DynamicSweep {
 
         for &(i, j) in &self.pairs {
             let (a, b) = (&self.entries[i], &self.entries[j]);
-            if a.body == b.body {
+            if a.body == b.body || ctx.contact_exemptions.exempts(a.body, b.body) {
                 continue;
             }
             // Sweep the faster side and clamp it. Time of impact is the same

@@ -6,6 +6,7 @@ use nalgebra::{Point3, UnitQuaternion};
 use crate::physics::body::RigidBody;
 use crate::physics::collider::Collider;
 use crate::physics::contact_event::ContactEvent;
+use crate::physics::contact_exemptions::ContactExemptions;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::impact::ImpactLedger;
 use crate::physics::static_geometry::StaticGeometry;
@@ -22,6 +23,8 @@ pub struct CcdContext<'a> {
     /// Bodies the narrowphase currently owns (excluded from CCD while its
     /// frame-start manifold still describes them).
     pub narrowphase_ownership: &'a NarrowphaseOwnership,
+    /// Pairs of bodies whose contacts are switched off.
+    pub contact_exemptions: &'a ContactExemptions,
     /// Currently sleeping bodies (excluded from CCD).
     pub sleeping: Option<&'a FxHashSet<RigidBodyHandle>>,
     /// Body positions/rotations captured before position integration.
