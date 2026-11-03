@@ -18,7 +18,8 @@ use crate::components::{
 };
 use crate::model::Model;
 use crate::physics::{
-    ColliderHandle, ColliderShape, FrictionModel, PhysicsImpulseQueue, RigidBodyHandle,
+    ColliderHandle, ColliderShape, CollisionFilter, FrictionModel, PhysicsImpulseQueue,
+    RigidBodyHandle,
 };
 use crate::rendering::material::MaterialId;
 use crate::systems::PhysicsResource;
@@ -388,6 +389,7 @@ struct ChildSnapshot {
     mass: f32,
     restitution: f32,
     friction: FrictionModel,
+    filter: CollisionFilter,
     world_pos: Point3<f32>,
     world_rot: nalgebra::UnitQuaternion<f32>,
     lin_vel: Vector3<f32>,
@@ -417,6 +419,7 @@ fn snapshot_child(
         mass: collider.mass(),
         restitution: collider.material().restitution,
         friction: collider.material().friction,
+        filter: *collider.filter(),
         world_pos,
         world_rot: world_xform.rotation,
         lin_vel: body_lin_vel + body_ang_vel.cross(&r),
@@ -489,7 +492,8 @@ fn spawn_freed_piece(
 
     let density = info.mass / info.shape.compute_mass(1.0);
     let new_collider_desc =
-        collider_desc_from_shape(&info.shape, density, info.restitution, info.friction);
+        collider_desc_from_shape(&info.shape, density, info.restitution, info.friction)
+            .filter(info.filter);
     physics
         .world
         .attach_collider(new_body_handle, new_collider_desc);

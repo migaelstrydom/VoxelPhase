@@ -35,6 +35,7 @@ use crate::collision::{SurfaceId, Triangle, AABB};
 
 use super::collider::ColliderShape;
 use super::collider_bounds::BOUNDS_MARGIN;
+use super::collision_filter::{CollisionFilter, Layers};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::static_geometry::StaticGeometry;
 use super::world::PhysicsWorld;
@@ -90,6 +91,7 @@ struct MoverShape {
     center: Point3<f32>,
     rotation: nalgebra::UnitQuaternion<f32>,
     shape: ColliderShape,
+    filter: CollisionFilter,
 }
 
 impl MoverShape {
@@ -383,6 +385,8 @@ pub struct BodySweep<'a> {
     fastest: f32,
     /// Dynamic bodies that are obstacles however fast they move.
     seen: &'a [RigidBodyHandle],
+    /// Layers whose colliders are obstacles.
+    layers: Layers,
 }
 
 impl<'a> BodySweep<'a> {
@@ -394,7 +398,15 @@ impl<'a> BodySweep<'a> {
             scenery_only: false,
             fastest: f32::INFINITY,
             seen: &[],
+            layers: Layers::ALL,
         }
+    }
+
+    /// Only colliders in `layers` are obstacles; the static geometry always
+    /// is.
+    pub fn looking_for(mut self, layers: Layers) -> Self {
+        self.layers = layers;
+        self
     }
 
     /// Dynamic bodies whose surface moves faster than `fastest` m/s are
@@ -434,11 +446,14 @@ impl<'a> BodySweep<'a> {
     /// The first thing `movers` touch when translated together by `travel`,
     /// or `None` if they travel the whole way without touching anything.
     ///
-    /// Movers are never obstacles to each other.
+    /// Movers are never obstacles to each other, nor is a collider a mover's
+    /// filter does not meet.
     pub fn cast(&self, movers: &[RigidBodyHandle], travel: Vector3<f32>) -> Option<SweepHit> {
         let mut earliest: Option<SweepHit> = None;
         for mover in &self.mover_shapes(movers) {
-            if let Some(hit) = self.cast_shape(&mover.view(), travel, movers) {
+            if let Some(hit) =
+                self.cast_filtered(&mover.view(), travel, movers, Some(&mover.filter))
+            {
                 if earliest.is_none_or(|e| hit.fraction < e.fraction) {
                     earliest = Some(hit);
                 }
@@ -455,6 +470,18 @@ impl<'a> BodySweep<'a> {
         travel: Vector3<f32>,
         exclude: &[RigidBodyHandle],
     ) -> Option<SweepHit> {
+        self.cast_filtered(view, travel, exclude, None)
+    }
+
+    /// [`Self::cast_shape`] for a shape filtered `mover`, which passes through
+    /// colliders it does not meet.
+    fn cast_filtered(
+        &self,
+        view: &ShapeView,
+        travel: Vector3<f32>,
+        exclude: &[RigidBodyHandle],
+        mover: Option<&CollisionFilter>,
+    ) -> Option<SweepHit> {
         let length = travel.magnitude();
         let mut first = FirstTouch::new(travel);
         let mut earliest: Option<(SweepObstacle, SweptSurface)> = None;
@@ -467,7 +494,7 @@ impl<'a> BodySweep<'a> {
         };
 
         let bounds = swept_bounds(view, travel);
-        for (obstacle, collider) in self.body_obstacles(exclude, &bounds) {
+        for (obstacle, collider) in self.body_obstacles(exclude, &bounds, mover) {
             let Some(obstacle_view) = self.collider_view(obstacle, collider) else {
                 continue;
             };
@@ -529,6 +556,7 @@ impl<'a> BodySweep<'a> {
                     center: Point3::from(transform.translation.vector),
                     rotation: transform.rotation,
                     shape: collider.shape().clone(),
+                    filter: *collider.filter(),
                 });
             }
         }
@@ -536,17 +564,23 @@ impl<'a> BodySweep<'a> {
     }
 
     /// Every collider of every body not in `exclude` whose bounds meet
-    /// `bounds`, in arena order.
+    /// `bounds`, in the layers looked for and met by `mover`, in arena order.
     fn body_obstacles(
         &self,
         exclude: &[RigidBodyHandle],
         bounds: &AABB,
+        mover: Option<&CollisionFilter>,
     ) -> Vec<(RigidBodyHandle, ColliderHandle)> {
         let mut near = Vec::new();
         self.world.colliders_meeting(bounds, &mut near);
         let world = self.world;
-        near.retain(|(body, _)| {
+        near.retain(|(body, collider)| {
+            let filter = world
+                .collider(*collider)
+                .map_or(CollisionFilter::DEFAULT, |c| *c.filter());
             !exclude.contains(body)
+                && filter.seen_by(self.layers)
+                && mover.is_none_or(|m| m.meets(&filter))
                 && (!self.scenery_only || world.body(*body).is_some_and(|b| b.is_static()))
                 && (self.fastest == f32::INFINITY
                     || world.body(*body).is_some_and(|b| !b.is_dynamic())

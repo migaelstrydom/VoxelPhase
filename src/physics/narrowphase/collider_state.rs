@@ -4,6 +4,7 @@ use crate::collision::shape_view::ShapeView;
 use crate::collision::AABB;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderMaterial, ColliderShape};
+use crate::physics::collision_filter::CollisionFilter;
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
 use generational_arena::Arena;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
@@ -19,6 +20,8 @@ pub(super) struct ColliderState {
     pub shape: ColliderShape,
     pub velocity: Vector3<f32>,
     pub material: ColliderMaterial,
+    /// Which other colliders it makes contact with.
+    pub filter: CollisionFilter,
     pub is_sleeping: bool,
     /// Whether the owning body is static. Static bodies take part in contacts
     /// but never initiate them.
@@ -110,6 +113,7 @@ pub(super) fn collect_collider_states_into(
                 shape: collider.shape().clone(),
                 velocity: body.linear_velocity(),
                 material: *collider.material(),
+                filter: *collider.filter(),
                 is_sleeping,
                 is_static: body.is_static(),
             });
@@ -132,6 +136,7 @@ mod tests {
             },
             velocity: Vector3::zeros(),
             material: ColliderMaterial::default(),
+            filter: CollisionFilter::DEFAULT,
             is_sleeping: false,
             is_static: false,
         }

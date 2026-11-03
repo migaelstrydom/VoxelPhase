@@ -7,6 +7,7 @@ use generational_arena::Arena;
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+use super::atmosphere::Atmosphere;
 use super::body::{BodyDrive, BodyType, RigidBody, RigidBodyDesc, SupportDrive};
 use super::bulk::EnvelopePart;
 use super::ccd::{
@@ -14,6 +15,7 @@ use super::ccd::{
 };
 use super::collider::{Collider, ColliderDesc, ColliderShape};
 use super::collider_bounds::ColliderBounds;
+use super::collision_filter::Layers;
 use super::constraint::suspension::{
     cast_suspension, Suspension, SuspensionDesc, SuspensionReadout,
 };
@@ -27,6 +29,7 @@ use super::drive::{
     DriveCommand, ReactionAnchor, SupportConfig, SupportResolver, SupportSets, TractionLedger,
     TractionPlanner, TractionUsage,
 };
+use super::fluid_drag::DragArea;
 use super::force_provider::{ForceContext, ForceOutput, MediumDrag, SubstepForceProvider};
 use super::grounding::{GroundedBodies, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
@@ -60,6 +63,8 @@ use crate::sensing::{ProbeHit, ProbeTarget};
 pub struct PhysicsConfig {
     /// Gravity acceleration vector.
     pub gravity: Vector3<f32>,
+    /// The air every body moves through.
+    pub atmosphere: Atmosphere,
     /// Minimum approach speed for restitution to apply. Below this threshold,
     /// restitution is zeroed to prevent micro-bouncing at resting contacts.
     pub restitution_velocity_threshold: f32,
@@ -169,6 +174,7 @@ impl Default for PhysicsConfig {
     fn default() -> Self {
         Self {
             gravity: Vector3::new(0.0, -9.81, 0.0),
+            atmosphere: Atmosphere::AIR,
             restitution_velocity_threshold: 0.3,
             contact_margin: 0.02,
             ccd_threshold: 0.5,
@@ -575,7 +581,9 @@ impl PhysicsWorld {
             rotation: UnitQuaternion::identity(),
             shape: &sphere,
         };
-        let mut sweep = BodySweep::new(self).against_static(static_geometry);
+        let mut sweep = BodySweep::new(self)
+            .against_static(static_geometry)
+            .looking_for(cast.layers);
         if cast.solid_bodies {
             sweep = sweep.solid_bodies();
         }
@@ -1436,14 +1444,23 @@ impl PhysicsWorld {
 
     /// Apply per-substep forces from external providers.
     ///
-    /// Clears all force/torque/drag accumulators first, then asks each provider
+    /// Resets every body's force and torque, and its drag to the air's
+    /// ([`PhysicsConfig::atmosphere`]), then asks each provider
     /// to recompute forces for its affected bodies based on current positions.
+    /// A body two providers affect gets both.
     fn apply_substep_forces(&mut self, providers: &[&dyn SubstepForceProvider]) {
-        // Clear accumulators so bodies that leave a force region get zero.
+        // Clear accumulators so bodies that leave a force region get zero,
+        // leaving each in the air alone, which providers' media join.
+        let air = self.config.atmosphere;
         for (_, body) in self.bodies.iter_mut() {
             body.set_force(Vector3::zeros());
             body.set_torque(Vector3::zeros());
-            body.set_drag(MediumDrag::NONE);
+            let drag = if air.drags(body) {
+                air.drag(body)
+            } else {
+                MediumDrag::NONE
+            };
+            body.set_drag(drag);
         }
 
         if providers.is_empty() {
@@ -1479,9 +1496,7 @@ impl PhysicsWorld {
 
         for (handle, output) in outputs {
             if let Some(body) = self.bodies.get_mut(handle.0) {
-                body.set_force(output.force);
-                body.set_torque(output.torque);
-                body.set_drag(output.drag);
+                body.accumulate_external(&output);
             }
         }
     }
@@ -1617,8 +1632,10 @@ impl PhysicsWorld {
             total_inertia += rotated_inertia + steiner;
         }
 
+        let drag_area = DragArea::of(body.envelope(&self.colliders).map(|part| part.shape));
         if let Some(body) = self.bodies.get_mut(body_handle.0) {
             body.set_mass_properties(total_mass, total_inertia);
+            body.set_drag_area(drag_area);
         }
     }
 
@@ -1631,7 +1648,7 @@ impl PhysicsWorld {
         length: f32,
         exclude: &[RigidBodyHandle],
     ) -> Option<BodyProbeHit> {
-        self.raycast_bodies(origin, direction, length, true, exclude)
+        self.raycast_bodies(origin, direction, length, true, exclude, Layers::ALL)
             .map(|(body, hit)| BodyProbeHit { body, hit })
     }
 
@@ -1649,7 +1666,20 @@ impl PhysicsWorld {
         length: f32,
         exclude: &[RigidBodyHandle],
     ) -> Option<ProbeHit> {
-        self.raycast_bodies(origin, direction, length, false, exclude)
+        self.raycast_looking_for(origin, direction, length, exclude, Layers::ALL)
+    }
+
+    /// [`Self::raycast_excluding`] that sees only colliders in `layers`: a
+    /// thrown grenade's predicted path passes through leaves.
+    pub fn raycast_looking_for(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        length: f32,
+        exclude: &[RigidBodyHandle],
+        layers: Layers,
+    ) -> Option<ProbeHit> {
+        self.raycast_bodies(origin, direction, length, false, exclude, layers)
             .map(|(_, hit)| hit)
     }
 
@@ -1663,6 +1693,7 @@ impl PhysicsWorld {
         length: f32,
         skip_static: bool,
         exclude: &[RigidBodyHandle],
+        layers: Layers,
     ) -> Option<(RigidBodyHandle, ProbeHit)> {
         debug_assert!(length.is_finite(), "a ray's bounds need a finite length");
         let end = origin + direction * length;
@@ -1685,6 +1716,9 @@ impl PhysicsWorld {
             let Some(collider) = self.colliders.get(ch.0) else {
                 continue;
             };
+            if !collider.filter().seen_by(layers) {
+                continue;
+            }
             let center = collider.world_center(body_pos, body_rot);
             let world_xform = collider.world_transform(body_pos, body_rot);
             let hit = match collider.shape() {

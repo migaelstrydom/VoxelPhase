@@ -16,8 +16,8 @@ use crate::physics::bench_harness::scenarios::{
     VoussoirArchScenario,
 };
 use crate::physics::{
-    ColliderDesc, ConstraintKind, PhysicsConfig, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
-    SequentialStepper, StaticGeometry, Stepper,
+    Atmosphere, ColliderDesc, ConstraintKind, PhysicsConfig, PhysicsWorld, RigidBodyDesc,
+    RigidBodyHandle, SequentialStepper, StaticGeometry, Stepper,
 };
 
 use super::write_exports;
@@ -346,6 +346,7 @@ fn a_rolling_ball_does_not_speed_itself_up() {
     let geometry = FlatQuadGeometry::new(20.0);
     let mut config = PhysicsConfig::default();
     config.sleep.enabled = false;
+    config.atmosphere = Atmosphere::VACUUM;
     let mut world = PhysicsWorld::new(config);
     let ball = world.create_body(
         RigidBodyDesc::dynamic()
@@ -445,6 +446,8 @@ fn energy_regained_after_knock(
     const FRAME_DT: f32 = 1.0 / 60.0;
     let mut config = scenario.build_world().config().clone();
     config.deterministic_contact_ordering = ordered_contacts;
+    // Air only takes energy away, and could hide what the solver adds.
+    config.atmosphere = Atmosphere::VACUUM;
     let mut world = PhysicsWorld::new(config);
     scenario.setup(&mut world);
     let blocks: Vec<RigidBodyHandle> = world
@@ -506,6 +509,8 @@ fn energy_regained_after_shove(
     const FRAME_DT: f32 = 1.0 / 60.0;
     let mut config = scenario.build_world().config().clone();
     config.deterministic_contact_ordering = ordered_contacts;
+    // Air only takes energy away, and could hide what the solver adds.
+    config.atmosphere = Atmosphere::VACUUM;
     let mut world = PhysicsWorld::new(config);
     scenario.setup(&mut world);
     let blocks: Vec<RigidBodyHandle> = world

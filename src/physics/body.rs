@@ -8,7 +8,8 @@ use super::collider::Collider;
 use super::constraint::types::ConstraintHandle;
 use super::drive::allowance::AllowanceCommand;
 use super::drive::command::VerticalVerbs;
-use super::force_provider::MediumDrag;
+use super::fluid_drag::DragArea;
+use super::force_provider::{ForceOutput, MediumDrag};
 use super::handle::ColliderHandle;
 use super::math::{inertia_to_world, integrate_orientation, skew};
 
@@ -221,6 +222,10 @@ pub struct RigidBody {
     // F_drag = -linear * (v - velocity), τ_drag = -angular * (ω - spin).
     drag: MediumDrag,
 
+    // What fluids see of the body, as drag areas: kept with its mass
+    // properties.
+    drag_area: DragArea,
+
     // Attached colliders
     colliders: Vec<ColliderHandle>,
 
@@ -291,6 +296,7 @@ impl RigidBody {
             force: Vector3::zeros(),
             torque: Vector3::zeros(),
             drag: MediumDrag::NONE,
+            drag_area: DragArea::default(),
             colliders: Vec::new(),
             bulk: desc.bulk.map(Box::new),
             drive: None,
@@ -355,6 +361,11 @@ impl RigidBody {
 
     pub fn mass(&self) -> f32 {
         self.mass
+    }
+
+    /// Drag areas of what fluids see of this body ([`Self::envelope`]).
+    pub fn drag_area(&self) -> DragArea {
+        self.drag_area
     }
 
     pub fn inv_mass(&self) -> f32 {
@@ -560,6 +571,14 @@ impl RigidBody {
         self.drag = drag;
     }
 
+    /// Add one provider's force, torque and medium to what this substep has
+    /// gathered so far.
+    pub(crate) fn accumulate_external(&mut self, output: &ForceOutput) {
+        self.force += output.force;
+        self.torque += output.torque;
+        self.drag = self.drag.combined(output.drag);
+    }
+
     // === Internal methods ===
 
     pub(crate) fn bulk_mut(&mut self) -> Option<&mut BulkShape> {
@@ -583,6 +602,12 @@ impl RigidBody {
         } else {
             false
         }
+    }
+
+    /// Set the drag areas of what fluids see of this body, as its envelope
+    /// changes.
+    pub(crate) fn set_drag_area(&mut self, drag_area: DragArea) {
+        self.drag_area = drag_area;
     }
 
     /// Update mass properties from attached colliders.

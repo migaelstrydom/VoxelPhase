@@ -2,7 +2,7 @@ use nalgebra::{Point3, Vector3};
 use traversal_planner::section::Footing;
 
 use crate::physics::{
-    CastObstacles, PhysicsWorld, RigidBodyHandle, SphereCast, SphereCastHit, StaticGeometry,
+    CastObstacles, Layers, PhysicsWorld, RigidBodyHandle, SphereCast, SphereCastHit, StaticGeometry,
 };
 
 /// How fast a dynamic body's surface may move, in m/s, to be seen as
@@ -60,6 +60,7 @@ impl WorldCaster<'_> {
             radius,
             exclude: self.exclude,
             solid_bodies: false,
+            layers: Layers::ALL,
             obstacles: CastObstacles::Settled {
                 fastest: IN_FLIGHT_SPEED,
                 seen: self.carriers,

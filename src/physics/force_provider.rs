@@ -47,6 +47,46 @@ impl MediumDrag {
         velocity: nalgebra::Vector3::new(0.0, 0.0, 0.0),
         spin: nalgebra::Vector3::new(0.0, 0.0, 0.0),
     };
+
+    /// Whether this medium drags nothing.
+    pub fn is_none(&self) -> bool {
+        self.linear == 0.0 && self.angular == 0.0
+    }
+
+    /// The one medium that drags a body as `self` and `other` do together.
+    ///
+    /// Two linear drags pulling towards different velocities sum to one drag
+    /// as stiff as both, pulling towards their stiffness-weighted mean
+    /// velocity: `k1(v1 - v) + k2(v2 - v) = (k1 + k2)(v̄ - v)`. Exact, so a
+    /// body wading out of water into a bush is dragged by both at once.
+    pub fn combined(self, other: Self) -> Self {
+        // Exactly the other medium when one is none, so a body only one
+        // provider drags is dragged bit for bit as that provider says.
+        if self.is_none() {
+            return other;
+        }
+        if other.is_none() {
+            return self;
+        }
+        let linear = self.linear + other.linear;
+        let angular = self.angular + other.angular;
+        let velocity = if linear > 0.0 {
+            (self.velocity * self.linear + other.velocity * other.linear) / linear
+        } else {
+            nalgebra::Vector3::zeros()
+        };
+        let spin = if angular > 0.0 {
+            (self.spin * self.angular + other.spin * other.angular) / angular
+        } else {
+            nalgebra::Vector3::zeros()
+        };
+        Self {
+            linear,
+            angular,
+            velocity,
+            spin,
+        }
+    }
 }
 
 /// Mutable target for a single body's force output.
@@ -64,9 +104,20 @@ impl ForceOutput {
             drag: MediumDrag::NONE,
         }
     }
+
+    /// Add what another provider asks of the same body: forces and torques
+    /// sum, and the two media combine into one ([`MediumDrag::combined`]).
+    pub fn accumulate(&mut self, other: &ForceOutput) {
+        self.force += other.force;
+        self.torque += other.torque;
+        self.drag = self.drag.combined(other.drag);
+    }
 }
 
 /// External force provider called each substep before force integration.
+///
+/// Several providers may affect one body (water and foliage both drag a body
+/// wading out of one into the other); their outputs accumulate.
 ///
 /// Implementations recompute position-dependent forces (buoyancy, wind fields,
 /// etc.) from the body's current position, ensuring forces stay accurate as
@@ -79,4 +130,42 @@ pub trait SubstepForceProvider {
     /// Compute force, torque, and drag for a single body.
     /// Called for each handle returned by `affected_bodies()`.
     fn compute_force(&self, handle: RigidBodyHandle, ctx: &ForceContext) -> ForceOutput;
+}
+
+#[cfg(test)]
+mod tests {
+    use nalgebra::Vector3;
+
+    use super::*;
+
+    fn drag(linear: f32, velocity: Vector3<f32>) -> MediumDrag {
+        MediumDrag {
+            linear,
+            angular: 0.0,
+            velocity,
+            spin: Vector3::zeros(),
+        }
+    }
+
+    /// Two media pulling a body pull it as one: as stiff as both, towards
+    /// their stiffness-weighted velocity, so the force each would exert on a
+    /// body at any velocity sums to what the combined medium exerts.
+    #[test]
+    fn two_media_drag_as_their_sum() {
+        let a = drag(3.0, Vector3::new(2.0, 0.0, 0.0));
+        let b = drag(1.0, Vector3::new(0.0, 0.0, -4.0));
+        let both = a.combined(b);
+        let v = Vector3::new(0.5, 1.0, 0.25);
+        let separate = (a.velocity - v) * a.linear + (b.velocity - v) * b.linear;
+        let combined = (both.velocity - v) * both.linear;
+        assert!((separate - combined).magnitude() < 1e-5);
+    }
+
+    /// No medium combined with a medium is that medium.
+    #[test]
+    fn no_medium_changes_nothing() {
+        let a = drag(2.0, Vector3::new(1.0, 2.0, 3.0));
+        assert_eq!(MediumDrag::NONE.combined(a), a);
+        assert_eq!(a.combined(MediumDrag::NONE), a);
+    }
 }

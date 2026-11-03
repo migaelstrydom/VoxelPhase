@@ -34,6 +34,7 @@
 //! let pos = physics.body(body).unwrap().position();
 //! ```
 
+mod atmosphere;
 pub mod bench_harness;
 mod body;
 mod broadphase;
@@ -41,12 +42,14 @@ mod bulk;
 pub mod ccd;
 mod collider;
 mod collider_bounds;
+mod collision_filter;
 pub mod constraint;
 mod contact_event;
 mod contact_work;
 mod debug;
 pub mod drive;
 mod energy_audit;
+pub mod fluid_drag;
 mod force_provider;
 pub mod grounding;
 mod handle;
@@ -66,10 +69,12 @@ pub mod stepping;
 mod sweep;
 mod world;
 
+pub use atmosphere::Atmosphere;
 pub use body::{BodyType, RigidBody, RigidBodyDesc};
 pub use bulk::{BulkShape, Envelope, EnvelopePart, MassPartRef, MassParts, Volume};
 pub use ccd::{CcdStrategy, SweepClampCcd};
 pub use collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape, FrictionModel};
+pub use collision_filter::{CollisionFilter, Layers};
 pub use constraint::spring::Spring;
 pub use constraint::spring_slider::SpringSlider;
 pub use constraint::suspension::{

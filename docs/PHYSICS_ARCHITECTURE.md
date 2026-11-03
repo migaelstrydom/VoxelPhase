@@ -28,6 +28,20 @@ connects them.
   side moves with the water). `integrate_forces` relaxes the body towards both exactly,
   `v ← u + (v − u)·e^(−c·dt/m)`, so drag far stiffer than a body's mass or inertia carries
   and turns it at the water's pace and never past it.
+- **Media add up.** Every provider's force, torque and medium on a body accumulate; two
+  media combine into one as stiff as both, pulling towards their stiffness-weighted
+  velocity (`MediumDrag::combined`), which is exact for the linearised drags. A body one
+  provider affects gets that provider's output bit for bit.
+- **The world has air** (`PhysicsConfig::atmosphere`, `atmosphere.rs`): the ambient
+  medium, as gravity is the ambient force. Each substep starts every dynamic body's drag at
+  the air's, `½ρ·ΣCd·A·|v − wind|` over its bulk (`fluid_drag.rs`, the law water uses
+  too; areas cached with the mass properties), and providers' media combine with it. A
+  body the air would take more than `felt_within` (60 m) to slow by a factor of e is left
+  in vacuum: rocks, characters and grenades fly as before, and only bodies light for
+  their size (a cardboard box, a clump of leaves, a big light crate) feel it. Tests that
+  judge energy conservation (`EnergyAudit`, the fuzz, `stability.rs`) set
+  `Atmosphere::VACUUM`, since drag only takes energy away and could hide what a solver
+  adds.
 
 ## Bodies, colliders, constraints
 
@@ -39,6 +53,13 @@ connects them.
 - `Collider` (`collider.rs`): `Sphere`, `Box`, `Capsule`, `ConvexHull`, with a
   `ColliderMaterial` (friction, restitution, density). Colliders attach to and detach from
   bodies at runtime. `detach_collider` swap-removes, so collider order changes after a split.
+- Collision filtering (`collision_filter.rs`): each collider has a `CollisionFilter`, the
+  `Layers` it belongs to and the layers it meets. A pair makes contact only if each meets
+  the other; the narrowphase, CCD and `BodySweep::cast` movers all check it. Queries
+  (`SphereCast::layers`, `raycast_looking_for`, `BodySweep::looking_for`) see only
+  colliders in the layers they look for. Static geometry is in no layer and always
+  solid. The engine names only `Layers::DEFAULT`; the game names the rest. Fracture
+  carries a collider's filter onto its pieces.
 - Constraints (`constraint/`): persistent definitions in an arena, `ConstraintKind` =
   `KeepUpright`, `KeepAttitude`, `Fixed`, `BallJoint`, `Hinge`, `FollowPoint`,
   `SpringSlider`, `MediumDrive`, `Suspension`. Each is expanded every frame into solver `ConstraintRow`s (`expand.rs`,

@@ -18,6 +18,7 @@ use crate::collision::shape_view::ShapeView;
 use crate::collision::AABB;
 use crate::physics::broadphase::SweepAndPrune;
 use crate::physics::collider::{ColliderMaterial, ColliderShape};
+use crate::physics::collision_filter::CollisionFilter;
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
 use crate::physics::pipeline::pair::PairHeader;
 
@@ -37,6 +38,7 @@ struct SweepEntry {
     collider: ColliderHandle,
     shape: ColliderShape,
     material: ColliderMaterial,
+    filter: CollisionFilter,
     pre_center: Point3<f32>,
     post_center: Point3<f32>,
     pre_rot: UnitQuaternion<f32>,
@@ -130,7 +132,7 @@ impl DynamicSweep {
 
         for &(i, j) in &self.pairs {
             let (a, b) = (&self.entries[i], &self.entries[j]);
-            if a.body == b.body {
+            if a.body == b.body || !a.filter.meets(&b.filter) {
                 continue;
             }
             // Sweep the faster side and clamp it. Time of impact is the same
@@ -201,6 +203,7 @@ impl DynamicSweep {
                     collider: *collider_handle,
                     shape: collider.shape().clone(),
                     material: *collider.material(),
+                    filter: *collider.filter(),
                     pre_center: center_at(pre_pos, pre_rot),
                     post_center: center_at(post_pos, post_rot),
                     pre_rot,

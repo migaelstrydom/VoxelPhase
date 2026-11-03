@@ -19,8 +19,8 @@ use nalgebra::{Point3, Vector3};
 use crate::debug::DebugLines;
 use crate::physics::bench_harness::geometry::FlatQuadGeometry;
 use crate::physics::{
-    energy_per_kg, ColliderDesc, EnergyAudit, PhysicsConfig, PhysicsWorld, RigidBodyDesc,
-    RigidBodyHandle, SequentialStepper, Stepper,
+    energy_per_kg, Atmosphere, ColliderDesc, EnergyAudit, PhysicsConfig, PhysicsWorld,
+    RigidBodyDesc, RigidBodyHandle, SequentialStepper, Stepper,
 };
 
 use super::case::{Case, Projectile};
@@ -154,6 +154,9 @@ pub fn run(case: &Case, options: RunOptions) -> Verdict {
     let mut config = PhysicsConfig::default();
     config.deterministic_contact_ordering = case.ordered_contacts;
     config.sleep.enabled = options.sleep;
+    // The fuzz judges energy, which air only takes away: it could hide what
+    // the solver adds.
+    config.atmosphere = Atmosphere::VACUUM;
     let mut world = PhysicsWorld::new(config);
     let floor = FlatQuadGeometry::new(FLOOR_HALF_SIZE);
     let mut stepper = SequentialStepper::new(FIXED_DT, MAX_SUBSTEPS);

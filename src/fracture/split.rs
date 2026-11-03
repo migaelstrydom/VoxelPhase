@@ -21,7 +21,9 @@
 //! into shards and a block of ice cleaves along a plane, and neither is this
 //! module's business. It is handed finished colliders.
 
-use crate::physics::{ColliderDesc, ColliderHandle, FrictionModel, RigidBodyHandle};
+use crate::physics::{
+    ColliderDesc, ColliderHandle, CollisionFilter, FrictionModel, RigidBodyHandle,
+};
 use crate::systems::PhysicsResource;
 
 use super::components::CompoundFracture;
@@ -90,6 +92,7 @@ pub struct ChildSubstance {
     pub density: f32,
     pub restitution: f32,
     pub friction: FrictionModel,
+    pub filter: CollisionFilter,
 }
 
 impl ChildSubstance {
@@ -101,6 +104,7 @@ impl ChildSubstance {
             density: collider.mass() / collider.shape().compute_mass(1.0).max(1e-9),
             restitution: material.restitution,
             friction: material.friction,
+            filter: *collider.filter(),
         })
     }
 
@@ -109,5 +113,6 @@ impl ChildSubstance {
         desc.density(self.density)
             .restitution(self.restitution)
             .friction_model(self.friction)
+            .filter(self.filter)
     }
 }

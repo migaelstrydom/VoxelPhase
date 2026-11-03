@@ -1,7 +1,9 @@
 use nalgebra::{Point3, Vector3};
 use traversal_planner::params::BodyDims;
 
-use crate::physics::{CastObstacles, PhysicsWorld, RigidBodyHandle, SphereCast, StaticGeometry};
+use crate::physics::{
+    CastObstacles, Layers, PhysicsWorld, RigidBodyHandle, SphereCast, StaticGeometry,
+};
 
 use super::path_frame::PathFrame;
 
@@ -115,6 +117,7 @@ impl WallSlide<'_> {
             radius: self.body.radius,
             exclude: self.exclude,
             solid_bodies: false,
+            layers: Layers::ALL,
             obstacles: CastObstacles::Everything,
         };
         let hit = self.world.cast_sphere(self.scenery, &cast)?;

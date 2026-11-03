@@ -2,7 +2,7 @@
 //! geometry and every body but those excluded.
 //!
 //! ```text
-//!   SphereCast (origin, direction, length, radius, exclude)
+//!   SphereCast (origin, direction, length, radius, exclude, layers)
 //!        │ PhysicsWorld::cast_sphere
 //!        ▼
 //!   BodySweep::cast_shape ── bodies near the ray (collider index)
@@ -16,6 +16,7 @@
 
 use nalgebra::{Point3, Vector3};
 
+use super::collision_filter::Layers;
 use super::handle::RigidBodyHandle;
 use super::sweep::SweptSurface;
 
@@ -39,6 +40,9 @@ pub struct SphereCast<'a> {
     pub solid_bodies: bool,
     /// What the sphere can touch.
     pub obstacles: CastObstacles<'a>,
+    /// Layers whose colliders it can touch: [`Layers::ALL`] for every body.
+    /// The static geometry it always touches.
+    pub layers: Layers,
 }
 
 /// What a [`SphereCast`] can touch besides the static geometry.

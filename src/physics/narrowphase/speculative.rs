@@ -147,6 +147,7 @@ mod tests {
             shape: crate::physics::collider::ColliderShape::Sphere { radius },
             velocity,
             material: crate::physics::collider::ColliderMaterial::default(),
+            filter: crate::physics::CollisionFilter::DEFAULT,
             is_sleeping: false,
             is_static: false,
         }

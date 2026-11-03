@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 
+use super::collision_filter::CollisionFilter;
 use super::math::{box_inertia_tensor, capsule_inertia_tensor, sphere_inertia_tensor};
 use crate::collision::ConvexHull;
 
@@ -178,6 +179,8 @@ pub struct ColliderDesc {
     pub density: f32,
     /// Material properties.
     pub material: ColliderMaterial,
+    /// Which colliders it meets, and which queries see it.
+    pub filter: CollisionFilter,
 }
 
 impl ColliderDesc {
@@ -187,6 +190,7 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
+            filter: CollisionFilter::DEFAULT,
         }
     }
 
@@ -196,6 +200,7 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
+            filter: CollisionFilter::DEFAULT,
         }
     }
 
@@ -205,6 +210,7 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
+            filter: CollisionFilter::DEFAULT,
         }
     }
 
@@ -217,6 +223,7 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
+            filter: CollisionFilter::DEFAULT,
         }
     }
 
@@ -240,6 +247,12 @@ impl ColliderDesc {
     /// Set a custom friction law (e.g. `FrictionModel::AxisBiased`).
     pub fn friction_model(mut self, model: FrictionModel) -> Self {
         self.material.friction = model;
+        self
+    }
+
+    /// Set which colliders it meets and which queries see it.
+    pub fn filter(mut self, filter: CollisionFilter) -> Self {
+        self.filter = filter;
         self
     }
 
@@ -269,6 +282,8 @@ pub struct Collider {
     mass: f32,
     /// Local inertia tensor.
     local_inertia: Matrix3<f32>,
+    /// Which colliders it meets, and which queries see it.
+    filter: CollisionFilter,
 }
 
 impl Collider {
@@ -282,6 +297,7 @@ impl Collider {
             material: desc.material,
             mass,
             local_inertia,
+            filter: desc.filter,
         }
     }
 
@@ -291,6 +307,10 @@ impl Collider {
 
     pub fn material(&self) -> &ColliderMaterial {
         &self.material
+    }
+
+    pub fn filter(&self) -> &CollisionFilter {
+        &self.filter
     }
 
     pub fn mass(&self) -> f32 {

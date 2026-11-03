@@ -14,6 +14,7 @@ use std::f32::consts::PI;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use smallvec::SmallVec;
 
+use crate::physics::fluid_drag::{ShapeDrag, ANGULAR_COEFFICIENT};
 use crate::physics::{
     ColliderShape, ForceContext, ForceOutput, MediumDrag, PhysicsWorld, RigidBodyHandle,
     SubstepForceProvider,
@@ -55,12 +56,6 @@ pub struct BuoyancyForces {
 /// 0.3 gives ~2-4 bobs before settling — enough to look natural without
 /// sustaining perpetual oscillation via wave coupling feedback.
 const HEAVE_DAMPING_RATIO: f32 = 0.3;
-/// Drag coefficient used in Fd = 0.5 * rho * Cd * A * |v| * v.
-const DRAG_COEFF_SPHERE: f32 = 0.47;
-const DRAG_COEFF_BOX: f32 = 1.05;
-const DRAG_COEFF_CAPSULE: f32 = 0.82;
-/// Rotational drag multiplier in τd = 0.5 * rho * Cω * A * r² * |ω| * ω.
-const ANGULAR_DRAG_COEFF: f32 = 2.0;
 /// Angular damping floor (N·m·s/rad) per unit submerged fraction.
 /// Provides linear angular drag that settles low-amplitude rocking where
 /// the quadratic term (∝ |ω|·ω) is too weak to converge.
@@ -367,7 +362,11 @@ pub fn compute_buoyancy(
     let heave_stiffness = fluid_density * gravity_magnitude * waterplane_area;
 
     // Shape-based quadratic drag coefficient.
-    let (shape_cd, mean_projected_area, angular_radius_sq) = shape_drag_properties(shape);
+    let ShapeDrag {
+        coefficient: shape_cd,
+        mean_area: mean_projected_area,
+        spin_radius_sq: angular_radius_sq,
+    } = ShapeDrag::of(shape);
     let frontal_area = flow.map_or(mean_projected_area, |direction| {
         shape.projected_area(body_rotation.inverse() * direction)
     });
@@ -375,7 +374,7 @@ pub fn compute_buoyancy(
         0.5 * fluid_density * shape_cd * frontal_area * submerged_fraction;
     let quadratic_angular_drag_coeff = 0.5
         * fluid_density
-        * ANGULAR_DRAG_COEFF
+        * ANGULAR_COEFFICIENT
         * mean_projected_area
         * angular_radius_sq
         * submerged_fraction;
@@ -865,42 +864,6 @@ fn estimate_waterplane_area(
     ((volume_down - volume_up) / (2.0 * epsilon)).max(0.0)
 }
 
-fn shape_drag_properties(shape: &ColliderShape) -> (f32, f32, f32) {
-    match shape {
-        ColliderShape::Sphere { radius } => {
-            let r = *radius;
-            let projected_area = PI * r * r;
-            (DRAG_COEFF_SPHERE, projected_area, r * r)
-        }
-        ColliderShape::Box { half_extents } => {
-            let hx = half_extents.x;
-            let hy = half_extents.y;
-            let hz = half_extents.z;
-            let projected_area = 2.0 * (hx * hy + hy * hz + hx * hz);
-            let radius_sq = hx * hx + hy * hy + hz * hz;
-            (DRAG_COEFF_BOX, projected_area, radius_sq)
-        }
-        ColliderShape::Capsule {
-            half_height,
-            radius,
-        } => {
-            let r = *radius;
-            let cyl_h = (2.0 * (half_height - r)).max(0.0);
-            let surface_area = 2.0 * PI * r * cyl_h + 4.0 * PI * r * r;
-            let projected_area = surface_area * 0.25;
-            let radius_sq = half_height * half_height;
-            (DRAG_COEFF_CAPSULE, projected_area, radius_sq)
-        }
-        ColliderShape::ConvexHull { hull } => {
-            // A convex body's projected area, averaged over every direction,
-            // is a quarter of its surface (Cauchy), as the box's is above.
-            let projected_area = hull.surface_area() * 0.25;
-            let radius_sq = hull.bounding_radius * hull.bounding_radius;
-            (DRAG_COEFF_BOX, projected_area, radius_sq)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -914,8 +877,8 @@ mod tests {
         let as_hull = ColliderShape::ConvexHull {
             hull: std::sync::Arc::new(crate::collision::convex_hull::cube_hull(half_extents)),
         };
-        let (_, box_area, _) = shape_drag_properties(&as_box);
-        let (_, hull_area, _) = shape_drag_properties(&as_hull);
+        let box_area = ShapeDrag::of(&as_box).mean_area;
+        let hull_area = ShapeDrag::of(&as_hull).mean_area;
         assert!(
             (box_area - hull_area).abs() < 1e-5,
             "box {box_area}, hull {hull_area}"

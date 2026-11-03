@@ -158,7 +158,7 @@ pub fn generate_dynamic_contacts(
         let si = &buf.states[i];
         let sj = &buf.states[j];
 
-        if si.body_handle == sj.body_handle {
+        if si.body_handle == sj.body_handle || !si.filter.meets(&sj.filter) {
             continue;
         }
 
