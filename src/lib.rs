@@ -7,6 +7,7 @@ pub mod character;
 pub mod character_viewer;
 pub mod cleave;
 pub mod collision;
+pub mod collision_layers;
 pub mod components;
 pub mod core;
 pub mod creature;

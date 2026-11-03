@@ -20,7 +20,7 @@ visible lobes  ──  drag volume (rides with the clump)
 |---|---|
 | The core's spheres: a dynamic body once loose | The nubbly skin, built once from the lobes |
 | Leaves dragging whatever overlaps a lobe (`FoliageDrag`) | The skin pressed onto what the core rests on (`Press`) |
-| Air dragging a loose clump to a 7 m/s terminal speed | A squash spring kicked by each landing (`Squash`) |
+| The world's air dragging a loose clump through its whole lobes (its bulk) | A squash spring kicked by each landing (`Squash`) |
 | A blast's shove on a freshly uprooted core | Leaves shed on landings and uprooting (particles) |
 | | Leaves parted round whatever pushes through them (`Parting`) |
 | | A wading character's shorter stride (`leaf_depth`) |
@@ -37,11 +37,17 @@ on the next physics step.
   cluster tumbles like a sack and stops. On a 25° slope a clump stops at the
   foot, while a ball of the same mass and size rolls 5 m or more past it
   (`a_clump_tumbles_down_a_slope_and_stops_where_a_ball_rolls_on`).
-- **Air drag, quadratic, to a low terminal speed.** A blast's shove is an
-  impulse whatever the mass, so a 12 kg clump 1.5 m from a grenade leaves at
-  about 60 m/s. The air brings that down to about a dozen metres of flight
-  (without air: hundreds of metres). It also makes loose clumps fall
-  floatily.
+- **The world's air, through the clump's whole lobes.** A loose clump's
+  core declares its lobes as its bulk (`LeafCore::bulk`), so the engine's
+  air (`physics::Atmosphere`) and water see a ball of leaves, not the core.
+  A blast's shove is an impulse whatever the mass, so a clump 1.5 m from a
+  grenade leaves at about 60 m/s; honest air brings it down about 50 m away
+  (without air: hundreds). Shorter needs a blast that pushes by a body's
+  exposed area, which would change every blast in the game.
+- **Cores are in their own collision layer** (`collision_layers::FOLIAGE`).
+  A grenade does not meet it: it passes through a loose clump slowed by the
+  leaves, as through a rooted shrub, and its predicted flight looks past
+  cores too. Characters and everything else still meet a core.
 - **Drag is quadratic and proportional to cross-section.** It is the same
   law as water's drag, at a quarter of water's density (120 kg/m³). A grenade
   thrown at 12 m/s through a shrub comes out at about 9.6 m/s.
@@ -72,7 +78,9 @@ on the next physics step.
 - Dropped from 1 m: no rebound, asleep at 1.9 s.
 - 25° and 35° slopes: stops within 1 m of the foot; asleep within 6 s.
 - Kicked at 4 m/s on flat ground: stops after about 1.2 m.
-- A grenade 1.5 m away: thrown about 13 m.
+- A grenade 1.5 m away: thrown about 50 m.
+- A grenade thrown at 12 m/s through a loose clump: through at 9.6 m/s, the
+  clump untouched.
 - In game, a big rooted shrub torn loose by a grenade beside it rose 3.4 m,
   landed 6.5 m away and stopped dead.
 
@@ -85,9 +93,10 @@ on the next physics step.
 - **Leaf look.** The leaves are geometry and vertex colour on a matte
   material. There is no translucency or wrap lighting, which is most of what
   makes sunlit foliage glow at its edges.
-- **No collision filtering.** Debris, dust and queries can't skip foliage.
-  The aim prediction and the traversal planner's casts treat the cores as
-  ordinary bodies.
+- **Blast distance.** About 50 m for a clump right by a grenade (see
+  above).
+- **The traversal planner's casts see cores.** Right while characters meet
+  them; revisit if a clump on the path makes the plan hop it.
 - **Upload while moving.** A still clump is a `ModelInstance`, uploaded
   once. A moving clump's skin (about 6–10k vertices) is a `ProceduralMesh`,
   rebuilt and uploaded every frame it moves. Fine for a few tumbling at

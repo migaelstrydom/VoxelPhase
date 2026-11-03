@@ -8,7 +8,8 @@
 //!                     │  Loose { body }   ── LeafCore: a sphere inside each lobe
 //!                     │
 //!   PhysicsSyncSystem ─┼─▶ FoliageDrag (SubstepForceProvider): leaves drag
-//!                     │    what overlaps them; the air drags loose clumps
+//!                     │    what overlaps them (the world's air drags loose
+//!                     │    clumps through their whole lobes)
 //!   CharacterControl ──┼─▶ leaf_depth: a wading character's stride shortens
 //!   FoliageSkinSystem ─┼─▶ Press + Squash ──deform──▶ ProceduralMesh (moving)
 //!                     │                               or ModelInstance (still)

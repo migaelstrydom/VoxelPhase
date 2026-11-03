@@ -6,13 +6,18 @@
 //! through them (`drag`), but nothing collides with them. A cluster of
 //! spheres, not one ball: a single sphere has nothing to stop it rolling, and
 //! the engine's friction has no rolling resistance, while a lumpy cluster
-//! tumbles like a sack and stops. The air's drag on it is the drag
-//! provider's (`drag`), quadratic to a low terminal speed.
+//! tumbles like a sack and stops. Its bulk, what the air and water see, is
+//! its whole lobes: a ball of leaves is mostly air, light for its size, so
+//! the world's air slows it to a floaty fall, and a blast's shove (an
+//! impulse whatever the mass) throws it a dozen metres rather than hundreds.
 
 use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
 
 use super::shape::FoliageShape;
-use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
+use crate::collision_layers;
+use crate::physics::{
+    BulkShape, ColliderDesc, ColliderShape, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, Volume,
+};
 
 /// How a clump's core is built.
 #[derive(Debug, Clone, Copy)]
@@ -74,6 +79,25 @@ impl LeafCore {
                     .offset_translation(lobe.centre.coords)
             })
             .collect()
+    }
+
+    /// What fluids see of the clump: every lobe whole. It weighs what its
+    /// core spheres weigh.
+    pub fn bulk(&self, shape: &FoliageShape) -> BulkShape {
+        BulkShape::displacing(
+            shape
+                .lobes
+                .iter()
+                .map(|lobe| {
+                    Volume::at(
+                        ColliderShape::Sphere {
+                            radius: lobe.radius,
+                        },
+                        lobe.centre.coords,
+                    )
+                })
+                .collect(),
+        )
     }
 
     /// How the core rests on level ground: the direction, in the clump's
@@ -163,7 +187,9 @@ impl LeafCore {
             RigidBodyDesc::dynamic()
                 .position(Point3::from(pose.translation.vector))
                 .rotation(pose.rotation)
-                .angular_damping(self.angular_damping),
+                .angular_damping(self.angular_damping)
+                .bulk(self.bulk(shape))
+                .filter(collision_layers::FOLIAGE_CORE),
         );
         for collider in self.colliders(shape) {
             world.attach_collider(body, collider);

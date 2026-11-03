@@ -4,7 +4,8 @@ use nalgebra::{Point3, Vector3};
 
 use crate::character::grab::{self, GrabConfig};
 use crate::character::ArmState;
-use crate::physics::{PhysicsWorld, RigidBodyHandle};
+use crate::collision_layers;
+use crate::physics::{Layers, PhysicsWorld, RigidBodyHandle};
 use crate::projectile::{grenade_launch, GrenadeConfig};
 
 use super::launch::Launch;
@@ -60,6 +61,12 @@ pub trait AimSource {
     fn ignored_bodies(&self, ctx: &AimContext) -> Vec<RigidBodyHandle> {
         vec![ctx.thrower]
     }
+
+    /// The collision layers the projectile meets, and its predicted flight
+    /// looks for.
+    fn meets(&self) -> Layers {
+        Layers::ALL
+    }
 }
 
 /// Aiming a grenade. Always has something to throw.
@@ -86,6 +93,10 @@ impl AimSource for GrenadeAim<'_> {
             ctx.camera_pitch,
             ctx.physics.config().gravity,
         ))
+    }
+
+    fn meets(&self) -> Layers {
+        collision_layers::GRENADE.meets
     }
 }
 

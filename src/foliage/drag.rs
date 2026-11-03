@@ -19,10 +19,8 @@
 //! meets its core, which is what moves it; the drag's reaction on the
 //! clump is left out.
 //!
-//! A loose clump is also dragged by the air, quadratically, to a low
-//! terminal speed: a ball of leaves is mostly air. That is what keeps a
-//! blast's shove, an impulse whatever the mass, from firing a light clump
-//! off at sixty metres a second, and it is why one falls floatily.
+//! The air's drag on a loose clump is the world's (`physics::Atmosphere`),
+//! through the bulk its core declares: its whole lobes, not the core.
 
 use std::sync::Arc;
 
@@ -46,9 +44,6 @@ pub struct LeafDrag {
     /// Angular drag for each unit of linear drag, per square metre of the
     /// body's radius: how much leaves brushing past slow a body's spin.
     pub angular_per_linear: f32,
-    /// The speed, m/s, a loose clump falls at through still air, where the
-    /// air's drag on it matches its weight.
-    pub terminal_speed: f32,
     /// The share of a character's stride leaves take wholly round it
     /// (`thicket`): what slows a wade where the drag alone, against a
     /// character's drive, does not.
@@ -60,7 +55,6 @@ impl Default for LeafDrag {
         Self {
             density: 120.0,
             angular_per_linear: 0.4,
-            terminal_speed: 7.0,
             stride_loss: 0.9,
         }
     }
@@ -189,8 +183,8 @@ pub struct FoliageDrag {
 
 impl FoliageDrag {
     /// Drag from `volumes` on whichever of `candidates` could reach one of
-    /// them within a frame of `frame_dt`, and the air's on every loose
-    /// clump. A volume's own body is never dragged by its own leaves.
+    /// them within a frame of `frame_dt`. A volume's own body is never
+    /// dragged by its own leaves.
     pub fn new(
         drag: LeafDrag,
         volumes: Vec<DragVolume>,
@@ -227,27 +221,10 @@ impl FoliageDrag {
                 })
                 .collect()
         };
-        let mut affected = affected;
-        for owner in volumes.iter().filter_map(DragVolume::owner) {
-            if !affected.contains(&owner) && world.body(owner).is_some_and(|b| b.is_dynamic()) {
-                affected.push(owner);
-            }
-        }
         Self {
             drag,
             volumes,
             affected,
-        }
-    }
-
-    /// The air's drag on a loose clump: quadratic, `m·g·|v|·v / v_t²`, so
-    /// it balances the clump's weight at the terminal speed.
-    fn air(&self, body: &RigidBody, gravity: f32) -> MediumDrag {
-        let speed = body.linear_velocity().magnitude();
-        let terminal = self.drag.terminal_speed;
-        MediumDrag {
-            linear: body.mass() * gravity * speed / (terminal * terminal),
-            ..MediumDrag::NONE
         }
     }
 
@@ -275,9 +252,6 @@ impl SubstepForceProvider for FoliageDrag {
             .filter_map(|v| Some(v.posed(v.motion(motion)?).collect::<Vec<_>>()))
             .flatten()
             .collect();
-        if self.volumes.iter().any(|v| v.owner() == Some(handle)) {
-            out.drag = self.air(body, ctx.gravity_magnitude);
-        }
 
         for &collider_handle in body.colliders() {
             let Some(collider) = ctx.colliders.get(collider_handle.0) else {

@@ -1,8 +1,9 @@
-//! Casting against the rigid bodies while ignoring a few of them.
+//! Casting against the rigid bodies while ignoring a few of them, and any
+//! the projectile would pass through.
 
 use nalgebra::{Point3, Vector3};
 
-use crate::physics::{PhysicsWorld, RigidBodyHandle};
+use crate::physics::{Layers, PhysicsWorld, RigidBodyHandle};
 use crate::sensing::{ProbeHit, ProbeTarget};
 
 /// The physics world as a probe target, minus a handful of bodies.
@@ -14,11 +15,18 @@ use crate::sensing::{ProbeHit, ProbeTarget};
 pub struct BodiesExcept<'a> {
     world: &'a PhysicsWorld,
     ignored: &'a [RigidBodyHandle],
+    /// The layers the projectile meets: a grenade's flight passes through
+    /// leaves.
+    layers: Layers,
 }
 
 impl<'a> BodiesExcept<'a> {
-    pub fn new(world: &'a PhysicsWorld, ignored: &'a [RigidBodyHandle]) -> Self {
-        Self { world, ignored }
+    pub fn new(world: &'a PhysicsWorld, ignored: &'a [RigidBodyHandle], layers: Layers) -> Self {
+        Self {
+            world,
+            ignored,
+            layers,
+        }
     }
 }
 
@@ -30,6 +38,6 @@ impl ProbeTarget for BodiesExcept<'_> {
         length: f32,
     ) -> Option<ProbeHit> {
         self.world
-            .raycast_excluding(origin, direction, length, self.ignored)
+            .raycast_looking_for(origin, direction, length, self.ignored, self.layers)
     }
 }
