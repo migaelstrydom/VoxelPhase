@@ -174,8 +174,9 @@ impl Passer {
 }
 
 /// A collider as the capsule that parts leaves round it: a capsule as
-/// itself, a sphere as a point, anything else as a sphere a little inside
-/// its bounds.
+/// itself, a sphere as a point, and a box or a hull as the capsule along its
+/// longest axis, as thick as the wider of its other two. A beam parts the
+/// leaves along its length, not in a ball as wide as it is long.
 fn pusher_of(shape: &ColliderShape, at: Isometry3<f32>) -> Pusher {
     let centre = Point3::from(at.translation.vector);
     match *shape {
@@ -195,11 +196,27 @@ fn pusher_of(shape: &ColliderShape, at: Isometry3<f32>) -> Pusher {
             b: centre,
             radius,
         },
-        ref other => Pusher {
-            a: centre,
-            b: centre,
-            radius: other.bounding_radius() * 0.7,
-        },
+        ColliderShape::Box { half_extents } => boxed_pusher(at, Vector3::zeros(), half_extents),
+        ColliderShape::ConvexHull { ref hull } => {
+            boxed_pusher(at, hull.box_center, hull.box_half_extents)
+        }
+    }
+}
+
+/// The capsule along the longest axis of a box of `half_extents` centred at
+/// `centre` in the frame `at`.
+fn boxed_pusher(at: Isometry3<f32>, centre: Vector3<f32>, half_extents: Vector3<f32>) -> Pusher {
+    let long = half_extents.imax();
+    let radius = (0..3)
+        .filter(|&axis| axis != long)
+        .map(|axis| half_extents[axis])
+        .fold(0.0, f32::max);
+    let mut along = Vector3::zeros();
+    along[long] = (half_extents[long] - radius).max(0.0);
+    Pusher {
+        a: at * Point3::from(centre - along),
+        b: at * Point3::from(centre + along),
+        radius,
     }
 }
 
@@ -361,5 +378,27 @@ impl<'a> System<'a> for FoliageUprootSystem {
                 .with(leaf_emitter(UPROOT_LEAVES))
                 .build();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A long beam parts leaves as a thin capsule along its length: one
+    /// metre to its side, a shrub is clear of it.
+    #[test]
+    fn a_beam_pushes_as_a_capsule_along_its_length() {
+        let beam = ColliderShape::Box {
+            half_extents: Vector3::new(3.0, 0.1, 0.1),
+        };
+        let pusher = pusher_of(&beam, Isometry3::identity());
+        assert!(
+            (pusher.radius - 0.1).abs() < 1e-6,
+            "radius {}",
+            pusher.radius
+        );
+        assert!((pusher.b - pusher.a).magnitude() > 5.0);
+        assert!((pusher.a.y).abs() < 1e-6 && (pusher.b.y).abs() < 1e-6);
     }
 }

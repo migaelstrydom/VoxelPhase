@@ -5,7 +5,7 @@ use nalgebra::{Point3, Vector3};
 use crate::character::grab::{self, GrabConfig};
 use crate::character::ArmState;
 use crate::collision_layers;
-use crate::physics::{Layers, PhysicsWorld, RigidBodyHandle};
+use crate::physics::{CollisionFilter, PhysicsWorld, RigidBodyHandle};
 use crate::projectile::{grenade_launch, GrenadeConfig};
 
 use super::launch::Launch;
@@ -62,11 +62,9 @@ pub trait AimSource {
         vec![ctx.thrower]
     }
 
-    /// The collision layers the projectile meets, and its predicted flight
-    /// looks for.
-    fn meets(&self) -> Layers {
-        Layers::ALL
-    }
+    /// The projectile as a collider: its predicted flight touches what it
+    /// would.
+    fn projectile(&self, ctx: &AimContext) -> CollisionFilter;
 }
 
 /// Aiming a grenade. Always has something to throw.
@@ -95,8 +93,8 @@ impl AimSource for GrenadeAim<'_> {
         ))
     }
 
-    fn meets(&self) -> Layers {
-        collision_layers::GRENADE.meets
+    fn projectile(&self, _ctx: &AimContext) -> CollisionFilter {
+        collision_layers::GRENADE
     }
 }
 
@@ -128,6 +126,10 @@ impl AimSource for HeldObjectAim<'_> {
     fn launch(&self, ctx: &AimContext) -> Option<Launch> {
         let body = Self::held_body(ctx)?;
         grab::throw_launch(ctx.physics, body, ctx.facing, self.config.throw_impulse)
+    }
+
+    fn projectile(&self, ctx: &AimContext) -> CollisionFilter {
+        Self::held_body(ctx).map_or(CollisionFilter::DEFAULT, |body| ctx.physics.filter_of(body))
     }
 
     fn ignored_bodies(&self, ctx: &AimContext) -> Vec<RigidBodyHandle> {

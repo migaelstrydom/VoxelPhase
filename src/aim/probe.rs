@@ -3,7 +3,7 @@
 
 use nalgebra::{Point3, Vector3};
 
-use crate::physics::{Layers, PhysicsWorld, RigidBodyHandle};
+use crate::physics::{CollisionFilter, PhysicsWorld, RigidBodyHandle};
 use crate::sensing::{ProbeHit, ProbeTarget};
 
 /// The physics world as a probe target, minus a handful of bodies.
@@ -15,17 +15,21 @@ use crate::sensing::{ProbeHit, ProbeTarget};
 pub struct BodiesExcept<'a> {
     world: &'a PhysicsWorld,
     ignored: &'a [RigidBodyHandle],
-    /// The layers the projectile meets: a grenade's flight passes through
+    /// The projectile as a collider: a grenade's flight passes through
     /// leaves.
-    layers: Layers,
+    projectile: CollisionFilter,
 }
 
 impl<'a> BodiesExcept<'a> {
-    pub fn new(world: &'a PhysicsWorld, ignored: &'a [RigidBodyHandle], layers: Layers) -> Self {
+    pub fn new(
+        world: &'a PhysicsWorld,
+        ignored: &'a [RigidBodyHandle],
+        projectile: CollisionFilter,
+    ) -> Self {
         Self {
             world,
             ignored,
-            layers,
+            projectile,
         }
     }
 }
@@ -38,6 +42,6 @@ impl ProbeTarget for BodiesExcept<'_> {
         length: f32,
     ) -> Option<ProbeHit> {
         self.world
-            .raycast_looking_for(origin, direction, length, self.ignored, self.layers)
+            .raycast_as(origin, direction, length, self.ignored, self.projectile)
     }
 }

@@ -121,7 +121,7 @@ impl<'a> System<'a> for AimPredictionSystem {
         };
 
         let ignored = source.ignored_bodies(&ctx);
-        let bodies = BodiesExcept::new(&physics.world, &ignored, source.meets());
+        let bodies = BodiesExcept::new(&physics.world, &ignored, source.projectile(&ctx));
         let world = ProbeSet::new([
             terrain.as_ref().map(|t| &**t as &dyn ProbeTarget),
             Some(&bodies as &dyn ProbeTarget),
