@@ -12,8 +12,10 @@
 //! the ground's plane instead, with a soft knee so the flattening rounds
 //! off into the clump rather than cutting it. A landing kicks a spring that
 //! squashes the clump along the impact and lets it wobble back. A body in
-//! its leaves pushes them aside, to its own surface, and they ease back
-//! once it has gone. None of it changes what physics sees.
+//! its leaves opens a hole round itself: every leaf moves out from the
+//! body's axis by a smooth map that never folds the skin over itself, most
+//! near the body and fading with distance, and the leaves ease back once it
+//! has gone. None of it changes what physics sees.
 
 use nalgebra::{Isometry3, Point3, Vector3};
 use smallvec::SmallVec;
@@ -219,14 +221,13 @@ struct LocalPusher {
     firmness: f32,
 }
 
-/// How far leaves part, at most, as a share of the way out to a pusher's
-/// surface: part way, so a body wading through a small shrub dents it
-/// round itself rather than hollowing it out, and the rest of the leaves
-/// close over the limbs.
-const PARTING_SHARE: f32 = 0.7;
-/// How far parted leaves' normals turn to face the body parting them, at
-/// most.
-const PARTED_TURN: f32 = 0.4;
+/// Radius of the hole a pusher opens in the leaves, as a share of its own:
+/// the leaves on its axis are moved this far out, and those further out
+/// less, so the hole is about the body's size.
+const PARTING_SHARE: f32 = 0.85;
+/// How dark the leaves a pusher squeezes in round itself are, at most: they
+/// are the clump's inside, shaded by the leaves round them.
+const PARTED_SHADE: f32 = 0.65;
 
 /// A pressing surface in the clump's own frame.
 struct LocalPlane {
@@ -311,9 +312,10 @@ pub fn deform(
                     v.normal = n;
                 }
                 for pusher in &pushers {
-                    let (p, n) = parted(position, v.normal, sprig, pusher, give);
-                    position = p;
-                    v.normal = n;
+                    let parting = parted(position, v.normal, pusher);
+                    position = parting.position;
+                    v.normal = parting.normal;
+                    v.ao *= 1.0 - PARTED_SHADE * (1.0 - parting.squeeze);
                 }
                 for plane in &planes {
                     let (p, n) = pressed(position, v.normal, sprig, plane, give);
@@ -347,59 +349,79 @@ fn squashed(
     (moved, turned.try_normalize(1e-9).unwrap_or(normal))
 }
 
-/// A point and its normal pushed aside by a capsule: away from its axis,
-/// untouched beyond the knee outside it, eased out to its surface within.
-///
-/// Aside, not out of its rounded ends: leaves part round a body wading
-/// through them and close over nothing, so a body opens a channel through
-/// a clump and its top comes out of the top, rather than wearing the leaves
-/// as a lid. Past the capsule's ends the parting fades over its radius. A
-/// sphere (a pusher whose segment is a point) parts them every way.
-fn parted(
+/// A point moved out of a pusher's way.
+struct Parted {
     position: Point3<f32>,
     normal: Vector3<f32>,
-    sprig: f32,
-    pusher: &LocalPusher,
-    give: &Give,
-) -> (Point3<f32>, Vector3<f32>) {
+    /// How much the skin there is squeezed towards the pusher's axis: 1
+    /// untouched, towards 0 on the axis.
+    squeeze: f32,
+}
+
+/// A point and its normal moved out of a pusher's way.
+///
+/// A leaf `d` from the pusher's axis moves out to `√(d² + c²)`, where `c` is
+/// the hole's radius: one on the axis moves out by `c`, one far away hardly
+/// at all. The map only ever grows with `d`, so leaves keep their order out
+/// from the axis and the skin never folds over itself, however deep the
+/// body is. It compresses the skin towards the axis by `a = d/√(d² + c²)`
+/// and stretches it round the axis by `1/a`; the normal takes the inverse
+/// of that, so each leaf keeps its shading, turned as the skin is.
+///
+/// Out from a capsule's axis, not from its rounded ends: leaves part round a
+/// body wading through them and close over nothing, so a body opens a
+/// channel through a clump rather than wearing the leaves as a lid. Past its
+/// ends the hole closes over its radius. A sphere (a pusher whose segment is
+/// a point) opens a round hole, every way.
+fn parted(position: Point3<f32>, normal: Vector3<f32>, pusher: &LocalPusher) -> Parted {
+    let untouched = Parted {
+        position,
+        normal,
+        squeeze: 1.0,
+    };
     let axis = pusher.b - pusher.a;
     let length = axis.magnitude();
-    let (core, reach) = if length > 1e-6 {
+    let (core, along, closing) = if length > 1e-6 {
         let along = axis / length;
         let t = (position - pusher.a).dot(&along);
         let past = (-t).max(t - length).max(0.0);
-        let fade = (1.0 - past / pusher.radius).clamp(0.0, 1.0);
-        (pusher.a + along * t, fade)
+        let closing = (1.0 - past / pusher.radius).clamp(0.0, 1.0);
+        (
+            pusher.a + along * t.clamp(0.0, length),
+            Some(along),
+            closing,
+        )
     } else {
-        (pusher.a, 1.0)
+        (pusher.a, None, 1.0)
     };
-    if reach <= 0.0 {
-        return (position, normal);
+    let hole = pusher.radius * pusher.firmness * closing;
+    if hole <= 0.0 {
+        return untouched;
     }
-    let offset = position - core;
+    let mut offset = position - core;
+    if let Some(along) = along {
+        offset -= along * offset.dot(&along);
+    }
     let distance = offset.magnitude();
-    let outside = distance - pusher.radius;
-    let knee = give.knee;
-    if outside >= knee {
-        return (position, normal);
+    if distance < 1e-5 {
+        return untouched;
     }
-    let Some(out) = offset.try_normalize(1e-6) else {
-        return (position, normal);
-    };
-    let firmness = pusher.firmness * reach;
-    let flatness = ((knee - outside) / knee).clamp(0.0, 1.0) * firmness;
-    // Pushed out to the knee, plus their own sprig: the parted wall stays a
-    // wall of nubs rather than a smooth sleeve round the body.
-    let eased = knee * ((outside - knee) / knee).exp() + sprig * flatness;
-    let lift = (eased - outside) * firmness;
-    // They turn towards the body that parts them, but only part way, and
-    // keep most of their own sprigs' shading.
-    let flatness = flatness * PARTED_TURN;
-    let turned = normal.lerp(&-out, flatness);
-    (
-        position + out * lift,
-        turned.try_normalize(1e-9).unwrap_or(-out),
-    )
+    let out = offset / distance;
+    let moved = (distance * distance + hole * hole).sqrt();
+    let squeeze = distance / moved;
+    // The normal through the inverse transpose: out from the axis it is
+    // divided by the squeeze, round it multiplied by it, along it unchanged.
+    let n_out = normal.dot(&out);
+    let n_along = along.map_or(0.0, |a| normal.dot(&a));
+    let n_round = normal - out * n_out - along.map_or(Vector3::zeros(), |a| a * n_along);
+    let turned = out * (n_out / squeeze)
+        + n_round * squeeze
+        + along.map_or(Vector3::zeros(), |a| a * n_along);
+    Parted {
+        position: position + out * (moved - distance),
+        normal: turned.try_normalize(1e-9).unwrap_or(normal),
+        squeeze,
+    }
 }
 
 /// A point and its normal pressed onto a surface: untouched above the knee,
@@ -485,8 +507,9 @@ mod tests {
         assert_eq!(out[1].pos, rest[1].pos);
     }
 
-    /// Leaves in a body's way are pushed most of the way out to its surface;
-    /// leaves well clear of it are left alone.
+    /// Leaves in a body's way are moved out to its surface, and leaves well
+    /// clear of it hardly at all; leaves keep their order out from the body,
+    /// so the skin never folds.
     #[test]
     fn a_body_parts_the_leaves_round_it() {
         let give = Give::default();
@@ -501,10 +524,9 @@ mod tests {
             pusher,
             &give,
         );
-        let rest = [
-            vertex(Vector3::new(0.1, 0.0, 0.0)),
-            vertex(Vector3::new(1.0, 0.0, 0.0)),
-        ];
+        let rest: Vec<Vertex> = (0..=40)
+            .map(|i| vertex(Vector3::new(0.01 + i as f32 * 0.05, 0.0, 0.0)))
+            .collect();
         let mut out = Vec::new();
         let bending = Bending {
             parting,
@@ -517,12 +539,47 @@ mod tests {
             &give,
             &mut out,
         );
-        let pushed = (out[0].pos.x - 0.1) / (0.25 - 0.1);
         assert!(
-            pushed > PARTING_SHARE * 0.9,
-            "a leaf in the body's way moved only {pushed:.2} of the way out"
+            out[0].pos.x >= 0.25 * PARTING_SHARE,
+            "a leaf in the body's way is still inside it, at {:.3}",
+            out[0].pos.x
         );
-        assert_eq!(out[1].pos, rest[1].pos);
+        let far = out.last().unwrap().pos.x - rest.last().unwrap().pos.x;
+        assert!(far < 0.02, "a leaf 2 m away moved {far:.3} m");
+        for pair in out.windows(2) {
+            assert!(pair[1].pos.x > pair[0].pos.x, "the skin folded");
+        }
+    }
+
+    /// The hole closes past a capsule's ends: a leaf above its head stays
+    /// put.
+    #[test]
+    fn leaves_close_over_nothing_past_a_capsules_end() {
+        let give = Give::default();
+        let mut parting = Parting::default();
+        parting.push(
+            RigidBodyHandle(generational_arena::Index::from_raw_parts(0, 0)),
+            Pusher {
+                a: Point3::new(0.0, -0.25, 0.0),
+                b: Point3::new(0.0, 0.25, 0.0),
+                radius: 0.25,
+            },
+            &give,
+        );
+        let above = [vertex(Vector3::new(0.1, 0.6, 0.0))];
+        let mut out = Vec::new();
+        let bending = Bending {
+            parting,
+            ..Bending::default()
+        };
+        deform(
+            &skin_of(&above),
+            &Isometry3::identity(),
+            &bending,
+            &give,
+            &mut out,
+        );
+        assert_eq!(out[0].pos, above[0].pos);
     }
 
     /// A surface stops pressing a moment after its contact stops.

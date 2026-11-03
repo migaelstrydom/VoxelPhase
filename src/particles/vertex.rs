@@ -33,6 +33,9 @@ pub struct ParticleVertex {
     /// four binding slots to say the same thing. See the fields of the same
     /// names on [`Particle`](super::particle::Particle).
     pub shape: Vector4<f32>,
+    /// The particle's outline and how it tumbles, packed as
+    /// `(silhouette, flutter)`. See [`Silhouette`](super::particle::Silhouette).
+    pub form: Vector2<f32>,
 }
 
 impl ParticleVertex {
@@ -44,6 +47,7 @@ impl ParticleVertex {
     const LIFE_OFFSET: u32 = Self::COLOR_OFFSET + mem::size_of::<Vector4<f32>>() as u32;
     const MOTION_OFFSET: u32 = Self::LIFE_OFFSET + mem::size_of::<f32>() as u32;
     const SHAPE_OFFSET: u32 = Self::MOTION_OFFSET + mem::size_of::<Vector3<f32>>() as u32;
+    const FORM_OFFSET: u32 = Self::SHAPE_OFFSET + mem::size_of::<Vector4<f32>>() as u32;
 
     /// Get the Vulkan binding description for this vertex format.
     pub fn binding_description() -> vk::VertexInputBindingDescription {
@@ -55,7 +59,7 @@ impl ParticleVertex {
     }
 
     /// Get the Vulkan attribute descriptions for this vertex format.
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 7] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 8] {
         [
             attribute(0, vk::Format::R32G32B32_SFLOAT, Self::CENTER_OFFSET),
             attribute(1, vk::Format::R32G32_SFLOAT, Self::CORNER_OFFSET),
@@ -64,6 +68,7 @@ impl ParticleVertex {
             attribute(4, vk::Format::R32_SFLOAT, Self::LIFE_OFFSET),
             attribute(5, vk::Format::R32G32B32_SFLOAT, Self::MOTION_OFFSET),
             attribute(6, vk::Format::R32G32B32A32_SFLOAT, Self::SHAPE_OFFSET),
+            attribute(7, vk::Format::R32G32_SFLOAT, Self::FORM_OFFSET),
         ]
     }
 }
@@ -98,6 +103,7 @@ mod tests {
             life: 0.0,
             motion: Vector3::zeros(),
             shape: Vector4::zeros(),
+            form: Vector2::zeros(),
         };
         let base = &vertex as *const _ as usize;
 
@@ -130,6 +136,14 @@ mod tests {
         assert_eq!(
             field_offset(vertex.shape.as_ptr()),
             ParticleVertex::SHAPE_OFFSET as usize
+        );
+        assert_eq!(
+            field_offset(vertex.form.as_ptr()),
+            ParticleVertex::FORM_OFFSET as usize
+        );
+        assert_eq!(
+            mem::size_of::<ParticleVertex>(),
+            ParticleVertex::FORM_OFFSET as usize + mem::size_of::<Vector2<f32>>()
         );
     }
 }

@@ -12,6 +12,7 @@
 use nalgebra::Vector4;
 
 use super::emitter::ParticleEffectType;
+use super::particle::Silhouette;
 use super::ramp::{ColourRamp, ColourStop};
 use super::spec::{LaunchPattern, ParticleSpec, Spread};
 
@@ -112,6 +113,8 @@ fn blast_core() -> ParticleSpec {
         spin: Spread::new(0.5, 2.0),
         additive: 1.0,
         billow: 1.0,
+        silhouette: Silhouette::Disc,
+        flutter: 0.0,
         gravity_scale: 0.0,
         drag: 1.2,
         turbulence: 0.0,
@@ -151,6 +154,8 @@ fn fireball() -> ParticleSpec {
         spin: Spread::new(0.4, 2.4),
         additive: 0.9,
         billow: 1.0,
+        silhouette: Silhouette::Disc,
+        flutter: 0.0,
         // Buoyant, but only just: the ball should lift as it burns out, not
         // launch. The rise the eye reads comes mostly from the smoke column.
         gravity_scale: -0.12,
@@ -184,6 +189,8 @@ fn blast_dust() -> ParticleSpec {
         spin: Spread::new(0.3, 1.5),
         additive: 0.0,
         billow: 1.0,
+        silhouette: Silhouette::Disc,
+        flutter: 0.0,
         gravity_scale: 0.1,
         drag: 0.35,
         turbulence: 1.2,
@@ -214,6 +221,8 @@ fn embers() -> ParticleSpec {
         spin: Spread::fixed(0.0),
         additive: 1.0,
         billow: 0.0,
+        silhouette: Silhouette::Disc,
+        flutter: 0.0,
         gravity_scale: 0.55,
         drag: 0.12,
         turbulence: 0.6,
@@ -240,6 +249,8 @@ fn debris() -> ParticleSpec {
         spin: Spread::new(3.0, 10.0),
         additive: 0.0,
         billow: 0.35,
+        silhouette: Silhouette::Disc,
+        flutter: 0.0,
         gravity_scale: 1.0,
         drag: 0.1,
         turbulence: 0.0,
@@ -269,6 +280,8 @@ fn shard_glitter() -> ParticleSpec {
         spin: Spread::new(4.0, 12.0),
         additive: 0.8,
         billow: 0.0,
+        silhouette: Silhouette::Disc,
+        flutter: 0.0,
         gravity_scale: 1.0,
         drag: 0.5,
         turbulence: 0.0,
@@ -299,6 +312,8 @@ fn smoke() -> ParticleSpec {
         spin: Spread::new(0.15, 0.9),
         additive: 0.0,
         billow: 1.0,
+        silhouette: Silhouette::Disc,
+        flutter: 0.0,
         gravity_scale: -0.18,
         drag: 0.35,
         turbulence: 2.0,
@@ -319,6 +334,8 @@ fn splash() -> ParticleSpec {
         spin: Spread::fixed(0.0),
         additive: 0.0,
         billow: 0.0,
+        silhouette: Silhouette::Disc,
+        flutter: 0.0,
         gravity_scale: 1.0,
         drag: 0.3,
         turbulence: 0.0,
@@ -344,6 +361,8 @@ fn ember_trail() -> ParticleSpec {
         spin: Spread::fixed(0.0),
         additive: 1.0,
         billow: 0.0,
+        silhouette: Silhouette::Disc,
+        flutter: 0.0,
         // Hot embers rise as they cool.
         gravity_scale: -0.25,
         drag: 1.4,
@@ -374,7 +393,9 @@ fn leaves() -> ParticleSpec {
         growth: 1.0,
         spin: Spread::new(4.0, 12.0),
         additive: 0.0,
-        billow: 0.2,
+        billow: 0.0,
+        silhouette: Silhouette::Leaf,
+        flutter: 1.0,
         gravity_scale: 0.3,
         drag: 2.5,
         turbulence: 1.5,

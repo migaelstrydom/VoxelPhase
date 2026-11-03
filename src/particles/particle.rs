@@ -80,6 +80,32 @@ pub struct Particle {
     /// Per-particle noise offset, so two overlapping puffs are not the same
     /// shape. Any value works; the shader only needs it to differ.
     pub seed: f32,
+    /// The particle's outline before any billow.
+    pub silhouette: Silhouette,
+    /// How much the particle tumbles out of the screen's plane as it spins:
+    /// 0 turns flat to the camera, 1 flips edge-on and over, as a falling
+    /// leaf does.
+    pub flutter: f32,
+}
+
+/// A particle's outline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Silhouette {
+    /// A soft round disc: sparks, droplets, puffs.
+    #[default]
+    Disc,
+    /// A pointed leaf with a darker midrib, paler on its underside.
+    Leaf,
+}
+
+impl Silhouette {
+    /// The value the fragment shader reads.
+    pub fn code(self) -> f32 {
+        match self {
+            Self::Disc => 0.0,
+            Self::Leaf => 1.0,
+        }
+    }
 }
 
 impl Default for Particle {
@@ -102,6 +128,8 @@ impl Default for Particle {
             additive: 0.0,
             billow: 0.0,
             seed: 0.0,
+            silhouette: Silhouette::Disc,
+            flutter: 0.0,
         }
     }
 }

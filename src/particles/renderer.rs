@@ -182,6 +182,7 @@ impl ParticleRenderer {
                 particle.seed,
             );
             let size = particle.drawn_size();
+            let form = Vector2::new(particle.silhouette.code(), particle.flutter);
 
             // Create 4 vertices for this particle's billboard
             for corner in &corners {
@@ -193,6 +194,7 @@ impl ParticleRenderer {
                     life: life_normalized,
                     motion,
                     shape,
+                    form,
                 });
             }
         }

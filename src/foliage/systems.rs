@@ -214,8 +214,13 @@ struct Impact {
     speed: f32,
 }
 
-/// Press the clump's skin against every surface its core touches, and kick
-/// its squash if one of them stopped it hard.
+/// Press the clump's skin against every fixed surface its core touches, and
+/// kick its squash if anything stopped it hard.
+///
+/// Only what cannot move presses: the ground, walls, a platform. A moving
+/// body (a character, a crate, another clump's core) parts the leaves round
+/// its own shape instead (`Parting`), and two clumps' leaves interleave
+/// rather than meeting on a flat face.
 ///
 /// A landing is told from resting by the velocity the contact took away:
 /// the core's change in velocity since last frame along the contact's
@@ -238,10 +243,12 @@ fn feel_contacts(
         } else {
             contact.normal
         };
-        clump
-            .bending
-            .press
-            .touch(contact.point, normal, &clump.give);
+        if presses(world, contact, body) {
+            clump
+                .bending
+                .press
+                .touch(contact.point, normal, &clump.give);
+        }
         let speed = stopped.dot(&normal);
         if speed > IMPACT_SPEED && hardest.as_ref().is_none_or(|h| speed > h.speed) {
             hardest = Some(Impact {
@@ -256,6 +263,17 @@ fn feel_contacts(
         }
     }
     hardest
+}
+
+/// Whether what `body` touches in `contact` presses its leaves flat: the
+/// static geometry, or a body that does not move by itself.
+fn presses(world: &PhysicsWorld, contact: &ContactEvent, body: RigidBodyHandle) -> bool {
+    let other = if contact.body_b == body {
+        contact.body_a
+    } else {
+        Some(contact.body_b)
+    };
+    other.is_none_or(|h| world.body(h).is_none_or(|b| !b.is_dynamic()))
 }
 
 fn involves(contact: &ContactEvent, body: RigidBodyHandle) -> bool {

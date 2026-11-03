@@ -14,7 +14,7 @@ use std::f32::consts::TAU;
 use nalgebra::{Vector3, Vector4};
 use rand::Rng;
 
-use super::particle::Particle;
+use super::particle::{Particle, Silhouette};
 use super::ramp::ColourRamp;
 
 /// A closed range a spawner draws uniformly from.
@@ -137,6 +137,10 @@ pub struct ParticleSpec {
     pub additive: f32,
     /// Noise erosion of the particle's silhouette. See [`Particle::billow`].
     pub billow: f32,
+    /// The particle's outline. See [`Particle::silhouette`].
+    pub silhouette: Silhouette,
+    /// Tumbling out of the screen's plane. See [`Particle::flutter`].
+    pub flutter: f32,
 
     /// Gravity multiplier; negative for anything buoyant.
     pub gravity_scale: f32,
@@ -166,6 +170,8 @@ impl Default for ParticleSpec {
             spin: Spread::fixed(0.0),
             additive: 0.0,
             billow: 0.0,
+            silhouette: Silhouette::Disc,
+            flutter: 0.0,
             gravity_scale: 0.0,
             drag: 0.0,
             turbulence: 0.0,
@@ -205,6 +211,8 @@ impl ParticleSpec {
             additive: self.additive,
             billow: self.billow,
             seed: rng.gen_range(0.0..1.0),
+            silhouette: self.silhouette,
+            flutter: self.flutter,
         }
     }
 }
