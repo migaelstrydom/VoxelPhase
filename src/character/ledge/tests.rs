@@ -6,7 +6,8 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 use crate::physics::bench_harness::geometry::{ConvexSolid, EmptyGeometry, SolidsGeometry};
 use crate::physics::{
-    ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, StaticGeometry,
+    ColliderDesc, CollisionFilter, PhysicsConfig, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
+    StaticGeometry,
 };
 use crate::traversal::WorldCaster;
 
@@ -65,6 +66,7 @@ fn edge_in(world: &PhysicsWorld, scenery: &dyn StaticGeometry) -> Option<Edge> {
         world,
         scenery,
         exclude: &[],
+        filter: CollisionFilter::DEFAULT,
         carriers: &[],
     };
     edge_at_hands(&caster, &reach(), &LedgeConfig::default())

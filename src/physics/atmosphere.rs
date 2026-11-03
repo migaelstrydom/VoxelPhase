@@ -17,6 +17,11 @@
 //! clump of leaves floats down. A body too heavy for the air to slow within
 //! [`Atmosphere::felt_within`] is passed by, which keeps a grenade's flight
 //! the parabola its aim predicts and costs nothing for rocks and characters.
+//!
+//! The air drags a body's whole bulk, under water too: at a thousandth of
+//! water's density it adds a tenth of a percent to the water's drag there,
+//! and is left in rather than split by depth. It is not a rule for stacking
+//! media.
 
 use nalgebra::Vector3;
 
@@ -52,8 +57,8 @@ impl Atmosphere {
         felt_within: 0.0,
     };
 
-    /// Whether the air is light enough a drag on `body` to bother with: a
-    /// dynamic body it slows within [`Self::felt_within`].
+    /// Whether the air drags `body` at all: a dynamic body light enough for
+    /// its size that the air slows it within [`Self::felt_within`].
     pub fn drags(&self, body: &RigidBody) -> bool {
         let area = body.drag_area().linear;
         body.is_dynamic() && area > 0.0 && body.mass() < self.felt_within * self.half_rho() * area

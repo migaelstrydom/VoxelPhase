@@ -1,6 +1,8 @@
 use nalgebra::{Point3, Vector3};
 
-use crate::physics::{CastObstacles, Layers, PhysicsWorld, SphereCast, StaticGeometry};
+use crate::physics::{
+    CastObstacles, CollisionFilter, Layers, PhysicsWorld, SphereCast, StaticGeometry,
+};
 
 /// Keeps the camera out of the scenery, and the scenery from hiding what it
 /// looks at for long.
@@ -226,7 +228,7 @@ impl CameraClearance {
                 radius: self.radius,
                 exclude: &[],
                 solid_bodies: false,
-                layers: Layers::ALL,
+                filter: CollisionFilter::seeing(Layers::ALL),
                 obstacles: CastObstacles::Scenery,
             },
         )

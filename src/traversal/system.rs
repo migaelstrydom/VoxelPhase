@@ -239,6 +239,7 @@ impl<'a> System<'a> for TraversalPlanSystem {
             world: &physics.world,
             scenery: &*terrain,
             exclude: &exclude,
+            filter: physics.world.filter_of(body),
             carriers: &carriers,
             terrain_changes: &changes,
             position,

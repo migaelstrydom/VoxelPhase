@@ -6,8 +6,10 @@
 //!        ├─▶ narrowphase pairs, CCD pairs, BodySweep::cast movers
 //!        │      a pair is made only if each side meets the other's membership
 //!        │
-//!        └─▶ queries (raycasts, sphere casts) see a collider only if
-//!               its membership is among the layers they look for
+//!        └─▶ queries (raycasts, sphere casts) are filtered as colliders:
+//!               a cast for a body is that body's filter
+//!               (`PhysicsWorld::filter_of`), and touches what the body would;
+//!               one for no body looks for layers (`CollisionFilter::seeing`)
 //! ```
 //!
 //! The engine names no layers but [`Layers::DEFAULT`]: what each bit means is
@@ -74,9 +76,23 @@ impl CollisionFilter {
         self.meets.intersects(other.membership) && other.meets.intersects(self.membership)
     }
 
-    /// Whether a query looking for `layers` sees this collider.
-    pub const fn seen_by(&self, layers: Layers) -> bool {
-        self.membership.intersects(layers)
+    /// A query for no body in particular, looking for colliders in
+    /// `layers`: it belongs to every layer, so whatever meets anything meets
+    /// it.
+    pub const fn seeing(layers: Layers) -> Self {
+        Self {
+            membership: Layers::ALL,
+            meets: layers,
+        }
+    }
+
+    /// The filter of a body made of colliders filtered `self` and `other`:
+    /// it belongs to either's layers and meets either's.
+    pub const fn with(self, other: Self) -> Self {
+        Self {
+            membership: self.membership.with(other.membership),
+            meets: self.meets.with(other.meets),
+        }
     }
 }
 
@@ -121,9 +137,27 @@ mod tests {
             membership: DEBRIS,
             meets: Layers::ALL,
         };
-        assert!(debris.seen_by(Layers::ALL));
-        assert!(!debris.seen_by(Layers::ALL.without(DEBRIS)));
-        assert!(CollisionFilter::DEFAULT.seen_by(Layers::DEFAULT.with(DEBRIS)));
+        assert!(CollisionFilter::seeing(Layers::ALL).meets(&debris));
+        assert!(!CollisionFilter::seeing(Layers::ALL.without(DEBRIS)).meets(&debris));
+        assert!(
+            CollisionFilter::seeing(DEBRIS.with(Layers::DEFAULT)).meets(&CollisionFilter::DEFAULT)
+        );
+    }
+
+    /// A query for a body touches only what the body would: not what it
+    /// passes through, nor what passes through it.
+    #[test]
+    fn a_query_for_a_body_touches_what_the_body_would() {
+        let character = CollisionFilter {
+            membership: CHARACTER,
+            meets: Layers::ALL,
+        };
+        let ignores_characters = CollisionFilter {
+            membership: DEBRIS,
+            meets: Layers::ALL.without(CHARACTER),
+        };
+        assert!(!character.meets(&ignores_characters));
+        assert!(character.meets(&CollisionFilter::DEFAULT));
     }
 
     /// A world's filtering seen end to end: contacts, CCD, mover sweeps and
@@ -216,7 +250,8 @@ mod tests {
             slab(&mut world, LOOSE_DEBRIS);
             let above = Point3::new(0.0, 1.0, 0.0);
             let down = -Vector3::y();
-            let ray = |layers| world.raycast_looking_for(above, down, 2.0, &[], layers);
+            let ray =
+                |layers| world.raycast_as(above, down, 2.0, &[], CollisionFilter::seeing(layers));
             assert!(ray(Layers::ALL).is_some());
             assert!(ray(Layers::ALL.without(DEBRIS)).is_none());
 
@@ -231,7 +266,7 @@ mod tests {
                         exclude: &[],
                         solid_bodies: false,
                         obstacles: CastObstacles::Everything,
-                        layers,
+                        filter: CollisionFilter::seeing(layers),
                     },
                 )
             };

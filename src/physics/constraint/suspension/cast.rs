@@ -23,7 +23,6 @@ use smallvec::SmallVec;
 
 use crate::physics::body::RigidBody;
 use crate::physics::collider::ColliderMaterial;
-use crate::physics::collision_filter::Layers;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::sphere_cast::{CastObstacles, SphereCast};
 use crate::physics::static_geometry::StaticGeometry;
@@ -62,7 +61,7 @@ pub(crate) fn cast_suspension(
             radius: desc.cast_radius,
             exclude: &exclude,
             solid_bodies: false,
-            layers: Layers::ALL,
+            filter: world.filter_of(desc.body),
             obstacles: CastObstacles::Everything,
         },
     )?;

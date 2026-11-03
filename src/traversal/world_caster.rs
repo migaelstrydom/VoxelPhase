@@ -2,7 +2,8 @@ use nalgebra::{Point3, Vector3};
 use traversal_planner::section::Footing;
 
 use crate::physics::{
-    CastObstacles, Layers, PhysicsWorld, RigidBodyHandle, SphereCast, SphereCastHit, StaticGeometry,
+    CastObstacles, CollisionFilter, PhysicsWorld, RigidBodyHandle, SphereCast, SphereCastHit,
+    StaticGeometry,
 };
 
 /// How fast a dynamic body's surface may move, in m/s, to be seen as
@@ -28,6 +29,9 @@ pub struct WorldCaster<'a> {
     pub scenery: &'a dyn StaticGeometry,
     /// Bodies the casts pass through: the caster's own.
     pub exclude: &'a [RigidBodyHandle],
+    /// What the casts are, as colliders: the caster's own body's filter
+    /// (`PhysicsWorld::filter_of`), so they touch what it would.
+    pub filter: CollisionFilter,
     /// Bodies that carry what stands on them.
     pub carriers: &'a [RigidBodyHandle],
 }
@@ -60,7 +64,7 @@ impl WorldCaster<'_> {
             radius,
             exclude: self.exclude,
             solid_bodies: false,
-            layers: Layers::ALL,
+            filter: self.filter,
             obstacles: CastObstacles::Settled {
                 fastest: IN_FLIGHT_SPEED,
                 seen: self.carriers,

@@ -30,18 +30,22 @@ connects them.
   and turns it at the water's pace and never past it.
 - **Media add up.** Every provider's force, torque and medium on a body accumulate; two
   media combine into one as stiff as both, pulling towards their stiffness-weighted
-  velocity (`MediumDrag::combined`), which is exact for the linearised drags. A body one
-  provider affects gets that provider's output bit for bit.
+  velocity (`MediumDrag::combined`), which is exact for the linearised drags. A body only
+  one medium drags (one provider, or the air alone) gets that medium's output bit for
+  bit; one the air drags as well has the two combined.
 - **The world has air** (`PhysicsConfig::atmosphere`, `atmosphere.rs`): the ambient
   medium, as gravity is the ambient force. Each substep starts every dynamic body's drag at
   the air's, `½ρ·ΣCd·A·|v − wind|` over its bulk (`fluid_drag.rs`, the law water uses
   too; areas cached with the mass properties), and providers' media combine with it. A
   body the air would take more than `felt_within` (60 m) to slow by a factor of e is left
   in vacuum: rocks, characters and grenades fly as before, and only bodies light for
-  their size (a cardboard box, a clump of leaves, a big light crate) feel it. Tests that
-  judge energy conservation (`EnergyAudit`, the fuzz, `stability.rs`) set
-  `Atmosphere::VACUUM`, since drag only takes energy away and could hide what a solver
-  adds.
+  their size (a cardboard box, a clump of leaves, a big light crate) feel it. A body's
+  drag area is a property of its shape, not of how it is cut up: its silhouette averaged
+  over directions (`DragArea::of`), measured on the first substep after its shape
+  changes. Tests of the solver's energy conservation (`physics_fuzz`, `stability.rs`) set
+  `Atmosphere::VACUUM` themselves, since drag only takes energy away and could hide what
+  a solver adds. `EnergyAudit` takes whatever world it is given, and `level_check`'s
+  disturb pass runs it with the game's air, since it checks the game as it plays.
 
 ## Bodies, colliders, constraints
 
@@ -56,8 +60,10 @@ connects them.
 - Collision filtering (`collision_filter.rs`): each collider has a `CollisionFilter`, the
   `Layers` it belongs to and the layers it meets. A pair makes contact only if each meets
   the other; the narrowphase, CCD and `BodySweep::cast` movers all check it. Queries
-  (`SphereCast::layers`, `raycast_looking_for`, `BodySweep::looking_for`) see only
-  colliders in the layers they look for. Static geometry is in no layer and always
+  are filtered as colliders (`SphereCast::filter`, `raycast_as`, `BodySweep::as_collider`):
+  one cast for a body takes `PhysicsWorld::filter_of` it and touches what the body would
+  (a suspension, the traversal planner's casts); one for no body looks for layers
+  (`CollisionFilter::seeing`). Static geometry is in no layer and always
   solid. The engine names only `Layers::DEFAULT`; the game names the rest. Fracture
   carries a collider's filter onto its pieces.
 - Constraints (`constraint/`): persistent definitions in an arena, `ConstraintKind` =

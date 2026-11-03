@@ -15,7 +15,7 @@ use super::ccd::{
 };
 use super::collider::{Collider, ColliderDesc, ColliderShape};
 use super::collider_bounds::ColliderBounds;
-use super::collision_filter::Layers;
+use super::collision_filter::{CollisionFilter, Layers};
 use super::constraint::suspension::{
     cast_suspension, Suspension, SuspensionDesc, SuspensionReadout,
 };
@@ -583,7 +583,7 @@ impl PhysicsWorld {
         };
         let mut sweep = BodySweep::new(self)
             .against_static(static_geometry)
-            .looking_for(cast.layers);
+            .as_collider(cast.filter);
         if cast.solid_bodies {
             sweep = sweep.solid_bodies();
         }
@@ -1453,8 +1453,18 @@ impl PhysicsWorld {
         // leaving each in the air alone, which providers' media join.
         let air = self.config.atmosphere;
         for (_, body) in self.bodies.iter_mut() {
+            if air.density > 0.0 && body.is_dynamic() && body.drag_area_is_stale() {
+                let parts = body
+                    .envelope(&self.colliders)
+                    .map(|part| (part.shape, part.offset));
+                let area = DragArea::of(parts);
+                body.set_drag_area(area);
+            }
             body.set_force(Vector3::zeros());
             body.set_torque(Vector3::zeros());
+            // A sleeping body is not integrated, so its drag is never felt,
+            // and the air never wakes it: still air is all it ever meets. A
+            // wind would have to wake what it should move.
             let drag = if air.drags(body) {
                 air.drag(body)
             } else {
@@ -1632,10 +1642,9 @@ impl PhysicsWorld {
             total_inertia += rotated_inertia + steiner;
         }
 
-        let drag_area = DragArea::of(body.envelope(&self.colliders).map(|part| part.shape));
         if let Some(body) = self.bodies.get_mut(body_handle.0) {
             body.set_mass_properties(total_mass, total_inertia);
-            body.set_drag_area(drag_area);
+            body.invalidate_drag_area();
         }
     }
 
@@ -1648,8 +1657,15 @@ impl PhysicsWorld {
         length: f32,
         exclude: &[RigidBodyHandle],
     ) -> Option<BodyProbeHit> {
-        self.raycast_bodies(origin, direction, length, true, exclude, Layers::ALL)
-            .map(|(body, hit)| BodyProbeHit { body, hit })
+        self.raycast_bodies(
+            origin,
+            direction,
+            length,
+            true,
+            exclude,
+            CollisionFilter::seeing(Layers::ALL),
+        )
+        .map(|(body, hit)| BodyProbeHit { body, hit })
     }
 
     /// Ray probe against every body, static ones included, skipping any body
@@ -1666,21 +1682,44 @@ impl PhysicsWorld {
         length: f32,
         exclude: &[RigidBodyHandle],
     ) -> Option<ProbeHit> {
-        self.raycast_looking_for(origin, direction, length, exclude, Layers::ALL)
+        self.raycast_as(
+            origin,
+            direction,
+            length,
+            exclude,
+            CollisionFilter::seeing(Layers::ALL),
+        )
     }
 
-    /// [`Self::raycast_excluding`] that sees only colliders in `layers`: a
-    /// thrown grenade's predicted path passes through leaves.
-    pub fn raycast_looking_for(
+    /// [`Self::raycast_excluding`] for a ray filtered as `filter`: it hits
+    /// only colliders that meet it, as a thrown grenade's predicted path
+    /// passes through what the grenade would.
+    pub fn raycast_as(
         &self,
         origin: Point3<f32>,
         direction: Vector3<f32>,
         length: f32,
         exclude: &[RigidBodyHandle],
-        layers: Layers,
+        filter: CollisionFilter,
     ) -> Option<ProbeHit> {
-        self.raycast_bodies(origin, direction, length, false, exclude, layers)
+        self.raycast_bodies(origin, direction, length, false, exclude, filter)
             .map(|(_, hit)| hit)
+    }
+
+    /// What `body` is to other colliders, as one filter: it belongs to every
+    /// layer one of its colliders does, and meets every layer one meets. A
+    /// query cast for the body uses it, so it touches what the body would.
+    pub fn filter_of(&self, body: RigidBodyHandle) -> CollisionFilter {
+        let Some(rigid) = self.bodies.get(body.0) else {
+            return CollisionFilter::DEFAULT;
+        };
+        rigid
+            .colliders()
+            .iter()
+            .filter_map(|c| self.colliders.get(c.0))
+            .map(|c| *c.filter())
+            .reduce(CollisionFilter::with)
+            .unwrap_or(CollisionFilter::DEFAULT)
     }
 
     /// The one ray-versus-bodies loop behind `probe_bodies`, `raycast_excluding`
@@ -1693,7 +1732,7 @@ impl PhysicsWorld {
         length: f32,
         skip_static: bool,
         exclude: &[RigidBodyHandle],
-        layers: Layers,
+        filter: CollisionFilter,
     ) -> Option<(RigidBodyHandle, ProbeHit)> {
         debug_assert!(length.is_finite(), "a ray's bounds need a finite length");
         let end = origin + direction * length;
@@ -1716,7 +1755,7 @@ impl PhysicsWorld {
             let Some(collider) = self.colliders.get(ch.0) else {
                 continue;
             };
-            if !collider.filter().seen_by(layers) {
+            if !filter.meets(collider.filter()) {
                 continue;
             }
             let center = collider.world_center(body_pos, body_rot);

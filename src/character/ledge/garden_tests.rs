@@ -8,7 +8,7 @@ use nalgebra::{Point3, Vector3};
 
 use crate::level::load_level;
 use crate::level_check::build_terrain;
-use crate::physics::{PhysicsConfig, PhysicsWorld};
+use crate::physics::{CollisionFilter, PhysicsConfig, PhysicsWorld};
 use crate::terrain::TerrainWorld;
 use crate::traversal::WorldCaster;
 
@@ -25,6 +25,7 @@ fn edge_at(terrain: &TerrainWorld, world: &PhysicsWorld, centre: Point3<f32>) ->
         world,
         scenery: terrain,
         exclude: &[],
+        filter: CollisionFilter::DEFAULT,
         carriers: &[],
     };
     let reach = Reach {

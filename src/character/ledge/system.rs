@@ -105,6 +105,7 @@ impl<'a> System<'a> for LedgeSensorSystem {
                 world,
                 scenery: &*terrain,
                 exclude: &exclude,
+                filter: world.filter_of(body.0),
                 carriers: &seen,
             };
             let reach = |heading: Vector3<f32>| Reach {

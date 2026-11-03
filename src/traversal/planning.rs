@@ -9,7 +9,7 @@ use traversal_planner::{
 
 use crate::collision::AABB;
 
-use crate::physics::{PhysicsWorld, RigidBodyHandle, StaticGeometry};
+use crate::physics::{CollisionFilter, PhysicsWorld, RigidBodyHandle, StaticGeometry};
 
 use super::legs::{footfall_id, Legs, Planted};
 use super::path_frame::PathFrame;
@@ -72,6 +72,9 @@ pub struct PlanningInput<'a> {
     pub scenery: &'a dyn StaticGeometry,
     /// The player's own body, which the casts pass through.
     pub exclude: &'a [RigidBodyHandle],
+    /// What the casts are, as colliders: the player's body's filter
+    /// (`PhysicsWorld::filter_of`), so they touch what it would.
+    pub filter: CollisionFilter,
     /// Bodies that carry what stands on them, read as fixed ground where
     /// they stand ([`super::carriers`]).
     pub carriers: &'a [RigidBodyHandle],
@@ -177,6 +180,7 @@ impl TraversalPlanning {
         world: &'a PhysicsWorld,
         scenery: &'a dyn StaticGeometry,
         exclude: &'a [RigidBodyHandle],
+        filter: CollisionFilter,
         carriers: &'a [RigidBodyHandle],
     ) -> PhysicsCaster<'a> {
         PhysicsCaster {
@@ -184,6 +188,7 @@ impl TraversalPlanning {
             scenery,
             frame: *self.cache.frame().expect("a laid path"),
             exclude,
+            filter,
             carriers,
             top: self.laid_at + self.reach.0,
             bottom: self.laid_at - self.reach.1,
@@ -230,7 +235,13 @@ impl TraversalPlanning {
             strip: self.scenery.as_ref().expect("fetched"),
             source: input.scenery,
         };
-        let caster = self.caster(input.world, &view, input.exclude, input.carriers);
+        let caster = self.caster(
+            input.world,
+            &view,
+            input.exclude,
+            input.filter,
+            input.carriers,
+        );
         self.sampled_ahead = match (laid_afresh, &self.previous) {
             // A path laid afresh carrying the last plan is sampled to its
             // full reach at once: the plan goes on along it, and planned on
@@ -353,6 +364,7 @@ impl TraversalPlanning {
             world: input.world,
             scenery: input.scenery,
             exclude: input.exclude,
+            filter: input.filter,
             body: &self.planner.params.body,
         }
         .path(input.position, input.heading);

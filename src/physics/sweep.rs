@@ -385,8 +385,9 @@ pub struct BodySweep<'a> {
     fastest: f32,
     /// Dynamic bodies that are obstacles however fast they move.
     seen: &'a [RigidBodyHandle],
-    /// Layers whose colliders are obstacles.
-    layers: Layers,
+    /// What the swept shapes are, as colliders: obstacles are what meets
+    /// it.
+    filter: CollisionFilter,
 }
 
 impl<'a> BodySweep<'a> {
@@ -398,14 +399,14 @@ impl<'a> BodySweep<'a> {
             scenery_only: false,
             fastest: f32::INFINITY,
             seen: &[],
-            layers: Layers::ALL,
+            filter: CollisionFilter::seeing(Layers::ALL),
         }
     }
 
-    /// Only colliders in `layers` are obstacles; the static geometry always
-    /// is.
-    pub fn looking_for(mut self, layers: Layers) -> Self {
-        self.layers = layers;
+    /// Only colliders that meet `filter` are obstacles; the static geometry
+    /// always is.
+    pub fn as_collider(mut self, filter: CollisionFilter) -> Self {
+        self.filter = filter;
         self
     }
 
@@ -564,7 +565,8 @@ impl<'a> BodySweep<'a> {
     }
 
     /// Every collider of every body not in `exclude` whose bounds meet
-    /// `bounds`, in the layers looked for and met by `mover`, in arena order.
+    /// `bounds` that meet the sweep's filter and `mover`'s, in arena order. A
+    /// collider gone from the world is no obstacle.
     fn body_obstacles(
         &self,
         exclude: &[RigidBodyHandle],
@@ -575,12 +577,10 @@ impl<'a> BodySweep<'a> {
         self.world.colliders_meeting(bounds, &mut near);
         let world = self.world;
         near.retain(|(body, collider)| {
-            let filter = world
-                .collider(*collider)
-                .map_or(CollisionFilter::DEFAULT, |c| *c.filter());
             !exclude.contains(body)
-                && filter.seen_by(self.layers)
-                && mover.is_none_or(|m| m.meets(&filter))
+                && world.collider(*collider).is_some_and(|c| {
+                    self.filter.meets(c.filter()) && mover.is_none_or(|m| m.meets(c.filter()))
+                })
                 && (!self.scenery_only || world.body(*body).is_some_and(|b| b.is_static()))
                 && (self.fastest == f32::INFINITY
                     || world.body(*body).is_some_and(|b| !b.is_dynamic())

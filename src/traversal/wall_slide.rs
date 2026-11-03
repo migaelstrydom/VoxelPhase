@@ -2,7 +2,7 @@ use nalgebra::{Point3, Vector3};
 use traversal_planner::params::BodyDims;
 
 use crate::physics::{
-    CastObstacles, Layers, PhysicsWorld, RigidBodyHandle, SphereCast, StaticGeometry,
+    CastObstacles, CollisionFilter, PhysicsWorld, RigidBodyHandle, SphereCast, StaticGeometry,
 };
 
 use super::path_frame::PathFrame;
@@ -56,6 +56,9 @@ pub struct WallSlide<'a> {
     pub scenery: &'a dyn StaticGeometry,
     /// Bodies the casts pass through: the player's own.
     pub exclude: &'a [RigidBodyHandle],
+    /// What the casts are, as colliders: the caster's own body's filter
+    /// (`PhysicsWorld::filter_of`), so they touch what it would.
+    pub filter: CollisionFilter,
     pub body: &'a BodyDims,
 }
 
@@ -117,7 +120,7 @@ impl WallSlide<'_> {
             radius: self.body.radius,
             exclude: self.exclude,
             solid_bodies: false,
-            layers: Layers::ALL,
+            filter: self.filter,
             obstacles: CastObstacles::Everything,
         };
         let hit = self.world.cast_sphere(self.scenery, &cast)?;
@@ -175,6 +178,7 @@ mod tests {
             world,
             scenery: &EmptyGeometry,
             exclude: &[],
+            filter: CollisionFilter::DEFAULT,
             body: &body,
         }
         .path(

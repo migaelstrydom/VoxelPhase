@@ -5,7 +5,7 @@ use nalgebra::Vector3;
 use traversal_planner::section::{BodyKey, CastHit, SphereCaster, StripLayout};
 use traversal_planner::{GaitParams, PathVec};
 
-use crate::physics::{PhysicsWorld, RigidBodyHandle, StaticGeometry};
+use crate::physics::{CollisionFilter, PhysicsWorld, RigidBodyHandle, StaticGeometry};
 
 use super::path_frame::PathFrame;
 use super::world_caster::WorldCaster;
@@ -40,6 +40,9 @@ pub struct PhysicsCaster<'a> {
     pub frame: PathFrame,
     /// Bodies the casts pass through: the player's own.
     pub exclude: &'a [RigidBodyHandle],
+    /// What the casts are, as colliders: the caster's own body's filter
+    /// (`PhysicsWorld::filter_of`), so they touch what it would.
+    pub filter: CollisionFilter,
     /// Bodies that carry what stands on them.
     pub carriers: &'a [RigidBodyHandle],
     /// World height casts up give up at, in metres, and casts down start
@@ -74,6 +77,7 @@ impl PhysicsCaster<'_> {
             world: self.world,
             scenery: self.scenery,
             exclude: self.exclude,
+            filter: self.filter,
             carriers: self.carriers,
         }
     }
@@ -145,6 +149,7 @@ mod tests {
             scenery: &EmptyGeometry,
             frame: PathFrame::new(Point3::origin(), 0.0),
             exclude: &[],
+            filter: CollisionFilter::DEFAULT,
             carriers: if carrier { &carriers } else { &[] },
             top: 5.0,
             bottom: -5.0,

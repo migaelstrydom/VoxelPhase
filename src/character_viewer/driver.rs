@@ -410,6 +410,7 @@ fn ride_floor_at(
         scenery: &*terrain,
         frame: PathFrame::new(bottom, 0.0),
         exclude: &exclude,
+        filter: physics.filter_of(character),
         carriers: &carriers,
         top: bottom.y + RIDE_CAST_ABOVE,
         bottom: bottom.y - RIDE_CAST_BELOW,

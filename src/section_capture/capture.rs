@@ -9,7 +9,7 @@ use traversal_planner::{GaitParams, TraversalScene};
 
 use crate::level::load_level;
 use crate::level_check::{build_terrain, is_at_rest, RestTrial};
-use crate::physics::PhysicsImpulse;
+use crate::physics::{CollisionFilter, PhysicsImpulse};
 use crate::traversal::{strip_reach, PathFrame, PhysicsCaster, WallSlide};
 
 /// How high above and below zero anything could stand, in metres: the search
@@ -144,6 +144,7 @@ impl CaptureWorld {
             scenery: &*terrain,
             frame,
             exclude: &[],
+            filter: CollisionFilter::DEFAULT,
             carriers: &[],
             top: SKY,
             bottom: -SKY,
@@ -160,6 +161,7 @@ impl CaptureWorld {
             world: &physics.world,
             scenery: &*terrain,
             exclude: &[],
+            filter: CollisionFilter::DEFAULT,
             body: &params.body,
         }
         .path(Point3::new(at.0, bottom, at.1), frame.forward())

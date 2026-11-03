@@ -222,9 +222,10 @@ pub struct RigidBody {
     // F_drag = -linear * (v - velocity), τ_drag = -angular * (ω - spin).
     drag: MediumDrag,
 
-    // What fluids see of the body, as drag areas: kept with its mass
-    // properties.
-    drag_area: DragArea,
+    // What fluids see of the body, as drag areas. `None` once its shape has
+    // changed, until the world measures it again: measuring is not cheap, and
+    // a fracture changes a body's shape many times in one frame.
+    drag_area: Option<DragArea>,
 
     // Attached colliders
     colliders: Vec<ColliderHandle>,
@@ -296,7 +297,7 @@ impl RigidBody {
             force: Vector3::zeros(),
             torque: Vector3::zeros(),
             drag: MediumDrag::NONE,
-            drag_area: DragArea::default(),
+            drag_area: None,
             colliders: Vec::new(),
             bulk: desc.bulk.map(Box::new),
             drive: None,
@@ -363,9 +364,15 @@ impl RigidBody {
         self.mass
     }
 
-    /// Drag areas of what fluids see of this body ([`Self::envelope`]).
+    /// Drag areas of what fluids see of this body ([`Self::envelope`]):
+    /// none measured since its shape last changed reads as none at all.
     pub fn drag_area(&self) -> DragArea {
-        self.drag_area
+        self.drag_area.unwrap_or_default()
+    }
+
+    /// Whether the drag areas need measuring again.
+    pub(crate) fn drag_area_is_stale(&self) -> bool {
+        self.drag_area.is_none()
     }
 
     pub fn inv_mass(&self) -> f32 {
@@ -604,10 +611,14 @@ impl RigidBody {
         }
     }
 
-    /// Set the drag areas of what fluids see of this body, as its envelope
-    /// changes.
+    /// Set the drag areas of what fluids see of this body, measured afresh.
     pub(crate) fn set_drag_area(&mut self, drag_area: DragArea) {
-        self.drag_area = drag_area;
+        self.drag_area = Some(drag_area);
+    }
+
+    /// Mark the drag areas for measuring again: the body's shape changed.
+    pub(crate) fn invalidate_drag_area(&mut self) {
+        self.drag_area = None;
     }
 
     /// Update mass properties from attached colliders.

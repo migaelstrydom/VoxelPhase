@@ -7,7 +7,7 @@ use traversal_planner::{GaitParams, PathVec, PlannerSettings};
 
 use crate::level::load_level;
 use crate::level_check::{build_terrain, RestTrial};
-use crate::physics::PhysicsImpulse;
+use crate::physics::{CollisionFilter, PhysicsImpulse};
 use crate::section_capture::Blast;
 use crate::traversal::{
     Legs, PathFrame, PhysicsCaster, PlanningCost, PlanningInput, TraversalPlanning,
@@ -146,6 +146,7 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             scenery: &*terrain,
             frame: PathFrame::along(Point3::new(spec.at.0, 0.0, spec.at.1), heading),
             exclude: &[],
+            filter: CollisionFilter::DEFAULT,
             carriers: &[],
             top: SKY,
             bottom: -SKY,
@@ -175,6 +176,7 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             world: &physics.world,
             scenery: &*terrain,
             exclude: &[],
+            filter: CollisionFilter::DEFAULT,
             carriers: &[],
             terrain_changes: &[],
             position,
@@ -188,7 +190,13 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             break;
         };
         let against_fresh = spec.verify.then(|| {
-            let caster = planning.caster(&physics.world, &*terrain, &[], &[]);
+            let caster = planning.caster(
+                &physics.world,
+                &*terrain,
+                &[],
+                CollisionFilter::DEFAULT,
+                &[],
+            );
             StripDifference::between(
                 &planned.section,
                 &sample_section(
