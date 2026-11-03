@@ -93,6 +93,12 @@ impl SurfaceSource {
     /// texture is fixed to it.
     pub const ALBEDO_MODEL_SPACE: Self = Self(1 << 7);
 
+    /// Lit as a mass of leaves (`shader/foliage.glsl`): a normal tilted
+    /// leaf by leaf, from noise fixed to the model's frame; diffuse that
+    /// wraps past the terminator through the gaps between leaves; and the sun
+    /// through the clump's edges seen against it.
+    pub const FOLIAGE: Self = Self(1 << 8);
+
     /// Everything terrain asks for. The four bits that used to be one.
     pub const TERRAIN: Self = Self(
         Self::ALBEDO_TRIPLANAR.0
@@ -138,6 +144,7 @@ mod tests {
         assert_eq!(SurfaceSource::ROUGHNESS_FROM_CHARACTER.0, 4);
         assert_eq!(SurfaceSource::RELIEF_FROM_CHARACTER.0, 8);
         assert_eq!(SurfaceSource::GRAIN_OBJECT_SPACE.0, 16);
+        assert_eq!(SurfaceSource::FOLIAGE.0, 256);
         assert_eq!(SurfaceSource::GRAIN_BY_UV.0, 32);
         assert_eq!(SurfaceSource::RELIEF_IN_ALPHA.0, 64);
         assert_eq!(SurfaceSource::ALBEDO_MODEL_SPACE.0, 128);

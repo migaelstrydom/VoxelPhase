@@ -91,9 +91,19 @@ on the next physics step.
   leaves is dragged but does not drag the clump; only its core is ever
   pushed. Leaves part round a passer, to its capsule plus 10 cm, and ease
   back over 0.2 s, but the parted skin is smooth where it hugs the capsule.
-- **Leaf look.** The leaves are geometry and vertex colour on a matte
-  material. There is no translucency or wrap lighting, which is most of what
-  makes sunlit foliage glow at its edges.
+- **Leaf look.** The bumps are geometry; the leaves are shading
+  (`SurfaceSource::FOLIAGE`, `shader/foliage.glsl`): a normal tilted leaf by
+  leaf from noise in the clump's frame, diffuse wrapped past the terminator,
+  and the sun through the edges of a backlit clump. Tuned by eye on two
+  views; its constants head the shader. Shed leaves are leaf-shaped
+  particles that flutter (`Silhouette::Leaf`).
+- **Parting** opens a hole by a map that cannot fold (`deform::parted`) and
+  shades the leaves it squeezes as the clump's inside. It still reads a
+  little like a well round a wading body: the leaves are one skin, so they
+  compress round the body rather than spring aside one by one. Instanced
+  leaf clusters would fix that.
+- **Only fixed surfaces press.** A sleeping crate on a sleeping clump sits in
+  its leaves: parting needs the passer awake.
 - **Blast distance.** About 50 m for a clump right by a grenade (see
   above).
 - **The traversal planner's casts see cores.** Right while characters meet

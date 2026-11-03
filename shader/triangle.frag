@@ -19,6 +19,7 @@
 #include "aerial.glsl"
 #include "pile.glsl"
 #include "slope_zoning.glsl"
+#include "foliage.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -147,6 +148,11 @@ void main() {
         }
     }
 
+    bool foliage = sourceHas(source, SOURCE_FOLIAGE);
+    if (foliage) {
+        normal = leafNormal(normal, inModelPos, materialModelToWorld());
+    }
+
     vec3 view_dir = normalize(scene.camera_pos.xyz - inWorldPos);
 
     // A transmissive surface is drawn from both sides — the far half of a
@@ -219,6 +225,20 @@ void main() {
                   + materialEmissive()
                   + pileSunResponse(surface, sun, pile) * sun_visibility
                   + pileSkyResponse(surface, sun.direction, pile);
+
+    // Leaves take the sun past the terminator and through their edges: light
+    // the shadow map, which sees the clump as solid, would put them in its
+    // own shadow for. Only part of that self-shadow is let through, so a
+    // clump in a wall's shadow stays mostly in it.
+    if (foliage) {
+        vec3 sun_radiance = sun.colour * sun.intensity;
+        float leaf_visibility = mix(FOLIAGE_SELF_SHADOW, 1.0, sun_visibility);
+        litColor += (surface.albedo * sun_radiance
+                         * leafWrapExtra(surface.normal, sun.direction) * surface.occlusion
+                     + leafTransmission(surface.albedo, surface.normal, view_dir,
+                                        sun.direction, sun_radiance))
+                  * leaf_visibility;
+    }
 
     // Bounded by the live light count, not just MAX_ACTIVE_LIGHTS, to skip
     // shading unused slots. But also clamped to MAX_ACTIVE_LIGHTS: `count` comes

@@ -33,6 +33,10 @@ const uint SOURCE_RELIEF_IN_ALPHA = 1u << 6;
 /// projection anchor, and blended by the model-space normal.
 const uint SOURCE_ALBEDO_MODEL_SPACE = 1u << 7;
 
+/// Lit as a mass of leaves: a leaf-scale normal, wrapped diffuse and the sun
+/// through the edges (`foliage.glsl`).
+const uint SOURCE_FOLIAGE = 1u << 8;
+
 /// Either grain projection.
 const uint SOURCE_GRAIN_ANY = SOURCE_GRAIN_OBJECT_SPACE | SOURCE_GRAIN_BY_UV;
 

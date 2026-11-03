@@ -62,7 +62,9 @@ impl Spawnable for ShrubDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         // The greens ride on the skin's vertices.
-        let leaves = Material::coloured(Colour::WHITE).with_finish(LEAF_FINISH);
+        let leaves = Material::coloured(Colour::WHITE)
+            .with_finish(LEAF_FINISH)
+            .as_foliage();
         Ok(vec![ctx.materials.register(leaves)])
     }
 

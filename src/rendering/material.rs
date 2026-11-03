@@ -217,6 +217,12 @@ impl Material {
         self
     }
 
+    /// Light this material as a mass of leaves ([`SurfaceSource::FOLIAGE`]).
+    pub fn as_foliage(mut self) -> Self {
+        self.source = self.source.with(SurfaceSource::FOLIAGE);
+        self
+    }
+
     /// Give this material a microstructure, projected from the object's own
     /// frame so that it stays put when the object moves.
     pub fn with_grain(mut self, grain: GrainSpec) -> Self {
