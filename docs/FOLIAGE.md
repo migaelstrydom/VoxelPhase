@@ -3,7 +3,8 @@
 Soft greenery for the Garden-of-Earthly-Delights look: topiary shrubs and
 loose clumps of leaves you can wade through, blow loose and kick about. The
 code is `src/foliage/`; the play-test level is
-`levels/shrub_garden.level.ron`.
+`levels/shrub_garden.level.ron`, and the Test Arena has a corner of them
+beside the hover sled and the plank bridge, among everything else.
 
 ## The idea: a firm core inside a soft skin
 

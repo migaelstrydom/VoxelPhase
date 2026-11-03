@@ -241,6 +241,19 @@ Level(
                 // A hover sled at the bridge's south end, nose to it.
                 HoverSled(pos: (8.0, 0.0, 2.5), yaw: -90.0),
 
+                // Foliage (`docs/FOLIAGE.md`): a hedge to wade through beside
+                // the sled, loose clumps to kick into it and sled through,
+                // and a big shrub a grenade can tear loose.
+                Shrub(pos: (13.0, 0.5), radius: 0.55),
+                Shrub(pos: (13.1, 1.6), radius: 0.6),
+                Shrub(pos: (12.9, 2.7), radius: 0.5),
+                Shrub(pos: (13.0, 3.8), radius: 0.6),
+                Shrub(pos: (13.1, 4.9), radius: 0.55),
+                Shrub(pos: (11.0, 6.5), radius: 0.5, loose: true),
+                Shrub(pos: (11.9, 7.3), radius: 0.45, loose: true),
+                Shrub(pos: (10.8, 7.7), radius: 0.4, loose: true),
+                Shrub(pos: (16.5, 3.0), radius: 1.1),
+
                 FencePost(
                     pos: (5.0, -13.0),
                     half_height: 1.0,
