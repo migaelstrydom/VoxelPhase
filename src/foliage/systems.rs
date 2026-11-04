@@ -173,50 +173,24 @@ impl Passer {
     }
 }
 
-/// A collider as the capsule that parts leaves round it: a capsule as
-/// itself, a sphere as a point, and a box or a hull as the capsule along its
-/// longest axis, as thick as the wider of its other two. A beam parts the
-/// leaves along its length, not in a ball as wide as it is long.
+/// A collider as the pusher that parts leaves round it: a sphere or a
+/// capsule as itself, a box or a hull as the box it fills, rounded by its
+/// thinnest half. A beam parts the leaves along its length and a slab
+/// beside its face, not in a ball as wide as it is long.
 fn pusher_of(shape: &ColliderShape, at: Isometry3<f32>) -> Pusher {
-    let centre = Point3::from(at.translation.vector);
     match *shape {
         ColliderShape::Capsule {
             half_height,
             radius,
-        } => {
-            let half = at.rotation * Vector3::y() * (half_height - radius).max(0.0);
-            Pusher {
-                a: centre - half,
-                b: centre + half,
-                radius,
-            }
+        } => Pusher::capsule(at, half_height, radius),
+        ColliderShape::Sphere { radius } => {
+            Pusher::sphere(Point3::from(at.translation.vector), radius)
         }
-        ColliderShape::Sphere { radius } => Pusher {
-            a: centre,
-            b: centre,
-            radius,
-        },
-        ColliderShape::Box { half_extents } => boxed_pusher(at, Vector3::zeros(), half_extents),
-        ColliderShape::ConvexHull { ref hull } => {
-            boxed_pusher(at, hull.box_center, hull.box_half_extents)
-        }
-    }
-}
-
-/// The capsule along the longest axis of a box of `half_extents` centred at
-/// `centre` in the frame `at`.
-fn boxed_pusher(at: Isometry3<f32>, centre: Vector3<f32>, half_extents: Vector3<f32>) -> Pusher {
-    let long = half_extents.imax();
-    let radius = (0..3)
-        .filter(|&axis| axis != long)
-        .map(|axis| half_extents[axis])
-        .fold(0.0, f32::max);
-    let mut along = Vector3::zeros();
-    along[long] = (half_extents[long] - radius).max(0.0);
-    Pusher {
-        a: at * Point3::from(centre - along),
-        b: at * Point3::from(centre + along),
-        radius,
+        ColliderShape::Box { half_extents } => Pusher::block(at, half_extents),
+        ColliderShape::ConvexHull { ref hull } => Pusher::block(
+            at * Isometry3::translation(hull.box_center.x, hull.box_center.y, hull.box_center.z),
+            hull.box_half_extents,
+        ),
     }
 }
 
@@ -385,8 +359,7 @@ impl<'a> System<'a> for FoliageUprootSystem {
 mod tests {
     use super::*;
 
-    /// A long beam parts leaves as a thin capsule along its length: one
-    /// metre to its side, a shrub is clear of it.
+    /// A long beam parts leaves as a thin capsule along its length.
     #[test]
     fn a_beam_pushes_as_a_capsule_along_its_length() {
         let beam = ColliderShape::Box {
@@ -398,7 +371,22 @@ mod tests {
             "radius {}",
             pusher.radius
         );
-        assert!((pusher.b - pusher.a).magnitude() > 5.0);
-        assert!((pusher.a.y).abs() < 1e-6 && (pusher.b.y).abs() < 1e-6);
+        assert_eq!(pusher.core, Vector3::new(2.9, 0.0, 0.0));
+    }
+
+    /// A slab (an arch's abutment) parts leaves as a slab a quarter metre
+    /// thick, not as a capsule as fat as the slab is deep.
+    #[test]
+    fn a_slab_pushes_as_a_slab() {
+        let slab = ColliderShape::Box {
+            half_extents: Vector3::new(2.5, 0.25, 1.6),
+        };
+        let pusher = pusher_of(&slab, Isometry3::identity());
+        assert!(
+            (pusher.radius - 0.25).abs() < 1e-6,
+            "radius {}",
+            pusher.radius
+        );
+        assert!((pusher.core - Vector3::new(2.25, 0.0, 1.35)).magnitude() < 1e-6);
     }
 }

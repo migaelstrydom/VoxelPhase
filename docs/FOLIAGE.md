@@ -103,6 +103,11 @@ on the next physics step.
   little like a well round a wading body: the leaves are one skin, so they
   compress round the body rather than spring aside one by one. Instanced
   leaf clusters would fix that.
+- **A passer is its shape's thinnest half round a flat core**
+  (`deform::Pusher`): a sphere a point, a capsule or beam a segment, a slab
+  a rectangle. The map reaches about as far as the radius, so a big flat
+  body (an arch's abutment) moves only the leaves by its face. A passer
+  that wakes already in the leaves opens its hole at once.
 - **Only fixed surfaces press.** A sleeping crate on a sleeping clump sits in
   its leaves: parting needs the passer awake.
 - **Blast distance.** About 46 m for a clump right by a grenade (see

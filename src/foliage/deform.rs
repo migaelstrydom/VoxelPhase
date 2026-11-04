@@ -168,17 +168,53 @@ impl Squash {
     }
 }
 
-/// Something pushing through a clump's leaves: a capsule, as the segment
-/// at its core and its radius, in the world. A sphere is a capsule whose
-/// segment is a point.
+/// Something pushing through a clump's leaves: a flat core and the radius
+/// round it, in the world. The core is a point (a sphere), a segment (a
+/// capsule, a beam) or a rectangle (a slab), so the radius is the body's
+/// thinnest half and a big flat body moves only the leaves near it: the
+/// parting reaches about as far as the radius does.
 #[derive(Debug, Clone, Copy)]
 pub struct Pusher {
-    /// One end of the core segment.
-    pub a: Point3<f32>,
-    /// The other end.
-    pub b: Point3<f32>,
-    /// Radius round the segment.
+    /// The core's centre and axes, in the world.
+    pub frame: Isometry3<f32>,
+    /// Half extents of the core along the frame's axes; at least one is
+    /// zero, and leaves part across those.
+    pub core: Vector3<f32>,
+    /// Radius round the core.
     pub radius: f32,
+}
+
+impl Pusher {
+    /// A ball of `radius` at `centre`.
+    pub fn sphere(centre: Point3<f32>, radius: f32) -> Self {
+        Self {
+            frame: Isometry3::translation(centre.x, centre.y, centre.z),
+            core: Vector3::zeros(),
+            radius,
+        }
+    }
+
+    /// A capsule along its frame's y axis, `half_height` from its centre to
+    /// either tip.
+    pub fn capsule(frame: Isometry3<f32>, half_height: f32, radius: f32) -> Self {
+        Self {
+            frame,
+            core: Vector3::new(0.0, (half_height - radius).max(0.0), 0.0),
+            radius,
+        }
+    }
+
+    /// A box of `half_extents` in `frame`, as the box its thinnest half
+    /// rounds: a cube parts leaves as a ball, a beam as a capsule along its
+    /// length, a slab as a rounded slab.
+    pub fn block(frame: Isometry3<f32>, half_extents: Vector3<f32>) -> Self {
+        let radius = half_extents.min();
+        Self {
+            frame,
+            core: half_extents.map(|h| (h - radius).max(0.0)),
+            radius,
+        }
+    }
 }
 
 /// The bodies pushing through a clump's leaves, each held a moment after it
@@ -215,8 +251,8 @@ impl Parting {
 
 /// A pusher in the clump's own frame, with how firmly it pushes.
 struct LocalPusher {
-    a: Point3<f32>,
-    b: Point3<f32>,
+    frame: Isometry3<f32>,
+    core: Vector3<f32>,
     radius: f32,
     firmness: f32,
 }
@@ -290,8 +326,8 @@ pub fn deform(
         .pushers
         .iter()
         .map(|(_, p, held)| LocalPusher {
-            a: to_local * p.a,
-            b: to_local * p.b,
+            frame: to_local * p.frame,
+            core: p.core,
             radius: p.radius,
             firmness: (held / give.hold).clamp(0.0, 1.0) * PARTING_SHARE,
         })
@@ -360,47 +396,42 @@ struct Parted {
 
 /// A point and its normal moved out of a pusher's way.
 ///
-/// A leaf `d` from the pusher's axis moves out to `√(d² + c²)`, where `c` is
-/// the hole's radius: one on the axis moves out by `c`, one far away hardly
+/// A leaf `d` from the pusher's core moves out to `√(d² + c²)`, where `c` is
+/// the hole's radius: one on the core moves out by `c`, one far away hardly
 /// at all. The map only ever grows with `d`, so leaves keep their order out
-/// from the axis and the skin never folds over itself, however deep the
-/// body is. It compresses the skin towards the axis by `a = d/√(d² + c²)`
-/// and stretches it round the axis by `1/a`; the normal takes the inverse
+/// from the core and the skin never folds over itself, however deep the
+/// body is. It compresses the skin towards the core by `a = d/√(d² + c²)`
+/// and stretches it round the core by `1/a`; the normal takes the inverse
 /// of that, so each leaf keeps its shading, turned as the skin is.
 ///
-/// Out from a capsule's axis, not from its rounded ends: leaves part round a
-/// body wading through them and close over nothing, so a body opens a
-/// channel through a clump rather than wearing the leaves as a lid. Past its
-/// ends the hole closes over its radius. A sphere (a pusher whose segment is
-/// a point) opens a round hole, every way.
+/// Across the core's thin axes only, not out past its edges: leaves part
+/// round a body wading through them and close over nothing, so a capsule
+/// opens a channel through a clump rather than wearing the leaves as a lid,
+/// and a slab a cleft. Past the core's edges the hole closes over its
+/// radius. A sphere (a pusher whose core is a point) opens a round hole,
+/// every way.
 fn parted(position: Point3<f32>, normal: Vector3<f32>, pusher: &LocalPusher) -> Parted {
     let untouched = Parted {
         position,
         normal,
         squeeze: 1.0,
     };
-    let axis = pusher.b - pusher.a;
-    let length = axis.magnitude();
-    let (core, along, closing) = if length > 1e-6 {
-        let along = axis / length;
-        let t = (position - pusher.a).dot(&along);
-        let past = (-t).max(t - length).max(0.0);
-        let closing = (1.0 - past / pusher.radius).clamp(0.0, 1.0);
-        (
-            pusher.a + along * t.clamp(0.0, length),
-            Some(along),
-            closing,
-        )
-    } else {
-        (pusher.a, None, 1.0)
-    };
+    let local = pusher.frame.inverse_transform_point(&position).coords;
+    let mut offset = Vector3::zeros();
+    let mut past = Vector3::zeros();
+    let mut spans = Vector3::zeros();
+    for axis in 0..3 {
+        if pusher.core[axis] > 0.0 {
+            past[axis] = (local[axis].abs() - pusher.core[axis]).max(0.0);
+            spans[axis] = 1.0;
+        } else {
+            offset[axis] = local[axis];
+        }
+    }
+    let closing = (1.0 - past.magnitude() / pusher.radius).clamp(0.0, 1.0);
     let hole = pusher.radius * pusher.firmness * closing;
     if hole <= 0.0 {
         return untouched;
-    }
-    let mut offset = position - core;
-    if let Some(along) = along {
-        offset -= along * offset.dot(&along);
     }
     let distance = offset.magnitude();
     if distance < 1e-5 {
@@ -409,17 +440,17 @@ fn parted(position: Point3<f32>, normal: Vector3<f32>, pusher: &LocalPusher) -> 
     let out = offset / distance;
     let moved = (distance * distance + hole * hole).sqrt();
     let squeeze = distance / moved;
-    // The normal through the inverse transpose: out from the axis it is
+    // The normal through the inverse transpose: out from the core it is
     // divided by the squeeze, round it multiplied by it, along it unchanged.
-    let n_out = normal.dot(&out);
-    let n_along = along.map_or(0.0, |a| normal.dot(&a));
-    let n_round = normal - out * n_out - along.map_or(Vector3::zeros(), |a| a * n_along);
-    let turned = out * (n_out / squeeze)
-        + n_round * squeeze
-        + along.map_or(Vector3::zeros(), |a| a * n_along);
+    let rotation = pusher.frame.rotation;
+    let n = rotation.inverse() * normal;
+    let n_out = n.dot(&out);
+    let n_along = n.component_mul(&spans);
+    let n_round = n - out * n_out - n_along;
+    let turned = out * (n_out / squeeze) + n_round * squeeze + n_along;
     Parted {
-        position: position + out * (moved - distance),
-        normal: turned.try_normalize(1e-9).unwrap_or(normal),
+        position: position + rotation * (out * (moved - distance)),
+        normal: (rotation * turned).try_normalize(1e-9).unwrap_or(normal),
         squeeze,
     }
 }
@@ -514,11 +545,7 @@ mod tests {
     fn a_body_parts_the_leaves_round_it() {
         let give = Give::default();
         let mut parting = Parting::default();
-        let pusher = Pusher {
-            a: Point3::new(0.0, -0.25, 0.0),
-            b: Point3::new(0.0, 0.25, 0.0),
-            radius: 0.25,
-        };
+        let pusher = Pusher::capsule(Isometry3::identity(), 0.5, 0.25);
         parting.push(
             RigidBodyHandle(generational_arena::Index::from_raw_parts(0, 0)),
             pusher,
@@ -559,11 +586,7 @@ mod tests {
         let mut parting = Parting::default();
         parting.push(
             RigidBodyHandle(generational_arena::Index::from_raw_parts(0, 0)),
-            Pusher {
-                a: Point3::new(0.0, -0.25, 0.0),
-                b: Point3::new(0.0, 0.25, 0.0),
-                radius: 0.25,
-            },
+            Pusher::capsule(Isometry3::identity(), 0.5, 0.25),
             &give,
         );
         let above = [vertex(Vector3::new(0.1, 0.6, 0.0))];
@@ -580,6 +603,43 @@ mod tests {
             &mut out,
         );
         assert_eq!(out[0].pos, above[0].pos);
+    }
+
+    /// A slab moves leaves half a metre above it by a few centimetres, and
+    /// those on its face out to its surface.
+    #[test]
+    fn a_slab_parts_only_the_leaves_near_it() {
+        let give = Give::default();
+        let mut parting = Parting::default();
+        parting.push(
+            RigidBodyHandle(generational_arena::Index::from_raw_parts(0, 0)),
+            Pusher::block(Isometry3::identity(), Vector3::new(2.5, 0.25, 1.6)),
+            &give,
+        );
+        let leaves = [
+            vertex(Vector3::new(1.0, 0.75, 0.5)),
+            vertex(Vector3::new(1.0, 0.05, 0.5)),
+        ];
+        let mut out = Vec::new();
+        let bending = Bending {
+            parting,
+            ..Bending::default()
+        };
+        deform(
+            &skin_of(&leaves),
+            &Isometry3::identity(),
+            &bending,
+            &give,
+            &mut out,
+        );
+        let above = out[0].pos - leaves[0].pos;
+        assert!(above.magnitude() < 0.05, "a leaf above moved {above:?}");
+        assert!(above.x.abs() < 1e-6 && above.z.abs() < 1e-6);
+        assert!(
+            out[1].pos.y >= 0.25 * PARTING_SHARE,
+            "inside at {:?}",
+            out[1].pos
+        );
     }
 
     /// A surface stops pressing a moment after its contact stops.
