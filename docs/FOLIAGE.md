@@ -39,12 +39,13 @@ on the next physics step.
   foot, while a ball of the same mass and size rolls 5 m or more past it
   (`a_clump_tumbles_down_a_slope_and_stops_where_a_ball_rolls_on`).
 - **The world's air, through the clump's whole lobes.** A loose clump's
-  core declares its lobes as its bulk (`LeafCore::bulk`), so the engine's
-  air (`physics::Atmosphere`) and water see a ball of leaves, not the core.
-  A blast's shove is an impulse whatever the mass, so a clump 1.5 m from a
-  grenade leaves at about 60 m/s; honest air brings it down about 50 m away
-  (without air: hundreds). Shorter needs a blast that pushes by a body's
-  exposed area, which would change every blast in the game.
+  core declares its lobes as its bulk (`LeafCore::bulk`), dragging as a
+  porous bush (`LeafCore::drag_coefficient`, 1.0, about twice a smooth
+  ball's), so the engine's air (`physics::Atmosphere`) and water see a ball
+  of leaves, not the core. A blast strikes a body by the area it shows it,
+  so a clump 1.5 m from a grenade leaves at about 48 m/s; the air brings it
+  down about 46 m away (without air: hundreds). How far is now the blast's
+  strength to tune, which is set for the whole game.
 - **Cores are in their own collision layer** (`collision_layers::FOLIAGE`).
   A grenade does not meet it: it passes through a loose clump slowed by the
   leaves, as through a rooted shrub, and its predicted flight looks past
@@ -104,8 +105,8 @@ on the next physics step.
   leaf clusters would fix that.
 - **Only fixed surfaces press.** A sleeping crate on a sleeping clump sits in
   its leaves: parting needs the passer awake.
-- **Blast distance.** About 50 m for a clump right by a grenade (see
-  above).
+- **Blast distance.** About 46 m for a clump right by a grenade (see
+  above): a tuning of the grenade's strength, for the whole game.
 - **The traversal planner's casts see cores.** Right while characters meet
   them; revisit if a clump on the path makes the plan hop it.
 - **Upload while moving.** A still clump is a `ModelInstance`, uploaded

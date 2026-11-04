@@ -7,9 +7,10 @@
 //! spheres, not one ball: a single sphere has nothing to stop it rolling, and
 //! the engine's friction has no rolling resistance, while a lumpy cluster
 //! tumbles like a sack and stops. Its bulk, what the air and water see, is
-//! its whole lobes: a ball of leaves is mostly air, light for its size, so
-//! the world's air slows it to a floaty fall, and a blast's shove (an
-//! impulse whatever the mass) throws it a dozen metres rather than hundreds.
+//! its whole lobes, dragging as a porous bush rather than smooth balls: a
+//! ball of leaves is mostly air, light for its size, so the world's air slows
+//! it to a floaty fall, and a blast, which strikes it by its size, throws it
+//! a few dozen metres rather than hundreds.
 
 use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
 
@@ -28,6 +29,10 @@ pub struct LeafCore {
     /// space its lobes fill. Light, so the player shoves it rather than
     /// stands on it.
     pub bulk_density: f32,
+    /// Drag coefficient of the clump's lobes in air and water: a porous
+    /// bush's, about twice a smooth ball's, since the flow is torn through
+    /// the leaves rather than parted round a surface.
+    pub drag_coefficient: f32,
     /// Grip of the core on whatever it lands on. High: leaves snag.
     pub friction: f32,
     /// Share of its spin the clump loses per second: leaves brushing the
@@ -41,6 +46,7 @@ impl Default for LeafCore {
         Self {
             core_fraction: 0.6,
             bulk_density: 30.0,
+            drag_coefficient: 1.0,
             friction: 0.9,
             angular_damping: 0.6,
         }
@@ -81,8 +87,8 @@ impl LeafCore {
             .collect()
     }
 
-    /// What fluids see of the clump: every lobe whole. It weighs what its
-    /// core spheres weigh.
+    /// What fluids see of the clump: every lobe whole, porous. It weighs
+    /// what its core spheres weigh.
     pub fn bulk(&self, shape: &FoliageShape) -> BulkShape {
         BulkShape::displacing(
             shape
@@ -98,6 +104,7 @@ impl LeafCore {
                 })
                 .collect(),
         )
+        .dragging_as(self.drag_coefficient)
     }
 
     /// How the core rests on level ground: the direction, in the clump's

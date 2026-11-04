@@ -412,11 +412,10 @@ fn capsule_volume(half_height: f32, radius: f32) -> f32 {
     pi * radius * radius * 2.0 * half_height + 4.0 / 3.0 * pi * radius.powi(3)
 }
 
-/// A grenade going off a metre and a half from a clump throws it about fifty
-/// metres; without the air the same shove throws it hundreds. A blast's
-/// shove is an impulse whatever the mass, 60 m/s to a clump this light, and
-/// it is the air through the clump's whole lobes that brings it down within
-/// the level. Shorter needs a blast that pushes by exposed area.
+/// A grenade going off a metre and a half from a clump throws it within the
+/// level; without the air the same shove throws it hundreds of metres. The
+/// blast strikes the clump by its size, and it is the air through the
+/// clump's porous lobes that brings it down.
 #[test]
 fn a_blast_throws_a_clump_within_the_level_not_across_it() {
     let shape = shrub();
@@ -429,9 +428,7 @@ fn a_blast_throws_a_clump_within_the_level_not_across_it() {
         let body =
             LeafCore::default().spawn(&mut world, &shape, standing(&shape, Point3::origin(), 0.01));
         let blast = PhysicsImpulse::radial(Point3::new(-1.5, 0.0, 0.0), 5.0, 1000.0, 0.5);
-        let kick = blast
-            .impulse_at(world.body(body).unwrap().position())
-            .unwrap();
+        let kick = world.impulse_on(body, &blast).unwrap();
         world.apply_impulse(body, kick);
         let launched = kick.magnitude() / world.body(body).unwrap().mass();
         (
