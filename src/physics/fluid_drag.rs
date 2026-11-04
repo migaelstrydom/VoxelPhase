@@ -11,6 +11,7 @@ use std::f32::consts::PI;
 use nalgebra::{Isometry3, Point3, Vector2, Vector3};
 use smallvec::SmallVec;
 
+use super::bulk::EnvelopePart;
 use super::collider::ColliderShape;
 
 /// Drag coefficient of a sphere.
@@ -89,7 +90,7 @@ impl ShapeDrag {
 /// the body's silhouette, averaged over directions: the 2D convex hull of
 /// every part's projected outline, for each of [`SILHOUETTE_DIRECTIONS`]
 /// directions. Its drag coefficient is the parts' own, weighted by their
-/// area. The spin area takes that silhouette at the parts' arm about the
+/// area, or the one the body's bulk declares. The spin area takes that silhouette at the parts' arm about the
 /// body's centre of mass, their own spin radius plus their offset squared,
 /// so a dumbbell turns against the air as a dumbbell.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -107,20 +108,18 @@ pub const SILHOUETTE_DIRECTIONS: usize = 32;
 const CIRCLE_POINTS: usize = 24;
 
 impl DragArea {
-    /// The drag areas of a body made of `parts`, each a shape placed in the
-    /// body's frame, measured from its centre of mass.
-    pub fn of<'a>(
-        parts: impl IntoIterator<Item = (&'a ColliderShape, &'a Isometry3<f32>)>,
-    ) -> Self {
-        let parts: SmallVec<[(&ColliderShape, &Isometry3<f32>); 8]> = parts.into_iter().collect();
+    /// The drag areas of a body whose envelope is `parts`, each placed in
+    /// the body's frame, measured from its centre of mass.
+    pub fn of<'a>(parts: impl IntoIterator<Item = EnvelopePart<'a>>) -> Self {
+        let parts: SmallVec<[EnvelopePart; 8]> = parts.into_iter().collect();
         if parts.is_empty() {
             return Self::default();
         }
         let mut weighted_coefficient = 0.0;
         let mut weighted_arm = 0.0;
         let mut total = 0.0;
-        for (shape, offset) in &parts {
-            let drag = ShapeDrag::of(shape);
+        for part in &parts {
+            let (drag, offset) = (part.drag(), part.offset);
             weighted_coefficient += drag.coefficient * drag.mean_area;
             weighted_arm +=
                 (drag.spin_radius_sq + offset.translation.vector.norm_squared()) * drag.mean_area;
@@ -147,7 +146,7 @@ impl DragArea {
 
 /// The parts' silhouette area averaged over directions spread evenly over a
 /// hemisphere (a silhouette and its opposite are the same).
-fn mean_silhouette(parts: &[(&ColliderShape, &Isometry3<f32>)]) -> f32 {
+fn mean_silhouette(parts: &[EnvelopePart]) -> f32 {
     let golden = PI * (3.0 - 5.0f32.sqrt());
     let mut points = Vec::new();
     let mut sum = 0.0;
@@ -162,8 +161,8 @@ fn mean_silhouette(parts: &[(&ColliderShape, &Isometry3<f32>)]) -> f32 {
             .unwrap_or_else(|| view.cross(&Vector3::y()).normalize());
         let up = view.cross(&across);
         points.clear();
-        for (shape, offset) in parts {
-            outline(shape, offset, &across, &up, &mut points);
+        for part in parts {
+            outline(part.shape, part.offset, &across, &up, &mut points);
         }
         sum += hull_area(&mut points);
     }
@@ -281,7 +280,7 @@ mod tests {
                 )
             })
             .collect();
-        DragArea::of(offsets.iter().map(|o| (&shape, o))).linear
+        DragArea::of(offsets.iter().map(|o| part(&shape, o, None))).linear
     }
 
     /// A metre cube drags the same however it is cut: eight boxes and
@@ -307,7 +306,7 @@ mod tests {
     #[test]
     fn a_sphere_drags_by_its_great_circle() {
         let sphere = ColliderShape::Sphere { radius: 0.3 };
-        let area = DragArea::of([(&sphere, &Isometry3::identity())]).linear;
+        let area = DragArea::of([part(&sphere, &Isometry3::identity(), None)]).linear;
         let exact = SPHERE * PI * 0.09;
         assert!(
             (area - exact).abs() < 0.01 * exact,
@@ -325,11 +324,36 @@ mod tests {
             Isometry3::translation(-1.0, 0.0, 0.0),
             Isometry3::translation(1.0, 0.0, 0.0),
         ];
-        let together = DragArea::of([(&ball, &centred), (&ball, &centred)]).angular;
-        let apart = DragArea::of(ends.iter().map(|o| (&ball, o))).angular;
+        let together =
+            DragArea::of([part(&ball, &centred, None), part(&ball, &centred, None)]).angular;
+        let apart = DragArea::of(ends.iter().map(|o| part(&ball, o, None))).angular;
         assert!(
             apart > 50.0 * together,
             "apart {apart}, together {together}"
         );
+    }
+
+    /// A body that declares its drag coefficient drags by it over the same
+    /// silhouette, and turns as before: spin drag has its own coefficient.
+    #[test]
+    fn a_declared_coefficient_replaces_the_shapes() {
+        let ball = ColliderShape::Sphere { radius: 0.3 };
+        let at = Isometry3::identity();
+        let own = DragArea::of([part(&ball, &at, None)]);
+        let porous = DragArea::of([part(&ball, &at, Some(1.0))]);
+        assert!((porous.linear - own.linear / SPHERE).abs() < 1e-6);
+        assert_eq!(porous.angular, own.angular);
+    }
+
+    fn part<'a>(
+        shape: &'a ColliderShape,
+        offset: &'a Isometry3<f32>,
+        drag_coefficient: Option<f32>,
+    ) -> EnvelopePart<'a> {
+        EnvelopePart {
+            shape,
+            offset,
+            drag_coefficient,
+        }
     }
 }

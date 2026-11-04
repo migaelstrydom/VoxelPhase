@@ -42,7 +42,9 @@ connects them.
   their size (a cardboard box, a clump of leaves, a big light crate) feel it. A body's
   drag area is a property of its shape, not of how it is cut up: its silhouette averaged
   over directions (`DragArea::of`), measured on the first substep after its shape
-  changes. Tests of the solver's energy conservation (`physics_fuzz`, `stability.rs`) set
+  changes. Its drag coefficient is its parts' shapes', unless its bulk declares one
+  (`BulkShape::dragging_as`): a porous body, a clump of leaves bounded by spheres, drags
+  as what it is in air and water alike. Tests of the solver's energy conservation (`physics_fuzz`, `stability.rs`) set
   `Atmosphere::VACUUM` themselves, since drag only takes energy away and could hide what
   a solver adds. `EnergyAudit` takes whatever world it is given, and `level_check`'s
   disturb pass runs it with the game's air, since it checks the game as it plays.

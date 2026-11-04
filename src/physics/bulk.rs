@@ -24,6 +24,7 @@ use generational_arena::Arena;
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 
 use super::collider::{Collider, ColliderShape};
+use super::fluid_drag::ShapeDrag;
 use super::handle::ColliderHandle;
 
 /// A shape placed in a body's frame.
@@ -90,6 +91,11 @@ pub struct BulkShape {
     /// What the body displaces from a fluid and presents to its flow. `None`
     /// leaves it to the colliders.
     envelope: Option<Vec<Volume>>,
+    /// The drag coefficient every fluid sees the envelope with, where its
+    /// shapes' own would be wrong: a clump of leaves bounded by spheres
+    /// drags as a porous bush, not as smooth balls. `None` leaves each part
+    /// its shape's.
+    drag_coefficient: Option<f32>,
 }
 
 impl BulkShape {
@@ -99,6 +105,7 @@ impl BulkShape {
         Self {
             mass: Some(vec![MassPart::new(volume.clone(), density)]),
             envelope: Some(vec![volume]),
+            drag_coefficient: None,
         }
     }
 
@@ -114,6 +121,7 @@ impl BulkShape {
                 MassPart::new(inner, -density),
             ]),
             envelope: Some(vec![outer]),
+            drag_coefficient: None,
         }
     }
 
@@ -123,7 +131,15 @@ impl BulkShape {
         Self {
             mass: None,
             envelope: Some(volumes),
+            drag_coefficient: None,
         }
+    }
+
+    /// The same bulk, dragging as `coefficient` in every fluid whatever
+    /// its envelope's shapes.
+    pub fn dragging_as(mut self, coefficient: f32) -> Self {
+        self.drag_coefficient = Some(coefficient);
+        self
     }
 
     /// Total mass of the declared parts; `None` where the colliders weigh the
@@ -152,9 +168,22 @@ pub struct EnvelopePart<'a> {
     pub shape: &'a ColliderShape,
     /// Placement in the body frame.
     pub offset: &'a Isometry3<f32>,
+    /// The body's declared drag coefficient, if it has one. See
+    /// [`BulkShape::dragging_as`].
+    pub drag_coefficient: Option<f32>,
 }
 
 impl EnvelopePart<'_> {
+    /// What this part presents to a fluid: its shape's areas, with the
+    /// body's drag coefficient where it declares one.
+    pub fn drag(&self) -> ShapeDrag {
+        let drag = ShapeDrag::of(self.shape);
+        ShapeDrag {
+            coefficient: self.drag_coefficient.unwrap_or(drag.coefficient),
+            ..drag
+        }
+    }
+
     /// Where this part is in the world, for a body at `position`, `rotation`.
     pub fn world_transform(
         &self,
@@ -213,21 +242,28 @@ impl<'a, T> Source<'a, T> {
     }
 }
 
-/// A body's envelope: its declared one, or its colliders.
-pub struct Envelope<'a>(Source<'a, Volume>);
+/// A body's envelope: its declared one, or its colliders, with the drag
+/// coefficient its bulk declares.
+pub struct Envelope<'a> {
+    parts: Source<'a, Volume>,
+    drag_coefficient: Option<f32>,
+}
 
 impl<'a> Iterator for Envelope<'a> {
     type Item = EnvelopePart<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next_with(
+        let drag_coefficient = self.drag_coefficient;
+        self.parts.next_with(
             |v| EnvelopePart {
                 shape: &v.shape,
                 offset: &v.offset,
+                drag_coefficient,
             },
             |c| EnvelopePart {
                 shape: c.shape(),
                 offset: c.offset(),
+                drag_coefficient,
             },
         )
     }
@@ -261,11 +297,10 @@ pub(crate) fn envelope<'a>(
     handles: &'a [ColliderHandle],
     colliders: &'a Arena<Collider>,
 ) -> Envelope<'a> {
-    Envelope(Source::new(
-        bulk.and_then(|b| b.envelope.as_deref()),
-        handles,
-        colliders,
-    ))
+    Envelope {
+        parts: Source::new(bulk.and_then(|b| b.envelope.as_deref()), handles, colliders),
+        drag_coefficient: bulk.and_then(|b| b.drag_coefficient),
+    }
 }
 
 /// The mass parts of a body with `bulk` and `handles`.

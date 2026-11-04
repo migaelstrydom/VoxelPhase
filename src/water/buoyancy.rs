@@ -160,6 +160,7 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
                 part_center,
                 part_rot,
                 part.shape,
+                part.drag(),
                 self.fluid_density,
                 ctx.gravity,
                 ctx.gravity_magnitude,
@@ -279,6 +280,7 @@ pub fn lift(world: &PhysicsWorld, body: RigidBodyHandle, water: &dyn WaterSurfac
                 Point3::from(pose.translation.vector),
                 pose.rotation,
                 part.shape,
+                part.drag(),
                 FLUID_DENSITY,
                 Vector3::new(0.0, -GRAVITY, 0.0),
                 GRAVITY,
@@ -300,6 +302,9 @@ pub const FLUID_DENSITY: f32 = 1000.0;
 /// the off-center buoyancy into a central force + torque, and sets
 /// drag coefficients on the body for per-substep application.
 ///
+/// `drag` is what the shape presents to the water's flow: its own
+/// [`ShapeDrag`], or with the coefficient its body declares.
+///
 /// `flow` is the world-space direction the body moves through the water, a
 /// unit vector; the linear drag is taken over the area the shape presents
 /// along it. `None` takes it over the mean projected area.
@@ -310,6 +315,7 @@ pub fn compute_buoyancy(
     collider_center: Point3<f32>,
     body_rotation: UnitQuaternion<f32>,
     shape: &ColliderShape,
+    drag: ShapeDrag,
     fluid_density: f32,
     gravity: Vector3<f32>,
     gravity_magnitude: f32,
@@ -366,7 +372,7 @@ pub fn compute_buoyancy(
         coefficient: shape_cd,
         mean_area: mean_projected_area,
         spin_radius_sq: angular_radius_sq,
-    } = ShapeDrag::of(shape);
+    } = drag;
     let frontal_area = flow.map_or(mean_projected_area, |direction| {
         shape.projected_area(body_rotation.inverse() * direction)
     });
@@ -1044,6 +1050,7 @@ mod tests {
             center,
             UnitQuaternion::identity(),
             &ColliderShape::Sphere { radius: 1.0 },
+            ShapeDrag::of(&ColliderShape::Sphere { radius: 1.0 }),
             1000.0,
             Vector3::new(0.0, -9.81, 0.0),
             9.81,
@@ -1068,6 +1075,7 @@ mod tests {
             center,
             UnitQuaternion::identity(),
             &ColliderShape::Sphere { radius: 1.0 },
+            ShapeDrag::of(&ColliderShape::Sphere { radius: 1.0 }),
             1000.0,
             Vector3::new(0.0, -9.81, 0.0),
             9.81,
@@ -1273,6 +1281,7 @@ mod tests {
                 Point3::new(0.0, 5.0, 0.0),
                 UnitQuaternion::identity(),
                 &shape,
+                ShapeDrag::of(&shape),
                 FLUID_DENSITY,
                 Vector3::new(0.0, -9.81, 0.0),
                 9.81,

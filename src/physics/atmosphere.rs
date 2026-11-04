@@ -97,13 +97,23 @@ mod tests {
     use crate::debug::DebugLines;
     use crate::physics::bench_harness::geometry::EmptyGeometry;
     use crate::physics::{
-        ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc, SequentialStepper, Stepper,
+        BulkShape, ColliderDesc, ColliderShape, PhysicsConfig, PhysicsWorld, RigidBodyDesc,
+        SequentialStepper, Stepper, Volume,
     };
 
     /// A dropped body's speed after `seconds` of falling in `world`.
     fn fall(world: &mut PhysicsWorld, desc: ColliderDesc, seconds: f32) -> f32 {
-        let body =
-            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, 500.0, 0.0)));
+        fall_as(world, RigidBodyDesc::dynamic(), desc, seconds)
+    }
+
+    /// [`fall`], for a body described by `body`.
+    fn fall_as(
+        world: &mut PhysicsWorld,
+        body: RigidBodyDesc,
+        desc: ColliderDesc,
+        seconds: f32,
+    ) -> f32 {
+        let body = world.create_body(body.position(Point3::new(0.0, 500.0, 0.0)));
         world.attach_collider(body, desc);
         world.wake_body(body);
         let mut stepper = SequentialStepper::new(1.0 / 240.0, 12);
@@ -151,6 +161,29 @@ mod tests {
         assert_eq!(
             fall(&mut air, stone(), 2.0),
             fall(&mut vacuum, stone(), 2.0)
+        );
+    }
+
+    /// A ball whose bulk declares a porous body's drag coefficient falls at
+    /// that coefficient's terminal speed, not a smooth ball's.
+    #[test]
+    fn a_declared_drag_coefficient_sets_the_terminal_speed() {
+        let radius: f32 = 0.2;
+        let mass = 0.3;
+        let density = mass / (4.0 / 3.0 * std::f32::consts::PI * radius.powi(3));
+        let ball = || ColliderDesc::sphere(radius).density(density);
+        let porous = RigidBodyDesc::dynamic().bulk(
+            BulkShape::displacing(vec![Volume::centred(ColliderShape::Sphere { radius })])
+                .dragging_as(1.0),
+        );
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let speed = fall_as(&mut world, porous, ball(), 4.0);
+        let area = std::f32::consts::PI * radius * radius;
+        let terminal = (2.0 * mass * 9.81 / (1.2 * area)).sqrt();
+        let smooth = fall(&mut world, ball(), 4.0);
+        assert!(
+            (speed - terminal).abs() < 0.05 * terminal,
+            "fell at {speed} m/s, terminal {terminal}, a smooth ball {smooth}"
         );
     }
 }

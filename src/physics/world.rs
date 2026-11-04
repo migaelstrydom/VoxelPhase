@@ -1454,10 +1454,7 @@ impl PhysicsWorld {
         let air = self.config.atmosphere;
         for (_, body) in self.bodies.iter_mut() {
             if air.density > 0.0 && body.is_dynamic() && body.drag_area_is_stale() {
-                let parts = body
-                    .envelope(&self.colliders)
-                    .map(|part| (part.shape, part.offset));
-                let area = DragArea::of(parts);
+                let area = DragArea::of(body.envelope(&self.colliders));
                 body.set_drag_area(area);
             }
             body.set_force(Vector3::zeros());

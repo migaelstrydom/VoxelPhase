@@ -199,6 +199,7 @@ mod tests {
     use nalgebra::UnitQuaternion;
 
     use super::*;
+    use crate::physics::fluid_drag::ShapeDrag;
     use crate::water::buoyancy::{compute_buoyancy, StillWater, FLUID_DENSITY};
 
     const GRAVITY: f32 = 9.81;
@@ -217,6 +218,7 @@ mod tests {
                 Point3::new(0.0, half_height, 0.0),
                 UnitQuaternion::identity(),
                 &shape,
+                ShapeDrag::of(&shape),
                 FLUID_DENSITY,
                 Vector3::new(0.0, -GRAVITY, 0.0),
                 GRAVITY,
