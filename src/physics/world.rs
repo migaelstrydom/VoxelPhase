@@ -29,7 +29,7 @@ use super::drive::{
     DriveCommand, ReactionAnchor, SupportConfig, SupportResolver, SupportSets, TractionLedger,
     TractionPlanner, TractionUsage,
 };
-use super::fluid_drag::DragArea;
+use super::fluid_drag::{self, DragArea};
 use super::force_provider::{ForceContext, ForceOutput, MediumDrag, SubstepForceProvider};
 use super::grounding::{GroundedBodies, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
@@ -455,17 +455,27 @@ impl PhysicsWorld {
         true
     }
 
+    /// The impulse `impulse` gives `handle`: by the area the body's
+    /// envelope shows it. `None` for no body, or one out of its reach.
+    pub fn impulse_on(
+        &self,
+        handle: RigidBodyHandle,
+        impulse: &PhysicsImpulse,
+    ) -> Option<Vector3<f32>> {
+        let body = self.body(handle)?;
+        blast_on(body, &self.colliders, impulse)
+    }
+
     /// Apply one-shot impulses to all dynamic bodies.
     fn apply_impulses(&mut self, impulses: &[PhysicsImpulse]) {
         for (idx, body) in self.bodies.iter_mut() {
             if !body.is_dynamic() {
                 continue;
             }
-            let pos = body.position();
             let mut wake = false;
 
             for impulse in impulses {
-                if let Some(v) = impulse.impulse_at(pos) {
+                if let Some(v) = blast_on(body, &self.colliders, impulse) {
                     body.apply_impulse(v);
                     wake = true;
                 }
@@ -2112,6 +2122,17 @@ impl PhysicsWorld {
     pub fn manifold_frame_stats(&self) -> ManifoldFrameStats {
         self.manifold_cache.frame_stats()
     }
+}
+
+/// The impulse `impulse` gives `body`, by the area its envelope shows it.
+fn blast_on(
+    body: &RigidBody,
+    colliders: &Arena<Collider>,
+    impulse: &PhysicsImpulse,
+) -> Option<Vector3<f32>> {
+    impulse.impulse_on(body.position(), |travel| {
+        fluid_drag::exposed_area(body.envelope(colliders), body.rotation().inverse() * travel)
+    })
 }
 
 #[cfg(test)]

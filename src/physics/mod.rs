@@ -92,7 +92,7 @@ pub use energy_audit::{energy_per_kg, EnergyAudit};
 pub use force_provider::{ForceContext, ForceOutput, MediumDrag, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
 pub use impact::{Impact, ImpactLedger};
-pub use impulses::{PhysicsImpulse, PhysicsImpulseQueue};
+pub use impulses::{Loading, PhysicsImpulse, PhysicsImpulseQueue};
 pub use profile::{FrameProfile, PhysicsStage};
 pub use rest_pose::resting_turn;
 pub use solver::{

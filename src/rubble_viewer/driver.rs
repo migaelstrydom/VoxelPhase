@@ -238,8 +238,8 @@ fn play(
                     in_pieces = pieces_of(&occupancy);
                     let mass = boulder.mass;
                     let placed = boulder.place(&mut world);
-                    let thrown = shove
-                        .impulse_at(placed.centre)
+                    let thrown = world
+                        .impulse_on(placed.body, &shove)
                         .map_or(Vector3::zeros(), |j| j / mass);
                     followed.push(Followed {
                         index,

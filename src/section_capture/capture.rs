@@ -29,7 +29,8 @@ const BLAST_UPWARD_BOOST: f32 = 0.5;
 #[derive(Clone, Copy, Debug)]
 pub struct Blast {
     pub at: Point3<f32>,
-    /// Impulse at the centre, N·s, falling off linearly to the radius.
+    /// Impulse per area struck at the centre, N·s/m², falling off linearly
+    /// to the radius.
     pub strength: f32,
     /// In metres.
     pub radius: f32,
@@ -93,11 +94,7 @@ impl CaptureWorld {
                     BLAST_UPWARD_BOOST,
                 );
                 for &handle in &handles {
-                    let Some(position) = physics.world.body(handle).map(|body| body.position())
-                    else {
-                        continue;
-                    };
-                    if let Some(shove) = impulse.impulse_at(position) {
+                    if let Some(shove) = physics.world.impulse_on(handle, &impulse) {
                         physics.world.apply_impulse(handle, shove);
                     }
                 }

@@ -144,6 +144,22 @@ impl DragArea {
     }
 }
 
+/// The area a body whose envelope is `parts` shows to `view`, a unit
+/// direction in the body's frame: what a blast travelling along it strikes.
+pub fn exposed_area<'a>(
+    parts: impl IntoIterator<Item = EnvelopePart<'a>>,
+    view: Vector3<f32>,
+) -> f32 {
+    let parts: SmallVec<[EnvelopePart; 8]> = parts.into_iter().collect();
+    match parts.as_slice() {
+        [] => 0.0,
+        [part] => part
+            .shape
+            .projected_area(part.offset.rotation.inverse() * view),
+        _ => silhouette(&parts, view, &mut Vec::new()),
+    }
+}
+
 /// The parts' silhouette area averaged over directions spread evenly over a
 /// hemisphere (a silhouette and its opposite are the same).
 fn mean_silhouette(parts: &[EnvelopePart]) -> f32 {
@@ -155,18 +171,24 @@ fn mean_silhouette(parts: &[EnvelopePart]) -> f32 {
         let ring = (1.0 - z * z).sqrt();
         let azimuth = golden * i as f32;
         let view = Vector3::new(ring * azimuth.cos(), ring * azimuth.sin(), z);
-        let across = view
-            .cross(&Vector3::x())
-            .try_normalize(1e-6)
-            .unwrap_or_else(|| view.cross(&Vector3::y()).normalize());
-        let up = view.cross(&across);
-        points.clear();
-        for part in parts {
-            outline(part.shape, part.offset, &across, &up, &mut points);
-        }
-        sum += hull_area(&mut points);
+        sum += silhouette(parts, view, &mut points);
     }
     sum / SILHOUETTE_DIRECTIONS as f32
+}
+
+/// The area of the parts' silhouette seen along `view`, a unit direction,
+/// with `points` as scratch.
+fn silhouette(parts: &[EnvelopePart], view: Vector3<f32>, points: &mut Vec<Vector2<f32>>) -> f32 {
+    let across = view
+        .cross(&Vector3::x())
+        .try_normalize(1e-6)
+        .unwrap_or_else(|| view.cross(&Vector3::y()).normalize());
+    let up = view.cross(&across);
+    points.clear();
+    for part in parts {
+        outline(part.shape, part.offset, &across, &up, points);
+    }
+    hull_area(points)
 }
 
 /// The points of `shape`'s outline at `offset`, projected onto the plane

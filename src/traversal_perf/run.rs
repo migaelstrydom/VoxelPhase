@@ -117,11 +117,7 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
             let impulse =
                 PhysicsImpulse::radial(blast.at, blast.radius, blast.strength, BLAST_UPWARD_BOOST);
             for &handle in &handles {
-                if let Some(shove) = physics
-                    .world
-                    .body(handle)
-                    .and_then(|body| impulse.impulse_at(body.position()))
-                {
+                if let Some(shove) = physics.world.impulse_on(handle, &impulse) {
                     physics.world.apply_impulse(handle, shove);
                 }
             }

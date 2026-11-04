@@ -44,7 +44,13 @@ connects them.
   over directions (`DragArea::of`), measured on the first substep after its shape
   changes. Its drag coefficient is its parts' shapes', unless its bulk declares one
   (`BulkShape::dragging_as`): a porous body, a clump of leaves bounded by spheres, drags
-  as what it is in air and water alike. Tests of the solver's energy conservation (`physics_fuzz`, `stability.rs`) set
+  as what it is in air and water alike.
+- **A blast strikes a body by the area it shows it.** `PhysicsImpulse::Radial`'s strength is
+  an impulse per square metre (N·s/m²); a body is given that times its envelope's
+  silhouette seen along the blast (`fluid_drag::exposed_area`), so a leaf and a boulder of
+  a size are struck alike and the lighter flies further, a plate edge-on is barely moved,
+  and a block behind another is shielded by it. Fracture and glass read the loading per
+  area (`PhysicsImpulse::loading_at`) as the blast's strength at a point. Tests of the solver's energy conservation (`physics_fuzz`, `stability.rs`) set
   `Atmosphere::VACUUM` themselves, since drag only takes energy away and could hide what
   a solver adds. `EnergyAudit` takes whatever world it is given, and `level_check`'s
   disturb pass runs it with the game's air, since it checks the game as it plays.

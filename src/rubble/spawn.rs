@@ -19,6 +19,7 @@
 //!                       scree.
 //! ```
 
+use std::f32::consts::PI;
 use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
@@ -96,19 +97,21 @@ impl Default for Launch {
 }
 
 impl Launch {
-    /// How a piece of `mass` kg with its centroid at `origin` and its
-    /// furthest point `reach` metres from it leaves the blast: its velocity
-    /// and its spin.
+    /// How a piece of `mass` kg and `volume` m³ with its centroid at
+    /// `origin` and its furthest point `reach` metres from it leaves the
+    /// blast: its velocity and its spin. The blast strikes a lump by about
+    /// the silhouette of a ball of its volume.
     fn of(
         &self,
         shove: &PhysicsImpulse,
-        mass: f32,
+        (mass, volume): (f32, f32),
         origin: Point3<f32>,
         reach: f32,
         rng: &mut impl Rng,
     ) -> (Vector3<f32>, Vector3<f32>) {
+        let radius = (3.0 * volume / (4.0 * PI)).cbrt();
         let velocity = shove
-            .impulse_at(origin)
+            .impulse_on(origin, |_| PI * radius * radius)
             .map_or(Vector3::zeros(), |impulse| impulse / mass.max(f32::EPSILON))
             .cap_magnitude(self.max_speed);
         let axis = Vector3::new(
@@ -286,15 +289,16 @@ impl RubblePlanner {
             }
             Form::Drawn { mesh, bricks } => (mesh, bricks),
         };
-        let mass = fragment.volume() * fragment.material().mass_density();
+        let volume = fragment.volume();
+        let mass = volume * fragment.material().mass_density();
         let reach = mesh
             .vertices
             .iter()
             .map(|v| v.pos.norm())
             .fold(0.0, f32::max);
-        let (velocity, spin) = self
-            .launch
-            .of(shove, mass, mesh.origin, reach, &mut self.rng);
+        let (velocity, spin) =
+            self.launch
+                .of(shove, (mass, volume), mesh.origin, reach, &mut self.rng);
         let plan = match bricks {
             Some(bricks) => Plan::Boulder(Boulder {
                 bricks,

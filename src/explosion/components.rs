@@ -27,7 +27,8 @@ pub struct Explosion {
     pub blast: BlastConfig,
     /// Radius for knockback effect (can be larger than crater).
     pub blast_radius: f32,
-    /// Force magnitude for knockback.
+    /// Knockback: the impulse each square metre a body shows the blast is
+    /// given at its centre, N·s/m².
     pub force: f32,
     /// Whether this explosion has been processed.
     pub processed: bool,

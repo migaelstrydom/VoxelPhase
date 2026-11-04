@@ -118,8 +118,8 @@ impl<'a> System<'a> for FractureSystem {
                         .unwrap_or(body_pos);
                     let blast = last_impulses
                         .iter()
-                        .filter_map(|imp| imp.impulse_at(centre))
-                        .map(|v| v.magnitude())
+                        .filter_map(|imp| imp.loading_at(centre))
+                        .map(|loading| loading.per_area.magnitude())
                         .sum();
                     ChildLoad {
                         blast,
@@ -472,11 +472,15 @@ fn spawn_freed_piece(
     impulse_sources: &[crate::physics::PhysicsImpulse],
     debris: Option<Debris>,
 ) {
-    // Apply explosion impulse directly to this piece's mass so light
-    // pieces fly off faster than heavy ones.
+    // The blast strikes the piece by the area it shows it, so light pieces
+    // fly off faster than heavy ones of a size.
     let explosion_kick: Vector3<f32> = impulse_sources
         .iter()
-        .filter_map(|imp| imp.impulse_at(info.world_pos))
+        .filter_map(|imp| {
+            imp.impulse_on(info.world_pos, |travel| {
+                info.shape.projected_area(info.world_rot.inverse() * travel)
+            })
+        })
         .sum();
     let piece_vel = info.lin_vel + (explosion_kick + info.kick) / info.mass;
 

@@ -240,7 +240,11 @@ fn gather_hits(
             // which of the new shards it blows out.
             let strongest = blasts
                 .iter()
-                .filter_map(|blast| blast.impulse_at(centre).map(|v| (v.magnitude(), blast)))
+                .filter_map(|blast| {
+                    blast
+                        .loading_at(centre)
+                        .map(|loading| (loading.per_area.magnitude(), blast))
+                })
                 .max_by(|a, b| a.0.total_cmp(&b.0));
             if let Some((magnitude, PhysicsImpulse::Radial { center, .. })) = strongest {
                 if magnitude > threshold {

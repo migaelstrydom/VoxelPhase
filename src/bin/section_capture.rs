@@ -12,8 +12,8 @@
 //!   is the floor's, the first below `y` if given (inside a roofed building).
 //! - `--heading deg`: the path's heading, turned about `+Y` from `+Z` like
 //!   every yaw in the level format (90 runs along `+X`).
-//! - `--blast x,y,z,strength,radius` (repeatable): a grenade's shove, N·s at
-//!   the centre falling off to the radius in metres, before settling.
+//! - `--blast x,y,z,strength,radius` (repeatable): a grenade's shove, N·s per
+//!   m² struck at the centre, falling off to the radius in metres, before settling.
 //! - `--speed v` (default 3), `--lead left|right` (default left),
 //!   `--expect crosses|refuses`.
 //!
