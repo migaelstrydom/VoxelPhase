@@ -24,7 +24,7 @@ use crate::debug::DebugLines;
 use crate::explosion::Explosion;
 use crate::physics::bench_harness::geometry::{EmptyGeometry, FlatQuadGeometry, RampGeometry};
 use crate::physics::{
-    Atmosphere, ColliderDesc, CollisionFilter, PhysicsConfig, PhysicsWorld, RigidBodyDesc,
+    Atmosphere, ColliderDesc, CollisionFilter, Layers, PhysicsConfig, PhysicsWorld, RigidBodyDesc,
     RigidBodyHandle, SequentialStepper, StaticGeometry, Stepper,
 };
 
@@ -318,12 +318,11 @@ fn a_grenade_through_a_shrub_comes_out_slowed() {
     assert!(through > 6.0, "the shrub nearly stopped it: {through:.2}");
 }
 
-/// A grenade thrown through a loose clump passes through its core, which
-/// stands for leaves, not wood: it comes out slowed by them, as through a
-/// rooted shrub, and the clump is left where it was. A ball the core does
-/// stop is stopped.
+/// A grenade thrown at a loose clump strikes its core, as any body does,
+/// and knocks the clump: only a rooted shrub, which has no core, lets it
+/// through.
 #[test]
-fn a_grenade_passes_through_a_loose_clump() {
+fn a_grenade_strikes_a_loose_clumps_core() {
     let thrown = |filter: CollisionFilter| {
         let mut world = PhysicsWorld::default();
         let shape = Arc::new(shrub());
@@ -369,19 +368,11 @@ fn a_grenade_passes_through_a_loose_clump() {
             clump.coords.magnitude(),
         )
     };
-    let (x, speed, clump_moved) = thrown(collision_layers::GRENADE);
-    println!("grenade: at x {x:.2}, {speed:.2} m/s; clump moved {clump_moved:.3} m");
-    assert!(x > 2.0, "it did not get through: x {x:.2}");
-    assert!(speed < 11.5, "the leaves did not slow it: {speed:.2}");
-    assert!(
-        clump_moved < 1e-3,
-        "the clump was knocked {clump_moved:.3} m"
-    );
     let (x, _, clump_moved) = thrown(CollisionFilter::DEFAULT);
-    println!("ball: at x {x:.2}; clump moved {clump_moved:.3} m");
+    println!("grenade: at x {x:.2}; clump moved {clump_moved:.3} m");
     assert!(
         x < 1.0 || clump_moved > 0.05,
-        "a ball the core meets went through untouched"
+        "the grenade went through the core untouched"
     );
 }
 
@@ -497,11 +488,14 @@ fn a_thrown_clump_does_not_haul_a_heavier_body() {
     let mut world = still_space();
     let shape = Arc::new(shrub());
     let core = LeafCore::default().spawn(&mut world, &shape, Isometry3::identity());
-    let player = world.create_body(
-        RigidBodyDesc::dynamic()
-            .position(Point3::origin())
-            .filter(collision_layers::GRENADE),
-    );
+    // A body the core does not meet, so only the leaves' drag acts between
+    // them.
+    let player = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()).filter(
+        CollisionFilter {
+            membership: Layers::DEFAULT,
+            meets: Layers::ALL.without(collision_layers::FOLIAGE),
+        },
+    ));
     world.attach_collider(
         player,
         ColliderDesc::capsule(0.5, 0.25).density(56.0 / capsule_volume(0.5, 0.25)),

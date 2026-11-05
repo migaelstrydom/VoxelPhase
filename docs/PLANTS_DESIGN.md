@@ -280,9 +280,9 @@ Done:
     thin limb has almost no inertia about its length, and a heavier crown
     welded to its tip rang until the welds broke.
   - Tree bodies are on the `WOOD` layer: limbs do not meet limbs (a branch
-    overlaps its parent at the fork), and grenades pass through trees, as
-    through leaves, since the crowns' cores are in the limbs' bodies. A
-    grenade passes through a trunk too.
+    overlaps its parent at the fork). Everything else meets them, grenades
+    included: a grenade strikes a trunk, and goes through the outer fifth of
+    a crown's leaves before striking its core, as it would a loose clump's.
   - Left for later: a tapered trunk and bark texture, a trunk that snaps,
     and crowns that sway.
 

@@ -48,10 +48,11 @@ carrying its crown's core.
   `BulkShape::porous`), so the game's grenade 1.5 m from a clump throws it
   at about 28 m/s, where a solid clump would leave at 95, and it comes to
   rest about 32 m away.
-- **Cores are in their own collision layer** (`collision_layers::FOLIAGE`).
-  A grenade does not meet it: it passes through a loose clump slowed by the
-  leaves, as through a rooted shrub, and its predicted flight looks past
-  cores too. Characters and everything else still meet a core.
+- **Cores are in their own collision layer** (`collision_layers::FOLIAGE`),
+  which everything meets, a grenade and its predicted flight included: a
+  grenade passes through a rooted shrub, which has no core, slowed by the
+  leaves, and strikes a loose clump's core as it would any body. A tree's
+  limbs (`collision_layers::WOOD`) do not meet each other.
 - **Leaves are a fluid.** They drag by the law the air and water drag by
   (`DragArea::exposed`), at a quarter of water's density (250 kg/m³): a
   body by the silhouette of its own parts, each by how much of it is in the

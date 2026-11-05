@@ -4,7 +4,6 @@ use nalgebra::{Point3, Vector3};
 
 use crate::character::grab::{self, GrabConfig};
 use crate::character::ArmState;
-use crate::collision_layers;
 use crate::physics::{CollisionFilter, PhysicsWorld, RigidBodyHandle};
 use crate::projectile::{grenade_launch, GrenadeConfig};
 
@@ -94,7 +93,7 @@ impl AimSource for GrenadeAim<'_> {
     }
 
     fn projectile(&self, _ctx: &AimContext) -> CollisionFilter {
-        collision_layers::GRENADE
+        CollisionFilter::DEFAULT
     }
 }
 

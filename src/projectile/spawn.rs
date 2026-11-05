@@ -6,7 +6,6 @@ use specs::{Builder, Entity};
 use super::components::{Grenade, Lifetime, Projectile};
 use super::config::GrenadeConfig;
 use crate::aim::launch::gravity_scale;
-use crate::collision_layers;
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -53,8 +52,7 @@ pub fn create_grenade_body(
     let body_desc = RigidBodyDesc::dynamic()
         .position(origin)
         .linear_velocity(velocity)
-        .gravity_scale(gravity_scale(world_gravity, config.gravity))
-        .filter(collision_layers::GRENADE);
+        .gravity_scale(gravity_scale(world_gravity, config.gravity));
     let body_handle = physics.create_body(body_desc);
 
     let collider_desc = ColliderDesc::sphere(config.radius)

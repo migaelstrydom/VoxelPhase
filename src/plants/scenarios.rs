@@ -10,7 +10,10 @@ use super::plant::Plant;
 use crate::debug::DebugLines;
 use crate::explosion::Explosion;
 use crate::physics::bench_harness::geometry::FlatQuadGeometry;
-use crate::physics::{ConstraintHandle, PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper};
+use crate::physics::{
+    ColliderDesc, ConstraintHandle, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
+    SequentialStepper, Stepper,
+};
 
 const FRAME_DT: f32 = 1.0 / 60.0;
 const PHYSICS_DT: f32 = 1.0 / 240.0;
@@ -186,4 +189,30 @@ fn a_distant_blast_breaks_no_branch() {
     for weld in grove.bodies.branch_welds.iter().flatten() {
         assert!(grove.holds(*weld), "a branch broke 4 m from the blast");
     }
+}
+
+/// A grenade thrown at a tree's trunk strikes it and comes back, as off any
+/// body: trees are solid to grenades.
+#[test]
+fn a_grenade_strikes_a_trunk() {
+    let mut grove = Grove::of(LollipopSpec::default(), 2);
+    let trunk = grove.plant.limbs.limbs[0];
+    let at = trunk.base + (trunk.tip - trunk.base) * 0.3;
+    let grenade = grove.world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(Point3::new(at.x - 2.0, at.y, at.z))
+            .linear_velocity(Vector3::x() * 12.0)
+            .gravity_scale(0.0),
+    );
+    grove
+        .world
+        .attach_collider(grenade, ColliderDesc::sphere(0.2).density(2000.0));
+    grove.world.wake_body(grenade);
+    grove.run(0.5);
+    let x = grove.at(grenade).x;
+    println!(
+        "grenade at x {x:.2} after 0.5 s, the trunk at x {:.2}",
+        at.x
+    );
+    assert!(x < at.x, "it went through the trunk to x {x:.2}");
 }
