@@ -1624,6 +1624,9 @@ impl PhysicsBenchScenario for JengaCrossWobbleScenario {
         let mut config = PhysicsConfig::default();
         config.sleep.enabled = false;
         config.deterministic_contact_ordering = true;
+        // A wobble that does not settle is the solver adding energy, which
+        // air, only taking it away, could hide.
+        config.atmosphere = Atmosphere::VACUUM;
         PhysicsWorld::new(config)
     }
 
@@ -2919,6 +2922,9 @@ impl PhysicsBenchScenario for HingeSettlesUnderLoadScenario {
     fn build_world(&self) -> PhysicsWorld {
         let mut config = PhysicsConfig::default();
         config.sleep.enabled = false;
+        // Its swing must die away by the solver's own damping, which air,
+        // only taking energy away, could stand in for.
+        config.atmosphere = Atmosphere::VACUUM;
         PhysicsWorld::new(config)
     }
 

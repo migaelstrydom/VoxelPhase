@@ -10,8 +10,8 @@ use crate::physics::constraint::spring::Spring;
 use crate::physics::constraint::spring_slider::SpringSlider;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::{
-    ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, SequentialStepper, StaticGeometry,
-    Stepper,
+    Atmosphere, ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
+    SequentialStepper, StaticGeometry, Stepper,
 };
 
 const FIXED_DT: f32 = 1.0 / 240.0;
@@ -29,7 +29,12 @@ struct Bed {
 
 impl Bed {
     fn new(spring: Spring, density: f32) -> Self {
-        let mut world = PhysicsWorld::default();
+        // The bed is judged on what the spring gives back, which air, only
+        // taking energy away, could make up for.
+        let mut world = PhysicsWorld::new(PhysicsConfig {
+            atmosphere: Atmosphere::VACUUM,
+            ..PhysicsConfig::default()
+        });
         let bed = world.create_body(RigidBodyDesc::dynamic().position(REST));
         let _ = world.attach_collider(
             bed,
