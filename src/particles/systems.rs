@@ -6,7 +6,7 @@ use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteS
 
 use super::config::ParticleConfig;
 use super::emitter::ParticleEmitter;
-use super::particle::ParticlePool;
+use super::particle::{Budget, ParticlePool};
 use super::spec::ParticleSpec;
 use crate::components::{Position, Velocity};
 use crate::time::Time;
@@ -65,8 +65,13 @@ pub fn step_emitter(
 
     let scale = emitter.scale;
     let palette = emitter.palette;
+    let budget = spec.most_live.map(|most_live| Budget {
+        effect: emitter.effect_type,
+        most_live,
+    });
     let mut spawn = |position: Vector3<f32>, rng: &mut _| {
         let mut particle = spec.sample(position, scale, rng);
+        particle.budget = budget;
         if let Some(palette) = palette {
             particle.ramp = particle.ramp.recoloured(palette.pick(rng));
             particle.colour = particle.ramp.sample(0.0);

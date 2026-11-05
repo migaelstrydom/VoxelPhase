@@ -10,7 +10,7 @@ use super::palette::Palette;
 /// Each names one [`ParticleSpec`](super::spec::ParticleSpec) in
 /// [`ParticleConfig`](super::config::ParticleConfig); the tuning lives there,
 /// not here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParticleEffectType {
     /// The blinding first instant of a detonation.
     BlastCore,

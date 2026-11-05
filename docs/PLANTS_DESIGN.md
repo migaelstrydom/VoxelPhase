@@ -253,20 +253,24 @@ Done:
   `SkinKind` waits for the second skin kind (blades) and `LeafMass` for the
   first plant with several masses (step 3): neither has anything to do
   until then.
+- **Skin in metres:** each lobe's geodesic sphere is sized for about
+  2.5 cm between vertices, buried vertices are dropped, and bumps are sized
+  in metres and spread evenly by area. Foliage triangles fell from about
+  157k to 117k. A shrub can be grown to a height, as a column or a mound.
+- **Leaf particles:** besides landings and uprooting, whatever moves
+  through a clump knocks leaves off (`rustle.rs`), and a clump flying faster
+  than 4 m/s trails them (`trail.rs`). At most 300 are alive at once
+  (`ParticleSpec::most_live`); past that a new leaf replaces the oldest.
+  The arena's blast among the shrubs peaked at 896 particles without the
+  cap and 477 with it, for about 0.2 ms of GPU.
 
 Next:
-2. **Fix the bumpy skin's triangles:** a fixed vertex spacing per lobe,
-   with buried vertices dropped, and bumps sized in metres so a tall lobe's
-   are not stretched.
-   - Gate: fewer triangles and an equal or sharper look on views of a small
-     and a big lobe.
 3. **Skeleton and the lollipop tree:** the `plants` module, a trunk with one
    or more masses, and the "on a limb" rooting state.
    - A skin hands over its mesh as a shared `Arc<Model>`: today
      `Foliage::model` copies the vertices, so each clump's mesh is held
      twice in CPU memory.
 4. **Cypress:** a tall lobe on a short trunk.
-5. **Leaf particles:** a cap on live leaves.
 
 Later:
 - **Bending on the GPU,** as designed above: 2a moves the old behaviour
@@ -275,8 +279,8 @@ Later:
   with its own shading terms and an oblate crown's core if it can come
   loose.
 - **Trees breaking.**
-- **Review and squash** the branch, and rewrite `docs/FOLIAGE.md` as the
-  plants doc.
+- **Rewrite `docs/FOLIAGE.md`** as the plants doc.
+
 
 ## Decided (2026-11-05)
 

@@ -2,6 +2,9 @@
 
 use nalgebra::{Vector3, Vector4};
 
+use rustc_hash::FxHashMap;
+
+use super::emitter::ParticleEffectType;
 use super::ramp::ColourRamp;
 
 /// Spatial frequency of the swirl field, in radians per world unit.
@@ -86,6 +89,18 @@ pub struct Particle {
     /// 0 turns flat to the camera, 1 flips edge-on and over, as a falling
     /// leaf does.
     pub flutter: f32,
+    /// The limit on live particles of its effect it counts against, if its
+    /// effect has one.
+    pub budget: Option<Budget>,
+}
+
+/// A limit on how many particles of one effect are alive at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    /// The effect whose particles are counted.
+    pub effect: ParticleEffectType,
+    /// The most alive at once: past it, a new one replaces the oldest.
+    pub most_live: usize,
 }
 
 /// A particle's outline.
@@ -130,6 +145,7 @@ impl Default for Particle {
             seed: 0.0,
             silhouette: Silhouette::Disc,
             flutter: 0.0,
+            budget: None,
         }
     }
 }
@@ -236,6 +252,8 @@ fn swirl(position: Vector3<f32>, time: f32) -> Vector3<f32> {
 pub struct ParticlePool {
     particles: Vec<Particle>,
     max_particles: usize,
+    /// Live particles of each effect with a [`Budget`].
+    live: FxHashMap<ParticleEffectType, usize>,
 }
 
 impl ParticlePool {
@@ -244,24 +262,63 @@ impl ParticlePool {
         Self {
             particles: Vec::with_capacity(max_particles),
             max_particles,
+            live: FxHashMap::default(),
         }
     }
 
     /// Add a new particle to the pool.
     ///
-    /// If the pool is full, the oldest particle is replaced.
+    /// If the pool is full, or its effect's [`Budget`] is spent, the oldest
+    /// particle (of its effect, for a budget) is replaced.
     pub fn spawn(&mut self, particle: Particle) {
+        if let Some(budget) = particle.budget {
+            if self.live_of(budget.effect) >= budget.most_live {
+                let effect = Some(budget.effect);
+                self.replace_oldest(particle, |p| p.budget.map(|b| b.effect) == effect);
+                return;
+            }
+        }
         if self.particles.len() < self.max_particles {
+            self.count_in(&particle);
             self.particles.push(particle);
         } else {
-            // Find and replace the oldest particle (shortest remaining life)
-            if let Some((idx, _)) = self
-                .particles
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| a.life.total_cmp(&b.life))
-            {
-                self.particles[idx] = particle;
+            self.replace_oldest(particle, |_| true);
+        }
+    }
+
+    /// Live particles of `effect`, counted only for an effect with a
+    /// [`Budget`].
+    pub fn live_of(&self, effect: ParticleEffectType) -> usize {
+        self.live.get(&effect).copied().unwrap_or(0)
+    }
+
+    /// Puts `particle` in place of the one nearest its end (shortest
+    /// remaining life) among those `among` picks.
+    fn replace_oldest(&mut self, particle: Particle, among: impl Fn(&Particle) -> bool) {
+        let oldest = self
+            .particles
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| among(p))
+            .min_by(|(_, a), (_, b)| a.life.total_cmp(&b.life))
+            .map(|(index, _)| index);
+        if let Some(index) = oldest {
+            self.count_in(&particle);
+            let gone = std::mem::replace(&mut self.particles[index], particle);
+            self.count_out(&gone);
+        }
+    }
+
+    fn count_in(&mut self, particle: &Particle) {
+        if let Some(budget) = particle.budget {
+            *self.live.entry(budget.effect).or_default() += 1;
+        }
+    }
+
+    fn count_out(&mut self, particle: &Particle) {
+        if let Some(budget) = particle.budget {
+            if let Some(count) = self.live.get_mut(&budget.effect) {
+                *count = count.saturating_sub(1);
             }
         }
     }
@@ -275,6 +332,12 @@ impl ParticlePool {
 
         // Remove dead particles
         self.particles.retain(|p| !p.is_dead());
+        self.live.clear();
+        for particle in &self.particles {
+            if let Some(budget) = particle.budget {
+                *self.live.entry(budget.effect).or_default() += 1;
+            }
+        }
     }
 
     /// Get an iterator over all active particles.
@@ -319,6 +382,33 @@ mod tests {
             lifetime,
             ColourRamp::default(),
         )
+    }
+
+    #[test]
+    fn a_budget_replaces_its_own_oldest_and_spares_the_rest() {
+        let budget = Budget {
+            effect: ParticleEffectType::Leaves,
+            most_live: 3,
+        };
+        let leaf = |life| Particle {
+            budget: Some(budget),
+            ..test_particle(life)
+        };
+        let mut pool = ParticlePool::new(100);
+        // A puff nearer its end than any leaf: the budget must not take it.
+        pool.spawn(test_particle(0.1));
+        for life in [1.0, 2.0, 3.0, 4.0, 5.0] {
+            pool.spawn(leaf(life));
+        }
+
+        assert_eq!(pool.count(), 4);
+        assert_eq!(pool.live_of(ParticleEffectType::Leaves), 3);
+        let mut lives: Vec<f32> = pool.iter().map(|p| p.life).collect();
+        lives.sort_by(f32::total_cmp);
+        assert_eq!(lives, [0.1, 3.0, 4.0, 5.0]);
+
+        pool.update(3.5, 0.0);
+        assert_eq!(pool.live_of(ParticleEffectType::Leaves), 2);
     }
 
     #[test]

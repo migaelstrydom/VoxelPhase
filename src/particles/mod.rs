@@ -25,7 +25,7 @@ pub mod vertex;
 pub use config::ParticleConfig;
 pub use emitter::{ParticleEffectType, ParticleEmitter};
 pub use palette::Palette;
-pub use particle::{Particle, ParticlePool, Silhouette};
+pub use particle::{Budget, Particle, ParticlePool, Silhouette};
 pub use ramp::{ColourRamp, ColourStop};
 pub use renderer::ParticleRenderer;
 pub use spec::{LaunchPattern, ParticleSpec, Spread};

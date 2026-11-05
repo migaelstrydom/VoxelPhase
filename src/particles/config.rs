@@ -119,6 +119,7 @@ fn blast_core() -> ParticleSpec {
         drag: 1.2,
         turbulence: 0.0,
         stretch: 0.0,
+        most_live: None,
     }
 }
 
@@ -162,6 +163,7 @@ fn fireball() -> ParticleSpec {
         drag: 0.55,
         turbulence: 2.5,
         stretch: 0.0,
+        most_live: None,
     }
 }
 
@@ -195,6 +197,7 @@ fn blast_dust() -> ParticleSpec {
         drag: 0.35,
         turbulence: 1.2,
         stretch: 0.0,
+        most_live: None,
     }
 }
 
@@ -227,6 +230,7 @@ fn embers() -> ParticleSpec {
         drag: 0.12,
         turbulence: 0.6,
         stretch: 0.035,
+        most_live: None,
     }
 }
 
@@ -255,6 +259,7 @@ fn debris() -> ParticleSpec {
         drag: 0.1,
         turbulence: 0.0,
         stretch: 0.0,
+        most_live: None,
     }
 }
 
@@ -286,6 +291,7 @@ fn shard_glitter() -> ParticleSpec {
         drag: 0.5,
         turbulence: 0.0,
         stretch: 0.0,
+        most_live: None,
     }
 }
 
@@ -318,6 +324,7 @@ fn smoke() -> ParticleSpec {
         drag: 0.35,
         turbulence: 2.0,
         stretch: 0.0,
+        most_live: None,
     }
 }
 
@@ -340,6 +347,7 @@ fn splash() -> ParticleSpec {
         drag: 0.3,
         turbulence: 0.0,
         stretch: 0.0,
+        most_live: None,
     }
 }
 
@@ -368,8 +376,13 @@ fn ember_trail() -> ParticleSpec {
         drag: 1.4,
         turbulence: 0.0,
         stretch: 0.05,
+        most_live: None,
     }
 }
+
+/// The most leaves alive at once, world-wide: a grenade into a hedge sheds
+/// several hundred, and each costs the transparent pass as much as a puff.
+const MOST_LIVE_LEAVES: usize = 300;
 
 /// Leaves knocked off a clump: a light spray that drifts down, flutters
 /// and is gone in a couple of seconds.
@@ -400,6 +413,7 @@ fn leaves() -> ParticleSpec {
         drag: 2.5,
         turbulence: 1.5,
         stretch: 0.0,
+        most_live: Some(MOST_LIVE_LEAVES),
     }
 }
 

@@ -150,6 +150,12 @@ pub struct ParticleSpec {
     pub turbulence: f32,
     /// Motion smear, in seconds. See [`Particle::stretch`].
     pub stretch: f32,
+
+    /// The most of this effect alive at once, world-wide, or `None` for no
+    /// limit but the pool's. Past it a new particle replaces the effect's
+    /// oldest: for an effect many sources shed at once, whose cost would
+    /// otherwise grow with how many there are.
+    pub most_live: Option<usize>,
 }
 
 impl Default for ParticleSpec {
@@ -176,6 +182,7 @@ impl Default for ParticleSpec {
             drag: 0.0,
             turbulence: 0.0,
             stretch: 0.0,
+            most_live: None,
         }
     }
 }
@@ -213,6 +220,7 @@ impl ParticleSpec {
             seed: rng.gen_range(0.0..1.0),
             silhouette: self.silhouette,
             flutter: self.flutter,
+            budget: None,
         }
     }
 }

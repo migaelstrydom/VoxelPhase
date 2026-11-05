@@ -352,7 +352,7 @@ impl Leaves<'_> {
 
 /// How far a point is in the leaves, 0 to 1, and the lobe it is deepest in.
 /// Overlapping lobes are one mass of leaves, not two layers of them.
-fn membership<'a>(point: Point3<f32>, lobes: &'a [PosedLobe]) -> Option<(f32, &'a PosedLobe)> {
+fn membership(point: Point3<f32>, lobes: &[PosedLobe]) -> Option<(f32, &PosedLobe)> {
     lobes
         .iter()
         .map(|lobe| {
