@@ -1,6 +1,8 @@
 # Plants: one architecture for shrubs, trees and other greenery (design)
 
-Status: agreed, 2026-11-05; not yet built. It reshapes `src/foliage/` (branch
+Status: agreed, 2026-11-05; building breadth-first (see Migration):
+plants first, with skins that do not bend; bending, blades and trees
+breaking come later. It reshapes `src/foliage/` (branch
 `foliage-prototype`) so that one architecture grows many kinds of plant,
 replacing today's single kind: round lobed topiary. Levels place a few set
 pieces each, so a plant may be rich, but there must be many kinds.
@@ -63,7 +65,7 @@ such as fruit trees or reeds.
                ├─ Volume: ellipsoid lobes ──▶ drag, stride depth, core, bulk, rest pose
                └─ Skin (by SkinKind)       ──▶ mesh, built once, with give and sprig per vertex
 
-  per frame, per touched mass:
+  later (parked), per frame, per touched mass:
      Bend: up to 8 primitives (nearby colliders, ground planes) and the squash
        ──▶ a per-frame bend table ──▶ the vertex shader (scene and shadow)
            bends the still mesh: one rule, any skin
@@ -151,7 +153,11 @@ such as fruit trees or reeds.
   per-blast total and a world-wide live cap, scaled by its leaf area.
   Settled in step 2b.
 
-### Bend: one rule, on the GPU
+### Bend: one rule, on the GPU (parked)
+
+Parked on 2026-11-05: skins are drawn as grown until the plants are in.
+The CPU bending was removed then (`docs/FOLIAGE.md`), and with it the
+sprig heights; restoring them is part of this step. The design stands:
 
 The skin is uploaded once and never rebuilt. Each frame the CPU hands each
 touched mass a small list of primitives in its own frame, at most 8.
@@ -228,43 +234,45 @@ leaves bent past their rest bounds need nothing.
   blasts that strike by area.
 - **Foliage:** `FoliageDrag`, the stride rule, uprooting of rooted masses,
   the leaf shader, and leaf particles.
-- **Parting's map:** the fold-free map, moved into the shader.
+- **Parting's map:** the fold-free map, to move into the shader when
+  bending returns (it is in git history before the commit that removed
+  it).
 
 ## Migration
 
+Breadth-first: every kind playable before any looks its best.
+
+Done:
+- **Leaf drag:** a fluid by real shape, on both sides.
+- **Bending removed:** skins drawn as grown, the core at 80% of each lobe.
+
+Next:
 1. **Reshape, no change in look.**
-   - `Lobe` becomes an ellipsoid, with every consumer listed above;
-   - `Skin` carries give and sprig in its texture coordinates;
-   - `SkinKind::Nubbed` takes today's generator;
-   - `LeafMass` gathers volume, skin, core and give.
+   - `Lobe` becomes an ellipsoid. Only drag and stride depth need to read
+     it as one: shrubs, the only masses that come loose, stay round, so the
+     core, bulk and resting pose keep their spheres.
+   - `SkinKind::Nubbed` takes today's generator, with bumps sized in metres.
+   - `LeafMass` gathers volume, skin and core.
 
    Gates: every test passes, and the arena renders the same.
-2. **Bend on the GPU,** in two halves.
-   - **2a, look-neutral:** today's behaviour moved exactly.
-     - Covers the bend table, the shader, the Rust mirror and both tests.
-     - Then delete the CPU `deform` path and `ProceduralMesh` for foliage.
-     - Gate: `render_perf` with a blast among the shrubs; `foliage_skin`
-       time and uploads drop to near zero, with no visible change.
-   - **2b, new behaviour,** each with its own test:
-     - every collider parts (sleeping and fixed bodies included), ranked
-       and merged, with the plant's own excluded;
-     - rooted masses pressed by probed ground planes, re-probed on terrain
-       edits;
-     - the leaf-particle budget.
-     - Gate: character_viewer `shrub_*` and an F3 snapshot by the arch.
-3. **Fix the bumpy skin's triangles:** a fixed vertex spacing per lobe,
-   with buried vertices dropped and bumps sized in metres.
+2. **Fix the bumpy skin's triangles:** a fixed vertex spacing per lobe,
+   with buried vertices dropped.
    - Gate: fewer triangles and an equal or sharper look on views of a small
      and a big lobe.
-4. **Skeleton and the lollipop tree:** a trunk with one or more masses, and
-   the "on a limb" rooting state.
-5. **Cypress:** a tall lobe, its capsule core and rotated bulk.
-6. **Blades and the palm:** the second skin kind, drawn from both sides,
-   with its own shading terms and an oblate crown's core.
-7. **Review and squash** the branch, and rewrite `docs/FOLIAGE.md` as the
-   plants doc.
+3. **Skeleton and the lollipop tree:** the `plants` module, a trunk with one
+   or more masses, and the "on a limb" rooting state.
+4. **Cypress:** a tall lobe on a short trunk.
+5. **Leaf particles:** a cap on live leaves.
 
-Steps 1–3 are the shrub's debt; 4–6 each prove the design on a new kind.
+Later:
+- **Bending on the GPU,** as designed above: 2a moves the old behaviour
+  exactly, 2b adds the new.
+- **Blades and the palm:** the second skin kind, drawn from both sides,
+  with its own shading terms and an oblate crown's core if it can come
+  loose.
+- **Trees breaking.**
+- **Review and squash** the branch, and rewrite `docs/FOLIAGE.md` as the
+  plants doc.
 
 ## Decided (2026-11-05)
 
