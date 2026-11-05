@@ -34,6 +34,7 @@ pub mod perf;
 pub mod physics;
 pub mod physics_fuzz;
 pub mod physics_perf;
+pub mod plants;
 pub mod platform;
 pub mod player;
 pub mod projectile;

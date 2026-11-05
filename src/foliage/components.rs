@@ -14,17 +14,24 @@ use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::rendering::material::MaterialId;
 
-/// Whether a clump stands where it grew or has been torn loose.
+/// Whether a clump stands where it grew, is held by a plant, or has been
+/// torn loose.
 #[derive(Debug, Clone, Copy)]
 pub enum Rooting {
-    /// Growing at `pose`: no body, nothing collides with it, only its leaves'
-    /// drag acts.
+    /// Growing from the ground at `pose`: no body, nothing collides with it,
+    /// only its leaves' drag acts. A blast near it tears it loose.
     Rooted {
         /// Where the clump's frame is.
         pose: Isometry3<f32>,
         /// How far its leaves reach below the ground, m: a clump torn loose
         /// is lifted by this, so its core does not start in the ground.
         sunk: f32,
+    },
+    /// Held up by a plant's limb at `pose`: as a rooted clump, but a blast
+    /// does not tear it loose, since its limb holds it.
+    OnLimb {
+        /// Where the clump's frame is.
+        pose: Isometry3<f32>,
     },
     /// Torn loose: its core is this dynamic body, whose frame is the clump's.
     Loose {
@@ -41,34 +48,35 @@ pub enum Rooting {
 pub struct Foliage {
     /// The lobes, in the clump's frame.
     pub shape: Arc<FoliageShape>,
-    /// The skin at rest, in the clump's frame.
-    pub skin: Arc<Skin>,
-    /// What the skin is drawn in.
-    pub material: MaterialId,
+    /// The skin at rest, in the clump's frame, as the model it is drawn as.
+    pub skin: Arc<Model>,
     /// How its core is built when it is torn loose.
     pub core: LeafCore,
-    /// Rooted or loose.
+    /// Rooted, on a limb or loose.
     pub rooting: Rooting,
     /// The core's velocity last frame, to tell a landing from resting.
     pub last_velocity: Vector3<f32>,
 }
 
 impl Foliage {
-    /// A rooted clump at `pose`, its leaves reaching `sunk` metres below
-    /// the ground.
-    pub fn rooted(
+    /// A clump of `shape` drawn as `skin` in `material`, its skin's mesh
+    /// handed to the model it is drawn as.
+    pub fn grown(
         shape: Arc<FoliageShape>,
-        skin: Arc<Skin>,
+        skin: Skin,
         material: MaterialId,
-        pose: Isometry3<f32>,
-        sunk: f32,
+        rooting: Rooting,
     ) -> Self {
+        let primitive = MeshPrimitive {
+            vertices: skin.vertices,
+            indices: skin.indices,
+            material,
+        };
         Self {
             shape,
-            skin,
-            material,
+            skin: Arc::new(Model::flat(vec![ModelPart::new(vec![primitive])])),
             core: LeafCore::default(),
-            rooting: Rooting::Rooted { pose, sunk },
+            rooting,
             last_velocity: Vector3::zeros(),
         }
     }
@@ -77,7 +85,7 @@ impl Foliage {
     pub fn body(&self) -> Option<RigidBodyHandle> {
         match self.rooting {
             Rooting::Loose { body } => Some(body),
-            Rooting::Rooted { .. } => None,
+            Rooting::Rooted { .. } | Rooting::OnLimb { .. } => None,
         }
     }
 
@@ -86,31 +94,26 @@ impl Foliage {
         DragVolume {
             shape: self.shape.clone(),
             frame: match self.rooting {
-                Rooting::Rooted { pose, .. } => VolumeFrame::Fixed(pose),
+                Rooting::Rooted { pose, .. } | Rooting::OnLimb { pose } => VolumeFrame::Fixed(pose),
                 Rooting::Loose { body } => VolumeFrame::Body(body),
             },
         }
     }
 
-    /// Where the clump's frame is now: its pose if rooted, its core's if
-    /// loose. `None` if its core has gone.
+    /// Where the clump's frame is now: its pose if rooted or on a limb, its
+    /// core's if loose. `None` if its core has gone.
     pub fn pose(&self, world: &PhysicsWorld) -> Option<Isometry3<f32>> {
         match self.rooting {
-            Rooting::Rooted { pose, .. } => Some(pose),
+            Rooting::Rooted { pose, .. } | Rooting::OnLimb { pose } => Some(pose),
             Rooting::Loose { body } => world
                 .body(body)
                 .map(|b| Isometry3::from_parts(b.position().coords.into(), b.rotation())),
         }
     }
 
-    /// The skin as a model, uploaded once and drawn in the clump's frame
-    /// wherever the clump goes.
+    /// The skin as its entity's model, uploaded once and drawn in the
+    /// clump's frame wherever the clump goes.
     pub fn model(&self) -> ModelInstance {
-        let skin = MeshPrimitive {
-            vertices: self.skin.vertices.clone(),
-            indices: self.skin.indices.clone(),
-            material: self.material,
-        };
-        ModelInstance::new(Arc::new(Model::flat(vec![ModelPart::new(vec![skin])])))
+        ModelInstance::new(self.skin.clone())
     }
 }

@@ -86,7 +86,7 @@ impl Spawnable for ShrubDef {
         let spec = if self.loose { spec } else { spec.rooted() };
         let spec = self.height.map_or(spec, |h| spec.with_height(h));
         let shape = Arc::new(spec.grow(seed));
-        let skin = Arc::new(SkinSpec::default().grow(&shape, seed));
+        let skin = SkinSpec::default().grow(&shape, seed);
         let yaw = (seed % 360) as f32 * std::f32::consts::PI / 180.0;
         let core = LeafCore::default();
         let (pose, sunk) = if self.loose {
@@ -101,7 +101,7 @@ impl Spawnable for ShrubDef {
             (pose, sunk)
         };
 
-        let mut clump = Foliage::rooted(shape, skin, materials[0], pose, sunk);
+        let mut clump = Foliage::grown(shape, skin, materials[0], Rooting::Rooted { pose, sunk });
         let body = self.loose.then(|| {
             let mut physics = world.write_resource::<PhysicsResource>();
             clump.core.spawn(&mut physics.world, &clump.shape, pose)

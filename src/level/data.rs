@@ -21,6 +21,7 @@ use serde::Deserialize;
 
 use crate::collision::AABB;
 use crate::fracture::DebrisBudget;
+use crate::plants::LollipopSpec;
 use crate::terrain::SegmentFrame;
 use crate::trampoline::TrampolineShape;
 
@@ -34,7 +35,7 @@ use crate::app::spawnables::{
     IceWallDef, IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef,
     MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef,
     PyramidDef, RockDef, SeesawDef, ShrubDef, Spawnable, StackDef, StackItemDef, TableDef,
-    TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef,
+    TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TreeDef, TrilithonDef, VoussoirArchDef,
     BARREL_RADIUS, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
@@ -1174,6 +1175,22 @@ pub enum LevelObject {
         #[serde(default)]
         height: Option<f32>,
     },
+    /// Tree — a lollipop: a slender, solid trunk under one round crown of
+    /// leaves, or a fork of branches under several. Its leaves drag what
+    /// passes through them as a shrub's do; a blast does not tear them off.
+    Tree {
+        /// Position (x, z) of the trunk's foot. Y is the terrain's there.
+        pos: (f32, f32),
+        /// Height from the ground to the top of its leaves, in metres.
+        #[serde(default = "TreeDef::default_height")]
+        height: f32,
+        /// Radius of the main crown, in metres.
+        #[serde(default = "TreeDef::default_crown_radius")]
+        crown_radius: f32,
+        /// How many crowns.
+        #[serde(default = "TreeDef::default_crowns")]
+        crowns: usize,
+    },
     /// Vertical post anchored to terrain. Released when terrain is destroyed.
     FencePost {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -1710,6 +1727,7 @@ impl LevelObject {
             LevelObject::Rock { pos, .. } => ("Rock", anchored(pos)),
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
             LevelObject::Shrub { pos, .. } => ("Shrub", anchored(pos)),
+            LevelObject::Tree { pos, .. } => ("Tree", anchored(pos)),
             LevelObject::Roller { pos, .. } => ("Roller", anchored(pos)),
             LevelObject::HeartCritter { pos, .. } => ("HeartCritter", anchored(pos)),
             LevelObject::Fish { pos, .. } => ("Fish", anchored(pos)),
@@ -2000,6 +2018,10 @@ impl LevelObject {
                 radius: radius * 0.6,
             },
             LevelObject::Rock { size, .. } => Disc { radius: size * 0.5 },
+            // Only its trunk touches the ground.
+            LevelObject::Tree { .. } => Disc {
+                radius: LollipopSpec::default().trunk_radius,
+            },
             LevelObject::Roller { radius, .. } => Disc { radius: *radius },
             // Small and it moves off immediately; the footprint is only
             // ever about what it is standing on at spawn.
@@ -2099,6 +2121,7 @@ impl LevelObject {
             | LevelObject::Rock { .. }
             | LevelObject::FencePost { .. }
             | LevelObject::Shrub { .. }
+            | LevelObject::Tree { .. }
             | LevelObject::Roller { .. }
             | LevelObject::HeartCritter { .. }
             | LevelObject::Fish { .. }
@@ -2226,6 +2249,7 @@ impl LevelObject {
             LevelObject::Rock { pos, .. } => p2(pos),
             LevelObject::FencePost { pos, .. } => p2(pos),
             LevelObject::Shrub { pos, .. } => p2(pos),
+            LevelObject::Tree { pos, .. } => p2(pos),
             LevelObject::Roller { pos, .. } => p2(pos),
             LevelObject::HeartCritter { pos, .. } => p2(pos),
             LevelObject::Fish { pos, .. } => p2(pos),
@@ -2607,6 +2631,18 @@ impl LevelObject {
                 radius: *radius,
                 loose: *loose,
                 height: *height,
+            }),
+
+            LevelObject::Tree {
+                pos,
+                height,
+                crown_radius,
+                crowns,
+            } => Box::new(TreeDef {
+                pos: *pos,
+                height: *height,
+                crown_radius: *crown_radius,
+                crowns: *crowns,
             }),
 
             LevelObject::FencePost {

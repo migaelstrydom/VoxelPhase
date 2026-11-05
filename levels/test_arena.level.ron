@@ -259,6 +259,12 @@ Level(
                 Shrub(pos: (20.3, 3.0), radius: 1.0, height: Some(0.7)),
                 Shrub(pos: (19.5, 6.0), radius: 0.5, height: Some(3.4)),
 
+                // Lollipop trees: one crown on a trunk, a fork of three, and
+                // a small one.
+                Tree(pos: (23.0, 2.0)),
+                Tree(pos: (24.0, 6.5), height: 4.2, crowns: 3),
+                Tree(pos: (22.5, -2.5), height: 2.6, crown_radius: 0.6),
+
                 FencePost(
                     pos: (5.0, -13.0),
                     half_height: 1.0,

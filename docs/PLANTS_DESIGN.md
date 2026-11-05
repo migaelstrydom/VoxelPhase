@@ -266,12 +266,18 @@ Done:
   The arena's blast among the shrubs peaked at 896 particles without the
   cap and 477 with it, for about 0.2 ms of GPU.
 
+- **The lollipop tree** (`src/plants/`): `LollipopSpec` grows a `Plant`,
+  its `Limbs` (the skeleton: a trunk, and branches from a fork for more
+  than one crown) and a `LeafMass` per crown. The limbs are capsules on one
+  static body, drawn as plain tubes; each crown is a `Foliage` clump
+  `OnLimb`, which a blast shakes leaves off but does not tear loose. A
+  clump holds its skin as the model it is drawn as, not a copy. In levels:
+  `Tree(pos, height, crown_radius, crowns)`.
+  - Left for later: a tapered trunk and bark texture, crowns that sway, and
+    `LeafMass` as more than a shape and a pose (it gathers the core and
+    give when bending returns).
+
 Next:
-3. **Skeleton and the lollipop tree:** the `plants` module, a trunk with one
-   or more masses, and the "on a limb" rooting state.
-   - A skin hands over its mesh as a shared `Arc<Model>`: today
-     `Foliage::model` copies the vertices, so each clump's mesh is held
-     twice in CPU memory.
 4. **Cypress:** a tall lobe on a short trunk.
 
 Later:
