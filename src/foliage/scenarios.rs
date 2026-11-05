@@ -196,10 +196,7 @@ fn a_clump_tumbles_down_a_slope_and_stops_where_a_ball_rolls_on() {
     println!("clump on the slope: {clump:?}");
 
     let ball = FoliageShape {
-        lobes: vec![Lobe {
-            centre: Point3::origin(),
-            radius: shape.bounding_radius() * 0.8,
-        }],
+        lobes: vec![Lobe::round(Point3::origin(), shape.bounding_radius() * 0.8)],
     };
     let ball_core = LeafCore {
         bulk_density: core.mass(&shape) / ball.leaf_volume(),
@@ -465,7 +462,7 @@ fn a_plank_sliding_past_a_shrub_is_not_dragged() {
     let reach = shrub()
         .lobes
         .iter()
-        .map(|l| l.centre.coords.x.abs() + l.radius)
+        .map(|l| l.centre.coords.x.abs() + l.greatest_radius())
         .fold(0.0, f32::max);
     let mut world = still_space();
     let plank = world.create_body(

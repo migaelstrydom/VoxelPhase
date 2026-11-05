@@ -11,6 +11,9 @@
 //! ball of leaves is mostly air, light for its size, so the world's air slows
 //! it to a floaty fall, and a blast, which strikes it by its size, throws it
 //! a few dozen metres rather than hundreds.
+//!
+//! Only round shrubs come loose, so the core reads each lobe as a ball: of
+//! its least radius, which is the lobe's own radius when it is round.
 
 use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
 
@@ -74,7 +77,7 @@ impl LeafCore {
         let radii: Vec<f32> = shape
             .lobes
             .iter()
-            .map(|l| l.radius * self.core_fraction)
+            .map(|l| l.least_radius() * self.core_fraction)
             .collect();
         let core_volume: f32 = radii
             .iter()
@@ -105,7 +108,7 @@ impl LeafCore {
                 .map(|lobe| {
                     Volume::at(
                         ColliderShape::Sphere {
-                            radius: lobe.radius,
+                            radius: lobe.least_radius(),
                         },
                         lobe.centre.coords,
                     )
@@ -129,7 +132,7 @@ impl LeafCore {
         let spheres: Vec<(Vector3<f32>, f32)> = shape
             .lobes
             .iter()
-            .map(|l| (l.centre.coords, l.radius * self.core_fraction))
+            .map(|l| (l.centre.coords, l.least_radius() * self.core_fraction))
             .collect();
         let height = |d: &Vector3<f32>| {
             spheres
@@ -229,13 +232,13 @@ mod tests {
         let lowest = shape
             .lobes
             .iter()
-            .map(|l| (pose * l.centre).y - l.radius * core.core_fraction)
+            .map(|l| (pose * l.centre).y - l.least_radius() * core.core_fraction)
             .fold(f32::MAX, f32::min);
         assert!(lowest.abs() < 1e-4, "lowest sphere at {lowest}");
         let upright = shape
             .lobes
             .iter()
-            .map(|l| l.radius * core.core_fraction - l.centre.y)
+            .map(|l| l.least_radius() * core.core_fraction - l.centre.y)
             .fold(f32::MIN, f32::max);
         let (_, height) = core.resting_down(&shape);
         assert!(

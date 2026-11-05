@@ -31,7 +31,7 @@ use generational_arena::Arena;
 use nalgebra::{Isometry3, Point3, Vector3};
 use smallvec::SmallVec;
 
-use super::shape::FoliageShape;
+use super::shape::{FoliageShape, Lobe};
 use crate::physics::{
     Collider, ColliderShape, EnvelopePart, ForceContext, ForceOutput, MediumDrag, PhysicsWorld,
     RigidBody, RigidBodyHandle, SubstepForceProvider,
@@ -98,8 +98,8 @@ impl FrameMotion {
 
 /// A lobe posed in the world, with the velocity and spin of the leaves in it.
 struct PosedLobe {
-    centre: Point3<f32>,
-    radius: f32,
+    /// The lobe, its centre and axes in the world.
+    lobe: Lobe,
     /// Velocity of the leaves at the lobe's centre.
     velocity: Vector3<f32>,
     /// Spin of the leaves.
@@ -136,8 +136,11 @@ impl DragVolume {
             let centre = motion.pose * lobe.centre;
             let arm = centre - Point3::from(motion.pose.translation.vector);
             PosedLobe {
-                centre,
-                radius: lobe.radius,
+                lobe: Lobe {
+                    centre,
+                    rotation: motion.pose.rotation * lobe.rotation,
+                    ..*lobe
+                },
                 velocity: motion.velocity + motion.spin.cross(&arm),
                 spin: motion.spin,
             }
@@ -146,15 +149,13 @@ impl DragVolume {
 }
 
 /// How deep a ball of `radius` at `centre` is in a lobe, from 0 (clear of
-/// it) to 1 (wholly inside): the overlap of the two along the line between
-/// them, over the ball's diameter. A body bigger than the lobe is never
-/// wholly in it.
+/// it) to 1 (wholly inside): how far it reaches past the lobe's surface,
+/// over its diameter. A body bigger than the lobe is never wholly in it.
 fn immersion(centre: Point3<f32>, radius: f32, lobe: &PosedLobe) -> f32 {
-    let distance = (centre - lobe.centre).magnitude();
-    let overlap = lobe.radius + radius - distance;
+    let overlap = radius - lobe.lobe.signed_distance(centre);
     (overlap / (2.0 * radius))
         .clamp(0.0, 1.0)
-        .min(lobe.radius / radius)
+        .min(lobe.lobe.least_radius() / radius)
 }
 
 /// How deep a ball of `radius` at `centre` is in `volume`'s leaves now.
@@ -355,7 +356,7 @@ fn membership<'a>(point: Point3<f32>, lobes: &'a [PosedLobe]) -> Option<(f32, &'
     lobes
         .iter()
         .map(|lobe| {
-            let inside = lobe.radius - (point - lobe.centre).magnitude();
+            let inside = -lobe.lobe.signed_distance(point);
             ((inside / LEAF_EDGE + 0.5).clamp(0.0, 1.0), lobe)
         })
         .filter(|(depth, _)| *depth > 0.0)
@@ -455,13 +456,17 @@ impl Pull {
 
 #[cfg(test)]
 mod tests {
+    use nalgebra::UnitQuaternion;
+
     use super::*;
-    use crate::foliage::shape::Lobe;
 
     fn lobe_at(centre: Point3<f32>, radius: f32) -> PosedLobe {
+        posed(Lobe::round(centre, radius))
+    }
+
+    fn posed(lobe: Lobe) -> PosedLobe {
         PosedLobe {
-            centre,
-            radius,
+            lobe,
             velocity: Vector3::zeros(),
             spin: Vector3::zeros(),
         }
@@ -480,16 +485,38 @@ mod tests {
         assert!(immersion(Point3::origin(), 1.0, &lobe) <= 0.5);
     }
 
+    /// A tall lobe holds a ball far up its long axis that a round lobe of its
+    /// width would not, and a turned lobe holds it along its turned axis.
+    #[test]
+    fn a_tall_lobe_holds_leaves_along_its_length() {
+        let tall = Lobe {
+            radii: Vector3::new(0.4, 1.5, 0.4),
+            ..Lobe::round(Point3::origin(), 0.4)
+        };
+        let high = Point3::new(0.0, 1.2, 0.0);
+        assert_eq!(immersion(high, 0.1, &posed(tall)), 1.0);
+        assert_eq!(immersion(high, 0.1, &lobe_at(Point3::origin(), 0.4)), 0.0);
+        let lying = Lobe {
+            rotation: UnitQuaternion::from_axis_angle(
+                &Vector3::z_axis(),
+                std::f32::consts::FRAC_PI_2,
+            ),
+            ..tall
+        };
+        assert_eq!(immersion(high, 0.1, &posed(lying)), 0.0);
+        assert_eq!(
+            immersion(Point3::new(1.2, 0.0, 0.0), 0.1, &posed(lying)),
+            1.0
+        );
+    }
+
     /// A loose volume's lobes move with its body: a point off the centre
     /// of a spinning clump moves as the spin carries it.
     #[test]
     fn a_spinning_clump_carries_its_leaves_round() {
         let volume = DragVolume {
             shape: Arc::new(FoliageShape {
-                lobes: vec![Lobe {
-                    centre: Point3::new(1.0, 0.0, 0.0),
-                    radius: 0.3,
-                }],
+                lobes: vec![Lobe::round(Point3::new(1.0, 0.0, 0.0), 0.3)],
             }),
             frame: VolumeFrame::Fixed(Isometry3::identity()),
         };

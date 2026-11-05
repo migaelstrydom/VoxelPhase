@@ -118,18 +118,18 @@ impl SkinSpec {
                     direction.z * 3.0,
                     seed,
                 ) * self.roughness;
-                let at = surface_point(lobe, direction) * LEAF_FREQUENCY;
+                let at = lobe.surface_point(direction, 1.0).coords * LEAF_FREQUENCY;
                 let leaves = self.leaf_relief * perlin_3d(at.x, at.y, at.z, seed ^ 0xa5a5);
-                let radius =
-                    lobe.radius * (1.0 - self.nub_depth * (1.0 - height) + wobble) + leaves;
-                let position = lobe.centre + direction * radius;
+                let normal = lobe.normal_at(direction);
+                let scale = 1.0 - self.nub_depth * (1.0 - height) + wobble;
+                let position = lobe.surface_point(direction, scale) + normal * leaves;
                 hidden.push(self.is_buried(position, index, shape));
                 vertices.push(Vertex {
                     pos: position.coords,
                     color: opaque(self.colour(height, nub)),
                     tex_coords: Vector2::zeros(),
-                    normal: direction,
-                    ao: self.crevice(height) * lobe_occlusion(position, direction, index, shape),
+                    normal,
+                    ao: self.crevice(height) * lobe_occlusion(position, normal, index, shape),
                 });
             }
             for face in sphere.indices.chunks_exact(3) {
@@ -145,7 +145,7 @@ impl SkinSpec {
 
     /// Nubs spread evenly over a lobe, as many as fit their size.
     fn nubs(&self, lobe: &Lobe, rng: &mut StdRng) -> Vec<Nub> {
-        let count = ((4.0 * lobe.radius * lobe.radius) / (self.nub_radius * self.nub_radius) * 1.1)
+        let count = (lobe.area() / (std::f32::consts::PI * self.nub_radius * self.nub_radius) * 1.1)
             .round()
             .max(8.0) as usize;
         let golden = std::f32::consts::PI * (3.0 - 5.0f32.sqrt());
@@ -180,7 +180,7 @@ impl SkinSpec {
         nubs: &'a [Nub],
     ) -> (f32, Option<&'a Nub>) {
         // Chord distance on the unit sphere, against a nub's radius there.
-        let reach = (self.nub_radius / lobe.radius) * 1.15;
+        let reach = (self.nub_radius / lobe.mean_radius()) * 1.15;
         let mut best = (0.0f32, None);
         for nub in nubs {
             let chord2 = 2.0 * (1.0 - direction.dot(&nub.direction));
@@ -196,10 +196,12 @@ impl SkinSpec {
     /// Whether a point is inside another lobe's valleys: hidden whatever
     /// way the clump is turned.
     fn is_buried(&self, point: Point3<f32>, index: usize, shape: &FoliageShape) -> bool {
-        shape.lobes.iter().enumerate().any(|(other, lobe)| {
-            let inner = lobe.radius * (1.0 - self.nub_depth) * 0.97;
-            other != index && (point - lobe.centre).magnitude_squared() < inner * inner
-        })
+        let inner = (1.0 - self.nub_depth) * 0.97;
+        shape
+            .lobes
+            .iter()
+            .enumerate()
+            .any(|(other, lobe)| other != index && lobe.contains_scaled(point, inner))
     }
 
     fn colour(&self, height: f32, nub: Option<&Nub>) -> Vector3<f32> {
@@ -223,14 +225,9 @@ impl SkinSpec {
 /// Leaf-sized relief per metre: a leaf or two across a nub.
 const LEAF_FREQUENCY: f32 = 22.0;
 
-/// Where on a lobe's surface a direction from its centre points, for
-/// noise laid in the clump's frame so neighbouring lobes share it.
-fn surface_point(lobe: &Lobe, direction: Vector3<f32>) -> Vector3<f32> {
-    lobe.centre.coords + direction * lobe.radius
-}
-
-/// Light the other lobes keep from a point on one: each a sphere seen from
-/// the point, weighted by how squarely the point's surface faces it.
+/// Light the other lobes keep from a point on one: each a ball of its mean
+/// radius seen from the point, weighted by how squarely the point's surface
+/// faces it.
 fn lobe_occlusion(
     point: Point3<f32>,
     normal: Vector3<f32>,
@@ -243,9 +240,10 @@ fn lobe_occlusion(
             continue;
         }
         let to = lobe.centre - point;
-        let distance = to.magnitude().max(lobe.radius);
+        let radius = lobe.mean_radius();
+        let distance = to.magnitude().max(radius);
         let facing = (normal.dot(&to) / distance).max(0.0);
-        blocked += (lobe.radius / distance).powi(2) * facing;
+        blocked += (radius / distance).powi(2) * facing;
     }
     (1.0 - 0.7 * blocked).clamp(0.3, 1.0)
 }
@@ -325,6 +323,38 @@ mod tests {
         assert!(
             outward * 100 > skin.indices.len() / 3 * 98,
             "faces wind inward"
+        );
+    }
+
+    /// A tall lobe's skin is stretched to its height: its nub tops reach its
+    /// semi-axes and no further.
+    #[test]
+    fn a_tall_lobe_grows_a_tall_skin() {
+        let lobe = Lobe {
+            radii: Vector3::new(0.4, 1.5, 0.4),
+            ..Lobe::round(Point3::origin(), 0.4)
+        };
+        let shape = FoliageShape { lobes: vec![lobe] };
+        let spec = SkinSpec::default();
+        let skin = spec.grow(&shape, 1);
+        let top = skin
+            .vertices
+            .iter()
+            .map(|v| v.pos.y)
+            .fold(f32::MIN, f32::max);
+        let side = skin
+            .vertices
+            .iter()
+            .map(|v| v.pos.x)
+            .fold(f32::MIN, f32::max);
+        let slack = 1.0 + spec.roughness;
+        assert!(
+            top > 1.4 && top < 1.5 * slack + spec.leaf_relief,
+            "top {top}"
+        );
+        assert!(
+            side > 0.36 && side < 0.4 * slack + spec.leaf_relief,
+            "side {side}"
         );
     }
 }
