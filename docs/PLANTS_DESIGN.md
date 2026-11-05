@@ -61,11 +61,12 @@ such as fruit trees or reeds.
      │                                                    (a trunk is solid)
      └────▶ LeafMass × n, each on a limb (or on the ground, for a shrub)
                ├─ Volume: ellipsoid lobes ──▶ drag, stride depth, core, bulk, rest pose
-               └─ Skin (by SkinKind)       ──▶ mesh, built once, with a give weight per vertex
+               └─ Skin (by SkinKind)       ──▶ mesh, built once, with give and sprig per vertex
 
   per frame, per touched mass:
-     Bend: nearby colliders as they are, ground planes, squash ──▶ the GPU's
-     vertex shader bends the still mesh (one rule, any skin)
+     Bend: up to 8 primitives (nearby colliders, ground planes) and the squash
+       ──▶ a per-frame bend table ──▶ the vertex shader (scene and shadow)
+           bends the still mesh: one rule, any skin
 ```
 
 ### Skeleton
@@ -78,6 +79,17 @@ such as fruit trees or reeds.
   own step, out of scope here.
 - **Shrubs** have no skeleton.
 
+### Rooting
+
+`Rooting` gains a third state:
+
+- **Rooted:** on the ground, no body (today's shrub).
+- **On a limb:** a leaf mass held by its plant's skeleton. A blast does not
+  tear it loose; it stays until limbs can break (decided: later).
+  `FoliageUprootSystem` today tears loose every rooted clump in range, so
+  this state must be added before the first tree (step 4).
+- **Loose:** a dynamic core (today's).
+
 ### LeafMass: a volume and a skin
 
 - **The volume stays concrete, not a trait.** A lobe gains an orientation
@@ -87,92 +99,168 @@ such as fruit trees or reeds.
   - a palm's crown, for drag and wading (a flat, wide lobe under the
     blades).
 
-  Drag, stride depth, the core and the bulk all keep reading lobes:
-  - **Immersion:** a sphere's immersion in an ellipsoid is taken in the
-    lobe's own scaled frame (approximate, fine for drag).
-  - **Core:** a lobe's collider is a sphere when the lobe is round and a
-    capsule along its long axis when it is not.
-  - **Resting pose:** keeps its least-over-down-directions search, with
-    lobe extents in place of radii.
+  Every place that reads a lobe as a sphere changes with it:
+  - **Immersion** (`drag.rs`): a sphere's immersion in an ellipsoid is
+    taken in the lobe's own scaled frame (approximate, fine for drag),
+    including the cap on how deep a small lobe can be immersed.
+  - **Core** (`leaf_core.rs`): chosen by the lobe's proportions:
+    - a sphere when it is round;
+    - a capsule along its axis when it is prolate (a cypress);
+    - a few spheres across it when it is oblate (a palm crown), since an
+      oblate lobe has two long axes.
+  - **Resting pose:** it measures the core colliders, not the lobes, so it
+    keeps its least-over-down-directions search over each collider's
+    support (a capsule's is `c·d + h·|a·d| + r`).
+  - **Bulk:** `physics::Volume::at` takes a translation only, and there is
+    no ellipsoid collider shape. A lobe's bulk is its core collider's shape
+    scaled up, which needs `Volume` to take a rotation: a small engine API
+    change, made on the engine branch.
+  - **The rest:** volume and centre of mass (`r³`), `bounding_radius` and
+    the skin's lobe occlusion.
 
   A trait would only pay for itself once a volume came along that
   ellipsoids cannot approximate, and no target kind needs one.
 - **The skin varies, so it is a closed enum of generators.** Each one builds
-  a `Skin` once (vertices plus a per-vertex **give**, 0..1: how freely that
-  leaf bends):
+  a `Skin` once. It carries two values per vertex in the vertex's texture
+  coordinates, which foliage leaves unused (its material is untextured), so
+  no other mesh changes format:
+  - **give**, 0..1: how freely that leaf bends;
+  - **sprig**: how far it stands out of the valleys, which pressing reads
+    today.
+
+  The generators:
   - `Nubbed`, today's bumpy mass, with two fixes. Subdivision is chosen per
     lobe for a fixed vertex spacing (about 3 cm, so 2–3 vertices across a
     bump). Vertices buried inside another lobe are dropped, along with
-    their triangles.
+    their triangles. Bumps are sized in metres, not as a share of the lobe,
+    so a cypress's are not stretched.
   - `Blades`: rosettes of strap-shaped strips (palm, dragon tree, reeds),
-    stiff at the base and free at the tip, shaded by the same leaf shader.
-- **Shading and leaf particles** are shared by every kind. Particles get a
-  budget per blast: today 9 clumps shed about 440.
+    stiff at the base and free at the tip.
+    - **Both sides drawn:** an open strip vanishes from behind and shadows
+      from one side only. Either doubled faces or a cull-none pipeline
+      variant; to decide in step 6.
+    - **Shading:** the leaf shader's wrap and edge transmission assume a
+      closed mass with outward normals. A thin blade needs its own terms
+      (light through the blade by its facing, not by `1 − n·v`), as a
+      variant of the same shader.
+    - **Bending a blade** vertex by vertex stretches it when a body pushes
+      through the crown. Acceptable for small pushes; check it in step 6.
+- **Shading** is shared by every kind, with the blade variant above.
+- **Leaf particles** are shared too, with a budget: today 9 clumps shed
+  about 440 in one blast (+1.3 ms GPU). Each mass sheds a share of a
+  per-blast total and a world-wide live cap, scaled by its leaf area.
+  Settled in step 2b.
 
 ### Bend: one rule, on the GPU
 
 The skin is uploaded once and never rebuilt. Each frame the CPU hands each
-touched mass a small list of primitives in its own frame, at most 8:
+touched mass a small list of primitives in its own frame, at most 8.
 
-- **Bodies:** every collider meeting the mass's bounds (`colliders_meeting`
-  sees sleeping bodies too), as it is: a sphere, capsule or box. A hull is
-  passed as its box, its one remaining approximation.
-- **Ground:** planes. A rooted mass gets them once, from ray probes at
-  load. A loose one gets them from its contacts, as today.
+What is gathered:
+- **Bodies:** colliders meeting the mass's bounds (`colliders_meeting`
+  sees sleeping bodies too), as they are: a sphere, capsule or box. A hull
+  is passed as its box, its one remaining approximation.
+  - **The plant's own** skeleton and core are excluded, or a crown would
+    part round its own trunk.
+  - **Ranked:** past the cap, the deepest into the leaves are kept. A body
+    of many colliders (a neighbour clump's 6 core spheres) is merged into
+    its bounding sphere or capsule first, so it costs one slot.
+- **Ground:** planes.
+  - A rooted mass gets them from ray probes at load, and again when a
+    terrain edit meets its bounds (a blast can carve nearby without tearing
+    it loose).
+  - A loose one gets them from its contacts, as today.
 - **Squash:** today's spring, kicked by impacts.
 
-Each primitive keeps today's 0.2 s ease-back hold. The vertex shader moves
-each leaf out of each primitive by today's fold-free map, written in terms
-of the primitive's distance:
+Each primitive keeps today's 0.2 s ease-back, held per (body, collider), so
+a primitive the cap drops fades out rather than popping. The vertex shader
+moves each leaf out of each primitive by today's fold-free map, written in
+terms of the primitive's distance:
 - a sphere's centre point, a capsule's segment and a box's thin core are
   its core, as `Pusher` has them now;
 - a plane uses the knee.
 
-Each displacement is scaled by the vertex's give. The rule lives once in
-GLSL, mirrored by a Rust function that the tests exercise, with a test
-holding the two together, as `swell.glsl` and `swell.rs` are held.
+Each displacement is scaled by the vertex's give. The order (squash,
+parting, then pressing) reads no neighbouring vertices, so it moves to the
+shader exactly. The leaf noise keeps reading the bent position, as it does
+today, so the look does not change.
+
+**The rule lives once in GLSL,** mirrored by a Rust function. Two tests hold
+them:
+- the Rust mirror against today's CPU `deform` on fixed inputs, so moving
+  the bend changes nothing;
+- the GLSL against the mirror: a headless compute pass runs the shader's
+  bend on test points and compares. The `swell` test only checks shared
+  constants, and would not catch the logic drifting.
+
+**How the data reaches the shader.** Push constants cannot carry it: the
+geometry push block is already 112 of Vulkan's guaranteed 128 bytes. It
+follows the surface table's pattern (`surface_buffer.rs`):
+- **A bend table:** a fixed-capacity storage buffer, one per frame slot, at
+  a new set 0 binding visible to the vertex stage. It is bound once and
+  never resized, so the in-flight rules hold.
+- **Per draw:** the draw pushes an index into it (in the push block's
+  padding), with "none" for every other model.
+
+It touches:
+- `descriptors.rs` (binding and layout) and the in-flight frame;
+- the geometry push and draw (`GeometryPush`, `submit_draw`, `draw_model`);
+- `RenderSystem`, which reads a new bend component;
+- the main vertex shader;
+- the shadow path: a caster carries the index, and `shadow.vert` bends.
+
+Reflection probes draw the leaves unbent; acceptable.
 
 What this removes:
 - the per-frame CPU bend (about 0.23 ms per moving clump);
 - the per-frame upload (about 0.5 MB per moving clump);
-- the `ProceduralMesh` / `ModelInstance` swapping.
+- the `ProceduralMesh` / `ModelInstance` swapping, which today also builds
+  a new model on every swap.
 
 What it costs the GPU: tens of microseconds of vertex work, run in the
-scene pass and the shadow pass.
-
-The renderer needs one new thing: per-draw bend data for a model (a small
-uniform slot, or push constants). This is the only new coupling.
+scene pass and the shadow pass. The main view and shadow casters are not
+culled by bounds, and probe bounds missing a bent edge is harmless, so
+leaves bent past their rest bounds need nothing.
 
 ## What carries over unchanged
 
 - **Engine:** air drag by a body's bulk (`dragging_as`), collision layers,
   blasts that strike by area.
-- **Foliage:** `FoliageDrag`, the stride rule, uprooting, the leaf shader,
-  and leaf particles.
+- **Foliage:** `FoliageDrag`, the stride rule, uprooting of rooted masses,
+  the leaf shader, and leaf particles.
 - **Parting's map:** the fold-free map, moved into the shader.
 
 ## Migration
 
 1. **Reshape, no change in look.**
-   - `Lobe` becomes an ellipsoid;
-   - `Skin` gains the per-vertex give;
+   - `Lobe` becomes an ellipsoid, with every consumer listed above;
+   - `Skin` carries give and sprig in its texture coordinates;
    - `SkinKind::Nubbed` takes today's generator;
    - `LeafMass` gathers volume, skin, core and give.
 
    Gates: every test passes, and the arena renders the same.
-2. **Bend on the GPU.** The shader, the Rust mirror and the tests that hold
-   them together, then delete `Press` / `Parting` CPU deformation and
-   `ProceduralMesh` for foliage.
-   - Gate: `render_perf` with a blast among the shrubs. `foliage_skin` time
-     and uploads should drop to near zero, with no visible change. Check
-     against character_viewer `shrub_*` and an F3 snapshot by the arch.
+2. **Bend on the GPU,** in two halves.
+   - **2a, look-neutral:** today's behaviour moved exactly.
+     - Covers the bend table, the shader, the Rust mirror and both tests.
+     - Then delete the CPU `deform` path and `ProceduralMesh` for foliage.
+     - Gate: `render_perf` with a blast among the shrubs; `foliage_skin`
+       time and uploads drop to near zero, with no visible change.
+   - **2b, new behaviour,** each with its own test:
+     - every collider parts (sleeping and fixed bodies included), ranked
+       and merged, with the plant's own excluded;
+     - rooted masses pressed by probed ground planes, re-probed on terrain
+       edits;
+     - the leaf-particle budget.
+     - Gate: character_viewer `shrub_*` and an F3 snapshot by the arch.
 3. **Fix the bumpy skin's triangles:** a fixed vertex spacing per lobe,
-   with buried vertices dropped.
+   with buried vertices dropped and bumps sized in metres.
    - Gate: fewer triangles and an equal or sharper look on views of a small
      and a big lobe.
-4. **Skeleton and the lollipop tree:** a trunk with one or more masses.
-5. **Cypress:** a tall lobe.
-6. **Blades and the palm:** the second skin kind.
+4. **Skeleton and the lollipop tree:** a trunk with one or more masses, and
+   the "on a limb" rooting state.
+5. **Cypress:** a tall lobe, its capsule core and rotated bulk.
+6. **Blades and the palm:** the second skin kind, drawn from both sides,
+   with its own shading terms and an oblate crown's core.
 7. **Review and squash** the branch, and rewrite `docs/FOLIAGE.md` as the
    plants doc.
 
