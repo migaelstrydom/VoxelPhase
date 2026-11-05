@@ -268,14 +268,23 @@ Done:
 
 - **The lollipop tree** (`src/plants/`): `LollipopSpec` grows a `Plant`,
   its `Limbs` (the skeleton: a trunk, and branches from a fork for more
-  than one crown) and a `LeafMass` per crown. The limbs are capsules on one
-  static body, drawn as plain tubes; each crown is a `Foliage` clump
-  `OnLimb`, which a blast shakes leaves off but does not tear loose. A
-  clump holds its skin as the model it is drawn as, not a copy. In levels:
+  than one crown) and a `LeafMass` per crown, held by a limb. `Joinery`
+  builds it: a body per limb, carrying its crown's core, so the tree is
+  physical throughout. The trunk is welded into the ground and let go when
+  the ground goes (`TerrainAnchored`, as a fence post is); a felled tree
+  lands on its crowns. Each branch is welded to what it grows from, and the
+  weld breaks past 80 N·s a substep: a grenade within about 2 m of a
+  branch's crown takes it off, one 3 m away does not. In levels:
   `Tree(pos, height, crown_radius, crowns)`.
-  - Left for later: a tapered trunk and bark texture, crowns that sway, and
-    `LeafMass` as more than a shape and a pose (it gathers the core and
-    give when bending returns).
+  - A crown's core is part of its limb's body, not a body welded to it: a
+    thin limb has almost no inertia about its length, and a heavier crown
+    welded to its tip rang until the welds broke.
+  - Tree bodies are on the `WOOD` layer: limbs do not meet limbs (a branch
+    overlaps its parent at the fork), and grenades pass through trees, as
+    through leaves, since the crowns' cores are in the limbs' bodies. A
+    grenade passes through a trunk too.
+  - Left for later: a tapered trunk and bark texture, a trunk that snaps,
+    and crowns that sway.
 
 Next:
 4. **Cypress:** a tall lobe on a short trunk.

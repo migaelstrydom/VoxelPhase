@@ -8,14 +8,9 @@ use specs::{Component, VecStorage};
 use super::drag::{DragVolume, VolumeFrame};
 use super::leaf_core::LeafCore;
 use super::shape::FoliageShape;
-use super::skin::Skin;
-use crate::components::ModelInstance;
-use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
-use crate::rendering::material::MaterialId;
 
-/// Whether a clump stands where it grew, is held by a plant, or has been
-/// torn loose.
+/// Whether a clump stands where it grew or is on a core of its own.
 #[derive(Debug, Clone, Copy)]
 pub enum Rooting {
     /// Growing from the ground at `pose`: no body, nothing collides with it,
@@ -27,54 +22,47 @@ pub enum Rooting {
         /// is lifted by this, so its core does not start in the ground.
         sunk: f32,
     },
-    /// Held up by a plant's limb at `pose`: as a rooted clump, but a blast
-    /// does not tear it loose, since its limb holds it.
-    OnLimb {
-        /// Where the clump's frame is.
-        pose: Isometry3<f32>,
-    },
-    /// Torn loose: its core is this dynamic body, whose frame is the clump's.
+    /// On a dynamic body: its own core, torn loose, or a plant's limb
+    /// holding it up as its crown (`plants`).
     Loose {
-        /// The core.
+        /// The body.
         body: RigidBodyHandle,
+        /// Where the clump's frame sits in the body's: none on its own core.
+        offset: Isometry3<f32>,
     },
 }
 
-/// A clump of leaves: its shape, its drawn skin and how it is rooted. Drawn
-/// as its entity's `ModelInstance` ([`Foliage::model`]), which rides on the
-/// clump's frame.
+/// A clump of leaves: its shape, its core and how it is rooted. Its skin is
+/// drawn by its entity's `ModelInstance` ([`Skin::model`](super::Skin::model)), which rides on
+/// the body or pose it is rooted by.
 #[derive(Component)]
 #[storage(VecStorage)]
 pub struct Foliage {
     /// The lobes, in the clump's frame.
     pub shape: Arc<FoliageShape>,
-    /// The skin at rest, in the clump's frame, as the model it is drawn as.
-    pub skin: Arc<Model>,
     /// How its core is built when it is torn loose.
     pub core: LeafCore,
-    /// Rooted, on a limb or loose.
+    /// Rooted or on a core.
     pub rooting: Rooting,
     /// The core's velocity last frame, to tell a landing from resting.
     pub last_velocity: Vector3<f32>,
 }
 
+impl Rooting {
+    /// On `body` as its own core.
+    pub fn on(body: RigidBodyHandle) -> Self {
+        Self::Loose {
+            body,
+            offset: Isometry3::identity(),
+        }
+    }
+}
+
 impl Foliage {
-    /// A clump of `shape` drawn as `skin` in `material`, its skin's mesh
-    /// handed to the model it is drawn as.
-    pub fn grown(
-        shape: Arc<FoliageShape>,
-        skin: Skin,
-        material: MaterialId,
-        rooting: Rooting,
-    ) -> Self {
-        let primitive = MeshPrimitive {
-            vertices: skin.vertices,
-            indices: skin.indices,
-            material,
-        };
+    /// A clump of `shape`, rooted as `rooting`.
+    pub fn new(shape: Arc<FoliageShape>, rooting: Rooting) -> Self {
         Self {
             shape,
-            skin: Arc::new(Model::flat(vec![ModelPart::new(vec![primitive])])),
             core: LeafCore::default(),
             rooting,
             last_velocity: Vector3::zeros(),
@@ -84,8 +72,8 @@ impl Foliage {
     /// The core's body, if the clump is loose.
     pub fn body(&self) -> Option<RigidBodyHandle> {
         match self.rooting {
-            Rooting::Loose { body } => Some(body),
-            Rooting::Rooted { .. } | Rooting::OnLimb { .. } => None,
+            Rooting::Loose { body, .. } => Some(body),
+            Rooting::Rooted { .. } => None,
         }
     }
 
@@ -94,26 +82,20 @@ impl Foliage {
         DragVolume {
             shape: self.shape.clone(),
             frame: match self.rooting {
-                Rooting::Rooted { pose, .. } | Rooting::OnLimb { pose } => VolumeFrame::Fixed(pose),
-                Rooting::Loose { body } => VolumeFrame::Body(body),
+                Rooting::Rooted { pose, .. } => VolumeFrame::Fixed(pose),
+                Rooting::Loose { body, offset } => VolumeFrame::Body { body, offset },
             },
         }
     }
 
-    /// Where the clump's frame is now: its pose if rooted or on a limb, its
-    /// core's if loose. `None` if its core has gone.
+    /// Where the clump's frame is now: its pose if rooted, its core's if
+    /// loose. `None` if its core has gone.
     pub fn pose(&self, world: &PhysicsWorld) -> Option<Isometry3<f32>> {
         match self.rooting {
-            Rooting::Rooted { pose, .. } | Rooting::OnLimb { pose } => Some(pose),
-            Rooting::Loose { body } => world
+            Rooting::Rooted { pose, .. } => Some(pose),
+            Rooting::Loose { body, offset } => world
                 .body(body)
-                .map(|b| Isometry3::from_parts(b.position().coords.into(), b.rotation())),
+                .map(|b| Isometry3::from_parts(b.position().coords.into(), b.rotation()) * offset),
         }
-    }
-
-    /// The skin as its entity's model, uploaded once and drawn in the
-    /// clump's frame wherever the clump goes.
-    pub fn model(&self) -> ModelInstance {
-        ModelInstance::new(self.skin.clone())
     }
 }

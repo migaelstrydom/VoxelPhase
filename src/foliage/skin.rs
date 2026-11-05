@@ -11,12 +11,16 @@
 //! still reads as a plastic ball. Built once, in the clump's frame, and drawn
 //! as it was built.
 
-use nalgebra::{Point3, Vector2, Vector3, Vector4};
+use std::sync::Arc;
+
+use nalgebra::{Isometry3, Point3, Vector2, Vector3, Vector4};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use super::shape::{FoliageShape, Lobe};
 use crate::geometry::{generate_ellipsoid_rings, generate_geodesic, Icosphere};
+use crate::model::{MeshPrimitive, Model, ModelPart};
+use crate::rendering::material::MaterialId;
 use crate::rendering::vertex::Vertex;
 use crate::utils::noise::perlin_3d;
 
@@ -89,6 +93,34 @@ pub struct Skin {
     pub vertices: Vec<Vertex>,
     /// Triangle list.
     pub indices: Vec<u32>,
+}
+
+impl Skin {
+    /// The skin moved by `by`: into a body it rides on at that offset.
+    pub fn moved(mut self, by: &Isometry3<f32>) -> Self {
+        for vertex in &mut self.vertices {
+            vertex.pos = (by * Point3::from(vertex.pos)).coords;
+            vertex.normal = by.rotation * vertex.normal;
+        }
+        self
+    }
+
+    /// The skin drawn in `material`, as one primitive of a model.
+    pub fn primitive(self, material: MaterialId) -> MeshPrimitive {
+        MeshPrimitive {
+            vertices: self.vertices,
+            indices: self.indices,
+            material,
+        }
+    }
+
+    /// The skin as a model of its own in `material`, uploaded once and drawn
+    /// in its entity's frame wherever that goes.
+    pub fn model(self, material: MaterialId) -> Arc<Model> {
+        Arc::new(Model::flat(vec![ModelPart::new(vec![
+            self.primitive(material)
+        ])]))
+    }
 }
 
 /// One nub on a lobe: where it points, how big it is and how its sprig is

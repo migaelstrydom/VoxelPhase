@@ -77,7 +77,9 @@ impl LeafCore {
     /// pieces weigh its share of the clump by volume, so the core's centre
     /// of mass is the lobes' volume-weighted centre, which is where
     /// [`FoliageShape::centred`] put the origin.
-    pub fn colliders(&self, shape: &FoliageShape) -> Vec<ColliderDesc> {
+    ///
+    /// They are placed with the clump's frame at `at` in the body's.
+    pub fn colliders(&self, shape: &FoliageShape, at: Isometry3<f32>) -> Vec<ColliderDesc> {
         let total: f32 = shape.lobes.iter().map(Lobe::volume).sum();
         let mass = self.mass(shape);
         let mut colliders = Vec::new();
@@ -86,19 +88,22 @@ impl LeafCore {
             let piece_volume: f32 = pieces.iter().map(CorePiece::volume).sum();
             let density = mass * lobe.volume() / total / piece_volume;
             colliders.extend(pieces.iter().map(|piece| {
-                piece
+                let mut collider = piece
                     .collider()
                     .density(density)
                     .restitution(0.0)
-                    .friction(self.friction)
+                    .friction(self.friction);
+                collider.offset = at * collider.offset;
+                collider
             }));
         }
         colliders
     }
 
     /// What fluids and blasts see of the clump: every lobe whole, as the
-    /// core's pieces at full size, porous.
-    pub fn bulk(&self, shape: &FoliageShape) -> BulkShape {
+    /// core's pieces at full size, porous, with the clump's frame at `at` in
+    /// the body's.
+    pub fn bulk(&self, shape: &FoliageShape, at: Isometry3<f32>) -> BulkShape {
         BulkShape::displacing(
             shape
                 .lobes
@@ -106,7 +111,7 @@ impl LeafCore {
                 .flat_map(|lobe| CorePiece::filling(lobe, 1.0))
                 .map(|piece| Volume {
                     shape: piece.shape(),
-                    offset: piece.offset(),
+                    offset: at * piece.offset(),
                 })
                 .collect(),
         )
@@ -202,10 +207,10 @@ impl LeafCore {
                 .position(Point3::from(pose.translation.vector))
                 .rotation(pose.rotation)
                 .angular_damping(self.angular_damping)
-                .bulk(self.bulk(shape))
+                .bulk(self.bulk(shape, Isometry3::identity()))
                 .filter(collision_layers::FOLIAGE_CORE),
         );
-        for collider in self.colliders(shape) {
+        for collider in self.colliders(shape, Isometry3::identity()) {
             world.attach_collider(body, collider);
         }
         body

@@ -83,7 +83,7 @@ fn run(
 ) -> Tumble {
     let volumes = vec![DragVolume {
         shape,
-        frame: VolumeFrame::Body(body),
+        frame: VolumeFrame::on(body),
     }];
     let mut stepper = SequentialStepper::new(PHYSICS_DT, 12);
     let mut lines = DebugLines::default();
@@ -330,7 +330,7 @@ fn a_grenade_passes_through_a_loose_clump() {
         let core = LeafCore::default().spawn(&mut world, &shape, Isometry3::identity());
         let volumes = vec![DragVolume {
             shape: shape.clone(),
-            frame: VolumeFrame::Body(core),
+            frame: VolumeFrame::on(core),
         }];
         let body = world.create_body(
             RigidBodyDesc::dynamic()
@@ -419,7 +419,7 @@ fn coast(
     let bodies: Vec<RigidBodyHandle> = volumes
         .iter()
         .filter_map(|v| match v.frame {
-            VolumeFrame::Body(core) => Some(core),
+            VolumeFrame::Body { body, .. } => Some(body),
             VolumeFrame::Fixed(_) => None,
         })
         .chain([body])
@@ -513,7 +513,7 @@ fn a_thrown_clump_does_not_haul_a_heavier_body() {
     world.apply_impulse(core, Vector3::x() * 10.0 * clump_mass);
     let volumes = vec![DragVolume {
         shape,
-        frame: VolumeFrame::Body(core),
+        frame: VolumeFrame::on(core),
     }];
     let world = coast(world, &volumes, player, 1.0);
     let clump_v = world.body(core).expect("there").linear_velocity();

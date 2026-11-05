@@ -262,7 +262,7 @@ Level(
                 // Lollipop trees: one crown on a trunk, a fork of three, and
                 // a small one.
                 Tree(pos: (23.0, 2.0)),
-                Tree(pos: (24.0, 6.5), height: 4.2, crowns: 3),
+                Tree(pos: (22.5, 7.0), height: 4.2, crowns: 3),
                 Tree(pos: (22.5, -2.5), height: 2.6, crown_radius: 0.6),
 
                 FencePost(

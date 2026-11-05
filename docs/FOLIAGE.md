@@ -28,9 +28,9 @@ visible lobes  ──  drag volume (rides with the clump)
 A rooted shrub has no body at all. Nothing collides with it; it is a drag
 volume and a mesh. A blast within 60% of its knockback radius gives it a core
 (`FoliageUprootSystem`), and the shove the explosion queued throws that core
-on the next physics step. A tree's crowns are clumps held on its limbs
-(`Rooting::OnLimb`, `src/plants/`): the same drag volume and mesh, but a
-blast only shakes leaves off them.
+on the next physics step. A tree's crowns are clumps riding on its limbs'
+bodies (`Rooting::Loose` with an offset, `src/plants/`), each limb's body
+carrying its crown's core.
 
 ## Why each piece is shaped the way it is
 

@@ -12,6 +12,8 @@ pub struct LeafMass {
     pub shape: FoliageShape,
     /// Where the mass's frame is, in the plant's frame.
     pub pose: Isometry3<f32>,
+    /// The limb that holds it up, by index: its tip is inside the mass.
+    pub limb: usize,
 }
 
 /// A plant as grown: its woody frame and its leaves, in the plant's frame,

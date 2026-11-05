@@ -1,7 +1,8 @@
 //! The shrub scenarios, in the Shrub Garden (`levels/shrub_garden.level.ron`):
 //! wading through the hedge row, a grenade thrown into a big shrub to tear
 //! it loose, a loose clump kicked along the flat, and one shoved off the
-//! terrace to tumble down the ramp.
+//! terrace to tumble down the ramp; and a grenade at a lollipop tree's foot
+//! in the Test Arena.
 
 use std::f32::consts::PI;
 
@@ -12,6 +13,7 @@ use crate::anim_viewer::{Beat, Script};
 use super::scenario::{CameraRig, Judged, Scenario};
 
 const SHRUB_GARDEN: &str = "levels/shrub_garden.level.ron";
+const TEST_ARENA: &str = "levels/test_arena.level.ron";
 /// North, up the garden.
 const NORTH: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
 const SOUTH: Vector3<f32> = Vector3::new(0.0, 0.0, -1.0);
@@ -48,6 +50,22 @@ pub fn catalogue() -> Vec<Scenario> {
                 .with_azimuth(115.0)
                 .with_distance(17.0)
                 .with_elevation(14.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "tree_blast",
+            summary: "Test Arena: throw a grenade at the foot of the lollipop tree at (23, 2) \
+                      and watch it fall when the ground under it goes",
+            level: TEST_ARENA,
+            start: (23.0, -4.0),
+            yaw: 0.0,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::stand(6.0).throwing_at(NORTH).named("throw")),
+            camera: CameraRig::side()
+                .with_azimuth(100.0)
+                .with_distance(11.0)
+                .with_elevation(12.0),
             judged: Judged::Motion,
         },
         Scenario {

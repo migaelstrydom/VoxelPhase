@@ -15,7 +15,9 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::textures::seed_from_ground;
 use super::spawnable::{MaterialCtx, Spawnable};
-use crate::components::{Orientation, Position, Renderable, RigidBodyComponent, Velocity};
+use crate::components::{
+    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
+};
 use crate::core::error::EngineResult;
 use crate::foliage::{Foliage, LeafCore, Rooting, ShrubSpec, SkinSpec};
 use crate::rendering::colour::Colour;
@@ -101,20 +103,20 @@ impl Spawnable for ShrubDef {
             (pose, sunk)
         };
 
-        let mut clump = Foliage::grown(shape, skin, materials[0], Rooting::Rooted { pose, sunk });
+        let mut clump = Foliage::new(shape, Rooting::Rooted { pose, sunk });
         let body = self.loose.then(|| {
             let mut physics = world.write_resource::<PhysicsResource>();
             clump.core.spawn(&mut physics.world, &clump.shape, pose)
         });
         if let Some(body) = body {
-            clump.rooting = Rooting::Loose { body };
+            clump.rooting = Rooting::on(body);
         }
 
         let mut entity = world
             .create_entity()
             .with(Position(pose.translation.vector))
             .with(Orientation(pose.rotation))
-            .with(clump.model())
+            .with(ModelInstance::new(skin.model(materials[0])))
             .with(clump)
             .with(Renderable);
         if let Some(body) = body {

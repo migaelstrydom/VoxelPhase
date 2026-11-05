@@ -29,6 +29,10 @@ const FORK_HEIGHT: (f32, f32) = (0.55, 0.65);
 const SIDE_CROWN: (f32, f32) = (0.6, 0.75);
 /// A branch's radius as a share of the trunk's.
 const BRANCH_RADIUS: f32 = 0.65;
+/// How far a side crown's centre stands from the trunk, as a share of its
+/// and the main crown's radii together: far enough that their cores, 80%
+/// of their size, keep apart.
+const SIDE_REACH: f32 = 0.9;
 
 /// What a lollipop tree grows to.
 #[derive(Debug, Clone, Copy)]
@@ -80,10 +84,12 @@ impl LollipopSpec {
             base,
             tip: main_centre,
             radius: self.trunk_radius,
+            parent: None,
         }];
         let mut masses = vec![LeafMass {
             shape: main,
             pose: turned(main_centre, &mut rng),
+            limb: 0,
         }];
 
         let sides = self.crowns.saturating_sub(1);
@@ -95,7 +101,7 @@ impl LollipopSpec {
                 let radius = self.crown_radius * rng.gen_range(SIDE_CROWN.0..SIDE_CROWN.1);
                 let shape = crown(radius, seed.wrapping_add(side as u32 + 1));
                 let around = first + TAU * side as f32 / sides as f32 + rng.gen_range(-0.3..0.3);
-                let reach = (self.crown_radius + radius) * 0.8;
+                let reach = (self.crown_radius + radius) * SIDE_REACH;
                 let low = fork.y + radius * 1.2;
                 let high = (main_centre.y - 0.3).max(low);
                 let centre = Point3::new(
@@ -107,10 +113,12 @@ impl LollipopSpec {
                     base: fork,
                     tip: centre,
                     radius: self.trunk_radius * BRANCH_RADIUS,
+                    parent: Some(0),
                 });
                 masses.push(LeafMass {
                     shape,
                     pose: turned(centre, &mut rng),
+                    limb: limbs.len() - 1,
                 });
             }
         }

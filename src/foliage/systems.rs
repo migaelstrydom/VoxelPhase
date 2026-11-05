@@ -142,13 +142,10 @@ pub fn leaves() -> ParticleEmitter {
 const UPROOT_SHARE: f32 = 0.6;
 /// Leaves a clump sheds as it is torn loose.
 const UPROOT_LEAVES: u32 = 60;
-/// Leaves a blast shakes off a clump on a limb, which holds it.
-const SHAKEN_LEAVES: u32 = 30;
 
 /// Tears rooted clumps loose when a blast goes off near them: each becomes a
 /// loose clump on a core of its own, which the blast's shove, delivered by
-/// the next physics step, throws. A clump on a limb is held, and only has
-/// leaves shaken off.
+/// the next physics step, throws.
 ///
 /// Runs after `ExplosionSystem` queued the shove, so the new core is there
 /// to receive it.
@@ -177,10 +174,8 @@ impl<'a> System<'a> for FoliageUprootSystem {
             return;
         }
         for (entity, clump) in (&entities, &mut foliage).join() {
-            let (pose, sunk) = match clump.rooting {
-                Rooting::Rooted { pose, sunk } => (pose, Some(sunk)),
-                Rooting::OnLimb { pose } => (pose, None),
-                Rooting::Loose { .. } => continue,
+            let Rooting::Rooted { pose, sunk } = clump.rooting else {
+                continue;
             };
             let centre = Point3::from(pose.translation.vector);
             if !blasts
@@ -189,18 +184,11 @@ impl<'a> System<'a> for FoliageUprootSystem {
             {
                 continue;
             }
-            let Some(sunk) = sunk else {
-                lazy.create_entity(&entities)
-                    .with(Position(centre.coords))
-                    .with(leaf_emitter(SHAKEN_LEAVES))
-                    .build();
-                continue;
-            };
             // Lifted clear of the ground it grew sunk into.
             let freed = Translation3::new(0.0, sunk, 0.0) * pose;
             let body = clump.core.spawn(&mut physics.world, &clump.shape, freed);
             physics.world.wake_body(body);
-            clump.rooting = Rooting::Loose { body };
+            clump.rooting = Rooting::on(body);
             let _ = bodies.insert(entity, RigidBodyComponent(body));
             let _ = velocities.insert(entity, Velocity(Vector3::zeros()));
             lazy.create_entity(&entities)
@@ -213,67 +201,7 @@ impl<'a> System<'a> for FoliageUprootSystem {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use nalgebra::Isometry3;
-    use specs::{Builder, RunNow, World, WorldExt};
-
     use super::*;
-    use crate::foliage::{ShrubSpec, Skin};
-    use crate::rendering::material::MaterialId;
-
-    /// A blast beside a clump on a limb shakes leaves off it but leaves it
-    /// held; beside a rooted clump it tears it loose.
-    #[test]
-    fn a_blast_tears_a_rooted_clump_loose_but_not_one_on_a_limb() {
-        let mut world = World::new();
-        world.register::<Foliage>();
-        world.register::<Explosion>();
-        world.register::<RigidBodyComponent>();
-        world.register::<Velocity>();
-        world.register::<Position>();
-        world.register::<ParticleEmitter>();
-        world.insert(PhysicsResource::default());
-        let clump = |rooting| {
-            let shape = Arc::new(ShrubSpec::with_radius(0.5).grow(1));
-            let skin = Skin {
-                vertices: Vec::new(),
-                indices: Vec::new(),
-            };
-            Foliage::grown(shape, skin, MaterialId(0), rooting)
-        };
-        let at = Isometry3::translation(0.0, 0.5, 0.0);
-        let held = world
-            .create_entity()
-            .with(clump(Rooting::OnLimb { pose: at }))
-            .build();
-        let rooted = world
-            .create_entity()
-            .with(clump(Rooting::Rooted {
-                pose: at,
-                sunk: 0.1,
-            }))
-            .build();
-        world
-            .create_entity()
-            .with(Explosion::new(Point3::new(1.0, 0.5, 0.0)))
-            .build();
-
-        FoliageUprootSystem.run_now(&world);
-        world.maintain();
-
-        let foliage = world.read_storage::<Foliage>();
-        assert!(matches!(
-            foliage.get(held).unwrap().rooting,
-            Rooting::OnLimb { .. }
-        ));
-        assert!(matches!(
-            foliage.get(rooted).unwrap().rooting,
-            Rooting::Loose { .. }
-        ));
-        let bursts = world.read_storage::<ParticleEmitter>().join().count();
-        assert_eq!(bursts, 2, "each clump sheds a burst");
-    }
 
     #[test]
     fn a_landing_is_a_fall_stopped_not_a_launch() {

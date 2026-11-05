@@ -65,8 +65,15 @@ impl Default for LeafDrag {
 pub enum VolumeFrame {
     /// Rooted: lobes posed once, in the world.
     Fixed(Isometry3<f32>),
-    /// Loose: lobes riding on the core's body, read afresh every substep.
-    Body(RigidBodyHandle),
+    /// On a body: lobes riding on it at `offset`, read afresh every
+    /// substep. A loose clump's own core carries it at no offset; a tree's
+    /// limb carries its crown where the crown grew.
+    Body {
+        /// The body it rides on.
+        body: RigidBodyHandle,
+        /// Where the clump's frame sits in the body's.
+        offset: Isometry3<f32>,
+    },
 }
 
 /// One clump's leaves, as drag sees them.
@@ -88,6 +95,17 @@ struct FrameMotion {
 }
 
 impl FrameMotion {
+    /// The frame `offset` from this one, riding with it.
+    fn offset_by(self, offset: Isometry3<f32>) -> Self {
+        let pose = self.pose * offset;
+        let arm = pose.translation.vector - self.pose.translation.vector;
+        Self {
+            pose,
+            velocity: self.velocity + self.spin.cross(&arm),
+            spin: self.spin,
+        }
+    }
+
     fn of(body: &RigidBody) -> Self {
         Self {
             pose: Isometry3::from_parts(body.position().coords.into(), body.rotation()),
@@ -107,6 +125,16 @@ struct PosedLobe {
     spin: Vector3<f32>,
 }
 
+impl VolumeFrame {
+    /// Riding on `body` as its own frame: a loose clump on its core.
+    pub fn on(body: RigidBodyHandle) -> Self {
+        Self::Body {
+            body,
+            offset: Isometry3::identity(),
+        }
+    }
+}
+
 impl DragVolume {
     /// Where this volume's frame is now, and how it moves: `None` if its
     /// body has gone.
@@ -120,14 +148,14 @@ impl DragVolume {
                 velocity: Vector3::zeros(),
                 spin: Vector3::zeros(),
             }),
-            VolumeFrame::Body(handle) => bodies(handle),
+            VolumeFrame::Body { body, offset } => bodies(body).map(|m| m.offset_by(offset)),
         }
     }
 
     fn owner(&self) -> Option<RigidBodyHandle> {
         match self.frame {
             VolumeFrame::Fixed(_) => None,
-            VolumeFrame::Body(handle) => Some(handle),
+            VolumeFrame::Body { body, .. } => Some(body),
         }
     }
 
@@ -214,16 +242,24 @@ impl FoliageDrag {
             .collect();
         let mut near: FxHashMap<RigidBodyHandle, SmallVec<[usize; 4]>> = FxHashMap::default();
         let mut passers = vec![SmallVec::new(); volumes.len()];
+        // Leaves that cannot move this frame: rooted, or riding on a body
+        // that is asleep. A sleeping body in them is at rest in them too.
+        let still: Vec<bool> = volumes
+            .iter()
+            .map(|v| v.owner().is_none_or(|owner| world.is_sleeping(owner)))
+            .collect();
         for handle in candidates {
             let Some(body) = world.body(handle).filter(|b| b.is_dynamic()) else {
                 continue;
             };
+            let asleep = world.is_sleeping(handle);
             let reach = world.reach(handle) + body.linear_velocity().magnitude() * frame_dt;
             for (index, volume) in volumes.iter().enumerate() {
                 let Some((centre, radius)) = bounds[index] else {
                     continue;
                 };
                 if volume.owner() != Some(handle)
+                    && !(asleep && still[index])
                     && (body.position() - centre).magnitude() < radius + reach
                 {
                     near.entry(handle).or_default().push(index);
@@ -577,7 +613,7 @@ mod tests {
             shape: Arc::new(FoliageShape {
                 lobes: vec![Lobe::round(Point3::origin(), 0.4)],
             }),
-            frame: VolumeFrame::Body(clump),
+            frame: VolumeFrame::on(clump),
         };
         // 0.4 m of leaves and 0.2 m of body leave 0.4 m of gap: a third of a
         // metre a frame at 20 m/s closes it within the frame's 12 substeps.
