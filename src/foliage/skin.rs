@@ -16,7 +16,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use super::shape::{FoliageShape, Lobe};
-use crate::geometry::generate_icosphere;
+use crate::geometry::generate_geodesic;
 use crate::rendering::vertex::Vertex;
 use crate::utils::noise::perlin_3d;
 
@@ -52,13 +52,15 @@ impl Default for LeafPalette {
 /// How a skin is grown over a shape.
 #[derive(Debug, Clone, Copy)]
 pub struct SkinSpec {
-    /// Geodesic subdivisions of each lobe's sphere: 4 is 2562 vertices a lobe.
-    pub subdivisions: u32,
+    /// Distance between neighbouring vertices along a lobe's longest axis,
+    /// in metres: a small lobe gets few vertices, a big one many, and every
+    /// lobe's nubs are drawn alike.
+    pub vertex_spacing: f32,
     /// Radius of one nub, in metres.
     pub nub_radius: f32,
-    /// Depth of the valleys between nubs, as a share of the lobe's radius.
+    /// Depth of the valleys between nubs, in metres.
     pub nub_depth: f32,
-    /// Irregularity laid over the nubs, as a share of the lobe's radius.
+    /// Irregularity laid over the nubs, in metres.
     pub roughness: f32,
     /// Depth of the leaf-sized relief over everything, in metres: what
     /// breaks a nub's surface into leaves.
@@ -70,10 +72,10 @@ pub struct SkinSpec {
 impl Default for SkinSpec {
     fn default() -> Self {
         Self {
-            subdivisions: 4,
+            vertex_spacing: 0.025,
             nub_radius: 0.075,
-            nub_depth: 0.09,
-            roughness: 0.035,
+            nub_depth: 0.045,
+            roughness: 0.018,
             leaf_relief: 0.012,
             palette: LeafPalette::default(),
         }
@@ -102,27 +104,25 @@ struct Nub {
 impl SkinSpec {
     /// The skin over `shape`, its nubs placed from `seed`.
     pub fn grow(&self, shape: &FoliageShape, seed: u32) -> Skin {
-        let sphere = generate_icosphere(self.subdivisions);
         let mut rng = StdRng::seed_from_u64(seed as u64 ^ 0x5eed_1eaf);
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
         for (index, lobe) in shape.lobes.iter().enumerate() {
             let nubs = self.nubs(lobe, &mut rng);
+            let sphere = generate_geodesic(self.frequency(lobe));
             let base = vertices.len() as u32;
             let mut hidden = Vec::with_capacity(sphere.positions.len());
             for &direction in &sphere.positions {
                 let (height, nub) = self.nub_height(direction, lobe, &nubs);
-                let wobble = perlin_3d(
-                    direction.x * 3.0 + index as f32 * 7.1,
-                    direction.y * 3.0,
-                    direction.z * 3.0,
-                    seed,
-                ) * self.roughness;
-                let at = lobe.surface_point(direction, 1.0).coords * LEAF_FREQUENCY;
+                let surface = lobe.surface_point(direction, 1.0).coords;
+                let lumps = surface * WOBBLE_FREQUENCY;
+                let wobble = perlin_3d(lumps.x + index as f32 * 7.1, lumps.y, lumps.z, seed)
+                    * self.roughness;
+                let at = surface * LEAF_FREQUENCY;
                 let leaves = self.leaf_relief * perlin_3d(at.x, at.y, at.z, seed ^ 0xa5a5);
                 let normal = lobe.normal_at(direction);
-                let scale = 1.0 - self.nub_depth * (1.0 - height) + wobble;
-                let position = lobe.surface_point(direction, scale) + normal * leaves;
+                let lift = wobble + leaves - self.nub_depth * (1.0 - height);
+                let position = Point3::from(surface) + normal * lift;
                 hidden.push(self.is_buried(position, index, shape));
                 vertices.push(Vertex {
                     pos: position.coords,
@@ -143,30 +143,51 @@ impl SkinSpec {
         compact(Skin { vertices, indices })
     }
 
-    /// Nubs spread evenly over a lobe, as many as fit their size.
+    /// Geodesic frequency for `lobe`: rows enough that neighbouring vertices
+    /// along its longest axis are about [`Self::vertex_spacing`] apart. An
+    /// icosahedron's edge is 1.05 of its radius.
+    fn frequency(&self, lobe: &Lobe) -> u32 {
+        ((1.05 * lobe.greatest_radius() / self.vertex_spacing).ceil() as u32).max(2)
+    }
+
+    /// Nubs spread evenly over a lobe's surface, as many as fit their size.
+    ///
+    /// Directions spread evenly over the unit sphere crowd where the lobe is
+    /// least stretched, so on a lobe that is not round a direction is kept
+    /// by how much surface it stands for: about one in `stretch` where the
+    /// lobe is narrowest, all of them where it is widest.
     fn nubs(&self, lobe: &Lobe, rng: &mut StdRng) -> Vec<Nub> {
-        let count = (lobe.area() / (std::f32::consts::PI * self.nub_radius * self.nub_radius) * 1.1)
+        let count = (lobe.area() / (std::f32::consts::PI * self.nub_radius * self.nub_radius)
+            * 1.1)
             .round()
-            .max(8.0) as usize;
+            .max(8.0);
+        let widest = 1.0 / lobe.least_radius();
+        let spread = |d: Vector3<f32>| d.component_div(&lobe.radii).magnitude() / widest;
+        let mean_spread = 4.0 * std::f32::consts::PI * lobe.radii.product() * widest;
+        let candidates = (count * mean_spread / lobe.area()).round().max(count) as usize;
         let golden = std::f32::consts::PI * (3.0 - 5.0f32.sqrt());
-        let jitter = 0.35 / (count as f32).sqrt();
-        (0..count)
-            .map(|i| {
-                let y = 1.0 - 2.0 * (i as f32 + 0.5) / count as f32;
+        let jitter = 0.35 / (candidates as f32).sqrt();
+        (0..candidates)
+            .filter_map(|i| {
+                let y = 1.0 - 2.0 * (i as f32 + 0.5) / candidates as f32;
                 let ring = (1.0 - y * y).sqrt();
                 let azimuth = golden * i as f32;
                 let even = Vector3::new(ring * azimuth.cos(), y, ring * azimuth.sin());
+                let keep = spread(even);
+                if keep < 0.999 && rng.gen::<f32>() > keep {
+                    return None;
+                }
                 let nudge = Vector3::new(
                     rng.gen_range(-1.0..1.0),
                     rng.gen_range(-1.0..1.0),
                     rng.gen_range(-1.0..1.0),
                 ) * jitter;
-                Nub {
+                Some(Nub {
                     direction: (even + nudge).normalize(),
                     size: rng.gen_range(0.75..1.3),
                     tint: rng.gen_range(-1.0..1.0),
                     blossom: rng.gen::<f32>() < self.palette.blossom_share,
-                }
+                })
             })
             .collect()
     }
@@ -179,11 +200,12 @@ impl SkinSpec {
         lobe: &Lobe,
         nubs: &'a [Nub],
     ) -> (f32, Option<&'a Nub>) {
-        // Chord distance on the unit sphere, against a nub's radius there.
-        let reach = (self.nub_radius / lobe.mean_radius()) * 1.15;
+        // Distance across the surface, in metres, against the nub's radius.
+        let here = lobe.surface_point(direction, 1.0);
+        let reach = self.nub_radius * 1.15;
         let mut best = (0.0f32, None);
         for nub in nubs {
-            let chord2 = 2.0 * (1.0 - direction.dot(&nub.direction));
+            let chord2 = (lobe.surface_point(nub.direction, 1.0) - here).magnitude_squared();
             let nub_reach = reach * nub.size;
             let cap = 1.0 - chord2 / (nub_reach * nub_reach);
             if cap > best.0 {
@@ -196,12 +218,12 @@ impl SkinSpec {
     /// Whether a point is inside another lobe's valleys: hidden whatever
     /// way the clump is turned.
     fn is_buried(&self, point: Point3<f32>, index: usize, shape: &FoliageShape) -> bool {
-        let inner = (1.0 - self.nub_depth) * 0.97;
+        let inner = |lobe: &Lobe| (1.0 - self.nub_depth / lobe.least_radius()) * 0.97;
         shape
             .lobes
             .iter()
             .enumerate()
-            .any(|(other, lobe)| other != index && lobe.contains_scaled(point, inner))
+            .any(|(other, lobe)| other != index && lobe.contains_scaled(point, inner(lobe)))
     }
 
     fn colour(&self, height: f32, nub: Option<&Nub>) -> Vector3<f32> {
@@ -222,6 +244,8 @@ impl SkinSpec {
     }
 }
 
+/// Lumps per metre in the irregularity laid over the nubs.
+const WOBBLE_FREQUENCY: f32 = 6.0;
 /// Leaf-sized relief per metre: a leaf or two across a nub.
 const LEAF_FREQUENCY: f32 = 22.0;
 
@@ -301,13 +325,17 @@ mod tests {
         let spec = SkinSpec::default();
         let skin = spec.grow(&shape, 3);
         assert!(!skin.indices.is_empty());
-        let reach = shape.bounding_radius() * (1.0 + spec.roughness) + spec.leaf_relief;
+        let reach = shape.bounding_radius() + spec.roughness + spec.leaf_relief;
         for v in &skin.vertices {
             assert!(v.pos.magnitude() <= reach + 1e-4);
             assert!((0.0..=1.0).contains(&v.ao));
         }
         // Buried faces are dropped: fewer than every lobe's whole sphere.
-        let whole = shape.lobes.len() * generate_icosphere(spec.subdivisions).indices.len();
+        let whole: usize = shape
+            .lobes
+            .iter()
+            .map(|l| generate_geodesic(spec.frequency(l)).indices.len())
+            .sum();
         assert!(skin.indices.len() < whole);
         let outward = skin
             .indices
