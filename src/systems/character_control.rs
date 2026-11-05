@@ -381,7 +381,7 @@ impl<'a> System<'a> for CharacterControlSystem {
                             target_body,
                             constraint,
                             facing,
-                            grab_config.throw_impulse,
+                            &grab_config.throw,
                         );
                         ArmState::Idle
                     } else {

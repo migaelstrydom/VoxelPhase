@@ -125,7 +125,7 @@ impl AimSource for HeldObjectAim<'_> {
 
     fn launch(&self, ctx: &AimContext) -> Option<Launch> {
         let body = Self::held_body(ctx)?;
-        grab::throw_launch(ctx.physics, body, ctx.facing, self.config.throw_impulse)
+        grab::throw_launch(ctx.physics, body, ctx.facing, &self.config.throw)
     }
 
     fn projectile(&self, ctx: &AimContext) -> CollisionFilter {

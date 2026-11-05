@@ -36,8 +36,8 @@ pub struct GrabConfig {
     /// (units/s). The anchor only rises as fast as the object can follow,
     /// so heavy objects lift slowly or not at all.
     pub lift_speed: f32,
-    /// Forward impulse magnitude for throwing.
-    pub throw_impulse: f32,
+    /// How hard a throw is.
+    pub throw: ThrowStrength,
     /// Show debug overlays for probe ray, hold point, etc.
     pub debug_draw: bool,
 }
@@ -54,9 +54,41 @@ impl Default for GrabConfig {
             angular_max_impulse: 500.0,
             lift_speed: 0.5,
             reach_duration: 0.15,
-            throw_impulse: 1000.0,
+            throw: ThrowStrength::default(),
             debug_draw: false,
         }
+    }
+}
+
+/// How hard a character throws what it holds.
+///
+/// An arm is not a fixed impulse: it has mass of its own and moves only so
+/// fast. A throw puts its impulse into the arm and the object together, so a
+/// heavy object leaves at about `impulse / mass`, and a light one at no more
+/// than `impulse / arm_mass`, the hand's own speed.
+#[derive(Debug, Clone, Copy)]
+pub struct ThrowStrength {
+    /// Impulse the arm puts into itself and what it throws, N·s.
+    pub impulse: f32,
+    /// Effective mass of the throwing arm, kg.
+    pub arm_mass: f32,
+}
+
+impl Default for ThrowStrength {
+    /// A 14 kg clump of leaves leaves at about 19 m/s, a 30 kg crate at 14,
+    /// a 100 kg barrel at 7, and nothing faster than 25.
+    fn default() -> Self {
+        Self {
+            impulse: 1000.0,
+            arm_mass: 40.0,
+        }
+    }
+}
+
+impl ThrowStrength {
+    /// Speed, m/s, at which a body of `mass` kg leaves the hand.
+    pub fn speed(&self, mass: f32) -> f32 {
+        self.impulse / (mass + self.arm_mass)
     }
 }
 
@@ -221,18 +253,20 @@ pub fn throw(
     target_body: RigidBodyHandle,
     constraint_handle: ConstraintHandle,
     facing: Vector3<f32>,
-    throw_impulse: f32,
+    strength: &ThrowStrength,
 ) {
     physics.remove_constraint(constraint_handle);
-    physics.apply_impulse(target_body, facing * throw_impulse);
+    let Some(mass) = physics.body(target_body).map(|b| b.mass()) else {
+        return;
+    };
+    physics.apply_impulse(target_body, facing * strength.speed(mass) * mass);
 }
 
 /// The arc a held body would fly if it were thrown this instant.
 ///
-/// Stated from the same impulse [`throw`] applies, so the aiming cursor and
-/// the throw agree by construction. A fixed impulse means a light crate leaves
-/// fast and a heavy one barely leaves at all — the mass is doing the talking,
-/// and the cursor says so.
+/// Stated from the same speed [`throw`] gives, so the aiming cursor and the
+/// throw agree by construction. A light crate leaves faster than a heavy one,
+/// but never faster than the hand, and the cursor says so.
 ///
 /// Returns `None` for a body that has gone (destroyed terrain took it) or one
 /// that cannot be moved at all.
@@ -240,7 +274,7 @@ pub fn throw_launch(
     physics: &PhysicsWorld,
     target_body: RigidBodyHandle,
     facing: Vector3<f32>,
-    throw_impulse: f32,
+    strength: &ThrowStrength,
 ) -> Option<Launch> {
     let body = physics.body(target_body)?;
     let inv_mass = body.inv_mass();
@@ -250,7 +284,7 @@ pub fn throw_launch(
 
     Some(Launch {
         origin: body.position(),
-        velocity: body.linear_velocity() + facing * throw_impulse * inv_mass,
+        velocity: body.linear_velocity() + facing * strength.speed(body.mass()),
         gravity: physics.config().gravity * body.gravity_scale(),
     })
 }
@@ -259,4 +293,36 @@ pub fn throw_launch(
 /// Returns false if the body was destroyed (e.g. by terrain destruction).
 pub fn is_body_alive(physics: &PhysicsWorld, body: RigidBodyHandle) -> bool {
     physics.body(body).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physics::{ColliderDesc, RigidBodyDesc};
+
+    /// A light object leaves no faster than the hand moves; a heavy one
+    /// leaves at about the impulse over its own mass.
+    #[test]
+    fn a_throw_is_limited_by_the_hand_not_the_object() {
+        let strength = ThrowStrength::default();
+        let hand = strength.impulse / strength.arm_mass;
+        assert!(strength.speed(0.1) < hand);
+        assert!(strength.speed(0.1) > 0.99 * hand);
+        let heavy = strength.speed(1000.0);
+        let alone = strength.impulse / 1000.0;
+        assert!((heavy - alone).abs() < 0.05 * alone, "{heavy} vs {alone}");
+        assert!(strength.speed(14.0) < strength.speed(2.0));
+    }
+
+    /// The aiming arc launches a held body at the throw's speed for its mass.
+    #[test]
+    fn the_aimed_launch_leaves_at_the_throws_speed() {
+        let mut world = PhysicsWorld::default();
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+        world.attach_collider(body, ColliderDesc::sphere(0.3).density(100.0));
+        let mass = world.body(body).expect("just made").mass();
+        let strength = ThrowStrength::default();
+        let launch = throw_launch(&world, body, Vector3::x(), &strength).expect("movable");
+        assert!((launch.velocity.x - strength.speed(mass)).abs() < 1e-4);
+    }
 }
