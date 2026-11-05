@@ -407,6 +407,143 @@ fn a_coasting_body_wades_into_a_shrub() {
     );
 }
 
+/// A body coasting from `from` at `velocity` among `volumes`, weightless and
+/// in vacuum, with every body in the world dragged by the leaves: the world
+/// after `seconds`.
+fn coast(
+    mut world: PhysicsWorld,
+    volumes: &[DragVolume],
+    body: RigidBodyHandle,
+    seconds: f32,
+) -> PhysicsWorld {
+    let mut stepper = SequentialStepper::new(PHYSICS_DT, 12);
+    let mut lines = DebugLines::default();
+    let bodies: Vec<RigidBodyHandle> = volumes
+        .iter()
+        .filter_map(|v| match v.frame {
+            VolumeFrame::Body(core) => Some(core),
+            VolumeFrame::Fixed(_) => None,
+        })
+        .chain([body])
+        .collect();
+    for _ in 0..(seconds / FRAME_DT) as usize {
+        let drag = FoliageDrag::new(
+            LeafDrag::default(),
+            volumes.to_vec(),
+            &world,
+            bodies.iter().copied(),
+            FRAME_DT,
+        );
+        stepper.step(
+            &mut world,
+            FRAME_DT,
+            &EmptyGeometry,
+            &[],
+            &[&drag],
+            &mut lines,
+        );
+        lines.clear();
+    }
+    world
+}
+
+/// A world with no gravity and no air.
+fn still_space() -> PhysicsWorld {
+    PhysicsWorld::new(PhysicsConfig {
+        gravity: Vector3::zeros(),
+        atmosphere: Atmosphere::VACUUM,
+        ..PhysicsConfig::default()
+    })
+}
+
+/// A plank sliding past a shrub, clear of its leaves, is not slowed by
+/// them, though a ball as wide as the plank is long would reach deep into
+/// them: leaves drag a body by its real shape.
+#[test]
+fn a_plank_sliding_past_a_shrub_is_not_dragged() {
+    let reach = shrub()
+        .lobes
+        .iter()
+        .map(|l| l.centre.coords.x.abs() + l.radius)
+        .fold(0.0, f32::max);
+    let mut world = still_space();
+    let plank = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(Point3::new(-(reach + 0.15), 0.0, -3.0))
+            .linear_velocity(Vector3::z() * 4.0),
+    );
+    world.attach_collider(
+        plank,
+        ColliderDesc::box_shape(Vector3::new(0.05, 0.15, 1.0)).density(600.0),
+    );
+    world.wake_body(plank);
+    let world = coast(world, &rooted_shrub(), plank, 1.5);
+    let speed = world
+        .body(plank)
+        .expect("there")
+        .linear_velocity()
+        .magnitude();
+    println!("plank 0.1 m clear of the leaves: {speed:.3} m/s after passing");
+    assert!(
+        (speed - 4.0).abs() < 1e-3,
+        "the leaves slowed it to {speed:.3}"
+    );
+}
+
+/// A loose clump thrown through a heavier body standing in its leaves
+/// shares its momentum with it: the body is nudged, never hauled along at
+/// the clump's speed, and the two together keep the momentum the clump was
+/// thrown with.
+#[test]
+fn a_thrown_clump_does_not_haul_a_heavier_body() {
+    let mut world = still_space();
+    let shape = Arc::new(shrub());
+    let core = LeafCore::default().spawn(&mut world, &shape, Isometry3::identity());
+    let player = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(Point3::origin())
+            .filter(collision_layers::GRENADE),
+    );
+    world.attach_collider(
+        player,
+        ColliderDesc::capsule(0.5, 0.25).density(56.0 / capsule_volume(0.5, 0.25)),
+    );
+    world.wake_body(player);
+    world.wake_body(core);
+    let clump_mass = world.body(core).expect("there").mass();
+    let player_mass = world.body(player).expect("there").mass();
+    world.apply_impulse(core, Vector3::x() * 10.0 * clump_mass);
+    let volumes = vec![DragVolume {
+        shape,
+        frame: VolumeFrame::Body(core),
+    }];
+    let world = coast(world, &volumes, player, 1.0);
+    let clump_v = world.body(core).expect("there").linear_velocity();
+    let player_v = world.body(player).expect("there").linear_velocity();
+    let shared = 10.0 * clump_mass / (clump_mass + player_mass);
+    let momentum = clump_v * clump_mass + player_v * player_mass;
+    println!(
+        "clump {clump_mass:.1} kg thrown at 10 m/s through a {player_mass:.0} kg body: \
+         body {:.2} m/s, clump {:.2} m/s, momentum {:.1} of {:.1}",
+        player_v.x,
+        clump_v.x,
+        momentum.x,
+        10.0 * clump_mass
+    );
+    assert!(player_v.x > 0.05, "the leaves did not drag the body");
+    assert!(
+        player_v.x <= shared + 0.05,
+        "the body was hauled to {:.2} m/s, past the shared {shared:.2}",
+        player_v.x
+    );
+    assert!(
+        (momentum.x - 10.0 * clump_mass).abs() < 0.02 * 10.0 * clump_mass,
+        "momentum {:.1}, thrown with {:.1}",
+        momentum.x,
+        10.0 * clump_mass
+    );
+}
+
 fn capsule_volume(half_height: f32, radius: f32) -> f32 {
     let pi = std::f32::consts::PI;
     pi * radius * radius * 2.0 * half_height + 4.0 / 3.0 * pi * radius.powi(3)

@@ -9,41 +9,41 @@
 //!   (SubstepForceProvider)
 //! ```
 //!
-//! Nothing collides with leaves. A body overlapping a lobe is dragged
-//! towards the velocity of the leaves there, as water drags a body wading
-//! through it: quadratic in the speed through them and proportional to the
-//! body's cross-section and how deep into the lobe it is. A grenade thrown
+//! Nothing collides with leaves. Leaves are one more fluid, under the law
+//! the air and water drag by (`physics::DragArea::exposed`): a body is
+//! dragged by the silhouette of its own parts, each by how much of it is in
+//! the leaves, measured at points spread through the part. A grenade thrown
 //! through a shrub comes out slowed; the player wades through one.
 //!
-//! The leaves are not pushed back. A body pushing through a loose clump
-//! meets its core, which is what moves it; the drag's reaction on the
-//! clump is left out.
+//! The drag acts on both sides. A body in a loose clump's leaves and the
+//! clump are each pulled towards their shared, momentum-weighted velocity,
+//! so a thrown clump slows as it drags what it passes and cannot haul a
+//! heavier body along. A rooted shrub is immovable: what wades through it is
+//! dragged towards rest. Only the linear drag is shared; the leaves' pull on
+//! a body's spin has no reaction on the clump.
 //!
 //! The air's drag on a loose clump is the world's (`physics::Atmosphere`),
 //! through the bulk its core declares: its whole lobes, not the core.
 
 use std::sync::Arc;
 
+use generational_arena::Arena;
 use nalgebra::{Isometry3, Point3, Vector3};
+use smallvec::SmallVec;
 
 use super::shape::FoliageShape;
 use crate::physics::{
-    ForceContext, ForceOutput, MediumDrag, PhysicsWorld, RigidBody, RigidBodyHandle,
-    SubstepForceProvider,
+    Collider, ColliderShape, EnvelopePart, ForceContext, ForceOutput, MediumDrag, PhysicsWorld,
+    RigidBody, RigidBodyHandle, SubstepForceProvider,
 };
 
 /// How hard leaves drag.
 #[derive(Debug, Clone, Copy)]
 pub struct LeafDrag {
-    /// The drag's density, kg/m³, in the quadratic law `F = c·A·|v|·v` for a
-    /// body of cross-section `A` wholly inside the leaves. Water's is about
-    /// 500; leaves are a quarter of it, so wading through a shrub is wading
-    /// through shallow water, and a grenade through one loses about a third
-    /// of its speed.
+    /// The leaves' density as a fluid, kg/m³, in the law every fluid drags
+    /// by, `F = ½ρ·Cd·A·|v|·v`: a quarter of water's, so wading through a
+    /// shrub is wading through shallow water.
     pub density: f32,
-    /// Angular drag for each unit of linear drag, per square metre of the
-    /// body's radius: how much leaves brushing past slow a body's spin.
-    pub angular_per_linear: f32,
     /// The share of a character's stride leaves take wholly round it
     /// (`thicket`): what slows a wade where the drag alone, against a
     /// character's drive, does not.
@@ -53,8 +53,7 @@ pub struct LeafDrag {
 impl Default for LeafDrag {
     fn default() -> Self {
         Self {
-            density: 120.0,
-            angular_per_linear: 0.4,
+            density: 250.0,
             stride_loss: 0.9,
         }
     }
@@ -245,45 +244,188 @@ impl SubstepForceProvider for FoliageDrag {
             return out;
         };
         let motion = |h: RigidBodyHandle| ctx.bodies.get(h.0).map(FrameMotion::of);
-        let lobes: Vec<PosedLobe> = self
-            .volumes
-            .iter()
-            .filter(|v| v.owner() != Some(handle))
-            .filter_map(|v| Some(v.posed(v.motion(motion)?).collect::<Vec<_>>()))
-            .flatten()
-            .collect();
-
-        for &collider_handle in body.colliders() {
-            let Some(collider) = ctx.colliders.get(collider_handle.0) else {
+        for volume in &self.volumes {
+            let Some(frame) = volume.motion(motion) else {
                 continue;
             };
-            let centre = collider.world_center(body.position(), body.rotation());
-            let radius = collider.shape().bounding_radius();
-            // The deepest lobe it is in: overlapping lobes are one mass of
-            // leaves, not two layers of them.
-            let Some((depth, lobe)) = lobes
-                .iter()
-                .map(|lobe| (immersion(centre, radius, lobe), lobe))
-                .max_by(|a, b| a.0.total_cmp(&b.0))
-            else {
-                continue;
-            };
-            if depth <= 0.0 {
-                continue;
+            let lobes: SmallVec<[PosedLobe; 8]> = volume.posed(frame).collect();
+            let density = self.drag.density;
+            if volume.owner() == Some(handle) {
+                // Its own leaves, pushed back by every other body in them.
+                for passer in self
+                    .affected
+                    .iter()
+                    .filter(|&&other| other != handle)
+                    .filter_map(|other| ctx.bodies.get(other.0))
+                {
+                    if let Some(drag) = in_leaves(passer, ctx.colliders, &lobes, density) {
+                        let pull = Pull::between(drag, passer, Some(body.mass()));
+                        out.drag = out.drag.combined(pull.on_leaves);
+                    }
+                }
+            } else if let Some(drag) = in_leaves(body, ctx.colliders, &lobes, density) {
+                let carrier = volume
+                    .owner()
+                    .and_then(|owner| ctx.bodies.get(owner.0))
+                    .map(RigidBody::mass);
+                out.drag = out
+                    .drag
+                    .combined(Pull::between(drag, body, carrier).on_body);
             }
-            let arm = centre - body.position();
-            let velocity = body.linear_velocity() + body.angular_velocity().cross(&arm);
-            let speed = (velocity - lobe.velocity).magnitude();
-            let area = std::f32::consts::PI * radius * radius;
-            let linear = self.drag.density * area * depth * speed;
-            out.drag = out.drag.combined(MediumDrag {
-                linear,
-                angular: linear * self.drag.angular_per_linear * radius * radius,
-                velocity: lobe.velocity,
-                spin: lobe.spin,
-            });
         }
         out
+    }
+}
+
+/// Width, m, over which a point goes from clear of a lobe to inside it, so a
+/// part sliding into leaves is dragged smoothly rather than a sample at a
+/// time.
+const LEAF_EDGE: f32 = 0.1;
+
+/// The drag of leaves on `body` were they immovable: towards their velocity
+/// and spin where it is in them, over the silhouette of its parts, each by
+/// the share of it in the leaves. `None` when no part is in them.
+fn in_leaves(
+    body: &RigidBody,
+    colliders: &Arena<Collider>,
+    lobes: &[PosedLobe],
+    density: f32,
+) -> Option<MediumDrag> {
+    let (position, rotation) = (body.position(), body.rotation());
+    let mut parts: SmallVec<[(EnvelopePart, f32); 8]> = SmallVec::new();
+    let (mut weight, mut velocity, mut spin) = (0.0, Vector3::zeros(), Vector3::zeros());
+    for part in body.envelope(colliders) {
+        let pose = part.world_transform(position, rotation);
+        let points = samples(part.shape);
+        let mut share = 0.0;
+        for point in &points {
+            if let Some((depth, lobe)) = membership(pose * Point3::from(*point), lobes) {
+                share += depth;
+                weight += depth;
+                velocity += lobe.velocity * depth;
+                spin += lobe.spin * depth;
+            }
+        }
+        parts.push((part, share / points.len() as f32));
+    }
+    if weight <= 0.0 {
+        return None;
+    }
+    let (velocity, spin) = (velocity / weight, spin / weight);
+    let flow = rotation.inverse() * (body.linear_velocity() - velocity);
+    let turning = (body.angular_velocity() - spin).magnitude();
+    let drag = body
+        .drag_area()
+        .exposed(parts, flow)
+        .drag(density, flow.norm(), turning);
+    Some(MediumDrag {
+        velocity,
+        spin,
+        ..drag
+    })
+}
+
+/// How far a point is in the leaves, 0 to 1, and the lobe it is deepest in.
+/// Overlapping lobes are one mass of leaves, not two layers of them.
+fn membership<'a>(point: Point3<f32>, lobes: &'a [PosedLobe]) -> Option<(f32, &'a PosedLobe)> {
+    lobes
+        .iter()
+        .map(|lobe| {
+            let inside = lobe.radius - (point - lobe.centre).magnitude();
+            ((inside / LEAF_EDGE + 0.5).clamp(0.0, 1.0), lobe)
+        })
+        .filter(|(depth, _)| *depth > 0.0)
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+}
+
+/// Points spread through a shape, in its own frame: the centres of a 3×3×3
+/// grid of cells over the box it fills, less those outside a round shape.
+fn samples(shape: &ColliderShape) -> SmallVec<[Vector3<f32>; 27]> {
+    let (centre, half) = match shape {
+        ColliderShape::Sphere { radius } => (Vector3::zeros(), Vector3::repeat(*radius)),
+        ColliderShape::Capsule {
+            half_height,
+            radius,
+        } => (
+            Vector3::zeros(),
+            Vector3::new(*radius, *half_height, *radius),
+        ),
+        ColliderShape::Box { half_extents } => (Vector3::zeros(), *half_extents),
+        ColliderShape::ConvexHull { hull } => (hull.box_center, hull.box_half_extents),
+    };
+    let mut points = SmallVec::new();
+    for i in -1..=1 {
+        for j in -1..=1 {
+            for k in -1..=1 {
+                let cell = Vector3::new(i as f32, j as f32, k as f32) * (2.0 / 3.0);
+                let point = centre + cell.component_mul(&half);
+                if within(shape, point) {
+                    points.push(point);
+                }
+            }
+        }
+    }
+    if points.is_empty() {
+        points.push(centre);
+    }
+    points
+}
+
+/// Whether a point in a shape's frame is inside it. A box is its box; a
+/// hull is taken as the box it fills.
+fn within(shape: &ColliderShape, point: Vector3<f32>) -> bool {
+    match shape {
+        ColliderShape::Sphere { radius } => point.magnitude() <= *radius,
+        ColliderShape::Capsule {
+            half_height,
+            radius,
+        } => {
+            let end = (half_height - radius).max(0.0);
+            let axis = Vector3::new(0.0, point.y.clamp(-end, end), 0.0);
+            (point - axis).magnitude() <= *radius
+        }
+        ColliderShape::Box { .. } | ColliderShape::ConvexHull { .. } => true,
+    }
+}
+
+/// Leaves' drag shared between a body and the clump carrying the leaves.
+struct Pull {
+    on_body: MediumDrag,
+    on_leaves: MediumDrag,
+}
+
+impl Pull {
+    /// `drag`, the leaves' drag on `body` were they immovable, shared with
+    /// leaves whose clump weighs `carrier` kg (`None`: rooted, immovable).
+    ///
+    /// Two bodies of mass `m` and `M` dragged against each other by `k`
+    /// close their relative velocity at `k(1/m + 1/M)`, about their shared
+    /// momentum-weighted velocity `v̄`. Each is the same as being dragged
+    /// towards `v̄` alone: the body by `k(1 + m/M)`, the clump by
+    /// `k(1 + M/m)`. With the clump immovable, the body is dragged by `k`
+    /// towards the leaves, as before.
+    fn between(drag: MediumDrag, body: &RigidBody, carrier: Option<f32>) -> Self {
+        let mass = body.mass();
+        let Some(carrier) = carrier.filter(|m| m.is_finite() && *m > 0.0) else {
+            return Self {
+                on_body: drag,
+                on_leaves: MediumDrag::NONE,
+            };
+        };
+        let shared = (body.linear_velocity() * mass + drag.velocity * carrier) / (mass + carrier);
+        Self {
+            on_body: MediumDrag {
+                linear: drag.linear * (1.0 + mass / carrier),
+                velocity: shared,
+                ..drag
+            },
+            on_leaves: MediumDrag {
+                linear: drag.linear * (1.0 + carrier / mass),
+                angular: 0.0,
+                velocity: shared,
+                spin: Vector3::zeros(),
+            },
+        }
     }
 }
 

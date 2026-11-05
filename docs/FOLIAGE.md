@@ -50,9 +50,18 @@ on the next physics step.
   A grenade does not meet it: it passes through a loose clump slowed by the
   leaves, as through a rooted shrub, and its predicted flight looks past
   cores too. Characters and everything else still meet a core.
-- **Drag is quadratic and proportional to cross-section.** It is the same
-  law as water's drag, at a quarter of water's density (120 kg/m³). A grenade
-  thrown at 12 m/s through a shrub comes out at about 9.6 m/s.
+- **Leaves are a fluid.** They drag by the law the air and water drag by
+  (`DragArea::exposed`), at a quarter of water's density (250 kg/m³): a
+  body by the silhouette of its own parts, each by how much of it is in the
+  leaves, measured at points spread through it. A plank sliding past a
+  shrub is not dragged until it is in the leaves. A grenade thrown at
+  12 m/s through a shrub comes out at about 10.8 m/s.
+- **The drag acts on both sides.** A body in a loose clump's leaves and the
+  clump are each pulled towards their shared, momentum-weighted velocity,
+  so a thrown clump nudges what it passes and slows, and cannot haul a
+  heavier body along (`a_thrown_clump_does_not_haul_a_heavier_body`). A
+  rooted shrub is immovable. Only the linear drag is shared: the leaves'
+  pull on a body's spin has no reaction.
 - **A stride rule on top of the drag.** The player's drive pushes five times
   harder through its feet than friction allows (`Actuator::drive_gain`).
   That is enough to walk through any honest leaf drag at full speed: the
@@ -81,17 +90,13 @@ on the next physics step.
 - 25° and 35° slopes: stops within 1 m of the foot; asleep within 6 s.
 - Kicked at 4 m/s on flat ground: stops after about 1.2 m.
 - A grenade 1.5 m away: thrown about 50 m.
-- A grenade thrown at 12 m/s through a loose clump: through at 9.6 m/s, the
-  clump untouched.
+- A grenade thrown at 12 m/s through a rooted shrub: through at about
+  10.8 m/s.
 - In game, a big rooted shrub torn loose by a grenade beside it rose 3.4 m,
   landed 6.5 m away and stopped dead.
 
 ## Open
 
-- **No reaction on the leaves.** Something pushing through a loose clump's
-  leaves is dragged but does not drag the clump; only its core is ever
-  pushed. Leaves part round a passer, to its capsule plus 10 cm, and ease
-  back over 0.2 s, but the parted skin is smooth where it hugs the capsule.
 - **Leaf look.** The bumps are geometry; the leaves are shading
   (`SurfaceSource::FOLIAGE`, `shader/foliage.glsl`): a normal tilted leaf by
   leaf from noise in the clump's frame, diffuse wrapped past the terminator,
