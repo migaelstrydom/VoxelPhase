@@ -13,7 +13,9 @@ use super::super::geometry::FlatQuadGeometry;
 use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
-use crate::physics::{ColliderDesc, DriveCommand, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
+use crate::physics::{
+    Atmosphere, ColliderDesc, DriveCommand, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
+};
 use crate::platform::{DeckSuspension, MovingPlatform, RouteLoop, SeekMotion, REFERENCE_LOAD_KG};
 
 const HALF_EXTENTS: Vector3<f32> = Vector3::new(2.0, 0.3, 2.0);
@@ -316,6 +318,8 @@ fn a_motor_weaker_than_gravity_cannot_hold_the_lift_up() {
     let geometry = FlatQuadGeometry::new(64.0);
     let mut config = PhysicsConfig::default();
     config.sleep.enabled = false;
+    // Only the motor may hold the lift up: air would count as its effort.
+    config.atmosphere = Atmosphere::VACUUM;
     let gravity = config.gravity.norm();
     let mut world = PhysicsWorld::new(config);
 

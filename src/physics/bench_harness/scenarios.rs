@@ -8,7 +8,9 @@ use super::geometry::*;
 use crate::collision::convex_hull::{cube_hull, dodecahedron_hull, ConvexHull, HullFace};
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
-use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, StaticGeometry};
+use crate::physics::{
+    Atmosphere, ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, StaticGeometry,
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Scenarios: mesh pipeline (sphere/box vs static terrain)
@@ -3104,6 +3106,8 @@ impl PhysicsBenchScenario for HingeAxisNoDriftZeroGravityScenario {
         let mut config = PhysicsConfig::default();
         config.sleep.enabled = false;
         config.gravity = Vector3::zeros();
+        // The hinge's drift is the solver's; air would slow the free spin.
+        config.atmosphere = Atmosphere::VACUUM;
         PhysicsWorld::new(config)
     }
 

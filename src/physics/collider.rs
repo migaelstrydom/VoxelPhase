@@ -179,8 +179,6 @@ pub struct ColliderDesc {
     pub density: f32,
     /// Material properties.
     pub material: ColliderMaterial,
-    /// Which colliders it meets, and which queries see it.
-    pub filter: CollisionFilter,
 }
 
 impl ColliderDesc {
@@ -190,7 +188,6 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
-            filter: CollisionFilter::DEFAULT,
         }
     }
 
@@ -200,7 +197,6 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
-            filter: CollisionFilter::DEFAULT,
         }
     }
 
@@ -210,7 +206,6 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
-            filter: CollisionFilter::DEFAULT,
         }
     }
 
@@ -223,7 +218,6 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
-            filter: CollisionFilter::DEFAULT,
         }
     }
 
@@ -247,12 +241,6 @@ impl ColliderDesc {
     /// Set a custom friction law (e.g. `FrictionModel::AxisBiased`).
     pub fn friction_model(mut self, model: FrictionModel) -> Self {
         self.material.friction = model;
-        self
-    }
-
-    /// Set which colliders it meets and which queries see it.
-    pub fn filter(mut self, filter: CollisionFilter) -> Self {
-        self.filter = filter;
         self
     }
 
@@ -282,12 +270,14 @@ pub struct Collider {
     mass: f32,
     /// Local inertia tensor.
     local_inertia: Matrix3<f32>,
-    /// Which colliders it meets, and which queries see it.
+    /// Its body's filter ([`super::RigidBody::filter`]), carried here for
+    /// the narrowphase and casts, which meet colliders.
     filter: CollisionFilter,
 }
 
 impl Collider {
-    pub(crate) fn new(desc: ColliderDesc) -> Self {
+    /// A collider of `desc`, for a body filtered by `filter`.
+    pub(crate) fn new(desc: ColliderDesc, filter: CollisionFilter) -> Self {
         let mass = desc.shape.compute_mass(desc.density);
         let local_inertia = desc.shape.compute_inertia(mass);
 
@@ -297,7 +287,7 @@ impl Collider {
             material: desc.material,
             mass,
             local_inertia,
-            filter: desc.filter,
+            filter,
         }
     }
 

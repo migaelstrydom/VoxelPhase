@@ -67,6 +67,9 @@ pub struct ConvexHull {
     /// tightly than by its bounding radius: a column 8 m tall and 0.7 m
     /// across is an 8 m cube by radius.
     pub box_half_extents: Vector3<f32>,
+    /// Each face's area vector, m²: its outward normal times its area, in
+    /// the order of `faces`.
+    face_areas: Vec<Vector3<f32>>,
 }
 
 impl ConvexHull {
@@ -107,6 +110,10 @@ impl ConvexHull {
             .fold(0.0f32, f32::max);
 
         let edges = build_edge_adjacency(&vertices, &canonical_faces);
+        let face_areas = canonical_faces
+            .iter()
+            .map(|face| face_area(&vertices, face))
+            .collect();
 
         Self {
             vertices,
@@ -115,6 +122,7 @@ impl ConvexHull {
             bounding_radius,
             box_center: (min_v + max_v) / 2.0,
             box_half_extents: extent / 2.0,
+            face_areas,
         }
     }
 
@@ -125,43 +133,16 @@ impl ConvexHull {
     /// twice, so the shadow is half the sum of every face's area projected
     /// onto the plane.
     pub fn projected_area(&self, direction: Vector3<f32>) -> f32 {
-        let mut twice = 0.0f32;
-        for face in &self.faces {
-            let indices = &face.vertex_indices;
-            if indices.len() < 3 {
-                continue;
-            }
-            let v0 = self.vertices[indices[0] as usize];
-            let mut area = Vector3::zeros();
-            for i in 1..indices.len() - 1 {
-                let v1 = self.vertices[indices[i] as usize];
-                let v2 = self.vertices[indices[i + 1] as usize];
-                area += (v1 - v0).cross(&(v2 - v0));
-            }
-            twice += 0.5 * area.dot(&direction).abs();
-        }
-        0.5 * twice
+        0.5 * self
+            .face_areas
+            .iter()
+            .map(|area| area.dot(&direction).abs())
+            .sum::<f32>()
     }
 
     /// Total area of the hull's faces.
     pub fn surface_area(&self) -> f32 {
-        self.faces
-            .iter()
-            .filter(|face| face.vertex_indices.len() >= 3)
-            .map(|face| {
-                let indices = &face.vertex_indices;
-                let v0 = self.vertices[indices[0] as usize];
-                let twice: Vector3<f32> = indices[1..]
-                    .windows(2)
-                    .map(|pair| {
-                        let v1 = self.vertices[pair[0] as usize];
-                        let v2 = self.vertices[pair[1] as usize];
-                        (v1 - v0).cross(&(v2 - v0))
-                    })
-                    .sum();
-                0.5 * twice.norm()
-            })
-            .sum()
+        self.face_areas.iter().map(|area| area.norm()).sum()
     }
 
     /// Compute volume via tetrahedron decomposition from the origin.
@@ -257,6 +238,11 @@ impl ConvexHull {
             bounding_radius: self.bounding_radius * factor,
             box_center: self.box_center * factor,
             box_half_extents: self.box_half_extents * factor,
+            face_areas: self
+                .face_areas
+                .iter()
+                .map(|area| area * (factor * factor))
+                .collect(),
         }
     }
 
@@ -425,6 +411,21 @@ fn tetrahedron_covariance(a: Vector3<f32>, b: Vector3<f32>, c: Vector3<f32>) -> 
         }
     }
     m
+}
+
+/// `face`'s area vector: its outward normal times its area, from a fan of
+/// triangles over its vertices. Zero for a face of fewer than three.
+fn face_area(vertices: &[Vector3<f32>], face: &HullFace) -> Vector3<f32> {
+    let indices = &face.vertex_indices;
+    let Some(&first) = indices.first() else {
+        return Vector3::zeros();
+    };
+    let v0 = vertices[first as usize];
+    let twice: Vector3<f32> = indices[1..]
+        .windows(2)
+        .map(|pair| (vertices[pair[0] as usize] - v0).cross(&(vertices[pair[1] as usize] - v0)))
+        .sum();
+    0.5 * twice
 }
 
 /// Compute the AABB (min, max) of a set of vertices.

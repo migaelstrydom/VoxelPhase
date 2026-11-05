@@ -1,17 +1,28 @@
-//! How a fluid drags a shape moving through it: the quadratic law
-//! `F = ½ρ·Cd·A·|v|·v`, and its turning twin `τ = ½ρ·Cω·A·r²·|ω|·ω`, with the
-//! drag coefficient and areas each collider shape presents.
+//! How a fluid drags a body moving through it: the quadratic law
+//! `F = ½ρ·Cd·A·|v|·v` over the silhouette the body shows the flow, and its
+//! turning twin `τ = ½ρ·Cω·A·R³·|ω|·ω`, the mean silhouette turning at the
+//! body's reach `R`.
 //!
-//! Every medium uses it: water (`water::buoyancy`) and the world's air
-//! ([`super::Atmosphere`]) differ only in density and in how much of the body
-//! is in them.
+//! Every medium uses it, through [`DragArea::exposed`]: water
+//! (`water::buoyancy`) over the parts it covers, and the world's air
+//! ([`super::Atmosphere`]) over all of them. They differ only in density and
+//! in how much of the body is in them.
+//!
+//! ```text
+//!   body's envelope ──(shape changes)──▶ DragArea::of: Cd, mean silhouette,
+//!                                        share shown, reach
+//!   each substep: parts in the fluid, flow ──▶ DragArea::exposed ──▶ Exposure
+//!                                                  ──▶ MediumDrag at density ρ
+//! ```
 
 use std::f32::consts::PI;
 
+use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
 
 use super::bulk::EnvelopePart;
 use super::collider::ColliderShape;
+use super::force_provider::MediumDrag;
 use super::silhouette::Silhouette;
 
 /// Drag coefficient of a sphere.
@@ -20,8 +31,16 @@ const SPHERE: f32 = 0.47;
 const BOX: f32 = 1.05;
 /// Drag coefficient of a capsule.
 const CAPSULE: f32 = 0.82;
-/// Rotational drag multiplier `Cω`.
-pub const ANGULAR_COEFFICIENT: f32 = 2.0;
+/// Spin drag coefficient `Cω`, over the mean silhouette at the reach.
+///
+/// A flat plate of face `S` and half-length `L` turning about its middle:
+/// each strip at `r` pushes `½ρ·Cd·(ωr)²·dS` with arm `r`, `½ρ·Cd·ω²·S·L³/4`
+/// in all. Its mean silhouette is `S/2`, so `Cω = Cd/2` for a plate's `Cd`.
+pub const ANGULAR_COEFFICIENT: f32 = 0.6;
+/// Speed through a fluid, m/s, below which a body has no flow direction and
+/// shows the fluid its mean silhouette. The drag scales with the speed, so
+/// which area stands in there makes no difference.
+const FLOW_SPEED_EPSILON: f32 = 1e-3;
 
 /// What a shape presents to a fluid.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -30,22 +49,17 @@ pub struct ShapeDrag {
     pub coefficient: f32,
     /// Projected area averaged over every direction, m².
     pub mean_area: f32,
-    /// Square of the arm spin drag acts at, m².
-    pub spin_radius_sq: f32,
 }
 
 impl ShapeDrag {
     /// What `shape` presents.
     pub fn of(shape: &ColliderShape) -> Self {
-        let (coefficient, mean_area, spin_radius_sq) = match shape {
-            ColliderShape::Sphere { radius } => {
-                let r = *radius;
-                (SPHERE, PI * r * r, r * r)
-            }
-            ColliderShape::Box { half_extents } => {
-                let (hx, hy, hz) = (half_extents.x, half_extents.y, half_extents.z);
-                let mean_area = 2.0 * (hx * hy + hy * hz + hx * hz);
-                (BOX, mean_area, hx * hx + hy * hy + hz * hz)
+        // A convex body's projected area, averaged over every direction, is a
+        // quarter of its surface (Cauchy).
+        let (coefficient, surface) = match shape {
+            ColliderShape::Sphere { radius } => (SPHERE, 4.0 * PI * radius * radius),
+            ColliderShape::Box { half_extents: h } => {
+                (BOX, 8.0 * (h.x * h.y + h.y * h.z + h.x * h.z))
             }
             ColliderShape::Capsule {
                 half_height,
@@ -53,58 +67,68 @@ impl ShapeDrag {
             } => {
                 let r = *radius;
                 let cylinder = (2.0 * (half_height - r)).max(0.0);
-                let surface = 2.0 * PI * r * cylinder + 4.0 * PI * r * r;
-                (CAPSULE, surface * 0.25, half_height * half_height)
+                (CAPSULE, 2.0 * PI * r * cylinder + 4.0 * PI * r * r)
             }
-            ColliderShape::ConvexHull { hull } => {
-                // A convex body's projected area, averaged over every
-                // direction, is a quarter of its surface (Cauchy), as the
-                // box's is above.
-                let radius = hull.bounding_radius;
-                (BOX, hull.surface_area() * 0.25, radius * radius)
-            }
+            ColliderShape::ConvexHull { hull } => (BOX, hull.surface_area()),
         };
         Self {
             coefficient,
-            mean_area,
-            spin_radius_sq,
+            mean_area: 0.25 * surface,
         }
-    }
-
-    /// `Cd·A` over the mean area, m²: the linear drag's area.
-    pub fn linear_area(&self) -> f32 {
-        self.coefficient * self.mean_area
-    }
-
-    /// `Cω·A·r²`, m⁴: the spin drag's area.
-    pub fn angular_area(&self) -> f32 {
-        ANGULAR_COEFFICIENT * self.mean_area * self.spin_radius_sq
     }
 }
 
-/// A body's drag areas: what turns a fluid's density and the body's speed
-/// into drag.
+/// A body's drag, measured from its shape whenever that changes.
 ///
 /// A property of the body's shape as a whole, not of how it is cut up: a
-/// crate of eight boxes drags as the one box they fill. The linear area is
-/// the body's silhouette averaged over directions ([`Silhouette`]: the union
-/// of its parts' outlines, so a gap between parts lets the flow through).
-/// Its drag coefficient is the parts' own, weighted by their area, or the
-/// one the body's bulk declares. The spin area takes that silhouette at the
-/// body's reach about its centre of mass, the furthest any part reaches,
-/// as one part's spin radius is its own furthest reach: a dumbbell turns
-/// against the air at its ends.
+/// crate of eight boxes drags as the one box they fill. Its mean silhouette
+/// is the union of its parts' outlines averaged over directions
+/// ([`Silhouette`]), so a gap between parts lets the flow through, and the
+/// share of their own silhouettes the parts show is what scales them along
+/// any one flow ([`Self::exposed`]). Its drag coefficient is the parts' own,
+/// weighted by their area, or the one the body's bulk declares. It spins
+/// against a fluid at its reach about its centre of mass, the furthest any
+/// part reaches: a dumbbell turns at its ends.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct DragArea {
-    /// `Cd·A`, m².
+    /// Drag coefficient `Cd`.
+    coefficient: f32,
+    /// Silhouette averaged over directions, m².
+    mean_area: f32,
+    /// The share of their own silhouettes the parts show, averaged over
+    /// directions: 1 for one part, a half for a cube cut into eight, each
+    /// hiding the others.
+    shown: f32,
+    /// The furthest any part reaches from the centre of mass, m.
+    reach: f32,
+}
+
+/// The drag areas a body shows a fluid at one moment.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Exposure {
+    /// `Cd·A` along the flow, m².
     pub linear: f32,
-    /// `Cω·A·r²`, m⁴.
+    /// `Cω·A·R³`, m⁵.
     pub angular: f32,
 }
 
+impl Exposure {
+    /// The drag of a fluid of `density` on a body showing these areas, moving
+    /// through it at `speed` and turning at `spin` (rad/s), towards the
+    /// fluid's rest: the quadratic law linearised about the body's motion.
+    pub fn drag(&self, density: f32, speed: f32, spin: f32) -> MediumDrag {
+        let half_rho = 0.5 * density;
+        MediumDrag {
+            linear: half_rho * self.linear * speed,
+            angular: half_rho * self.angular * spin,
+            ..MediumDrag::NONE
+        }
+    }
+}
+
 impl DragArea {
-    /// The drag areas of a body whose envelope is `parts`, each placed in
-    /// the body's frame, measured from its centre of mass.
+    /// The drag of a body whose envelope is `parts`, each placed in the
+    /// body's frame, measured from its centre of mass.
     pub fn of<'a>(parts: impl IntoIterator<Item = EnvelopePart<'a>>) -> Self {
         let parts: SmallVec<[EnvelopePart; 8]> = parts.into_iter().collect();
         let mut weighted_coefficient = 0.0;
@@ -114,24 +138,99 @@ impl DragArea {
             let drag = part.drag();
             weighted_coefficient += drag.coefficient * drag.mean_area;
             total += drag.mean_area;
-            let arm = part.offset.translation.vector.norm();
-            reach = reach.max(arm + drag.spin_radius_sq.sqrt());
+            reach = reach.max(furthest(part));
         }
         if total <= 0.0 {
             return Self::default();
         }
-        // One convex part's mean silhouette is Cauchy's quarter of its
-        // surface exactly; only a body of several needs measuring.
-        let area = if parts.len() == 1 {
-            total
+        // One convex part shows all of its silhouette; only a body of
+        // several needs measuring.
+        let shown = if parts.len() == 1 {
+            1.0
         } else {
-            Silhouette::default().mean_area(&parts)
+            Silhouette::default().mean_shown(&parts)
         };
-        let coefficient = weighted_coefficient / total;
         Self {
-            linear: coefficient * area,
-            angular: ANGULAR_COEFFICIENT * area * reach * reach,
+            coefficient: weighted_coefficient / total,
+            mean_area: shown * total,
+            shown,
+            reach,
         }
+    }
+
+    /// `Cd·A` over the mean silhouette, m².
+    pub fn mean_linear(&self) -> f32 {
+        self.coefficient * self.mean_area
+    }
+
+    /// `Cω·A·R³`, m⁵: the spin drag's area with the whole body in the fluid.
+    pub fn angular(&self) -> f32 {
+        ANGULAR_COEFFICIENT * self.mean_area * self.reach.powi(3)
+    }
+
+    /// What the body shows a fluid it moves through at `flow` (its velocity
+    /// relative to the fluid, in the body's frame), with `parts` the body's
+    /// envelope paired with how much of each part is in the fluid, 0 to 1.
+    ///
+    /// Each part shows its own silhouette along the flow, as much of it as is
+    /// in the fluid, scaled by the share the parts show of each other: exact
+    /// for a body cut on a grid, and the measured mean silhouette over every
+    /// direction for any body. The spin drag is the share of the silhouette
+    /// in the fluid.
+    pub fn exposed<'a>(
+        &self,
+        parts: impl IntoIterator<Item = (EnvelopePart<'a>, f32)>,
+        flow: Vector3<f32>,
+    ) -> Exposure {
+        let speed = flow.norm();
+        let direction = (speed > FLOW_SPEED_EPSILON).then(|| flow / speed);
+        let (mut immersed, mut whole) = (0.0, 0.0);
+        for (part, share) in parts {
+            let area = direction.map_or_else(
+                || ShapeDrag::of(part.shape).mean_area,
+                |d| {
+                    part.shape
+                        .projected_area(part.offset.rotation.inverse() * d)
+                },
+            );
+            immersed += share * area;
+            whole += area;
+        }
+        if whole <= 0.0 {
+            return Exposure::default();
+        }
+        Exposure {
+            linear: self.coefficient * self.shown * immersed,
+            angular: self.angular() * immersed / whole,
+        }
+    }
+}
+
+/// The furthest any point of `part` lies from the body's origin, m.
+fn furthest(part: &EnvelopePart) -> f32 {
+    let offset = part.offset;
+    let from_origin = |p: Point3<f32>| (offset * p).coords.norm();
+    match part.shape {
+        ColliderShape::Sphere { radius } => from_origin(Point3::origin()) + radius,
+        ColliderShape::Box { half_extents: h } => (0..8)
+            .map(|corner| {
+                let sign = |bit: u32| if corner & (1 << bit) == 0 { -1.0 } else { 1.0 };
+                from_origin(Point3::new(sign(0) * h.x, sign(1) * h.y, sign(2) * h.z))
+            })
+            .fold(0.0, f32::max),
+        ColliderShape::Capsule {
+            half_height,
+            radius,
+        } => {
+            let end = (half_height - radius).max(0.0);
+            from_origin(Point3::new(0.0, end, 0.0)).max(from_origin(Point3::new(0.0, -end, 0.0)))
+                + radius
+        }
+        ColliderShape::ConvexHull { hull } => hull
+            .vertices
+            .iter()
+            .map(|v| from_origin(Point3::from(*v)))
+            .fold(0.0, f32::max),
     }
 }
 
@@ -141,43 +240,80 @@ mod tests {
 
     use super::*;
 
-    /// A metre cube cut into `pieces_per_side`³ boxes.
-    fn cube(pieces_per_side: usize) -> DragArea {
-        let half = 0.5 / pieces_per_side as f32;
-        let shape = ColliderShape::Box {
-            half_extents: Vector3::repeat(half),
-        };
-        let at = |k: usize| -0.5 + half * (2 * k + 1) as f32;
-        let n = pieces_per_side;
-        let offsets: Vec<Isometry3<f32>> = (0..n.pow(3))
-            .map(|i| Isometry3::translation(at(i % n), at(i / n % n), at(i / (n * n))))
+    /// A box of `half_extents` cut into `cuts` pieces along each axis, as
+    /// shapes and their placements.
+    fn cut_box(half_extents: Vector3<f32>, cuts: usize) -> (ColliderShape, Vec<Isometry3<f32>>) {
+        let piece = half_extents / cuts as f32;
+        let at = |k: usize, half: f32| -half * cuts as f32 + half * (2 * k + 1) as f32;
+        let offsets = (0..cuts.pow(3))
+            .map(|i| {
+                Isometry3::translation(
+                    at(i % cuts, piece.x),
+                    at(i / cuts % cuts, piece.y),
+                    at(i / (cuts * cuts), piece.z),
+                )
+            })
             .collect();
-        DragArea::of(offsets.iter().map(|o| part(&shape, o, None)))
+        (
+            ColliderShape::Box {
+                half_extents: piece,
+            },
+            offsets,
+        )
     }
 
-    /// A metre cube drags and turns the same however it is cut: eight boxes
-    /// and twenty-seven measure the same silhouette and reach, and that is
-    /// the one box's exact quarter-surface to within the directions'
-    /// sampling.
+    fn parts<'a>(
+        shape: &'a ColliderShape,
+        offsets: &'a [Isometry3<f32>],
+    ) -> impl Iterator<Item = EnvelopePart<'a>> + Clone {
+        offsets.iter().map(move |o| part(shape, o, None))
+    }
+
+    /// A box drags and turns the same however it is cut: into eight boxes,
+    /// twenty-seven, or a long box into two cubes. Its mean silhouette is the
+    /// whole box's exact quarter-surface to within the directions' sampling,
+    /// its reach is the same corner, and along any flow it shows what the
+    /// whole box does.
     #[test]
     fn a_body_drags_as_its_shape_however_it_is_cut() {
-        let whole = cube(1);
-        let cauchy = BOX * 6.0 / 4.0;
-        assert!(
-            (whole.linear - cauchy).abs() < 1e-5,
-            "{} against {cauchy}",
-            whole.linear
-        );
-        for cut in [cube(2), cube(3)] {
+        let flows = [
+            Vector3::x(),
+            Vector3::new(1.0, 2.0, 0.5),
+            Vector3::new(-0.3, 0.2, 1.0),
+        ];
+        for (half_extents, cuts) in [
+            (Vector3::repeat(0.5), 2),
+            (Vector3::repeat(0.5), 3),
+            (Vector3::new(0.5, 0.25, 0.25), 2),
+        ] {
+            let (whole_shape, whole_at) = cut_box(half_extents, 1);
+            let (cut_shape, cut_at) = cut_box(half_extents, cuts);
+            let whole = DragArea::of(parts(&whole_shape, &whole_at));
+            let cut = DragArea::of(parts(&cut_shape, &cut_at));
+            let h = half_extents;
+            let cauchy = BOX * 2.0 * (h.x * h.y + h.y * h.z + h.x * h.z);
+            assert!((whole.mean_linear() - cauchy).abs() < 1e-5 * cauchy);
             assert!(
-                (cut.linear - whole.linear).abs() < 0.01 * whole.linear,
+                (cut.mean_linear() - whole.mean_linear()).abs() < 0.01 * whole.mean_linear(),
                 "cut {cut:?} against {whole:?}"
             );
-            let (cut_reach, whole_reach) = (cut.angular / cut.linear, whole.angular / whole.linear);
             assert!(
-                (cut_reach - whole_reach).abs() < 1e-4 * whole_reach,
+                (cut.reach - whole.reach).abs() < 1e-5,
                 "cut {cut:?} against {whole:?}"
             );
+            for flow in flows {
+                let shows = |area: &DragArea, parts: &mut dyn Iterator<Item = EnvelopePart>| {
+                    area.exposed(parts.map(|p| (p, 1.0)), flow).linear
+                };
+                let (cut_shows, whole_shows) = (
+                    shows(&cut, &mut parts(&cut_shape, &cut_at)),
+                    shows(&whole, &mut parts(&whole_shape, &whole_at)),
+                );
+                assert!(
+                    (cut_shows - whole_shows).abs() < 0.01 * whole_shows,
+                    "along {flow:?}: cut {cut_shows}, whole {whole_shows}"
+                );
+            }
         }
     }
 
@@ -185,7 +321,7 @@ mod tests {
     #[test]
     fn a_sphere_drags_by_its_great_circle() {
         let sphere = ColliderShape::Sphere { radius: 0.3 };
-        let area = DragArea::of([part(&sphere, &Isometry3::identity(), None)]).linear;
+        let area = DragArea::of([part(&sphere, &Isometry3::identity(), None)]).mean_linear();
         let exact = SPHERE * PI * 0.09;
         assert!(
             (area - exact).abs() < 0.01 * exact,
@@ -194,7 +330,7 @@ mod tests {
     }
 
     /// Two balls on a bar drag by their two discs, not by the hull round
-    /// both, and turn against the air at their ends.
+    /// both, and turn against a fluid at their ends.
     #[test]
     fn a_dumbbell_drags_by_its_balls_and_turns_at_its_ends() {
         let ball = ColliderShape::Sphere { radius: 0.1 };
@@ -207,11 +343,10 @@ mod tests {
         // The balls' circles are drawn circumscribed, about half a percent
         // over, and hide each other only end on.
         assert!(
-            (dumbbell.linear - 2.0 * one.linear).abs() < 0.02 * one.linear,
+            (dumbbell.mean_linear() - 2.0 * one.mean_linear()).abs() < 0.02 * one.mean_linear(),
             "dumbbell {dumbbell:?}, one ball {one:?}"
         );
-        let reach_sq = dumbbell.angular / (ANGULAR_COEFFICIENT * dumbbell.linear / SPHERE);
-        assert!((reach_sq - 1.21).abs() < 1e-4, "reach² {reach_sq}");
+        assert!((dumbbell.reach - 1.1).abs() < 1e-5, "{dumbbell:?}");
     }
 
     /// A body that declares its drag coefficient drags by it over the same
@@ -222,8 +357,59 @@ mod tests {
         let at = Isometry3::identity();
         let own = DragArea::of([part(&ball, &at, None)]);
         let porous = DragArea::of([part(&ball, &at, Some(1.0))]);
-        assert!((porous.linear - own.linear / SPHERE).abs() < 1e-6);
-        assert_eq!(porous.angular, own.angular);
+        assert!((porous.mean_linear() - own.mean_linear() / SPHERE).abs() < 1e-6);
+        assert_eq!(porous.angular(), own.angular());
+    }
+
+    /// A capsule moving along its axis shows the flow its caps' disc; across
+    /// it, the disc and the cylinder's side; and at rest, its mean.
+    #[test]
+    fn a_capsule_moving_end_on_meets_less_drag_than_side_on() {
+        let shape = ColliderShape::Capsule {
+            half_height: 0.5,
+            radius: 0.17,
+        };
+        let at = Isometry3::identity();
+        let area = DragArea::of([part(&shape, &at, None)]);
+        let along =
+            |flow: Vector3<f32>| area.exposed([(part(&shape, &at, None), 1.0)], flow).linear;
+        let (end_on, side_on, still) = (
+            along(Vector3::y()),
+            along(Vector3::x()),
+            along(Vector3::zeros()),
+        );
+        assert!(
+            end_on < still && still < side_on,
+            "{end_on} {still} {side_on}"
+        );
+        assert!((side_on / end_on - (1.0 + 0.34 * 0.66 / (PI * 0.0289))).abs() < 1e-3);
+        assert!((still - area.mean_linear()).abs() < 1e-6);
+    }
+
+    /// A body half in a fluid shows it the half that is in it, and spins
+    /// against it by that half.
+    #[test]
+    fn a_body_half_in_a_fluid_shows_it_half() {
+        let (shape, at) = cut_box(Vector3::repeat(0.5), 2);
+        let area = DragArea::of(parts(&shape, &at));
+        let flow = Vector3::new(0.3, 0.0, 1.0);
+        let whole = area.exposed(parts(&shape, &at).map(|p| (p, 1.0)), flow);
+        let lower = area.exposed(
+            parts(&shape, &at).map(|p| {
+                (
+                    p,
+                    if p.offset.translation.y < 0.0 {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                )
+            }),
+            flow,
+        );
+        assert!((lower.linear - 0.5 * whole.linear).abs() < 1e-5 * whole.linear);
+        assert!((lower.angular - 0.5 * whole.angular).abs() < 1e-5 * whole.angular);
+        assert!((whole.angular - area.angular()).abs() < 1e-6 * whole.angular);
     }
 
     fn part<'a>(

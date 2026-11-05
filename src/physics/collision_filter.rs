@@ -1,7 +1,8 @@
-//! Which colliders meet: layers a collider belongs to, and layers it meets.
+//! Which bodies meet: layers a body belongs to, and layers it meets.
 //!
 //! ```text
-//!   ColliderDesc::filter(CollisionFilter { membership, meets })
+//!   RigidBodyDesc::filter(CollisionFilter { membership, meets })
+//!        │  carried by each of the body's colliders
 //!        │
 //!        ├─▶ narrowphase pairs, CCD pairs, BodySweep::cast movers
 //!        │      a pair is made only if each side meets the other's membership
@@ -183,11 +184,12 @@ mod tests {
         };
 
         fn slab(world: &mut PhysicsWorld, filter: CollisionFilter) -> RigidBodyHandle {
-            let body = world.create_body(RigidBodyDesc::static_body().position(Point3::origin()));
-            world.attach_collider(
-                body,
-                ColliderDesc::box_shape(Vector3::new(2.0, 0.05, 2.0)).filter(filter),
+            let body = world.create_body(
+                RigidBodyDesc::static_body()
+                    .position(Point3::origin())
+                    .filter(filter),
             );
+            world.attach_collider(body, ColliderDesc::box_shape(Vector3::new(2.0, 0.05, 2.0)));
             body
         }
 
@@ -200,9 +202,10 @@ mod tests {
             let body = world.create_body(
                 RigidBodyDesc::dynamic()
                     .position(at)
-                    .linear_velocity(velocity),
+                    .linear_velocity(velocity)
+                    .filter(filter),
             );
-            world.attach_collider(body, ColliderDesc::sphere(0.1).filter(filter));
+            world.attach_collider(body, ColliderDesc::sphere(0.1));
             world.wake_body(body);
             body
         }

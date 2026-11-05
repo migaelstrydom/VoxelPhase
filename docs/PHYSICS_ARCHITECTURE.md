@@ -34,16 +34,19 @@ connects them.
   one medium drags (one provider, or the air alone) gets that medium's output bit for
   bit; one the air drags as well has the two combined.
 - **The world has air** (`PhysicsConfig::atmosphere`, `atmosphere.rs`): the ambient
-  medium, as gravity is the ambient force. Each substep starts every dynamic body's drag at
-  the air's, `½ρ·Cd·A·|v − wind|` over its bulk (`fluid_drag.rs`, the law water uses
-  too), and providers' media combine with it. A body the air would take more than
-  `felt_within` (60 m) to slow by a factor of e is left in vacuum: rocks, characters and
-  grenades fly as before, and only bodies light for their size (a cardboard box, a clump
-  of leaves, a big light crate) feel it. A body's drag areas are a property of its shape,
-  not of how it is cut up (`DragArea::of`), measured on the first substep after its shape
-  changes: its silhouette averaged over directions, the union of its parts' outlines
-  (`silhouette.rs`), and for spin that silhouette at the body's reach about its centre of
-  mass. Its drag coefficient is its parts' shapes', unless its bulk declares one
+  medium, as gravity is the ambient force. Each substep starts every awake dynamic body's
+  drag at the still air's, and providers' media combine with it. It matters only to
+  bodies light for their size (a cardboard box, a clump of leaves, a big light crate);
+  the air takes a grenade a couple of kilometres to slow by a factor of e.
+- **Every fluid drags by one law** (`fluid_drag.rs`): `½ρ·Cd·A·|v|·v` over the silhouette
+  the body shows the flow, and `½ρ·Cω·A·R³·|ω|·ω` for spin, its mean silhouette turning
+  at its reach `R` about its centre of mass. Air and water call the same
+  `DragArea::exposed`, water over the parts it covers. A body's drag is a property of its
+  shape, not of how it is cut up (`DragArea::of`), measured on the first substep it is
+  awake after its shape changes: the share of their own silhouettes its parts show,
+  averaged over directions (the union of their outlines, `silhouette.rs`), which scales
+  the parts' own silhouettes along any flow, exact for a body cut on a grid. Its drag
+  coefficient is its parts' shapes', unless its bulk declares one
   (`BulkShape::dragging_as`): a porous body, a clump of leaves bounded by spheres, drags
   as what it is in air and water alike. Tests of the solver's energy conservation
   (`physics_fuzz`, `stability.rs`) set `Atmosphere::VACUUM` themselves, since drag only
@@ -54,8 +57,8 @@ connects them.
   is an impulse per square metre (N·s/m²); a body is given that times its envelope's
   silhouette seen along the blast (`silhouette::exposed_area`), so a leaf and a boulder of
   a size are struck alike and the lighter flies further, a plate edge-on is barely moved,
-  a block behind another is shielded by it, and a gap between parts lets the blast
-  through. Fracture and glass read the loading per area (`PhysicsImpulse::loading_at`) as
+  a part behind another of the same body is shielded by it, and a gap between parts lets
+  the blast through. Separate bodies do not shield each other. Fracture and glass read the loading per area (`PhysicsImpulse::loading_at`) as
   the blast's strength at a point.
 
 ## Bodies, colliders, constraints
@@ -68,15 +71,16 @@ connects them.
 - `Collider` (`collider.rs`): `Sphere`, `Box`, `Capsule`, `ConvexHull`, with a
   `ColliderMaterial` (friction, restitution, density). Colliders attach to and detach from
   bodies at runtime. `detach_collider` swap-removes, so collider order changes after a split.
-- Collision filtering (`collision_filter.rs`): each collider has a `CollisionFilter`, the
-  `Layers` it belongs to and the layers it meets. A pair makes contact only if each meets
-  the other; the narrowphase, CCD and `BodySweep::cast` movers all check it. Queries
+- Collision filtering (`collision_filter.rs`): each body has a `CollisionFilter`
+  (`RigidBodyDesc::filter`), the `Layers` it belongs to and the layers it meets, which its
+  colliders carry. A pair makes contact only if each meets the other; the narrowphase,
+  CCD and `BodySweep::cast` movers all check it. Queries
   are filtered as colliders (`SphereCast::filter`, `raycast_as`, `BodySweep::as_collider`):
   one cast for a body takes `PhysicsWorld::filter_of` it and touches what the body would
   (a suspension, the traversal planner's casts); one for no body looks for layers
   (`CollisionFilter::seeing`). Static geometry is in no layer and always
-  solid. The engine names only `Layers::DEFAULT`; the game names the rest. Fracture
-  carries a collider's filter onto its pieces.
+  solid. The engine names only `Layers::DEFAULT`; the game names the rest. A piece
+  fracture frees keeps its body's filter.
 - Constraints (`constraint/`): persistent definitions in an arena, `ConstraintKind` =
   `KeepUpright`, `KeepAttitude`, `Fixed`, `BallJoint`, `Hinge`, `FollowPoint`,
   `SpringSlider`, `MediumDrive`, `Suspension`. Each is expanded every frame into solver `ConstraintRow`s (`expand.rs`,

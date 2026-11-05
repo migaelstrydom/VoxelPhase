@@ -2,84 +2,64 @@
 //! is its ambient force.
 //!
 //! ```text
-//!   PhysicsConfig::atmosphere ── density, wind, felt_within
+//!   PhysicsConfig::atmosphere ── density
 //!        │
 //!        ▼  every substep, before any SubstepForceProvider
-//!   each dynamic body the air can slow ── ½ρ·ΣCd·A (its bulk's DragArea)
-//!        │                                 relaxed towards the wind
+//!   each awake dynamic body ── ½ρ·Cd·A·|v| over its bulk (DragArea::exposed),
+//!        │                     towards rest
+//!        │
 //!        ▼
 //!   MediumDrag, which providers' media (water, leaves) then combine with
 //! ```
 //!
 //! Air drags a body by its bulk, the shape fluids see
-//! ([`super::RigidBodyDesc::bulk`]), not its colliders. It matters only to
-//! bodies light for their size: a cardboard box falls at about 7 m/s, and a
-//! clump of leaves floats down. A body too heavy for the air to slow within
-//! [`Atmosphere::felt_within`] is passed by, which keeps a grenade's flight
-//! the parabola its aim predicts and costs nothing for rocks and characters.
+//! ([`super::RigidBodyDesc::bulk`]), not its colliders. Every dynamic body
+//! feels it, but it matters only to bodies light for their size: a cardboard
+//! box falls flat at about 7 m/s, and a clump of leaves floats down, while the air
+//! takes a grenade a couple of kilometres to slow by a factor of e, a percent
+//! over a throw.
 //!
 //! The air drags a body's whole bulk, under water too: at a thousandth of
 //! water's density it adds a tenth of a percent to the water's drag there,
 //! and is left in rather than split by depth. It is not a rule for stacking
 //! media.
 
-use nalgebra::Vector3;
-
 use super::body::RigidBody;
+use super::bulk::EnvelopePart;
 use super::force_provider::MediumDrag;
 
-/// The air bodies move through.
+/// The air bodies move through. It is still: it drags bodies towards rest.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Atmosphere {
     /// Density, kg/m³.
     pub density: f32,
-    /// Velocity of the air, m/s: what it carries a light body towards.
-    pub wind: Vector3<f32>,
-    /// Distance, m, within which the air must slow a body's speed by a factor
-    /// of e (`m / (½ρ·ΣCd·A)`, the same at any speed) for it to drag the body
-    /// at all. Past it the drag is a few percent over a throw, and the body is
-    /// treated as moving through vacuum.
-    pub felt_within: f32,
 }
 
 impl Atmosphere {
-    /// Air at sea level, still.
-    pub const AIR: Self = Self {
-        density: 1.2,
-        wind: Vector3::new(0.0, 0.0, 0.0),
-        felt_within: 60.0,
-    };
+    /// Air at sea level.
+    pub const AIR: Self = Self { density: 1.2 };
 
     /// No air: nothing is dragged.
-    pub const VACUUM: Self = Self {
-        density: 0.0,
-        wind: Vector3::new(0.0, 0.0, 0.0),
-        felt_within: 0.0,
-    };
+    pub const VACUUM: Self = Self { density: 0.0 };
 
-    /// Whether the air drags `body` at all: a dynamic body light enough for
-    /// its size that the air slows it within [`Self::felt_within`].
-    pub fn drags(&self, body: &RigidBody) -> bool {
-        let area = body.drag_area().linear;
-        body.is_dynamic() && area > 0.0 && body.mass() < self.felt_within * self.half_rho() * area
-    }
-
-    /// The air's drag on `body` moving as it is now. Call only for a body the
-    /// air [`drags`](Self::drags).
-    pub fn drag(&self, body: &RigidBody) -> MediumDrag {
-        let area = body.drag_area();
-        let speed = (body.linear_velocity() - self.wind).magnitude();
-        let spin = body.angular_velocity().magnitude();
-        MediumDrag {
-            linear: self.half_rho() * area.linear * speed,
-            angular: self.half_rho() * area.angular * spin,
-            velocity: self.wind,
-            spin: Vector3::zeros(),
+    /// The air's drag on `body` moving as it is now, over its envelope, by
+    /// the drag the world has measured for it.
+    pub(crate) fn drag<'a>(
+        &self,
+        body: &RigidBody,
+        envelope: impl IntoIterator<Item = EnvelopePart<'a>>,
+    ) -> MediumDrag {
+        if self.density <= 0.0 {
+            return MediumDrag::NONE;
         }
-    }
-
-    fn half_rho(&self) -> f32 {
-        0.5 * self.density
+        let flow = body.rotation().inverse() * body.linear_velocity();
+        body.drag_area()
+            .exposed(envelope.into_iter().map(|part| (part, 1.0)), flow)
+            .drag(
+                self.density,
+                flow.norm(),
+                body.angular_velocity().magnitude(),
+            )
     }
 }
 
@@ -96,6 +76,7 @@ mod tests {
     use super::*;
     use crate::debug::DebugLines;
     use crate::physics::bench_harness::geometry::EmptyGeometry;
+    use crate::physics::fluid_drag::ANGULAR_COEFFICIENT;
     use crate::physics::{
         BulkShape, ColliderDesc, ColliderShape, PhysicsConfig, PhysicsWorld, RigidBodyDesc,
         SequentialStepper, Stepper, Volume,
@@ -130,8 +111,9 @@ mod tests {
         world.body(body).unwrap().linear_velocity().magnitude()
     }
 
-    /// A cardboard box (40 cm, half a kilo) falls at the speed the drag law
-    /// gives: `√(2mg / ρ·Cd·A)`, about 7 m/s.
+    /// A cardboard box (40 cm, half a kilo) dropped flat falls at the speed
+    /// the drag law gives over the face it shows the air: `√(2mg / ρ·Cd·A)`,
+    /// about 7 m/s.
     #[test]
     fn a_cardboard_box_falls_at_its_terminal_speed() {
         let mut world = PhysicsWorld::new(PhysicsConfig::default());
@@ -140,7 +122,7 @@ mod tests {
         let density = mass / (2.0 * half).powi(3);
         let box_ = ColliderDesc::box_shape(Vector3::repeat(half)).density(density);
         let speed = fall(&mut world, box_, 4.0);
-        let area = 1.05 * 2.0 * 3.0 * half * half;
+        let area = 1.05 * (2.0 * half).powi(2);
         let terminal = (2.0 * mass * 9.81 / (1.2 * area)).sqrt();
         assert!(
             (speed - terminal).abs() < 0.05 * terminal,
@@ -148,19 +130,60 @@ mod tests {
         );
     }
 
-    /// A stone the air would take more than `felt_within` to slow falls as
-    /// it would through vacuum.
+    /// A stone barely notices the air: two seconds' fall is slowed by about
+    /// a percent (`k·g²·t³/3` for `k = ½ρ·Cd·A/m`).
     #[test]
-    fn a_stone_falls_through_air_as_through_vacuum() {
+    fn a_stone_barely_notices_the_air() {
         let stone = || ColliderDesc::sphere(0.1).density(2500.0);
         let mut air = PhysicsWorld::new(PhysicsConfig::default());
         let mut vacuum = PhysicsWorld::new(PhysicsConfig {
             atmosphere: Atmosphere::VACUUM,
             ..PhysicsConfig::default()
         });
-        assert_eq!(
-            fall(&mut air, stone(), 2.0),
-            fall(&mut vacuum, stone(), 2.0)
+        let in_air = fall(&mut air, stone(), 2.0);
+        let in_vacuum = fall(&mut vacuum, stone(), 2.0);
+        assert!(
+            in_air < 0.995 * in_vacuum && in_air > 0.98 * in_vacuum,
+            "fell at {in_air} m/s in air, {in_vacuum} in vacuum"
+        );
+    }
+
+    /// A plank spinning flat about its stiffest axis slows as the spin drag
+    /// law gives for that axis's own inertia: `ω = ω₀ / (1 + c·ω₀·t / I)`,
+    /// for `c = ½ρ·Cω·A·R³`.
+    #[test]
+    fn a_spinning_plank_slows_at_its_own_inertia() {
+        let mut world = PhysicsWorld::new(PhysicsConfig {
+            gravity: Vector3::zeros(),
+            ..PhysicsConfig::default()
+        });
+        let half = Vector3::new(1.0, 0.2, 0.3);
+        let density = 500.0;
+        let body = world.create_body(RigidBodyDesc::dynamic().angular_damping(0.0));
+        world.attach_collider(body, ColliderDesc::box_shape(half).density(density));
+        let spin = 3.0;
+        world.set_body_velocity(body, Vector3::zeros(), Vector3::z() * spin);
+        let seconds = 5.0;
+        let mut stepper = SequentialStepper::new(1.0 / 240.0, 12);
+        for _ in 0..(seconds * 60.0) as usize {
+            stepper.step(
+                &mut world,
+                1.0 / 60.0,
+                &EmptyGeometry,
+                &[],
+                &[],
+                &mut DebugLines::default(),
+            );
+        }
+        let mass = density * 8.0 * half.x * half.y * half.z;
+        let inertia = mass * 4.0 * (half.x * half.x + half.y * half.y) / 12.0;
+        let mean_area = 2.0 * (half.x * half.y + half.y * half.z + half.x * half.z);
+        let c = 0.5 * 1.2 * ANGULAR_COEFFICIENT * mean_area * half.norm().powi(3);
+        let expected = spin / (1.0 + c * spin * seconds / inertia);
+        let got = world.body(body).unwrap().angular_velocity().z;
+        assert!(
+            (got - expected).abs() < 0.01 * expected,
+            "spun at {got} rad/s, the law gives {expected}"
         );
     }
 

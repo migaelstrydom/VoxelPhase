@@ -81,6 +81,36 @@ pub fn capsule_inertia_tensor(mass: f32, half_height: f32, radius: f32) -> Matri
     Matrix3::from_diagonal(&Vector3::new(i_xz, i_y, i_xz))
 }
 
+/// A symmetric tensor's principal axes, and its value along each.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrincipalAxes {
+    /// The axes, as orthonormal columns, in the tensor's frame.
+    pub axes: Matrix3<f32>,
+    /// The tensor's value along each axis, in the columns' order.
+    pub values: Vector3<f32>,
+}
+
+impl PrincipalAxes {
+    /// The principal axes of the symmetric `tensor`.
+    pub fn of(tensor: &Matrix3<f32>) -> Self {
+        let eigen = tensor.symmetric_eigen();
+        Self {
+            axes: eigen.eigenvectors,
+            values: eigen.eigenvalues,
+        }
+    }
+}
+
+impl Default for PrincipalAxes {
+    /// The zero tensor's, along the frame's own axes.
+    fn default() -> Self {
+        Self {
+            axes: Matrix3::identity(),
+            values: Vector3::zeros(),
+        }
+    }
+}
+
 /// A body-frame inertia tensor (or its inverse) expressed in the world frame
 /// of a body turned by `rotation`: I_world = R * I_local * R^T.
 pub fn inertia_to_world(

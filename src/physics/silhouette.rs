@@ -30,14 +30,15 @@ use smallvec::SmallVec;
 use super::bulk::EnvelopePart;
 use super::collider::ColliderShape;
 
-/// Directions a mean silhouette is averaged over: enough that a box's mean
-/// comes within a percent of Cauchy's exact quarter-surface.
-pub const MEAN_DIRECTIONS: usize = 32;
+/// Directions the share a body's parts show is averaged over: enough that it
+/// comes within a percent of its value over hundreds, for cut cubes and
+/// boulders, crosses, dumbbells and Ls.
+pub const MEAN_DIRECTIONS: usize = 16;
 /// Points round each projected circle (a sphere's, a capsule's ends).
 const CIRCLE_POINTS: usize = 24;
 /// Most slabs one silhouette is measured in: what bounds its cost for a
-/// body of many parts. A compound of 64 boxes measures its mean silhouette
-/// in about 1.5 ms, within a percent of the one box they fill.
+/// body of many parts. A compound of 64 boxes measures the share it shows
+/// in about half a millisecond, within a tenth of a percent of a quarter.
 pub const MAX_SLABS: usize = 64;
 
 /// The area a body whose envelope is `parts` shows to `view`, a unit
@@ -68,6 +69,11 @@ pub struct Silhouette {
     /// Heights the slabs break at: the polygons' vertices', or even rows
     /// past [`MAX_SLABS`].
     heights: Vec<f32>,
+    /// The polygons in the order the slabs reach them, lowest first.
+    rising: Vec<usize>,
+    /// The polygons the current slab's middle crosses, each walking up its
+    /// two sides.
+    active: Vec<Climb>,
     /// The spans across one slab's middle.
     spans: Vec<(f32, f32)>,
 }
@@ -81,6 +87,22 @@ struct Polygon {
     low: f32,
     /// Its highest height.
     high: f32,
+    /// Where its lowest vertex is in its own outline.
+    lowest: usize,
+}
+
+/// A polygon a rising row crosses, and the vertex below the row on each of
+/// its two sides: walking up from its lowest vertex one way round, and the
+/// other way round. A convex outline's sides only climb, so the walk only
+/// moves on.
+#[derive(Debug, Clone, Copy)]
+struct Climb {
+    /// The polygon, in [`Silhouette::polygons`].
+    polygon: usize,
+    /// The vertex below the row going forwards round the outline.
+    forwards: usize,
+    /// The vertex below the row going backwards round the outline.
+    backwards: usize,
 }
 
 impl Silhouette {
@@ -94,20 +116,32 @@ impl Silhouette {
         }
     }
 
-    /// The area `parts` show averaged over [`MEAN_DIRECTIONS`] directions
-    /// spread evenly over a hemisphere (a view and its opposite show the
-    /// same).
-    pub fn mean_area(&mut self, parts: &[EnvelopePart]) -> f32 {
+    /// The share of their own silhouettes `parts` show together, over
+    /// [`MEAN_DIRECTIONS`] directions spread evenly over a hemisphere (a view
+    /// and its opposite show the same): the union's area over the sum of the
+    /// parts' outlines, each summed over the same directions and drawn the
+    /// same way, so the directions' sampling and the drawing of round shapes
+    /// cancel where the parts hide each other alike from every side.
+    pub fn mean_shown(&mut self, parts: &[EnvelopePart]) -> f32 {
         let golden = PI * (3.0 - 5.0f32.sqrt());
-        let mut sum = 0.0;
+        let (mut union, mut each) = (0.0, 0.0);
         for i in 0..MEAN_DIRECTIONS {
             let z = 1.0 - (i as f32 + 0.5) / MEAN_DIRECTIONS as f32;
             let ring = (1.0 - z * z).sqrt();
             let azimuth = golden * i as f32;
             let view = Vector3::new(ring * azimuth.cos(), ring * azimuth.sin(), z);
-            sum += self.area(parts, view);
+            union += self.area(parts, view);
+            each += self
+                .polygons
+                .iter()
+                .map(|polygon| polygon_area(&self.vertices[polygon.vertices.clone()]))
+                .sum::<f32>();
         }
-        sum / MEAN_DIRECTIONS as f32
+        if each > 0.0 {
+            union / each
+        } else {
+            0.0
+        }
     }
 
     /// Each part's convex outline seen along `view`.
@@ -129,15 +163,15 @@ impl Silhouette {
                 self.vertices.truncate(start);
                 continue;
             }
-            let (low, high) = hull
-                .iter()
-                .fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), v| {
-                    (low.min(v.y), high.max(v.y))
-                });
+            let lowest = (0..hull.len())
+                .min_by(|&a, &b| hull[a].y.total_cmp(&hull[b].y))
+                .unwrap_or(0);
+            let high = hull.iter().map(|v| v.y).fold(f32::NEG_INFINITY, f32::max);
             self.polygons.push(Polygon {
                 vertices: start..self.vertices.len(),
-                low,
+                low: hull[lowest].y,
                 high,
+                lowest,
             });
         }
     }
@@ -155,22 +189,68 @@ impl Silhouette {
             self.heights
                 .extend((0..=MAX_SLABS).map(|i| lowest + row * i as f32));
         }
+        self.rising.clear();
+        self.rising.extend(0..self.polygons.len());
+        let polygons = &self.polygons;
+        self.rising
+            .sort_unstable_by(|&a, &b| polygons[a].low.total_cmp(&polygons[b].low));
+        self.active.clear();
+        let mut reached = 0;
         let mut area = 0.0;
         for slab in self.heights.windows(2) {
             let (low, high) = (slab[0], slab[1]);
             let middle = 0.5 * (low + high);
-            self.spans.clear();
-            for polygon in &self.polygons {
-                if polygon.low < middle && middle < polygon.high {
-                    let outline = &self.vertices[polygon.vertices.clone()];
-                    if let Some(span) = span_at(outline, middle) {
-                        self.spans.push(span);
-                    }
+            while let Some(&next) = self.rising.get(reached) {
+                let polygon = &polygons[next];
+                if polygon.low >= middle {
+                    break;
                 }
+                self.active.push(Climb {
+                    polygon: next,
+                    forwards: polygon.lowest,
+                    backwards: polygon.lowest,
+                });
+                reached += 1;
+            }
+            self.active
+                .retain(|climb| polygons[climb.polygon].high > middle);
+            self.spans.clear();
+            for climb in &mut self.active {
+                let outline = &self.vertices[polygons[climb.polygon].vertices.clone()];
+                self.spans.push(climb.span_at(outline, middle));
             }
             area += covered_width(&mut self.spans) * (high - low);
         }
         area
+    }
+}
+
+impl Climb {
+    /// The polygon's span across `height`, which is above its lowest vertex
+    /// and below its highest, and no lower than the last height asked.
+    fn span_at(&mut self, outline: &[Vector2<f32>], height: f32) -> (f32, f32) {
+        let n = outline.len();
+        let forwards = climb(outline, &mut self.forwards, height, 1);
+        let backwards = climb(outline, &mut self.backwards, height, n - 1);
+        (forwards.min(backwards), forwards.max(backwards))
+    }
+}
+
+/// Walks `below` round `outline` by `step` until the next vertex is at or
+/// above `height`, and gives where the side between them crosses it.
+fn climb(outline: &[Vector2<f32>], below: &mut usize, height: f32, step: usize) -> f32 {
+    let n = outline.len();
+    let mut above = (*below + step) % n;
+    while outline[above].y < height {
+        *below = above;
+        above = (above + step) % n;
+    }
+    let (a, b) = (outline[*below], outline[above]);
+    let rise = b.y - a.y;
+    if rise > 0.0 {
+        a.x + (height - a.y) * (b.x - a.x) / rise
+    } else {
+        a.x
     }
 }
 
@@ -259,21 +339,6 @@ fn polygon_area(outline: &[Vector2<f32>]) -> f32 {
     let n = outline.len();
     let twice: f32 = (0..n).map(|i| outline[i].perp(&outline[(i + 1) % n])).sum();
     0.5 * twice.abs()
-}
-
-/// Where the convex polygon `outline` spans at `height`, from its least to
-/// its greatest across.
-fn span_at(outline: &[Vector2<f32>], height: f32) -> Option<(f32, f32)> {
-    let n = outline.len();
-    let mut span = (f32::INFINITY, f32::NEG_INFINITY);
-    for i in 0..n {
-        let (a, b) = (outline[i], outline[(i + 1) % n]);
-        if (a.y <= height) != (b.y <= height) {
-            let x = a.x + (height - a.y) * (b.x - a.x) / (b.y - a.y);
-            span = (span.0.min(x), span.1.max(x));
-        }
-    }
-    (span.0 <= span.1).then_some(span)
 }
 
 /// The width `spans` cover together, counting overlaps once. Reorders them.

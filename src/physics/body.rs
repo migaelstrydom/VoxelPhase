@@ -5,13 +5,14 @@ use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 
 use super::bulk::{self, BulkShape, Envelope, MassParts};
 use super::collider::Collider;
+use super::collision_filter::CollisionFilter;
 use super::constraint::types::ConstraintHandle;
 use super::drive::allowance::AllowanceCommand;
 use super::drive::command::VerticalVerbs;
 use super::fluid_drag::DragArea;
 use super::force_provider::{ForceOutput, MediumDrag};
 use super::handle::ColliderHandle;
-use super::math::{inertia_to_world, integrate_orientation, skew};
+use super::math::{inertia_to_world, integrate_orientation, skew, PrincipalAxes};
 
 /// Type of rigid body determining how it participates in physics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +41,9 @@ pub struct RigidBodyDesc {
     /// Whether the body passes through static geometry. See
     /// [`RigidBody::ignores_static`].
     pub ignores_static: bool,
+    /// Which bodies it meets, and which queries see it. See
+    /// [`RigidBody::filter`].
+    pub filter: CollisionFilter,
 }
 
 impl Default for RigidBodyDesc {
@@ -55,6 +59,7 @@ impl Default for RigidBodyDesc {
             gravity_scale: 1.0,
             bulk: None,
             ignores_static: false,
+            filter: CollisionFilter::DEFAULT,
         }
     }
 }
@@ -116,6 +121,12 @@ impl RigidBodyDesc {
     /// [`RigidBody::ignores_static`].
     pub fn ignores_static(mut self, ignores: bool) -> Self {
         self.ignores_static = ignores;
+        self
+    }
+
+    /// Set which bodies it meets and which queries see it.
+    pub fn filter(mut self, filter: CollisionFilter) -> Self {
+        self.filter = filter;
         self
     }
 
@@ -204,11 +215,19 @@ pub struct RigidBody {
     /// with the ground could only fight the weld.
     ignores_static: bool,
 
+    /// Which bodies it meets, and which queries see it. A body is filtered
+    /// as one: its colliders carry this filter, since colliders filtered
+    /// apart would leave no single filter for the body's own casts.
+    filter: CollisionFilter,
+
     // Mass properties (computed from attached colliders)
     mass: f32,
     inv_mass: f32,
     local_inertia: Matrix3<f32>,
     inv_local_inertia: Matrix3<f32>,
+    /// The inverse inertia's principal axes in the body frame: what drag
+    /// against spin relaxes, each axis at its own inertia.
+    inv_inertia_axes: PrincipalAxes,
 
     // Force/torque accumulators. External systems set these each frame;
     // they are NOT cleared per substep so forces like buoyancy integrate
@@ -290,10 +309,12 @@ impl RigidBody {
             angular_damping: desc.angular_damping,
             gravity_scale: desc.gravity_scale,
             ignores_static: desc.ignores_static,
+            filter: desc.filter,
             mass: 0.0,
             inv_mass: 0.0,
             local_inertia: Matrix3::zeros(),
             inv_local_inertia: Matrix3::zeros(),
+            inv_inertia_axes: PrincipalAxes::default(),
             force: Vector3::zeros(),
             torque: Vector3::zeros(),
             drag: MediumDrag::NONE,
@@ -388,6 +409,11 @@ impl RigidBody {
     /// Whether static geometry is invisible to the body.
     pub fn ignores_static(&self) -> bool {
         self.ignores_static
+    }
+
+    /// Which bodies it meets, and which queries see it.
+    pub fn filter(&self) -> &CollisionFilter {
+        &self.filter
     }
 
     pub fn set_ignores_static(&mut self, ignores: bool) {
@@ -524,8 +550,13 @@ impl RigidBody {
         self.local_inertia.m22 *= scale.y;
         self.local_inertia.m33 *= scale.z;
         if let Some(inv) = self.local_inertia.try_inverse() {
-            self.inv_local_inertia = inv;
+            self.set_inv_local_inertia(inv);
         }
+    }
+
+    fn set_inv_local_inertia(&mut self, inv: Matrix3<f32>) {
+        self.inv_local_inertia = inv;
+        self.inv_inertia_axes = PrincipalAxes::of(&inv);
     }
 
     /// Apply an instantaneous linear impulse at the center of mass.
@@ -629,16 +660,11 @@ impl RigidBody {
 
         if self.body_type == BodyType::Dynamic && mass > 0.0 {
             self.inv_mass = 1.0 / mass;
-            // Invert the inertia tensor
-            if let Some(inv) = local_inertia.try_inverse() {
-                self.inv_local_inertia = inv;
-            } else {
-                self.inv_local_inertia = Matrix3::zeros();
-            }
+            self.set_inv_local_inertia(local_inertia.try_inverse().unwrap_or_else(Matrix3::zeros));
         } else {
             // Static and kinematic bodies have infinite mass
             self.inv_mass = 0.0;
-            self.inv_local_inertia = Matrix3::zeros();
+            self.set_inv_local_inertia(Matrix3::zeros());
         }
     }
 
@@ -667,12 +693,15 @@ impl RigidBody {
 
         self.angular_velocity += self.world_inv_inertia() * self.torque * dt;
         if drag.angular > 0.0 {
-            // Use the average inverse inertia (trace(I_inv)/3) so that
-            // angular drag scales with rotational inertia, not mass.
-            let inv_i = self.world_inv_inertia();
-            let avg_inv_inertia = (inv_i.m11 + inv_i.m22 + inv_i.m33) / 3.0;
-            let decay = (-drag.angular * avg_inv_inertia * dt).exp();
-            self.angular_velocity = drag.spin + (self.angular_velocity - drag.spin) * decay;
+            // The drag's torque, -c·(ω - spin), turns the spin about each
+            // principal axis at that axis's own inertia.
+            let principal = &self.inv_inertia_axes;
+            let axes = self.rotation.to_rotation_matrix().matrix() * principal.axes;
+            let along = axes.transpose() * (self.angular_velocity - drag.spin);
+            let relaxed = along.zip_map(&principal.values, |spin, inv_inertia| {
+                spin * (-drag.angular * inv_inertia * dt).exp()
+            });
+            self.angular_velocity = drag.spin + axes * relaxed;
         }
 
         // Gyroscopic correction: Euler's equation for rigid body rotation is

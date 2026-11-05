@@ -14,10 +14,9 @@ use std::f32::consts::PI;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use smallvec::SmallVec;
 
-use crate::physics::fluid_drag::{ShapeDrag, ANGULAR_COEFFICIENT};
 use crate::physics::{
-    ColliderShape, ForceContext, ForceOutput, MediumDrag, PhysicsWorld, RigidBodyHandle,
-    SubstepForceProvider,
+    ColliderShape, EnvelopePart, ForceContext, ForceOutput, MediumDrag, PhysicsWorld,
+    RigidBodyHandle, SubstepForceProvider,
 };
 
 use super::falling::Strike;
@@ -44,10 +43,6 @@ pub struct BuoyancyForces {
     pub buoyancy_center: Point3<f32>,
     /// Linearized heave stiffness k = ρ g A_wp (N/m).
     pub heave_stiffness: f32,
-    /// Quadratic linear drag base coefficient scaled by submerged fraction.
-    pub quadratic_linear_drag_coeff: f32,
-    /// Quadratic angular drag base coefficient scaled by submerged fraction.
-    pub quadratic_angular_drag_coeff: f32,
     /// Fraction of the body volume that is submerged [0, 1].
     pub submerged_fraction: f32,
 }
@@ -62,10 +57,6 @@ const HEAVE_DAMPING_RATIO: f32 = 0.3;
 const ANGULAR_DRAG_FLOOR: f32 = 0.5;
 /// Vertical offset used for numerical dV/dy waterplane area estimation.
 const WATERPLANE_EPSILON: f32 = 0.05;
-/// Speed through the water, m/s, below which a body has no flow direction and
-/// its drag is taken over its mean projected area. The quadratic drag scales
-/// with the speed, so which area stands in there makes no difference.
-const FLOW_SPEED_EPSILON: f32 = 1e-3;
 
 /// Per-substep buoyancy force provider.
 ///
@@ -113,7 +104,6 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
             .map_or(Vector3::zeros(), |s| s.velocity);
         let relative_velocity = body.linear_velocity() - water_velocity;
         let linear_speed = relative_velocity.magnitude();
-        let flow = (linear_speed > FLOW_SPEED_EPSILON).then(|| relative_velocity / linear_speed);
 
         // Accumulate contributions from every part of the body's envelope, so
         // compound bodies (bridges, fracturable structures) get their whole
@@ -123,9 +113,7 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
         let mut total_force = Vector3::zeros();
         let mut total_torque = Vector3::zeros();
         let mut total_heave_stiffness = 0.0f32;
-        let mut total_linear_drag_coeff = 0.0f32;
-        let mut total_angular_drag_coeff = 0.0f32;
-        let mut total_submerged_fraction = 0.0f32;
+        let mut immersion: SmallVec<[(EnvelopePart, f32); 8]> = SmallVec::new();
         let mut part_count = 0u32;
         let mut strike_drag = 0.0f32;
         let mut strike_carry = Vector3::zeros();
@@ -156,48 +144,55 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
                 strike_spin_drag += drag * lever.norm_squared();
             }
 
-            let result = match compute_buoyancy(
+            let Some(result) = compute_buoyancy(
                 part_center,
                 part_rot,
                 part.shape,
-                part.drag(),
                 self.fluid_density,
                 ctx.gravity,
                 ctx.gravity_magnitude,
-                flow,
                 self.water,
-            ) {
-                Some(f) => f,
-                None => continue,
+            ) else {
+                immersion.push((part, 0.0));
+                continue;
             };
+            immersion.push((part, result.submerged_fraction));
 
             let r = result.buoyancy_center - body_pos;
             total_force += result.buoyancy_force;
             total_torque += r.cross(&result.buoyancy_force);
             total_heave_stiffness += result.heave_stiffness;
-            total_linear_drag_coeff += result.quadratic_linear_drag_coeff;
-            total_angular_drag_coeff += result.quadratic_angular_drag_coeff;
-            total_submerged_fraction += result.submerged_fraction;
             part_count += 1;
         }
 
         let (water_drag, angular_drag_coeff) = if part_count > 0 {
-            let avg_submerged_fraction = total_submerged_fraction / part_count as f32;
+            // The water drags the parts it covers, as any fluid drags a body
+            // (`DragArea::exposed`).
+            let flow = body_rot.inverse() * relative_velocity;
+            let drag_area = body.drag_area();
+            let exposure = drag_area.exposed(immersion, flow);
+            let quadratic = exposure.drag(
+                self.fluid_density,
+                linear_speed,
+                body.angular_velocity().magnitude(),
+            );
 
             // Linearized heave damping target: c = 2 ζ sqrt(m k).
             let mass = body.mass().max(1e-4);
             let linear_drag_floor =
                 2.0 * HEAVE_DAMPING_RATIO * (mass * total_heave_stiffness.max(0.0)).sqrt();
 
-            // Quadratic drag from shape area: Fd = -k |v - u| (v - u).
-            let angular_speed = body.angular_velocity().magnitude();
-
             // Angular drag floor: linear term that guarantees rocking settles
-            // even at low angular speeds where the quadratic term vanishes.
-            let angular_drag_floor = ANGULAR_DRAG_FLOOR * avg_submerged_fraction;
+            // even at low angular speeds where the quadratic term vanishes,
+            // by how much of the body is in the water.
+            let in_water = if drag_area.angular() > 0.0 {
+                exposure.angular / drag_area.angular()
+            } else {
+                0.0
+            };
             (
-                linear_drag_floor + total_linear_drag_coeff * linear_speed,
-                angular_drag_floor + total_angular_drag_coeff * angular_speed,
+                linear_drag_floor + quadratic.linear,
+                ANGULAR_DRAG_FLOOR * in_water + quadratic.angular,
             )
         } else {
             (0.0, 0.0)
@@ -280,11 +275,9 @@ pub fn lift(world: &PhysicsWorld, body: RigidBodyHandle, water: &dyn WaterSurfac
                 Point3::from(pose.translation.vector),
                 pose.rotation,
                 part.shape,
-                part.drag(),
                 FLUID_DENSITY,
                 Vector3::new(0.0, -GRAVITY, 0.0),
                 GRAVITY,
-                None,
                 water,
             )
         })
@@ -295,31 +288,20 @@ pub fn lift(world: &PhysicsWorld, body: RigidBodyHandle, water: &dyn WaterSurfac
 /// Density of water, kg/m³.
 pub const FLUID_DENSITY: f32 = 1000.0;
 
-/// Compute buoyancy force and drag coefficients for a body with the given shape.
+/// Compute the buoyancy of one shape of a body.
 ///
-/// Returns the buoyancy force (N) at the submerged centroid and drag
-/// coefficients scaled by submersion fraction. The caller decomposes
-/// the off-center buoyancy into a central force + torque, and sets
-/// drag coefficients on the body for per-substep application.
+/// Returns the buoyancy force (N) at the submerged centroid, the heave
+/// stiffness and how much of the shape is submerged. The caller decomposes
+/// the off-center buoyancy into a central force + torque.
 ///
-/// `drag` is what the shape presents to the water's flow: its own
-/// [`ShapeDrag`], or with the coefficient its body declares.
-///
-/// `flow` is the world-space direction the body moves through the water, a
-/// unit vector; the linear drag is taken over the area the shape presents
-/// along it. `None` takes it over the mean projected area.
-///
-/// Returns `None` if no part of the body is submerged.
-#[allow(clippy::too_many_arguments)]
+/// Returns `None` if no part of the shape is submerged.
 pub fn compute_buoyancy(
     collider_center: Point3<f32>,
     body_rotation: UnitQuaternion<f32>,
     shape: &ColliderShape,
-    drag: ShapeDrag,
     fluid_density: f32,
     gravity: Vector3<f32>,
     gravity_magnitude: f32,
-    flow: Option<Vector3<f32>>,
     water: &dyn WaterSurface,
 ) -> Option<BuoyancyForces> {
     let (submerged_volume, submerged_fraction, buoyancy_center) = match shape {
@@ -367,30 +349,10 @@ pub fn compute_buoyancy(
     );
     let heave_stiffness = fluid_density * gravity_magnitude * waterplane_area;
 
-    // Shape-based quadratic drag coefficient.
-    let ShapeDrag {
-        coefficient: shape_cd,
-        mean_area: mean_projected_area,
-        spin_radius_sq: angular_radius_sq,
-    } = drag;
-    let frontal_area = flow.map_or(mean_projected_area, |direction| {
-        shape.projected_area(body_rotation.inverse() * direction)
-    });
-    let quadratic_linear_drag_coeff =
-        0.5 * fluid_density * shape_cd * frontal_area * submerged_fraction;
-    let quadratic_angular_drag_coeff = 0.5
-        * fluid_density
-        * ANGULAR_COEFFICIENT
-        * mean_projected_area
-        * angular_radius_sq
-        * submerged_fraction;
-
     Some(BuoyancyForces {
         buoyancy_force,
         buoyancy_center,
         heave_stiffness,
-        quadratic_linear_drag_coeff,
-        quadratic_angular_drag_coeff,
         submerged_fraction,
     })
 }
@@ -873,6 +835,7 @@ fn estimate_waterplane_area(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physics::fluid_drag::ShapeDrag;
 
     /// A hull shaped like a box meets the water like the box: the same drag
     /// area, and nothing from below the floor.
@@ -1050,11 +1013,9 @@ mod tests {
             center,
             UnitQuaternion::identity(),
             &ColliderShape::Sphere { radius: 1.0 },
-            ShapeDrag::of(&ColliderShape::Sphere { radius: 1.0 }),
             1000.0,
             Vector3::new(0.0, -9.81, 0.0),
             9.81,
-            None,
             &grid,
         )
         .unwrap();
@@ -1067,7 +1028,7 @@ mod tests {
     }
 
     #[test]
-    fn submerged_body_has_positive_drag_coefficients() {
+    fn a_body_the_surface_cuts_has_heave_stiffness() {
         let grid = make_test_grid(5.0);
         let center = Point3::new(0.0, 5.0, 0.0);
 
@@ -1075,11 +1036,9 @@ mod tests {
             center,
             UnitQuaternion::identity(),
             &ColliderShape::Sphere { radius: 1.0 },
-            ShapeDrag::of(&ColliderShape::Sphere { radius: 1.0 }),
             1000.0,
             Vector3::new(0.0, -9.81, 0.0),
             9.81,
-            None,
             &grid,
         )
         .unwrap();
@@ -1089,16 +1048,6 @@ mod tests {
             forces.heave_stiffness > 0.0,
             "Submerged body should have positive heave stiffness, got {}",
             forces.heave_stiffness
-        );
-        assert!(
-            forces.quadratic_linear_drag_coeff > 0.0,
-            "Submerged body should have positive quadratic linear drag, got {}",
-            forces.quadratic_linear_drag_coeff
-        );
-        assert!(
-            forces.quadratic_angular_drag_coeff > 0.0,
-            "Submerged body should have positive quadratic angular drag, got {}",
-            forces.quadratic_angular_drag_coeff
         );
     }
 
@@ -1267,35 +1216,6 @@ mod tests {
             centroid.y,
             center.y
         );
-    }
-
-    #[test]
-    fn a_capsule_moving_end_on_meets_less_drag_than_side_on() {
-        let shape = ColliderShape::Capsule {
-            half_height: 0.5,
-            radius: 0.17,
-        };
-        let water = make_test_grid(10.0);
-        let drag = |flow: Option<Vector3<f32>>| {
-            compute_buoyancy(
-                Point3::new(0.0, 5.0, 0.0),
-                UnitQuaternion::identity(),
-                &shape,
-                ShapeDrag::of(&shape),
-                FLUID_DENSITY,
-                Vector3::new(0.0, -9.81, 0.0),
-                9.81,
-                flow,
-                &water,
-            )
-            .unwrap()
-            .quadratic_linear_drag_coeff
-        };
-        let end_on = drag(Some(Vector3::y()));
-        let side_on = drag(Some(Vector3::x()));
-        let mean = drag(None);
-        assert!(end_on < mean && mean < side_on, "{end_on} {mean} {side_on}");
-        assert!((side_on / end_on - (1.0 + 0.34 * 0.66 / (PI * 0.0289))).abs() < 1e-3);
     }
 }
 

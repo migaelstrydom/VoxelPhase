@@ -975,12 +975,8 @@ impl PhysicsWorld {
         body_handle: RigidBodyHandle,
         desc: ColliderDesc,
     ) -> Option<ColliderHandle> {
-        // Verify body exists
-        if self.bodies.get(body_handle.0).is_none() {
-            return None;
-        }
-
-        let collider = Collider::new(desc);
+        let filter = *self.bodies.get(body_handle.0)?.filter();
+        let collider = Collider::new(desc, filter);
         let collider_handle = ColliderHandle(self.colliders.insert(collider));
         self.pose_epoch += 1;
 
@@ -1460,24 +1456,31 @@ impl PhysicsWorld {
     /// to recompute forces for its affected bodies based on current positions.
     /// A body two providers affect gets both.
     fn apply_substep_forces(&mut self, providers: &[&dyn SubstepForceProvider]) {
+        // A sleeping body does not integrate, so neither a force on it nor its
+        // drag is ever felt; both are computed afresh on the substep it wakes,
+        // its drag areas too if its shape changed while it slept.
+        let sleeping = self
+            .config
+            .sleep
+            .enabled
+            .then(|| self.sleep_manager.sleeping());
+        let is_awake = |handle: RigidBodyHandle| !sleeping.is_some_and(|s| s.contains(&handle));
         // Clear accumulators so bodies that leave a force region get zero,
         // leaving each in the air alone, which providers' media join.
         let air = self.config.atmosphere;
-        for (_, body) in self.bodies.iter_mut() {
-            if air.density > 0.0 && body.is_dynamic() && body.drag_area_is_stale() {
-                let area = DragArea::of(body.envelope(&self.colliders));
-                body.set_drag_area(area);
+        for (index, body) in self.bodies.iter_mut() {
+            if !body.is_dynamic() || !is_awake(RigidBodyHandle(index)) {
+                body.set_force(Vector3::zeros());
+                body.set_torque(Vector3::zeros());
+                body.set_drag(MediumDrag::NONE);
+                continue;
             }
+            if body.drag_area_is_stale() {
+                body.set_drag_area(DragArea::of(body.envelope(&self.colliders)));
+            }
+            let drag = air.drag(body, body.envelope(&self.colliders));
             body.set_force(Vector3::zeros());
             body.set_torque(Vector3::zeros());
-            // A sleeping body is not integrated, so its drag is never felt,
-            // and the air never wakes it: still air is all it ever meets. A
-            // wind would have to wake what it should move.
-            let drag = if air.drags(body) {
-                air.drag(body)
-            } else {
-                MediumDrag::NONE
-            };
             body.set_drag(drag);
         }
 
@@ -1494,17 +1497,10 @@ impl PhysicsWorld {
             gravity_magnitude: self.config.gravity.magnitude(),
         };
 
-        // A sleeping body does not integrate, so a force on it is never felt;
-        // it is computed afresh on the substep it wakes.
-        let sleeping = self
-            .config
-            .sleep
-            .enabled
-            .then(|| self.sleep_manager.sleeping());
         let mut outputs: Vec<(RigidBodyHandle, ForceOutput)> = Vec::new();
         for provider in providers {
             for &handle in provider.affected_bodies() {
-                if sleeping.is_some_and(|sleeping| sleeping.contains(&handle)) {
+                if !is_awake(handle) {
                     continue;
                 }
                 let output = provider.compute_force(handle, &ctx);
@@ -1702,8 +1698,8 @@ impl PhysicsWorld {
     }
 
     /// [`Self::raycast_excluding`] for a ray filtered as `filter`: it hits
-    /// only colliders that meet it, as a thrown grenade's predicted path
-    /// passes through what the grenade would.
+    /// only colliders that meet it, as a cast for a body passes through what
+    /// the body would.
     pub fn raycast_as(
         &self,
         origin: Point3<f32>,
@@ -1719,27 +1715,12 @@ impl PhysicsWorld {
     /// What `body` is to other colliders: the filter its colliders share. A
     /// query cast for the body uses it, so it touches what the body would.
     ///
-    /// A body is filtered as one. Colliders filtered differently on one body
-    /// would have no single filter that touches what the body does (the
-    /// union of theirs touches what none of them would), so they are a bug.
-    /// `DEFAULT` for a body that is gone or has no colliders.
+    /// The filter `body` is filtered by ([`RigidBody::filter`]), or
+    /// `DEFAULT` for a body that is gone.
     pub fn filter_of(&self, body: RigidBodyHandle) -> CollisionFilter {
-        let Some(rigid) = self.bodies.get(body.0) else {
-            return CollisionFilter::DEFAULT;
-        };
-        let mut filters = rigid
-            .colliders()
-            .iter()
-            .filter_map(|c| self.colliders.get(c.0))
-            .map(|c| *c.filter());
-        let Some(filter) = filters.next() else {
-            return CollisionFilter::DEFAULT;
-        };
-        debug_assert!(
-            filters.all(|other| other == filter),
-            "a body's colliders share one collision filter"
-        );
-        filter
+        self.bodies
+            .get(body.0)
+            .map_or(CollisionFilter::DEFAULT, |rigid| *rigid.filter())
     }
 
     /// The one ray-versus-bodies loop behind `probe_bodies`, `raycast_excluding`

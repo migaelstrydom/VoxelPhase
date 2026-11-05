@@ -389,6 +389,7 @@ struct ChildSnapshot {
     mass: f32,
     restitution: f32,
     friction: FrictionModel,
+    /// The filter of the body it leaves, which its own body keeps.
     filter: CollisionFilter,
     world_pos: Point3<f32>,
     world_rot: nalgebra::UnitQuaternion<f32>,
@@ -490,14 +491,14 @@ fn spawn_freed_piece(
         .linear_velocity(piece_vel)
         .angular_velocity(body_ang_vel)
         .linear_damping(0.01)
-        .angular_damping(0.005);
+        .angular_damping(0.005)
+        .filter(info.filter);
 
     let new_body_handle = physics.world.create_body(new_body_desc);
 
     let density = info.mass / info.shape.compute_mass(1.0);
     let new_collider_desc =
-        collider_desc_from_shape(&info.shape, density, info.restitution, info.friction)
-            .filter(info.filter);
+        collider_desc_from_shape(&info.shape, density, info.restitution, info.friction);
     physics
         .world
         .attach_collider(new_body_handle, new_collider_desc);
