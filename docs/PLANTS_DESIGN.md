@@ -292,8 +292,14 @@ Done:
   - Left for later: a trunk that snaps, crowns that sway, a crown broken
     off by a hard landing.
 
+- **The cypress** (`CypressSpec`, `Cypress(pos, height, radius)` in levels):
+  one tall crown, the column shrub's shape, on a short bare trunk that runs
+  up inside it to its centre. Its core is a capsule along it. Three stand
+  in a row in the Test Arena.
+
 Next:
-4. **Cypress:** a tall lobe on a short trunk.
+- **Bark in the painted manner:** the limbs drawn tapered and gently
+  sinuous, with a flared foot and a bark texture, over the same capsules.
 
 Later:
 - **Bending on the GPU,** as designed above: 2a moves the old behaviour

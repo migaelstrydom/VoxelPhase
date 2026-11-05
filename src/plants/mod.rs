@@ -1,7 +1,8 @@
 //! Plants: trees grown from a spec, a woody frame of limbs holding up leaf masses (`foliage`).
 //!
 //! ```text
-//!   LollipopSpec ──grow(seed)──▶ Plant ──┬──▶ Limbs: a trunk and branches, each a capsule
+//!   LollipopSpec ─┐
+//!   CypressSpec ──┴─grow(seed)─▶ Plant ──┬──▶ Limbs: a trunk and branches, each a capsule
 //!                                        └──▶ LeafMass × n: a FoliageShape, its pose, its limb
 //!
 //!   Joinery ──build──▶ PlantBodies: a body per limb, carrying its crown's core;
@@ -19,6 +20,7 @@
 
 mod bodies;
 mod components;
+mod cypress;
 mod limbs;
 mod lollipop;
 mod plant;
@@ -29,6 +31,7 @@ mod scenarios;
 
 pub use bodies::{Joinery, PlantBodies};
 pub use components::HeldCrown;
+pub use cypress::CypressSpec;
 pub use limbs::{Limb, Limbs};
 pub use lollipop::LollipopSpec;
 pub use plant::{LeafMass, Plant};

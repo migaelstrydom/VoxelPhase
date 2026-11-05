@@ -21,7 +21,7 @@ use serde::Deserialize;
 
 use crate::collision::AABB;
 use crate::fracture::DebrisBudget;
-use crate::plants::LollipopSpec;
+use crate::plants::{CypressSpec, LollipopSpec};
 use crate::terrain::SegmentFrame;
 use crate::trampoline::TrampolineShape;
 
@@ -29,14 +29,14 @@ use super::footprint::{Footprint, Support};
 
 use crate::app::creatures::{FishDef, HeartCritterDef, PeeperDef, RollerDef, TurtleDef};
 use crate::app::spawnables::{
-    BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef,
-    DolosDef, DominoDef, FencePostDef, FramedWindowDef, GemDef, GlassSheetDef, GlowingOrbDef,
-    GoalDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, HoverSledDef, IceBoxDef,
-    IceWallDef, IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef,
-    MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef,
-    PyramidDef, RockDef, SeesawDef, ShrubDef, Spawnable, StackDef, StackItemDef, TableDef,
-    TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TreeDef, TrilithonDef, VoussoirArchDef,
-    BARREL_RADIUS, BEACH_BALL_RADIUS,
+    BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, CypressDef,
+    DodecahedronDef, DolosDef, DominoDef, FencePostDef, FramedWindowDef, GemDef, GlassSheetDef,
+    GlowingOrbDef, GoalDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, HoverSledDef,
+    IceBoxDef, IceWallDef, IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef, Metal,
+    MetalCubeDef, MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef,
+    PlayWheelDef, PyramidDef, RockDef, SeesawDef, ShrubDef, Spawnable, StackDef, StackItemDef,
+    TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TreeDef, TrilithonDef,
+    VoussoirArchDef, BARREL_RADIUS, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -1191,6 +1191,18 @@ pub enum LevelObject {
         #[serde(default = "TreeDef::default_crowns")]
         crowns: usize,
     },
+    /// Cypress — one tall, narrow crown of leaves on a short, solid trunk.
+    /// Its crown breaks off under a blast close to it, loose as a shrub.
+    Cypress {
+        /// Position (x, z) of the trunk's foot. Y is the terrain's there.
+        pos: (f32, f32),
+        /// Height from the ground to the top of its leaves, in metres.
+        #[serde(default = "CypressDef::default_height")]
+        height: f32,
+        /// Radius of the crown at its widest, in metres.
+        #[serde(default = "CypressDef::default_radius")]
+        radius: f32,
+    },
     /// Vertical post anchored to terrain. Released when terrain is destroyed.
     FencePost {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -1728,6 +1740,7 @@ impl LevelObject {
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
             LevelObject::Shrub { pos, .. } => ("Shrub", anchored(pos)),
             LevelObject::Tree { pos, .. } => ("Tree", anchored(pos)),
+            LevelObject::Cypress { pos, .. } => ("Cypress", anchored(pos)),
             LevelObject::Roller { pos, .. } => ("Roller", anchored(pos)),
             LevelObject::HeartCritter { pos, .. } => ("HeartCritter", anchored(pos)),
             LevelObject::Fish { pos, .. } => ("Fish", anchored(pos)),
@@ -2022,6 +2035,9 @@ impl LevelObject {
             LevelObject::Tree { .. } => Disc {
                 radius: LollipopSpec::default().trunk_radius,
             },
+            LevelObject::Cypress { .. } => Disc {
+                radius: CypressSpec::default().trunk_radius,
+            },
             LevelObject::Roller { radius, .. } => Disc { radius: *radius },
             // Small and it moves off immediately; the footprint is only
             // ever about what it is standing on at spawn.
@@ -2122,6 +2138,7 @@ impl LevelObject {
             | LevelObject::FencePost { .. }
             | LevelObject::Shrub { .. }
             | LevelObject::Tree { .. }
+            | LevelObject::Cypress { .. }
             | LevelObject::Roller { .. }
             | LevelObject::HeartCritter { .. }
             | LevelObject::Fish { .. }
@@ -2250,6 +2267,7 @@ impl LevelObject {
             LevelObject::FencePost { pos, .. } => p2(pos),
             LevelObject::Shrub { pos, .. } => p2(pos),
             LevelObject::Tree { pos, .. } => p2(pos),
+            LevelObject::Cypress { pos, .. } => p2(pos),
             LevelObject::Roller { pos, .. } => p2(pos),
             LevelObject::HeartCritter { pos, .. } => p2(pos),
             LevelObject::Fish { pos, .. } => p2(pos),
@@ -2643,6 +2661,16 @@ impl LevelObject {
                 height: *height,
                 crown_radius: *crown_radius,
                 crowns: *crowns,
+            }),
+
+            LevelObject::Cypress {
+                pos,
+                height,
+                radius,
+            } => Box::new(CypressDef {
+                pos: *pos,
+                height: *height,
+                radius: *radius,
             }),
 
             LevelObject::FencePost {

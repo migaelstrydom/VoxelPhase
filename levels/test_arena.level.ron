@@ -265,6 +265,11 @@ Level(
                 Tree(pos: (22.5, 7.0), height: 4.2, crowns: 3),
                 Tree(pos: (22.5, -2.5), height: 2.6, crown_radius: 0.6),
 
+                // A row of cypresses.
+                Cypress(pos: (26.0, -3.0)),
+                Cypress(pos: (26.2, 0.0), height: 5.2, radius: 0.6),
+                Cypress(pos: (26.0, 3.0), height: 3.8, radius: 0.5),
+
                 FencePost(
                     pos: (5.0, -13.0),
                     half_height: 1.0,
