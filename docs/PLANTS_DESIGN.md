@@ -245,18 +245,19 @@ Breadth-first: every kind playable before any looks its best.
 Done:
 - **Leaf drag:** a fluid by real shape, on both sides.
 - **Bending removed:** skins drawn as grown, the core at 80% of each lobe.
+- **Blasts and throws:** a porous bulk catches a share of a blast
+  (`BulkShape::porous`); a throw is limited by the hand.
+- **Ellipsoid lobes:** drag and wading read them as ellipsoids; the core,
+  bulk and resting pose read each as a ball of its least radius, since only
+  round shrubs come loose. Round shrubs are unchanged vertex for vertex.
+  `SkinKind` waits for the second skin kind (blades) and `LeafMass` for the
+  first plant with several masses (step 3): neither has anything to do
+  until then.
 
 Next:
-1. **Reshape, no change in look.**
-   - `Lobe` becomes an ellipsoid. Only drag and stride depth need to read
-     it as one: shrubs, the only masses that come loose, stay round, so the
-     core, bulk and resting pose keep their spheres.
-   - `SkinKind::Nubbed` takes today's generator, with bumps sized in metres.
-   - `LeafMass` gathers volume, skin and core.
-
-   Gates: every test passes, and the arena renders the same.
 2. **Fix the bumpy skin's triangles:** a fixed vertex spacing per lobe,
-   with buried vertices dropped.
+   with buried vertices dropped, and bumps sized in metres so a tall lobe's
+   are not stretched.
    - Gate: fewer triangles and an equal or sharper look on views of a small
      and a big lobe.
 3. **Skeleton and the lollipop tree:** the `plants` module, a trunk with one
