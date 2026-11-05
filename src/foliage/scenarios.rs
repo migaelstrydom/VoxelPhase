@@ -588,3 +588,45 @@ fn a_blast_throws_a_clump_within_the_level_not_across_it() {
     );
     assert!(run.slept_at.is_some(), "it never came to rest");
 }
+
+/// A column blasted loose falls over and lies on its side, within the
+/// level, and comes to rest: its core is a capsule along it, not a ball of
+/// its width per lobe.
+#[test]
+fn a_blasted_column_lies_down_and_rests() {
+    let shape = ShrubSpec::with_radius(0.45)
+        .rooted()
+        .with_height(2.8)
+        .grow(5);
+    let ground = FlatQuadGeometry::new(200.0);
+    let core = LeafCore::default();
+    let mut world = PhysicsWorld::default();
+    let body = core.spawn(&mut world, &shape, standing(&shape, Point3::origin(), 0.01));
+    let blast = Explosion::new(Point3::new(-1.5, 0.3, 0.0)).physics_impulse();
+    let kick = world.impulse_on(body, &blast).unwrap();
+    world.apply_impulse(body, kick);
+    let run = run(
+        &mut world,
+        body,
+        Arc::new(shape),
+        &ground,
+        12.0,
+        LeafDrag::default(),
+    );
+    let length = world.body(body).unwrap().rotation() * Vector3::y();
+    println!(
+        "column: {run:?}, its length {:.0}° from upright",
+        length.y.abs().acos().to_degrees()
+    );
+    assert!(
+        run.rest.x > 1.0 && run.rest.x < 40.0,
+        "it went {:.2} m",
+        run.rest.x
+    );
+    assert!(
+        length.y.abs() < 0.3,
+        "it stands {:.2} upright",
+        length.y.abs()
+    );
+    assert!(run.slept_at.is_some(), "it never came to rest");
+}
