@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::atmosphere::Atmosphere;
 use super::body::{BodyDrive, BodyType, RigidBody, RigidBodyDesc, SupportDrive};
-use super::bulk::EnvelopePart;
+use super::bulk::{BulkShape, EnvelopePart};
 use super::ccd::{
     pair_separation, CcdContext, CcdStrategy, ContactPairKey, NarrowphaseOwnership, SweepClampCcd,
 };
@@ -2124,8 +2124,10 @@ fn blast_on(
     colliders: &Arena<Collider>,
     impulse: &PhysicsImpulse,
 ) -> Option<Vector3<f32>> {
+    let solidity = body.bulk().map_or(1.0, BulkShape::solidity);
     impulse.impulse_on(body.position(), |travel| {
-        silhouette::exposed_area(body.envelope(colliders), body.rotation().inverse() * travel)
+        solidity
+            * silhouette::exposed_area(body.envelope(colliders), body.rotation().inverse() * travel)
     })
 }
 

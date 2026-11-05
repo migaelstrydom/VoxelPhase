@@ -121,7 +121,10 @@ mod tests {
     use nalgebra::{Point3, Vector3};
 
     use super::*;
-    use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
+    use crate::physics::{
+        BulkShape, ColliderDesc, ColliderShape, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
+        Volume,
+    };
 
     /// A blast 3 m along -x from the origin, reaching 6 m, with no lift.
     fn blast() -> PhysicsImpulse {
@@ -187,6 +190,29 @@ mod tests {
         assert!(
             (in_line - one).abs() < 1e-3 * one,
             "in line {in_line}, one {one}"
+        );
+    }
+
+    /// A porous body catches its declared share of the blast on its
+    /// silhouette; a solid one of the same shape catches all of it.
+    #[test]
+    fn a_porous_body_catches_its_share_of_a_blast() {
+        let solid = struck(vec![ColliderDesc::sphere(0.5)]);
+        let mut world = PhysicsWorld::default();
+        let bush = world.create_body(
+            RigidBodyDesc::dynamic().bulk(
+                BulkShape::displacing(vec![Volume::at(
+                    ColliderShape::Sphere { radius: 0.5 },
+                    Vector3::zeros(),
+                )])
+                .porous(0.3),
+            ),
+        );
+        world.attach_collider(bush, ColliderDesc::sphere(0.3));
+        let porous = world.impulse_on(bush, &blast()).unwrap().x;
+        assert!(
+            (porous - 0.3 * solid).abs() < 1e-3 * solid,
+            "porous {porous}, solid {solid}"
         );
     }
 }

@@ -36,6 +36,10 @@ pub struct LeafCore {
     /// bush's, about twice a smooth ball's, since the flow is torn through
     /// the leaves rather than parted round a surface.
     pub drag_coefficient: f32,
+    /// The share of a blast's loading the clump's lobes catch: leaves let the
+    /// shock front through, and only the wind behind it pushes
+    /// (`BulkShape::porous`).
+    pub solidity: f32,
     /// Grip of the core on whatever it lands on. High: leaves snag.
     pub friction: f32,
     /// Share of its spin the clump loses per second: leaves brushing the
@@ -50,6 +54,7 @@ impl Default for LeafCore {
             core_fraction: 0.8,
             bulk_density: 30.0,
             drag_coefficient: 1.0,
+            solidity: 0.3,
             friction: 0.9,
             angular_damping: 0.6,
         }
@@ -90,8 +95,8 @@ impl LeafCore {
             .collect()
     }
 
-    /// What fluids see of the clump: every lobe whole, porous. It weighs
-    /// what its core spheres weigh.
+    /// What fluids and blasts see of the clump: every lobe whole, porous. It
+    /// weighs what its core spheres weigh.
     pub fn bulk(&self, shape: &FoliageShape) -> BulkShape {
         BulkShape::displacing(
             shape
@@ -108,6 +113,7 @@ impl LeafCore {
                 .collect(),
         )
         .dragging_as(self.drag_coefficient)
+        .porous(self.solidity)
     }
 
     /// How the core rests on level ground: the direction, in the clump's

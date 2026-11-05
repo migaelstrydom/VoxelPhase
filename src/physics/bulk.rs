@@ -15,6 +15,7 @@
 //!                    ▼
 //!              mass_parts() ─────────────────▶ mass, centre of mass, inertia
 //!              envelope() ───────────────────▶ buoyancy, drag, splash (any medium)
+//!              solidity() ───────────────────▶ how much of a blast it catches
 //! ```
 //!
 //! The choice between the override and the colliders is made once, inside the
@@ -96,6 +97,12 @@ pub struct BulkShape {
     /// drags as a porous bush, not as smooth balls. `None` leaves each part
     /// its shape's.
     drag_coefficient: Option<f32>,
+    /// The share of a blast's loading on its silhouette the body catches,
+    /// 0 to 1. A blast strikes a solid body twice: its shock front's
+    /// pressure jump, then the wind behind it. Through a porous one, a bush,
+    /// the pressure evens out at once between the leaves and only the wind
+    /// pushes. `None` is solid: all of it.
+    solidity: Option<f32>,
 }
 
 impl BulkShape {
@@ -106,6 +113,7 @@ impl BulkShape {
             mass: Some(vec![MassPart::new(volume.clone(), density)]),
             envelope: Some(vec![volume]),
             drag_coefficient: None,
+            solidity: None,
         }
     }
 
@@ -122,6 +130,7 @@ impl BulkShape {
             ]),
             envelope: Some(vec![outer]),
             drag_coefficient: None,
+            solidity: None,
         }
     }
 
@@ -132,6 +141,7 @@ impl BulkShape {
             mass: None,
             envelope: Some(volumes),
             drag_coefficient: None,
+            solidity: None,
         }
     }
 
@@ -140,6 +150,19 @@ impl BulkShape {
     pub fn dragging_as(mut self, coefficient: f32) -> Self {
         self.drag_coefficient = Some(coefficient);
         self
+    }
+
+    /// The same bulk, porous: catching `solidity` (0 to 1) of a blast's
+    /// loading on its silhouette.
+    pub fn porous(mut self, solidity: f32) -> Self {
+        self.solidity = Some(solidity.clamp(0.0, 1.0));
+        self
+    }
+
+    /// The share of a blast's loading the body catches: 1 unless it is
+    /// declared porous.
+    pub fn solidity(&self) -> f32 {
+        self.solidity.unwrap_or(1.0)
     }
 
     /// Total mass of the declared parts; `None` where the colliders weigh the

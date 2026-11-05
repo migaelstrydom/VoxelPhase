@@ -41,9 +41,10 @@ on the next physics step.
   porous bush (`LeafCore::drag_coefficient`, 1.0, about twice a smooth
   ball's), so the engine's air (`physics::Atmosphere`) and water see a ball
   of leaves, not the core. A blast strikes a body by the area it shows it,
-  so a clump 1.5 m from a grenade leaves at about 48 m/s; the air brings it
-  down about 46 m away (without air: hundreds). How far is now the blast's
-  strength to tune, which is set for the whole game.
+  but leaves let its shock front through (`LeafCore::solidity`, 0.3:
+  `BulkShape::porous`), so the game's grenade 1.5 m from a clump throws it
+  at about 28 m/s, where a solid clump would leave at 95, and it comes to
+  rest about 32 m away.
 - **Cores are in their own collision layer** (`collision_layers::FOLIAGE`).
   A grenade does not meet it: it passes through a loose clump slowed by the
   leaves, as through a rooted shrub, and its predicted flight looks past
@@ -88,7 +89,7 @@ on the next physics step.
 - Dropped from 1 m: no rebound, asleep at 1.9 s.
 - 25° and 35° slopes: stops within 1 m of the foot; asleep within 6 s.
 - Kicked at 4 m/s on flat ground: stops after about 1.2 m.
-- A grenade 1.5 m away: thrown about 50 m.
+- A grenade 1.5 m away: thrown at about 28 m/s, resting about 32 m away.
 - A grenade thrown at 12 m/s through a rooted shrub: through at about
   10.8 m/s.
 - In game, a big rooted shrub torn loose by a grenade beside it rose 3.4 m,
@@ -102,8 +103,6 @@ on the next physics step.
   and the sun through the edges of a backlit clump. Tuned by eye on two
   views; its constants head the shader. Shed leaves are leaf-shaped
   particles that flutter (`Silhouette::Leaf`).
-- **Blast distance.** About 46 m for a clump right by a grenade (see
-  above): a tuning of the grenade's strength, for the whole game.
 - **The traversal planner's casts see cores.** Right while characters meet
   them; revisit if a clump on the path makes the plan hop it.
 - **Trees** are the next step: `docs/PLANTS_DESIGN.md`.

@@ -21,10 +21,11 @@ use super::leaf_core::LeafCore;
 use super::shape::{FoliageShape, Lobe, ShrubSpec};
 use crate::collision_layers;
 use crate::debug::DebugLines;
+use crate::explosion::Explosion;
 use crate::physics::bench_harness::geometry::{EmptyGeometry, FlatQuadGeometry, RampGeometry};
 use crate::physics::{
-    Atmosphere, ColliderDesc, CollisionFilter, PhysicsConfig, PhysicsImpulse, PhysicsWorld,
-    RigidBodyDesc, RigidBodyHandle, SequentialStepper, StaticGeometry, Stepper,
+    Atmosphere, ColliderDesc, CollisionFilter, PhysicsConfig, PhysicsWorld, RigidBodyDesc,
+    RigidBodyHandle, SequentialStepper, StaticGeometry, Stepper,
 };
 
 /// The game's frame and physics step.
@@ -549,47 +550,44 @@ fn capsule_volume(half_height: f32, radius: f32) -> f32 {
     pi * radius * radius * 2.0 * half_height + 4.0 / 3.0 * pi * radius.powi(3)
 }
 
-/// A grenade going off a metre and a half from a clump throws it within the
-/// level; without the air the same shove throws it hundreds of metres. The
-/// blast strikes the clump by its size, and it is the air through the
-/// clump's porous lobes that brings it down.
+/// The game's grenade going off a metre and a half from a clump throws it a
+/// few metres, not across the level. Leaves let the shock front through, so
+/// the clump catches only part of the blast its lobes show it: a solid clump
+/// of the same shape and weight is thrown several times as fast.
 #[test]
 fn a_blast_throws_a_clump_within_the_level_not_across_it() {
     let shape = shrub();
     let ground = FlatQuadGeometry::new(200.0);
-    let blasted = |atmosphere: Atmosphere| {
-        let mut world = PhysicsWorld::new(PhysicsConfig {
-            atmosphere,
-            ..PhysicsConfig::default()
-        });
-        let body =
-            LeafCore::default().spawn(&mut world, &shape, standing(&shape, Point3::origin(), 0.01));
-        let blast = PhysicsImpulse::radial(Point3::new(-1.5, 0.0, 0.0), 5.0, 1000.0, 0.5);
+    let blasted = |core: LeafCore| {
+        let mut world = PhysicsWorld::default();
+        let body = core.spawn(&mut world, &shape, standing(&shape, Point3::origin(), 0.01));
+        let blast = Explosion::new(Point3::new(-1.5, 0.0, 0.0)).physics_impulse();
         let kick = world.impulse_on(body, &blast).unwrap();
         world.apply_impulse(body, kick);
         let launched = kick.magnitude() / world.body(body).unwrap().mass();
-        (
-            launched,
-            run(
-                &mut world,
-                body,
-                Arc::new(shape.clone()),
-                &ground,
-                12.0,
-                LeafDrag::default(),
-            ),
-        )
+        let run = run(
+            &mut world,
+            body,
+            Arc::new(shape.clone()),
+            &ground,
+            12.0,
+            LeafDrag::default(),
+        );
+        (launched, run)
     };
-    let (launched, run) = blasted(Atmosphere::AIR);
-    let (_, airless) = blasted(Atmosphere::VACUUM);
+    let porous = LeafCore::default();
+    let (launched, run) = blasted(porous);
+    let (solid_launch, _) = blasted(LeafCore {
+        solidity: 1.0,
+        ..porous
+    });
     println!("blasted at {launched:.0} m/s: {run:?}");
-    println!("without air: {airless:?}");
+    println!("a solid clump: {solid_launch:.0} m/s");
     assert!(run.rest.x > 2.0, "it barely moved: {:.2} m", run.rest.x);
-    assert!(run.rest.x < 60.0, "it flew {:.2} m", run.rest.x);
+    assert!(run.rest.x < 40.0, "it flew {:.2} m", run.rest.x);
     assert!(
-        airless.rest.x > 3.0 * run.rest.x,
-        "air made little difference: {:.2} m without it",
-        airless.rest.x
+        solid_launch > 2.5 * launched,
+        "leaves caught as much as a solid: {launched:.1} against {solid_launch:.1} m/s"
     );
     assert!(run.slept_at.is_some(), "it never came to rest");
 }
