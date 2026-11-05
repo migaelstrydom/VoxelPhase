@@ -1606,6 +1606,12 @@ impl PhysicsWorld {
                 collider.shift_offset(-local_com);
             }
         }
+        // Joints hold their anchors on the body from its origin.
+        for (_, constraint) in self.constraints.iter_mut() {
+            if constraint.kind.references_body(body_handle) {
+                constraint.kind.shift_anchor(body_handle, local_com);
+            }
+        }
 
         if let Some(body) = self.bodies.get_mut(body_handle.0) {
             if let Some(bulk) = body.bulk_mut() {
@@ -2507,6 +2513,46 @@ mod tests {
              as not a floor",
             first.map(|f| f.1),
             first.map(|f| f.0),
+        );
+    }
+
+    /// A welded body that loses a collider and re-centres keeps its weld on
+    /// the same point of itself: the anchor follows the origin.
+    #[test]
+    fn recentring_keeps_a_weld_on_the_same_point() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let handle = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+        let gone = world
+            .attach_collider(
+                handle,
+                ColliderDesc::sphere(0.3).offset_translation(Vector3::new(-1.0, 0.0, 0.0)),
+            )
+            .unwrap();
+        world.attach_collider(
+            handle,
+            ColliderDesc::sphere(0.3).offset_translation(Vector3::new(1.0, 0.0, 0.0)),
+        );
+        let weld = world.create_constraint(ConstraintKind::world_fixed(
+            handle,
+            Point3::new(1.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            &UnitQuaternion::identity(),
+            0.0,
+            f32::MAX,
+        ));
+
+        world.detach_collider(handle, gone);
+        world.recenter_on_colliders(handle);
+
+        let ConstraintKind::Fixed { local_anchor_b, .. } = world.constraint(weld).unwrap().kind
+        else {
+            unreachable!("a weld")
+        };
+        let body = world.body(handle).unwrap();
+        let anchored = body.position() + body.rotation() * local_anchor_b;
+        assert!(
+            (anchored - Point3::new(1.0, 0.0, 0.0)).norm() < 1e-4,
+            "the weld moved to {anchored:?}"
         );
     }
 

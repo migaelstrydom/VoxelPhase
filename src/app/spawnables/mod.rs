@@ -25,6 +25,7 @@ mod moving_platform;
 mod octahedron;
 mod pendulum;
 mod plank_bridge;
+mod plant;
 mod play_wheel;
 mod pyramid;
 mod rock;

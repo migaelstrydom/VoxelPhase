@@ -379,6 +379,65 @@ impl ConstraintKind {
         )
     }
 
+    /// Follows `handle`'s origin moving by `delta`, in its own frame (a
+    /// re-centre after it lost colliders): every anchor this constraint holds
+    /// on it shifts by `-delta`, so it stays on the same point of the body.
+    ///
+    /// The joints are the kinds that hold anchors on a body that can lose
+    /// colliders; a drive, a slider or a suspension is authored on a body
+    /// that keeps its own, and is left as it is.
+    pub fn shift_anchor(&mut self, handle: RigidBodyHandle, delta: Vector3<f32>) {
+        match self {
+            ConstraintKind::BallJoint {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                ..
+            }
+            | ConstraintKind::Fixed {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                ..
+            }
+            | ConstraintKind::Hinge {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                ..
+            } => {
+                if *body_a == Some(handle) {
+                    *local_anchor_a -= delta;
+                }
+                if *body_b == handle {
+                    *local_anchor_b -= delta;
+                }
+            }
+            ConstraintKind::FollowPoint {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                ..
+            } => {
+                if *body_a == handle {
+                    *local_anchor_a -= delta;
+                }
+                if *body_b == handle {
+                    *local_anchor_b -= delta;
+                }
+            }
+            ConstraintKind::KeepUpright { .. }
+            | ConstraintKind::KeepAttitude { .. }
+            | ConstraintKind::SpringSlider(_)
+            | ConstraintKind::MediumDrive { .. }
+            | ConstraintKind::Suspension(_) => {}
+        }
+    }
+
     /// Whether this constraint references the given body.
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {

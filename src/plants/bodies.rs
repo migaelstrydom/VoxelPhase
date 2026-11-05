@@ -23,7 +23,7 @@ use super::plant::Plant;
 use crate::collision_layers;
 use crate::foliage::LeafCore;
 use crate::physics::{
-    ConstraintHandle, ConstraintKind, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
+    ColliderHandle, ConstraintHandle, ConstraintKind, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
 };
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
 
@@ -64,6 +64,9 @@ pub struct PlantBodies {
     pub branch_welds: Vec<Option<ConstraintHandle>>,
     /// Where each leaf mass's frame sits in its limb's body's.
     pub mass_offsets: Vec<Isometry3<f32>>,
+    /// Each leaf mass's core colliders on its limb's body: what comes away
+    /// when the crown breaks off.
+    pub mass_colliders: Vec<Vec<ColliderHandle>>,
     /// The trunk's weld into the ground.
     pub rooting: ConstraintHandle,
 }
@@ -79,6 +82,7 @@ impl Joinery {
         let mut limbs = Vec::new();
         let mut limb_frames = Vec::new();
         let mut mass_offsets = vec![Isometry3::identity(); plant.masses.len()];
+        let mut mass_colliders = vec![Vec::new(); plant.masses.len()];
         for (index, limb) in plant.limbs.limbs.iter().enumerate() {
             let crowns: Vec<usize> = (0..plant.masses.len())
                 .filter(|&m| plant.masses[m].limb == index)
@@ -112,7 +116,7 @@ impl Joinery {
             for &m in &crowns {
                 let at = frame * plant.masses[m].pose;
                 for collider in self.core.colliders(&plant.masses[m].shape, at) {
-                    world.attach_collider(body, collider);
+                    mass_colliders[m].extend(world.attach_collider(body, collider));
                 }
                 mass_offsets[m] = at;
             }
@@ -148,6 +152,7 @@ impl Joinery {
             limb_frames,
             branch_welds,
             mass_offsets,
+            mass_colliders,
             rooting,
         }
     }

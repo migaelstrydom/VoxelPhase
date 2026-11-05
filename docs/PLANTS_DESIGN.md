@@ -283,8 +283,14 @@ Done:
     overlaps its parent at the fork). Everything else meets them, grenades
     included: a grenade strikes a trunk, and goes through the outer fifth of
     a crown's leaves before striking its core, as it would a loose clump's.
-  - Left for later: a tapered trunk and bark texture, a trunk that snaps,
-    and crowns that sway.
+  - A blast within half its knockback radius of a crown's centre breaks
+    the crown off its limb (`CrownBreakSystem`): its core's colliders come
+    off the limb's body, which re-centres (the engine now carries joint
+    anchors with a re-centre), and the crown becomes a loose clump, as a
+    shrub torn from the ground. A grenade caught in a crown, or at the foot
+    of a small tree, takes its crown off.
+  - Left for later: a trunk that snaps, crowns that sway, a crown broken
+    off by a hard landing.
 
 Next:
 4. **Cypress:** a tall lobe on a short trunk.

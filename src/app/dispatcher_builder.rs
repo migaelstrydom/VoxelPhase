@@ -27,6 +27,7 @@ use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
 use crate::objective::{GemMotionSystem, GoalSystem, ObjectiveHudSystem, ProgressSystem};
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
+use crate::plants::CrownBreakSystem;
 use crate::platform::MovingPlatformSystem;
 use crate::projectile::{
     GrenadeSpawnSystem, GrenadeVisualSystem, HeldGrenadeSystem, LifetimeSystem,
@@ -246,6 +247,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // A blast tears shrubs loose after it has queued its shove, so the
         // next physics step throws the cores it makes.
         .with(FoliageUprootSystem, "foliage_uproot", &["explosion"])
+        .with(CrownBreakSystem, "crown_break", &["explosion"])
         .with(FireCleanupSystem, "fire_cleanup", &["fire_ignition"])
         // Firelight tracks OnFire, so it must settle before lights are collected.
         .with(FireLightSystem, "fire_light", &["fire_cleanup"])
