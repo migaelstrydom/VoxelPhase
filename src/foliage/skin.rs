@@ -16,7 +16,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use super::shape::{FoliageShape, Lobe};
-use crate::geometry::generate_geodesic;
+use crate::geometry::{generate_ellipsoid_rings, generate_geodesic, Icosphere};
 use crate::rendering::vertex::Vertex;
 use crate::utils::noise::perlin_3d;
 
@@ -109,7 +109,7 @@ impl SkinSpec {
         let mut indices = Vec::new();
         for (index, lobe) in shape.lobes.iter().enumerate() {
             let nubs = self.nubs(lobe, &mut rng);
-            let sphere = generate_geodesic(self.frequency(lobe));
+            let sphere = self.mesh(lobe);
             let base = vertices.len() as u32;
             let mut hidden = Vec::with_capacity(sphere.positions.len());
             for &direction in &sphere.positions {
@@ -141,6 +141,18 @@ impl SkinSpec {
         }
         smooth_normals(&mut vertices, &indices);
         compact(Skin { vertices, indices })
+    }
+
+    /// The lobe's mesh on the unit sphere: a geodesic sphere when the lobe
+    /// is round, whose spacing has no poles; rings round its long axis when
+    /// it is stretched, since a geodesic sphere sized for its long axis is
+    /// oversampled across the short ones by their ratio.
+    fn mesh(&self, lobe: &Lobe) -> Icosphere {
+        if lobe.greatest_radius() > STRETCHED * lobe.least_radius() {
+            generate_ellipsoid_rings(lobe.radii, self.vertex_spacing)
+        } else {
+            generate_geodesic(self.frequency(lobe))
+        }
     }
 
     /// Geodesic frequency for `lobe`: rows enough that neighbouring vertices
@@ -244,6 +256,10 @@ impl SkinSpec {
     }
 }
 
+/// How much longer than its shortest a lobe's longest radius must be for
+/// it to be meshed in rings: below it a geodesic sphere's oversampling is
+/// small and its pole-free spacing is worth keeping.
+const STRETCHED: f32 = 1.2;
 /// Lumps per metre in the irregularity laid over the nubs.
 const WOBBLE_FREQUENCY: f32 = 6.0;
 /// Leaf-sized relief per metre: a leaf or two across a nub.
@@ -331,11 +347,7 @@ mod tests {
             assert!((0.0..=1.0).contains(&v.ao));
         }
         // Buried faces are dropped: fewer than every lobe's whole sphere.
-        let whole: usize = shape
-            .lobes
-            .iter()
-            .map(|l| generate_geodesic(spec.frequency(l)).indices.len())
-            .sum();
+        let whole: usize = shape.lobes.iter().map(|l| spec.mesh(l).indices.len()).sum();
         assert!(skin.indices.len() < whole);
         let outward = skin
             .indices

@@ -1,7 +1,7 @@
 //! Foliage's ECS systems: leaves shed where a loose clump lands, and clumps
 //! torn loose by blasts.
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, Translation3, Vector3};
 use specs::{
     Builder, Entities, Join, LazyUpdate, Read, ReadExpect, ReadStorage, System, Write, WriteStorage,
 };
@@ -72,7 +72,9 @@ struct Impact {
 /// A landing is told from resting by the velocity the contact took away:
 /// the core's change in velocity since last frame along the contact's
 /// normal. Gravity alone puts a sixth of a metre a second into that each
-/// frame, well under [`IMPACT_SPEED`].
+/// frame, well under [`IMPACT_SPEED`]. Only the speed it was moving into the
+/// surface at can be taken away, so a clump launched off the ground, by a
+/// blast or a kick, does not land.
 fn hardest_landing(clump: &Foliage, world: &PhysicsWorld, body: RigidBodyHandle) -> Option<Impact> {
     let core = world.body(body)?;
     let centre = core.position();
@@ -88,13 +90,20 @@ fn hardest_landing(clump: &Foliage, world: &PhysicsWorld, body: RigidBodyHandle)
             } else {
                 contact.normal
             };
-            let speed = stopped.dot(&normal);
+            let speed = landing_speed(stopped, clump.last_velocity, normal);
             (speed > IMPACT_SPEED).then_some(Impact {
                 point: contact.point,
                 speed,
             })
         })
         .max_by(|a, b| a.speed.total_cmp(&b.speed))
+}
+
+/// The speed a contact with outward `normal` stopped a core at, given the
+/// velocity it took away and the core's velocity before: no more than the
+/// core was moving into the surface.
+fn landing_speed(stopped: Vector3<f32>, before: Vector3<f32>, normal: Vector3<f32>) -> f32 {
+    stopped.dot(&normal).min(-before.dot(&normal))
 }
 
 fn involves(contact: &ContactEvent, body: RigidBodyHandle) -> bool {
@@ -165,7 +174,7 @@ impl<'a> System<'a> for FoliageUprootSystem {
             return;
         }
         for (entity, clump) in (&entities, &mut foliage).join() {
-            let Rooting::Rooted { pose } = clump.rooting else {
+            let Rooting::Rooted { pose, sunk } = clump.rooting else {
                 continue;
             };
             let centre = Point3::from(pose.translation.vector);
@@ -175,7 +184,9 @@ impl<'a> System<'a> for FoliageUprootSystem {
             {
                 continue;
             }
-            let body = clump.core.spawn(&mut physics.world, &clump.shape, pose);
+            // Lifted clear of the ground it grew sunk into.
+            let freed = Translation3::new(0.0, sunk, 0.0) * pose;
+            let body = clump.core.spawn(&mut physics.world, &clump.shape, freed);
             physics.world.wake_body(body);
             clump.rooting = Rooting::Loose { body };
             let _ = bodies.insert(entity, RigidBodyComponent(body));
@@ -185,5 +196,21 @@ impl<'a> System<'a> for FoliageUprootSystem {
                 .with(leaf_emitter(UPROOT_LEAVES))
                 .build();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_landing_is_a_fall_stopped_not_a_launch() {
+        let up = Vector3::y();
+        let falling = Vector3::new(1.0, -5.0, 0.0);
+        let landed = landing_speed(Vector3::new(0.0, 5.0, 0.0), falling, up);
+        assert!((landed - 5.0).abs() < 1e-6);
+        // Launched off the ground at 15 m/s: not a landing.
+        let launched = landing_speed(Vector3::new(0.0, 15.0, 0.0), Vector3::zeros(), up);
+        assert!(launched < IMPACT_SPEED);
     }
 }

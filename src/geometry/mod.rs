@@ -7,6 +7,7 @@ mod capsule;
 mod cube;
 mod cylinder;
 mod dome;
+mod ellipsoid_rings;
 mod fissured_shell;
 mod heart;
 mod icosphere;
@@ -19,6 +20,7 @@ pub use cylinder::generate_cylinder;
 #[cfg(test)]
 pub(crate) use cylinder::widest_u_span;
 pub use dome::{generate_dome, DomeSpec};
+pub use ellipsoid_rings::generate_ellipsoid_rings;
 pub use fissured_shell::{
     generate_fissured_shell, FissureBand, FissuredShell, FissuredShellConfig,
 };

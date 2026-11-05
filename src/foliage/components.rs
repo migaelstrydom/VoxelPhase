@@ -22,6 +22,9 @@ pub enum Rooting {
     Rooted {
         /// Where the clump's frame is.
         pose: Isometry3<f32>,
+        /// How far its leaves reach below the ground, m: a clump torn loose
+        /// is lifted by this, so its core does not start in the ground.
+        sunk: f32,
     },
     /// Torn loose: its core is this dynamic body, whose frame is the clump's.
     Loose {
@@ -51,19 +54,21 @@ pub struct Foliage {
 }
 
 impl Foliage {
-    /// A rooted clump at `pose`.
+    /// A rooted clump at `pose`, its leaves reaching `sunk` metres below
+    /// the ground.
     pub fn rooted(
         shape: Arc<FoliageShape>,
         skin: Arc<Skin>,
         material: MaterialId,
         pose: Isometry3<f32>,
+        sunk: f32,
     ) -> Self {
         Self {
             shape,
             skin,
             material,
             core: LeafCore::default(),
-            rooting: Rooting::Rooted { pose },
+            rooting: Rooting::Rooted { pose, sunk },
             last_velocity: Vector3::zeros(),
         }
     }
@@ -81,7 +86,7 @@ impl Foliage {
         DragVolume {
             shape: self.shape.clone(),
             frame: match self.rooting {
-                Rooting::Rooted { pose } => VolumeFrame::Fixed(pose),
+                Rooting::Rooted { pose, .. } => VolumeFrame::Fixed(pose),
                 Rooting::Loose { body } => VolumeFrame::Body(body),
             },
         }
@@ -91,7 +96,7 @@ impl Foliage {
     /// loose. `None` if its core has gone.
     pub fn pose(&self, world: &PhysicsWorld) -> Option<Isometry3<f32>> {
         match self.rooting {
-            Rooting::Rooted { pose } => Some(pose),
+            Rooting::Rooted { pose, .. } => Some(pose),
             Rooting::Loose { body } => world
                 .body(body)
                 .map(|b| Isometry3::from_parts(b.position().coords.into(), b.rotation())),

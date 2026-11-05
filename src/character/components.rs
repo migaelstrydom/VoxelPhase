@@ -33,6 +33,16 @@ impl Default for ArmState {
     }
 }
 
+impl ArmState {
+    /// The body in the character's hands, if it is holding one.
+    pub fn held(&self) -> Option<RigidBodyHandle> {
+        match *self {
+            Self::Holding { target_body, .. } => Some(target_body),
+            Self::Idle | Self::Reaching { .. } => None,
+        }
+    }
+}
+
 /// Layered character state machine holding two orthogonal state enums.
 ///
 /// Locomotion and arm states are independent but subject to a compatibility

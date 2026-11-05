@@ -148,10 +148,9 @@ such as fruit trees or reeds.
     - **Bending a blade** vertex by vertex stretches it when a body pushes
       through the crown. Acceptable for small pushes; check it in step 6.
 - **Shading** is shared by every kind, with the blade variant above.
-- **Leaf particles** are shared too, with a budget: today 9 clumps shed
-  about 440 in one blast (+1.3 ms GPU). Each mass sheds a share of a
-  per-blast total and a world-wide live cap, scaled by its leaf area.
-  Settled in step 2b.
+- **Leaf particles** are shared too, under one world-wide cap on live
+  leaves (300), so a tree's masses shed as a shrub's do without a budget
+  of their own.
 
 ### Bend: one rule, on the GPU (parked)
 
@@ -248,13 +247,16 @@ Done:
 - **Blasts and throws:** a porous bulk catches a share of a blast
   (`BulkShape::porous`); a throw is limited by the hand.
 - **Ellipsoid lobes:** drag and wading read them as ellipsoids; the core,
-  bulk and resting pose read each as a ball of its least radius, since only
-  round shrubs come loose. Round shrubs are unchanged vertex for vertex.
+  bulk and resting pose read each as a sphere when round and a capsule
+  along each of its long axes when stretched, so a column lies down and a
+  mound sits flat. Round shrubs are unchanged vertex for vertex.
   `SkinKind` waits for the second skin kind (blades) and `LeafMass` for the
   first plant with several masses (step 3): neither has anything to do
   until then.
-- **Skin in metres:** each lobe's geodesic sphere is sized for about
-  2.5 cm between vertices, buried vertices are dropped, and bumps are sized
+- **Skin in metres:** each round lobe's geodesic sphere is sized for about
+  2.5 cm between vertices, and a stretched lobe is meshed in rings round
+  its long axis at that spacing (a geodesic sphere sized for a column's
+  length had five times the triangles); buried vertices are dropped, and bumps are sized
   in metres and spread evenly by area. Foliage triangles fell from about
   157k to 117k. A shrub can be grown to a height, as a column or a mound.
 - **Leaf particles:** besides landings and uprooting, whatever moves

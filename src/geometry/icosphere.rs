@@ -112,10 +112,8 @@ pub fn generate_geodesic(frequency: u32) -> Icosphere {
                 ));
             }
         }
-        let at = |i: u32, j: u32| {
-            let row: u32 = (0..i).map(|r| f - r + 1).sum();
-            grid[(row + j) as usize]
-        };
+        // Row i starts after rows 0..i, of f + 1, f, ... vertices.
+        let at = |i: u32, j: u32| grid[(i * (f + 1) - i * i.saturating_sub(1) / 2 + j) as usize];
         for i in 0..f {
             for j in 0..(f - i) {
                 indices.extend_from_slice(&[at(i, j), at(i + 1, j), at(i, j + 1)]);

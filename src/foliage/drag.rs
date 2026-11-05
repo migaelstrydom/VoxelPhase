@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use generational_arena::Arena;
 use nalgebra::{Isometry3, Point3, Vector3};
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use super::shape::{FoliageShape, Lobe};
@@ -175,16 +176,24 @@ pub(crate) fn immersion_in(
 }
 
 /// Foliage's drag on every body near a clump, recomputed each substep.
+///
+/// Which bodies are near which clumps is settled once a frame, widened by
+/// how far each could travel in it, so a substep poses only the clumps a
+/// body could be in.
 pub struct FoliageDrag {
     drag: LeafDrag,
     volumes: Vec<DragVolume>,
     affected: Vec<RigidBodyHandle>,
+    /// The volumes each body could be in this frame, its own excluded.
+    near: FxHashMap<RigidBodyHandle, SmallVec<[usize; 4]>>,
+    /// The bodies that could be in each volume this frame, by volume.
+    passers: Vec<SmallVec<[RigidBodyHandle; 4]>>,
 }
 
 impl FoliageDrag {
     /// Drag from `volumes` on whichever of `candidates` could reach one of
-    /// them within a frame of `frame_dt`. A volume's own body is never
-    /// dragged by its own leaves.
+    /// them within a frame of `frame_dt`, and back on a loose volume's body
+    /// from them. A volume's own body is never dragged by its own leaves.
     pub fn new(
         drag: LeafDrag,
         volumes: Vec<DragVolume>,
@@ -192,45 +201,74 @@ impl FoliageDrag {
         candidates: impl IntoIterator<Item = RigidBodyHandle>,
         frame_dt: f32,
     ) -> Self {
-        let bounds: Vec<(Point3<f32>, f32)> = volumes
+        // Each volume's reach this frame: its leaves, and as far as it flies.
+        let bounds: Vec<Option<(Point3<f32>, f32)>> = volumes
             .iter()
-            .filter_map(|v| {
+            .map(|v| {
                 let motion = v.motion(|h| world.body(h).map(FrameMotion::of))?;
                 Some((
                     Point3::from(motion.pose.translation.vector),
-                    v.shape.bounding_radius(),
+                    v.shape.bounding_radius() + motion.velocity.magnitude() * frame_dt,
                 ))
             })
             .collect();
-        let affected = if bounds.is_empty() {
-            Vec::new()
-        } else {
-            candidates
-                .into_iter()
-                .filter(|&handle| {
-                    let Some(body) = world.body(handle) else {
-                        return false;
-                    };
-                    if !body.is_dynamic() {
-                        return false;
-                    }
-                    let reach = world.reach(handle) + body.linear_velocity().magnitude() * frame_dt;
-                    bounds.iter().any(|(centre, radius)| {
-                        (body.position() - centre).magnitude() < radius + reach
-                    })
-                })
-                .collect()
-        };
+        let mut near: FxHashMap<RigidBodyHandle, SmallVec<[usize; 4]>> = FxHashMap::default();
+        let mut passers = vec![SmallVec::new(); volumes.len()];
+        for handle in candidates {
+            let Some(body) = world.body(handle).filter(|b| b.is_dynamic()) else {
+                continue;
+            };
+            let reach = world.reach(handle) + body.linear_velocity().magnitude() * frame_dt;
+            for (index, volume) in volumes.iter().enumerate() {
+                let Some((centre, radius)) = bounds[index] else {
+                    continue;
+                };
+                if volume.owner() != Some(handle)
+                    && (body.position() - centre).magnitude() < radius + reach
+                {
+                    near.entry(handle).or_default().push(index);
+                    passers[index].push(handle);
+                }
+            }
+        }
+        let mut affected: Vec<RigidBodyHandle> = near.keys().copied().collect();
+        affected.extend(
+            volumes
+                .iter()
+                .zip(&passers)
+                .filter(|(_, passing)| !passing.is_empty())
+                .filter_map(|(volume, _)| volume.owner())
+                .filter(|owner| !near.contains_key(owner)),
+        );
+        affected.sort_unstable_by_key(|h| h.0);
+        affected.dedup();
         Self {
             drag,
             volumes,
             affected,
+            near,
+            passers,
         }
     }
 
     /// Whether any body is near enough to be dragged this frame.
     pub fn is_idle(&self) -> bool {
         self.affected.is_empty()
+    }
+
+    /// A volume's leaves, posed as `lobes` round `centre`.
+    fn leaves<'a>(
+        &self,
+        volume: &DragVolume,
+        lobes: &'a [PosedLobe],
+        centre: Point3<f32>,
+    ) -> Leaves<'a> {
+        Leaves {
+            lobes,
+            centre,
+            reach: volume.shape.bounding_radius(),
+            density: self.drag.density,
+        }
     }
 }
 
@@ -245,31 +283,22 @@ impl SubstepForceProvider for FoliageDrag {
             return out;
         };
         let motion = |h: RigidBodyHandle| ctx.bodies.get(h.0).map(FrameMotion::of);
-        for volume in &self.volumes {
-            let Some(frame) = volume.motion(motion) else {
+        let posed = |volume: &DragVolume, lobes: &mut SmallVec<[PosedLobe; 8]>| {
+            let frame = volume.motion(motion)?;
+            lobes.clear();
+            lobes.extend(volume.posed(frame));
+            Some(Point3::from(frame.pose.translation.vector))
+        };
+        let mut lobes = SmallVec::new();
+
+        // Leaves it is in, dragging it.
+        for &index in self.near.get(&handle).into_iter().flatten() {
+            let volume = &self.volumes[index];
+            let Some(centre) = posed(volume, &mut lobes) else {
                 continue;
             };
-            let lobes: SmallVec<[PosedLobe; 8]> = volume.posed(frame).collect();
-            let leaves = Leaves {
-                lobes: &lobes,
-                centre: Point3::from(frame.pose.translation.vector),
-                reach: volume.shape.bounding_radius(),
-                density: self.drag.density,
-            };
-            if volume.owner() == Some(handle) {
-                // Its own leaves, pushed back by every other body in them.
-                for passer in self
-                    .affected
-                    .iter()
-                    .filter(|&&other| other != handle)
-                    .filter_map(|other| ctx.bodies.get(other.0))
-                {
-                    if let Some(drag) = leaves.drag_on(passer, ctx.colliders) {
-                        let pull = Pull::between(drag, passer, Some(body.mass()));
-                        out.drag = out.drag.combined(pull.on_leaves);
-                    }
-                }
-            } else if let Some(drag) = leaves.drag_on(body, ctx.colliders) {
+            let leaves = self.leaves(volume, &lobes, centre);
+            if let Some(drag) = leaves.drag_on(body, ctx.colliders) {
                 let carrier = volume
                     .owner()
                     .and_then(|owner| ctx.bodies.get(owner.0))
@@ -277,6 +306,23 @@ impl SubstepForceProvider for FoliageDrag {
                 out.drag = out
                     .drag
                     .combined(Pull::between(drag, body, carrier).on_body);
+            }
+        }
+
+        // Its own leaves, pushed back by every other body in them.
+        for (volume, passing) in self.volumes.iter().zip(&self.passers) {
+            if volume.owner() != Some(handle) || passing.is_empty() {
+                continue;
+            }
+            let Some(centre) = posed(volume, &mut lobes) else {
+                continue;
+            };
+            let leaves = self.leaves(volume, &lobes, centre);
+            for passer in passing.iter().filter_map(|other| ctx.bodies.get(other.0)) {
+                if let Some(drag) = leaves.drag_on(passer, ctx.colliders) {
+                    let pull = Pull::between(drag, passer, Some(body.mass()));
+                    out.drag = out.drag.combined(pull.on_leaves);
+                }
             }
         }
         out
@@ -458,6 +504,8 @@ impl Pull {
 mod tests {
     use nalgebra::UnitQuaternion;
 
+    use crate::physics::{ColliderDesc, RigidBodyDesc};
+
     use super::*;
 
     fn lobe_at(centre: Point3<f32>, radius: f32) -> PosedLobe {
@@ -512,6 +560,38 @@ mod tests {
 
     /// A loose volume's lobes move with its body: a point off the centre
     /// of a spinning clump moves as the spin carries it.
+    /// A clump flying fast at a resting body drags it from the frame it
+    /// could reach it, though the body itself is not moving.
+    #[test]
+    fn a_fast_clump_reaches_a_resting_body_within_the_frame() {
+        let mut world = PhysicsWorld::default();
+        let resting = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+        world.attach_collider(resting, ColliderDesc::sphere(0.2));
+        let clump = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(-1.0, 0.0, 0.0))
+                .linear_velocity(Vector3::new(20.0, 0.0, 0.0)),
+        );
+        world.attach_collider(clump, ColliderDesc::sphere(0.2));
+        let volume = DragVolume {
+            shape: Arc::new(FoliageShape {
+                lobes: vec![Lobe::round(Point3::origin(), 0.4)],
+            }),
+            frame: VolumeFrame::Body(clump),
+        };
+        // 0.4 m of leaves and 0.2 m of body leave 0.4 m of gap: a third of a
+        // metre a frame at 20 m/s closes it within the frame's 12 substeps.
+        let drag = FoliageDrag::new(
+            LeafDrag::default(),
+            vec![volume],
+            &world,
+            [resting, clump],
+            1.0 / 30.0,
+        );
+        assert!(drag.affected_bodies().contains(&resting));
+        assert!(drag.affected_bodies().contains(&clump));
+    }
+
     #[test]
     fn a_spinning_clump_carries_its_leaves_round() {
         let volume = DragVolume {

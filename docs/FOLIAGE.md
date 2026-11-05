@@ -14,7 +14,8 @@ see.
 
 ```
 visible lobes  ──  drag volume (rides with the clump)
-   core        ──  colliders: one sphere per lobe, 80% of its radius
+   core        ──  colliders: a sphere per round lobe, a capsule along each
+                   long axis of a stretched one, 80% of its size
 ```
 
 | Real physics | Drawn, or a rule |

@@ -191,7 +191,12 @@ impl<'a> System<'a> for CharacterControlSystem {
             // jump's landing frame already sees crouch suppressed.
             let ground_speed =
                 resolve_ground_speed(target, config, state.conditioning.crouch_locked())
-                    * wading_stride(&foliage, &physics_res.world, character_body);
+                    * wading_stride(
+                        &foliage,
+                        &physics_res.world,
+                        character_body,
+                        state.arm.held(),
+                    );
 
             // --- Yaw drive (physics body → Rotation, input → angular velocity) ---
             // Read against the pitch the body is being held at: a swimmer's
@@ -510,17 +515,22 @@ fn draw_grab_debug(
 }
 
 /// The share of its stride a character keeps for the leaves it is wading
-/// through (`foliage::thicket`): all of it clear of any.
+/// through (`foliage::thicket`): all of it clear of any. A clump it is
+/// carrying is not one it wades through.
 fn wading_stride(
     foliage: &ReadStorage<Foliage>,
     world: &PhysicsWorld,
     body: RigidBodyHandle,
+    held: Option<RigidBodyHandle>,
 ) -> f32 {
     let Some(rigid) = world.body(body) else {
         return 1.0;
     };
     let reach = world.reach(body);
-    let depth = leaf_depth(foliage.join(), world, rigid.position(), reach);
+    let waded = foliage
+        .join()
+        .filter(|clump| held.is_none() || clump.body() != held);
+    let depth = leaf_depth(waded, world, rigid.position(), reach);
     LeafDrag::default().stride(depth)
 }
 

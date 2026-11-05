@@ -5,7 +5,7 @@
 //!                                                    │
 //!                     Foliage component ◀────────────┘
 //!                     │  Rooted { pose }  ── no body: nothing collides with it
-//!                     │  Loose { body }   ── LeafCore: a sphere inside each lobe
+//!                     │  Loose { body }   ── LeafCore: a solid piece inside each lobe
 //!                     │
 //!   PhysicsSyncSystem ─┼─▶ FoliageDrag (SubstepForceProvider): leaves drag
 //!                     │    what overlaps them (the world's air drags loose

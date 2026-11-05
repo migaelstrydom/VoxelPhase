@@ -89,17 +89,19 @@ impl Spawnable for ShrubDef {
         let skin = Arc::new(SkinSpec::default().grow(&shape, seed));
         let yaw = (seed % 360) as f32 * std::f32::consts::PI / 180.0;
         let core = LeafCore::default();
-        let pose = if self.loose {
-            core.resting_pose(&shape, Point3::new(self.pos.0, ground, self.pos.1), yaw)
+        let (pose, sunk) = if self.loose {
+            let pose = core.resting_pose(&shape, Point3::new(self.pos.0, ground, self.pos.1), yaw);
+            (pose, 0.0)
         } else {
-            let sink = self.radius * ROOTED_SINK;
-            Isometry3::from_parts(
-                Translation3::new(self.pos.0, ground + shape.depth_below() - sink, self.pos.1),
+            let sunk = self.radius * ROOTED_SINK;
+            let pose = Isometry3::from_parts(
+                Translation3::new(self.pos.0, ground + shape.depth_below() - sunk, self.pos.1),
                 UnitQuaternion::from_axis_angle(&Vector3::y_axis(), yaw),
-            )
+            );
+            (pose, sunk)
         };
 
-        let mut clump = Foliage::rooted(shape, skin, materials[0], pose);
+        let mut clump = Foliage::rooted(shape, skin, materials[0], pose, sunk);
         let body = self.loose.then(|| {
             let mut physics = world.write_resource::<PhysicsResource>();
             clump.core.spawn(&mut physics.world, &clump.shape, pose)
