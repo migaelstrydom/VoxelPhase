@@ -41,7 +41,7 @@ impl Explosion {
             center,
             blast: BlastConfig::default(),
             blast_radius: 5.0,
-            force: 1000.0,
+            force: 2000.0,
             processed: false,
         }
     }
