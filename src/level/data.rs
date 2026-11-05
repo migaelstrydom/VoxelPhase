@@ -1169,6 +1169,10 @@ pub enum LevelObject {
         /// Whether it starts torn loose.
         #[serde(default)]
         loose: bool,
+        /// Its height overall, in metres: taller than its width a column,
+        /// lower a mound. Absent, a round shrub.
+        #[serde(default)]
+        height: Option<f32>,
     },
     /// Vertical post anchored to terrain. Released when terrain is destroyed.
     FencePost {
@@ -2593,10 +2597,16 @@ impl LevelObject {
                 density: *density,
             }),
 
-            LevelObject::Shrub { pos, radius, loose } => Box::new(ShrubDef {
+            LevelObject::Shrub {
+                pos,
+                radius,
+                loose,
+                height,
+            } => Box::new(ShrubDef {
                 pos: *pos,
                 radius: *radius,
                 loose: *loose,
+                height: *height,
             }),
 
             LevelObject::FencePost {

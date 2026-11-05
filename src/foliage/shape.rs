@@ -129,9 +129,13 @@ pub struct ShrubSpec {
     pub satellites: usize,
     /// Satellite radius as a share of the clump's, drawn from this range.
     pub satellite_radius: (f32, f32),
-    /// Squash of the clump's height against its width: below 1 a mound,
-    /// above it a column.
+    /// Squash of where the satellites sit, height against width: below 1 a
+    /// mound, above it a column.
     pub height_ratio: f32,
+    /// Height overall, in metres, the grown shape is stretched upright to:
+    /// its lobes grow tall for a column (a cypress) and flat for a mound.
+    /// `None` leaves it as it grows.
+    pub height: Option<f32>,
     /// How low round the central lobe the satellites go, as the sine of
     /// their elevation: -1 all the way round, as a clump that has tumbled;
     /// near 0 only the sides and top, as a shrub growing from the ground.
@@ -145,6 +149,7 @@ impl Default for ShrubSpec {
             satellites: 5,
             satellite_radius: (0.42, 0.55),
             height_ratio: 0.85,
+            height: None,
             lowest_satellite: -1.0,
         }
     }
@@ -156,6 +161,15 @@ impl ShrubSpec {
         Self {
             radius,
             ..Self::default()
+        }
+    }
+
+    /// The same shrub grown to `height` overall: a column taller than it is
+    /// wide, a mound lower.
+    pub fn with_height(self, height: f32) -> Self {
+        Self {
+            height: Some(height),
+            ..self
         }
     }
 
@@ -174,7 +188,8 @@ impl ShrubSpec {
     /// The central lobe takes what the satellites leave: each satellite sits
     /// so its outer surface just reaches the clump's radius, in a direction
     /// spread round the sphere (a jittered Fibonacci spiral) so no two crowd
-    /// together.
+    /// together. Grown to a height, the shape is then stretched upright to
+    /// it.
     pub fn grow(&self, seed: u32) -> FoliageShape {
         let mut rng = StdRng::seed_from_u64(seed as u64);
         let squash = Vector3::new(1.0, self.height_ratio, 1.0);
@@ -196,7 +211,11 @@ impl ShrubSpec {
                 radius,
             ));
         }
-        FoliageShape { lobes }.centred()
+        let shape = FoliageShape { lobes }.centred();
+        match self.height {
+            Some(height) => shape.stretched_upright(height),
+            None => shape,
+        }
     }
 }
 
@@ -208,6 +227,25 @@ impl FoliageShape {
             lobe.centre -= centre.coords;
         }
         self
+    }
+
+    /// The same lobes stretched upright to stand `height` overall, centres
+    /// and heights alike, then re-centred. Every height scales by the same
+    /// factor, so the stretched shape is exactly that tall. The lobes must
+    /// stand upright, as grown: a turned one would no longer be an ellipsoid
+    /// along its own axes.
+    pub fn stretched_upright(mut self, height: f32) -> Self {
+        let (low, high) = self.bounds();
+        let grown = high.y - low.y;
+        if grown <= 0.0 {
+            return self;
+        }
+        let stretch = height / grown;
+        for lobe in &mut self.lobes {
+            lobe.centre.y *= stretch;
+            lobe.radii.y *= stretch;
+        }
+        self.centred()
     }
 
     /// Volume-weighted centre of the lobes (overlaps counted twice).
@@ -321,6 +359,24 @@ mod tests {
         };
         let sphere = 4.0 / 3.0 * std::f32::consts::PI * 0.125;
         assert!((shape.leaf_volume() - sphere).abs() < sphere * 0.03);
+    }
+
+    /// A shrub grown to a height stands about that tall, and no wider than
+    /// its radius: a column from tall lobes, a mound from flat ones.
+    #[test]
+    fn a_shrub_grows_to_its_height() {
+        for height in [3.0, 0.7] {
+            let spec = ShrubSpec::with_radius(0.5).rooted().with_height(height);
+            let shape = spec.grow(4);
+            let (low, high) = shape.bounds();
+            let tall = high.y - low.y;
+            let wide = (high.x - low.x).max(high.z - low.z);
+            assert!(
+                (tall - height).abs() < 1e-3 * height,
+                "{tall:.2} m tall for {height}"
+            );
+            assert!(wide < 2.0 * 0.5 * 1.2, "{wide:.2} m wide");
+        }
     }
 
     /// A tall lobe turned on its side: its distance is exact on its axes,

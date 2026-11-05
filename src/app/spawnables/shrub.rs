@@ -43,6 +43,10 @@ pub struct ShrubDef {
     /// Whether it starts torn loose.
     #[serde(default)]
     pub loose: bool,
+    /// Its height overall, in metres: taller than its width a column, lower
+    /// a mound. `None` is a round shrub.
+    #[serde(default)]
+    pub height: Option<f32>,
 }
 
 impl ShrubDef {
@@ -80,6 +84,7 @@ impl Spawnable for ShrubDef {
         let seed = self.seed();
         let spec = ShrubSpec::with_radius(self.radius);
         let spec = if self.loose { spec } else { spec.rooted() };
+        let spec = self.height.map_or(spec, |h| spec.with_height(h));
         let shape = Arc::new(spec.grow(seed));
         let skin = Arc::new(SkinSpec::default().grow(&shape, seed));
         let yaw = (seed % 360) as f32 * std::f32::consts::PI / 180.0;

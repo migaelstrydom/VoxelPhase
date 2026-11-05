@@ -78,6 +78,11 @@ on the next physics step.
   while the cluster still tumbles to a stop rather than rolling. Bending the
   skin (pressing, squashing, parting) is designed in
   `docs/PLANTS_DESIGN.md` and parked.
+- **Lobes are ellipsoids.** A shrub given a `height` (`Shrub(..., height:
+  Some(2.8))`) is grown and then stretched upright to it: tall lobes make a
+  cypress column, flat ones a mound. Skin vertices and bumps are sized in
+  metres, so a tall lobe's nubs are the size of a round one's. The Test
+  Arena has two columns and a mound east of the big shrub.
 - **Loose clumps spawn at rest.** A loose clump's resting pose is computed
   from its core (`LeafCore::resting_pose`): the least of `max(c·d + r)` over
   down directions `d`, which is the face of the sphere cluster it settles
