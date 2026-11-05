@@ -249,7 +249,12 @@ impl SubstepForceProvider for FoliageDrag {
                 continue;
             };
             let lobes: SmallVec<[PosedLobe; 8]> = volume.posed(frame).collect();
-            let density = self.drag.density;
+            let leaves = Leaves {
+                lobes: &lobes,
+                centre: Point3::from(frame.pose.translation.vector),
+                reach: volume.shape.bounding_radius(),
+                density: self.drag.density,
+            };
             if volume.owner() == Some(handle) {
                 // Its own leaves, pushed back by every other body in them.
                 for passer in self
@@ -258,12 +263,12 @@ impl SubstepForceProvider for FoliageDrag {
                     .filter(|&&other| other != handle)
                     .filter_map(|other| ctx.bodies.get(other.0))
                 {
-                    if let Some(drag) = in_leaves(passer, ctx.colliders, &lobes, density) {
+                    if let Some(drag) = leaves.drag_on(passer, ctx.colliders) {
                         let pull = Pull::between(drag, passer, Some(body.mass()));
                         out.drag = out.drag.combined(pull.on_leaves);
                     }
                 }
-            } else if let Some(drag) = in_leaves(body, ctx.colliders, &lobes, density) {
+            } else if let Some(drag) = leaves.drag_on(body, ctx.colliders) {
                 let carrier = volume
                     .owner()
                     .and_then(|owner| ctx.bodies.get(owner.0))
@@ -282,47 +287,66 @@ impl SubstepForceProvider for FoliageDrag {
 /// time.
 const LEAF_EDGE: f32 = 0.1;
 
-/// The drag of leaves on `body` were they immovable: towards their velocity
-/// and spin where it is in them, over the silhouette of its parts, each by
-/// the share of it in the leaves. `None` when no part is in them.
-fn in_leaves(
-    body: &RigidBody,
-    colliders: &Arena<Collider>,
-    lobes: &[PosedLobe],
+/// One clump's leaves posed for a substep.
+struct Leaves<'a> {
+    lobes: &'a [PosedLobe],
+    /// Centre of the clump's frame.
+    centre: Point3<f32>,
+    /// How far from `centre` its leaves reach.
+    reach: f32,
+    /// Their density as a fluid, kg/m³.
     density: f32,
-) -> Option<MediumDrag> {
-    let (position, rotation) = (body.position(), body.rotation());
-    let mut parts: SmallVec<[(EnvelopePart, f32); 8]> = SmallVec::new();
-    let (mut weight, mut velocity, mut spin) = (0.0, Vector3::zeros(), Vector3::zeros());
-    for part in body.envelope(colliders) {
-        let pose = part.world_transform(position, rotation);
-        let points = samples(part.shape);
-        let mut share = 0.0;
-        for point in &points {
-            if let Some((depth, lobe)) = membership(pose * Point3::from(*point), lobes) {
-                share += depth;
-                weight += depth;
-                velocity += lobe.velocity * depth;
-                spin += lobe.spin * depth;
+}
+
+impl Leaves<'_> {
+    /// Whether a part at `centre` reaching `radius` could be in the leaves.
+    fn near(&self, centre: Point3<f32>, radius: f32) -> bool {
+        (centre - self.centre).magnitude() < self.reach + radius + LEAF_EDGE
+    }
+
+    /// The drag of the leaves on `body` were they immovable: towards their
+    /// velocity and spin where it is in them, over the silhouette of its
+    /// parts, each by the share of it in the leaves. `None` when no part is
+    /// in them.
+    fn drag_on(&self, body: &RigidBody, colliders: &Arena<Collider>) -> Option<MediumDrag> {
+        let (position, rotation) = (body.position(), body.rotation());
+        let mut parts: SmallVec<[(EnvelopePart, f32); 8]> = SmallVec::new();
+        let (mut weight, mut velocity, mut spin) = (0.0, Vector3::zeros(), Vector3::zeros());
+        for part in body.envelope(colliders) {
+            let pose = part.world_transform(position, rotation);
+            let centre = Point3::from(pose.translation.vector);
+            if !self.near(centre, part.shape.bounding_radius()) {
+                parts.push((part, 0.0));
+                continue;
             }
+            let points = samples(part.shape);
+            let mut share = 0.0;
+            for point in &points {
+                if let Some((depth, lobe)) = membership(pose * Point3::from(*point), self.lobes) {
+                    share += depth;
+                    weight += depth;
+                    velocity += lobe.velocity * depth;
+                    spin += lobe.spin * depth;
+                }
+            }
+            parts.push((part, share / points.len() as f32));
         }
-        parts.push((part, share / points.len() as f32));
+        if weight <= 0.0 {
+            return None;
+        }
+        let (velocity, spin) = (velocity / weight, spin / weight);
+        let flow = rotation.inverse() * (body.linear_velocity() - velocity);
+        let turning = (body.angular_velocity() - spin).magnitude();
+        let drag = body
+            .drag_area()
+            .exposed(parts, flow)
+            .drag(self.density, flow.norm(), turning);
+        Some(MediumDrag {
+            velocity,
+            spin,
+            ..drag
+        })
     }
-    if weight <= 0.0 {
-        return None;
-    }
-    let (velocity, spin) = (velocity / weight, spin / weight);
-    let flow = rotation.inverse() * (body.linear_velocity() - velocity);
-    let turning = (body.angular_velocity() - spin).magnitude();
-    let drag = body
-        .drag_area()
-        .exposed(parts, flow)
-        .drag(density, flow.norm(), turning);
-    Some(MediumDrag {
-        velocity,
-        spin,
-        ..drag
-    })
 }
 
 /// How far a point is in the leaves, 0 to 1, and the lobe it is deepest in.
