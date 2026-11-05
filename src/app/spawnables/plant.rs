@@ -17,21 +17,21 @@ use crate::components::{
 use crate::core::error::EngineResult;
 use crate::foliage::{Foliage, FoliageShape, Rooting, Skin, SkinSpec};
 use crate::model::{Model, ModelPart};
-use crate::plants::{HeldCrown, Joinery, Plant};
+use crate::plants::{BarkSpec, HeldCrown, Joinery, Plant};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId, SurfaceFinish};
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 
-/// A smooth, pale trunk, as the painted topiary's are.
-const BARK: Colour = Colour::new(0.58, 0.40, 0.25, 1.0);
 /// Leaves are matte, with a faint sheen off the tops of the sprigs.
 const LEAF_FINISH: SurfaceFinish = SurfaceFinish {
     roughness: 0.8,
     metallic: 0.0,
 };
+/// Bark is smooth and dull, the painted trees' trunks catching only a soft
+/// sheen.
 const BARK_FINISH: SurfaceFinish = SurfaceFinish {
-    roughness: 0.7,
+    roughness: 0.75,
     metallic: 0.0,
 };
 /// How far below the ground at its foot the trunk checks for terrain: inside
@@ -40,14 +40,21 @@ const ANCHOR_PROBE: f32 = 0.1;
 /// How many materials a plant registers: its leaves, then its bark.
 pub const PLANT_MATERIALS: usize = 2;
 
-/// A plant's materials, leaves then bark, for one grown from `seed`.
-pub fn plant_materials(ctx: &mut MaterialCtx, _seed: u32) -> EngineResult<Vec<MaterialId>> {
-    // The greens ride on the skin's vertices, the bark's colour on the
-    // limbs'.
+/// A plant's materials, leaves then bark, for one grown from `seed`: its bark
+/// is a tile of its own, painted from that seed, with its relief in alpha.
+pub fn plant_materials(ctx: &mut MaterialCtx, seed: u32) -> EngineResult<Vec<MaterialId>> {
+    // The greens ride on the skin's vertices.
     let leaves = Material::coloured(Colour::WHITE)
         .with_finish(LEAF_FINISH)
         .as_foliage();
-    let bark = Material::coloured(Colour::WHITE).with_finish(BARK_FINISH);
+    let spec = BarkSpec::default();
+    let size = spec.texture_size;
+    let tile = ctx
+        .textures
+        .create_from_rgba(size, size, &spec.texture(seed), true)?;
+    let bark = Material::textured(tile)
+        .with_finish(BARK_FINISH)
+        .with_relief(spec.relief_depth);
     Ok(vec![
         ctx.materials.register(leaves),
         ctx.materials.register(bark),
@@ -121,7 +128,7 @@ pub fn spawn_plant(
         let body = bodies.limbs[index];
         let frame = bodies.limb_frames[index];
         let pose = root * frame.inverse();
-        let (vertices, indices) = limb.mesh(BARK);
+        let (vertices, indices) = BarkSpec::default().mesh(limb, seed.wrapping_add(index as u32));
         let tube =
             Skin { vertices, indices }.moved(&(frame * Translation3::from(limb.midpoint().coords)));
         let wood = tube.primitive(bark);

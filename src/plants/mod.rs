@@ -18,6 +18,7 @@
 //! loose as a shrub torn from the ground is.
 //! `docs/PLANTS_DESIGN.md` has the design and its steps.
 
+mod bark;
 mod bodies;
 mod components;
 mod cypress;
@@ -29,6 +30,7 @@ mod systems;
 #[cfg(all(test, feature = "foliage_scenarios"))]
 mod scenarios;
 
+pub use bark::BarkSpec;
 pub use bodies::{Joinery, PlantBodies};
 pub use components::HeldCrown;
 pub use cypress::CypressSpec;

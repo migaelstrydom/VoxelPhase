@@ -2,13 +2,7 @@
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
-use crate::geometry::generate_tube;
 use crate::physics::ColliderDesc;
-use crate::rendering::colour::Colour;
-use crate::rendering::vertex::Vertex;
-
-/// Sides round a limb's drawn tube: round enough for a slender trunk.
-const LIMB_SIDES: u32 = 12;
 
 /// One limb: a rod from `base` to `tip`, in the plant's frame.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -36,14 +30,6 @@ impl Limb {
             .unwrap_or_else(UnitQuaternion::identity);
         ColliderDesc::capsule(along.magnitude() * 0.5 + self.radius, self.radius)
             .offset_rotation(turn)
-    }
-
-    /// It drawn as a tube in `colour`, centred on its midpoint. Its ends are
-    /// open: a trunk's foot is in the ground and every tip is inside leaves.
-    pub fn mesh(&self, colour: Colour) -> (Vec<Vertex>, Vec<u32>) {
-        let middle = self.midpoint().coords;
-        let ends = [self.base - middle, self.tip - middle];
-        generate_tube(&ends, self.radius, LIMB_SIDES, false, colour)
     }
 }
 

@@ -297,9 +297,15 @@ Done:
   up inside it to its centre. Its core is a capsule along it. Three stand
   in a row in the Test Arena.
 
+- **Bark in the painted manner** (`BarkSpec`): limbs drawn tapered and
+  gently sinuous, a trunk flared at the ground and a branch collared where
+  it joins, about 10 sides and a ring every 0.3 m (a 3 m trunk is under
+  300 triangles), over the same straight capsules. Each plant paints its
+  own bark tile from its seed: pale warm grey-ochre with a pink blush,
+  soft fibre streaks, fine fissures and faint ring marks, its height in
+  alpha for the shader's detail normals (`Material::with_relief`).
+
 Next:
-- **Bark in the painted manner:** the limbs drawn tapered and gently
-  sinuous, with a flared foot and a bark texture, over the same capsules.
 
 Later:
 - **Bending on the GPU,** as designed above: 2a moves the old behaviour
