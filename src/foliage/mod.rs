@@ -12,6 +12,7 @@
 //!                     │    clumps through their whole lobes)
 //!   CharacterControl ──┼─▶ leaf_depth: a wading character's stride shortens
 //!   FoliageLanding ────┼─▶ leaves shed where a loose clump lands hard
+//!   FoliageRustle ─────┼─▶ leaves shed by whatever moves through a clump
 //!   FoliageUprootSystem┘   a blast near a rooted clump gives it a core
 //! ```
 //!
@@ -25,6 +26,7 @@
 mod components;
 mod drag;
 mod leaf_core;
+mod rustle;
 mod shape;
 mod skin;
 mod systems;
@@ -36,6 +38,7 @@ mod scenarios;
 pub use components::{Foliage, Rooting};
 pub use drag::{DragVolume, FoliageDrag, LeafDrag, VolumeFrame};
 pub use leaf_core::LeafCore;
+pub use rustle::{FoliageRustleSystem, Rustle};
 pub use shape::{FoliageShape, Lobe, ShrubSpec};
 pub use skin::{LeafPalette, Skin, SkinSpec};
 pub use systems::{leaf_emitter, FoliageLandingSystem, FoliageUprootSystem};

@@ -262,6 +262,9 @@ Next:
      and a big lobe.
 3. **Skeleton and the lollipop tree:** the `plants` module, a trunk with one
    or more masses, and the "on a limb" rooting state.
+   - A skin hands over its mesh as a shared `Arc<Model>`: today
+     `Foliage::model` copies the vertices, so each clump's mesh is held
+     twice in CPU memory.
 4. **Cypress:** a tall lobe on a short trunk.
 5. **Leaf particles:** a cap on live leaves.
 

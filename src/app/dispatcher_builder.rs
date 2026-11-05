@@ -17,7 +17,7 @@ use crate::damage::{
 use crate::explosion::{BlastLightSystem, ExplosionSystem};
 use crate::fire::light::FireLightSystem;
 use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
-use crate::foliage::{FoliageLandingSystem, FoliageUprootSystem};
+use crate::foliage::{FoliageLandingSystem, FoliageRustleSystem, FoliageUprootSystem};
 use crate::force_field::ForceFieldSystem;
 use crate::fracture::{DebrisCullSystem, FractureSystem};
 use crate::glass::GlassCrackSystem;
@@ -184,6 +184,11 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
         .with(TrampolineBedSystem, "trampoline_bed", &["physics_sync"])
         .with(FoliageLandingSystem, "foliage_landing", &["physics_sync"])
+        .with(
+            FoliageRustleSystem::default(),
+            "foliage_rustle",
+            &["physics_sync"],
+        )
         // Where a throw would land, predicted from this frame's camera and
         // this frame's arm state — the same two things the throw itself reads,
         // so the cursor and the grenade cannot disagree.
