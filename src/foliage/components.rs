@@ -5,15 +5,14 @@ use std::sync::Arc;
 use nalgebra::{Isometry3, Vector3};
 use specs::{Component, VecStorage};
 
-use super::deform::{deform, Bending, Give};
 use super::drag::{DragVolume, VolumeFrame};
 use super::leaf_core::LeafCore;
 use super::shape::FoliageShape;
 use super::skin::Skin;
-use crate::model::MeshPrimitive;
+use crate::components::ModelInstance;
+use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::rendering::material::MaterialId;
-use crate::rendering::vertex::Vertex;
 
 /// Whether a clump stands where it grew or has been torn loose.
 #[derive(Debug, Clone, Copy)]
@@ -31,9 +30,9 @@ pub enum Rooting {
     },
 }
 
-/// A clump of leaves: its shape, its drawn skin, and how that skin is giving
-/// this frame. Drawn through the entity's `ProceduralMesh` while it moves,
-/// and its `ModelInstance` while it is still (`FoliageSkinSystem`).
+/// A clump of leaves: its shape, its drawn skin and how it is rooted. Drawn
+/// as its entity's `ModelInstance` ([`Foliage::model`]), which rides on the
+/// clump's frame.
 #[derive(Component)]
 #[storage(VecStorage)]
 pub struct Foliage {
@@ -45,17 +44,10 @@ pub struct Foliage {
     pub material: MaterialId,
     /// How its core is built when it is torn loose.
     pub core: LeafCore,
-    /// How its skin gives.
-    pub give: Give,
     /// Rooted or loose.
     pub rooting: Rooting,
-    /// What bends its skin this frame.
-    pub bending: Bending,
     /// The core's velocity last frame, to tell a landing from resting.
     pub last_velocity: Vector3<f32>,
-    /// Whether the skin drawn is still right for a clump that has not moved
-    /// since: nothing to rebuild.
-    pub still_drawn: bool,
 }
 
 impl Foliage {
@@ -71,11 +63,8 @@ impl Foliage {
             skin,
             material,
             core: LeafCore::default(),
-            give: Give::default(),
             rooting: Rooting::Rooted { pose },
-            bending: Bending::default(),
             last_velocity: Vector3::zeros(),
-            still_drawn: true,
         }
     }
 
@@ -109,28 +98,14 @@ impl Foliage {
         }
     }
 
-    /// The skin as it is giving now, for the clump at `pose`: pressed and
-    /// squashed, or at rest if nothing is doing either. `scratch` is reused
-    /// for the bent vertices.
-    pub fn drawn(&self, pose: &Isometry3<f32>, scratch: &mut Vec<Vertex>) -> MeshPrimitive {
-        if self.bending.is_at_rest() {
-            return self.rest_primitive();
-        }
-        deform(&self.skin, pose, &self.bending, &self.give, scratch);
-        self.primitive(std::mem::take(scratch))
-    }
-
-    /// The skin as drawn from `vertices`.
-    fn primitive(&self, vertices: Vec<Vertex>) -> MeshPrimitive {
-        MeshPrimitive {
-            vertices,
+    /// The skin as a model, uploaded once and drawn in the clump's frame
+    /// wherever the clump goes.
+    pub fn model(&self) -> ModelInstance {
+        let skin = MeshPrimitive {
+            vertices: self.skin.vertices.clone(),
             indices: self.skin.indices.clone(),
             material: self.material,
-        }
-    }
-
-    /// The skin at rest, as drawn.
-    fn rest_primitive(&self) -> MeshPrimitive {
-        self.primitive(self.skin.vertices.clone())
+        };
+        ModelInstance::new(Arc::new(Model::flat(vec![ModelPart::new(vec![skin])])))
     }
 }

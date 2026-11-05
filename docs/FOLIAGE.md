@@ -14,17 +14,15 @@ see.
 
 ```
 visible lobes  ──  drag volume (rides with the clump)
-   core        ──  colliders: one sphere per lobe, 60% of its radius
+   core        ──  colliders: one sphere per lobe, 80% of its radius
 ```
 
 | Real physics | Drawn, or a rule |
 |---|---|
-| The core's spheres: a dynamic body once loose | The nubbly skin, built once from the lobes |
-| Leaves dragging whatever overlaps a lobe (`FoliageDrag`) | The skin pressed onto what the core rests on (`Press`) |
-| The world's air dragging a loose clump through its whole lobes (its bulk) | A squash spring kicked by each landing (`Squash`) |
-| A blast's shove on a freshly uprooted core | Leaves shed on landings and uprooting (particles) |
-| | Leaves parted round whatever pushes through them (`Parting`) |
-| | A wading character's shorter stride (`leaf_depth`) |
+| The core's spheres: a dynamic body once loose | The nubbly skin, built once from the lobes and drawn as grown |
+| Leaves dragging whatever is in a lobe (`FoliageDrag`) | Leaves shed on landings and uprooting (particles) |
+| The world's air dragging a loose clump through its whole lobes (its bulk) | A wading character's shorter stride (`leaf_depth`) |
+| A blast's shove on a freshly uprooted core | |
 
 A rooted shrub has no body at all. Nothing collides with it; it is a drag
 volume and a mesh. A blast within 60% of its knockback radius gives it a core
@@ -73,15 +71,16 @@ on the next physics step.
   once. `PhysicsWorld` now sums every provider's force on a body and
   combines their media (`MediumDrag::combined`, exact for linear drags). A
   body only one provider affects gets that provider's output bit for bit.
-- **Pressed, not collided.** Where the skin would pass into the ground it is
-  eased onto the ground's plane, with a soft knee, and its normals turned to
-  face the ground. Contact planes are held for 0.2 s, because contacts
-  flicker, and they are frozen while the clump sleeps, so a sleeping clump
-  stays pressed.
+- **The skin does not bend.** Leaves pass through whatever wades through
+  them, and a resting clump's skin sinks into what it rests on by a fifth
+  of a lobe's radius: the core is 80% of each lobe, as large as it can be
+  while the cluster still tumbles to a stop rather than rolling. Bending the
+  skin (pressing, squashing, parting) is designed in
+  `docs/PLANTS_DESIGN.md` and parked.
 - **Loose clumps spawn at rest.** A loose clump's resting pose is computed
   from its core (`LeafCore::resting_pose`): the least of `max(c·d + r)` over
   down directions `d`, which is the face of the sphere cluster it settles
-  onto. It is drawn pressed from the first frame. Shrubs cannot be `Dropped`:
+  onto. Shrubs cannot be `Dropped`:
   they take their height from the terrain.
 
 ## Measured (foliage_scenarios, character_viewer `shrub_*`)
@@ -103,25 +102,8 @@ on the next physics step.
   and the sun through the edges of a backlit clump. Tuned by eye on two
   views; its constants head the shader. Shed leaves are leaf-shaped
   particles that flutter (`Silhouette::Leaf`).
-- **Parting** opens a hole by a map that cannot fold (`deform::parted`) and
-  shades the leaves it squeezes as the clump's inside. It still reads a
-  little like a well round a wading body: the leaves are one skin, so they
-  compress round the body rather than spring aside one by one. Instanced
-  leaf clusters would fix that.
-- **A passer is its shape's thinnest half round a flat core**
-  (`deform::Pusher`): a sphere a point, a capsule or beam a segment, a slab
-  a rectangle. The map reaches about as far as the radius, so a big flat
-  body (an arch's abutment) moves only the leaves by its face. A passer
-  that wakes already in the leaves opens its hole at once.
-- **Only fixed surfaces press.** A sleeping crate on a sleeping clump sits in
-  its leaves: parting needs the passer awake.
 - **Blast distance.** About 46 m for a clump right by a grenade (see
   above): a tuning of the grenade's strength, for the whole game.
 - **The traversal planner's casts see cores.** Right while characters meet
   them; revisit if a clump on the path makes the plan hop it.
-- **Upload while moving.** A still clump is a `ModelInstance`, uploaded
-  once. A moving clump's skin (about 6–10k vertices) is a `ProceduralMesh`,
-  rebuilt and uploaded every frame it moves. Fine for a few tumbling at
-  once.
-- **Trees** are the next step. The trunk-and-limb compound with fracture
-  joints and the canopy as clumps were discussed but not built.
+- **Trees** are the next step: `docs/PLANTS_DESIGN.md`.

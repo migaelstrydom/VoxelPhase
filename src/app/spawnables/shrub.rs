@@ -17,7 +17,7 @@ use super::shared::textures::seed_from_ground;
 use super::spawnable::{MaterialCtx, Spawnable};
 use crate::components::{Orientation, Position, Renderable, RigidBodyComponent, Velocity};
 use crate::core::error::EngineResult;
-use crate::foliage::{still_model, Foliage, LeafCore, Rooting, ShrubSpec, SkinSpec};
+use crate::foliage::{Foliage, LeafCore, Rooting, ShrubSpec, SkinSpec};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId, SurfaceFinish};
 use crate::systems::PhysicsResource;
@@ -101,22 +101,13 @@ impl Spawnable for ShrubDef {
         });
         if let Some(body) = body {
             clump.rooting = Rooting::Loose { body };
-            // Drawn pressed onto the ground it rests on from the start: it
-            // sleeps until disturbed, and nothing presses it until then.
-            let give = clump.give;
-            clump.bending.press.touch(
-                Point3::new(self.pos.0, ground, self.pos.1),
-                Vector3::y(),
-                &give,
-            );
         }
-        let drawn = clump.drawn(&pose, &mut Vec::new());
 
         let mut entity = world
             .create_entity()
             .with(Position(pose.translation.vector))
             .with(Orientation(pose.rotation))
-            .with(still_model(drawn))
+            .with(clump.model())
             .with(clump)
             .with(Renderable);
         if let Some(body) = body {

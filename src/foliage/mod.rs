@@ -11,20 +11,18 @@
 //!                     │    what overlaps them (the world's air drags loose
 //!                     │    clumps through their whole lobes)
 //!   CharacterControl ──┼─▶ leaf_depth: a wading character's stride shortens
-//!   FoliageSkinSystem ─┼─▶ Press + Squash ──deform──▶ ProceduralMesh (moving)
-//!                     │                               or ModelInstance (still)
+//!   FoliageLanding ────┼─▶ leaves shed where a loose clump lands hard
 //!   FoliageUprootSystem┘   a blast near a rooted clump gives it a core
 //! ```
 //!
 //! What is real and what is drawn: the core's spheres are real bodies, the
 //! leaves' drag on whatever passes through them is a real force, and so is
-//! the air's on a loose clump. The leaves themselves never collide; where
-//! they would pass into the ground they are pressed onto it, and a landing
-//! squashes them for a moment, in drawing only. `docs/FOLIAGE.md` has the
-//! design, its numbers and what is open.
+//! the air's on a loose clump. The leaves themselves never collide, and
+//! their skin is drawn as it was grown: it does not bend round what passes
+//! through it. `docs/FOLIAGE.md` has the design, its numbers and what is
+//! open.
 
 mod components;
-mod deform;
 mod drag;
 mod leaf_core;
 mod shape;
@@ -36,10 +34,9 @@ mod thicket;
 mod scenarios;
 
 pub use components::{Foliage, Rooting};
-pub use deform::{deform, Bending, ContactPlane, Give, Parting, Press, Pusher, Squash};
 pub use drag::{DragVolume, FoliageDrag, LeafDrag, VolumeFrame};
 pub use leaf_core::LeafCore;
 pub use shape::{FoliageShape, Lobe, ShrubSpec};
 pub use skin::{LeafPalette, Skin, SkinSpec};
-pub use systems::{leaf_emitter, still_model, FoliageSkinSystem, FoliageUprootSystem};
+pub use systems::{leaf_emitter, FoliageLandingSystem, FoliageUprootSystem};
 pub use thicket::leaf_depth;

@@ -1,26 +1,20 @@
-//! Foliage's ECS systems: the skin kept up with its core, and clumps torn
-//! loose by blasts.
+//! Foliage's ECS systems: leaves shed where a loose clump lands, and clumps
+//! torn loose by blasts.
 
-use std::sync::Arc;
-
-use nalgebra::{Isometry3, Point3, Vector3};
-use smallvec::SmallVec;
+use nalgebra::{Point3, Vector3};
 use specs::{
     Builder, Entities, Join, LazyUpdate, Read, ReadExpect, ReadStorage, System, Write, WriteStorage,
 };
 
 use super::components::{Foliage, Rooting};
-use super::deform::Pusher;
-use crate::components::{ModelInstance, Position, ProceduralMesh, RigidBodyComponent, Velocity};
+use crate::components::{Position, RigidBodyComponent, Velocity};
 use crate::explosion::Explosion;
-use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::particles::{Palette, ParticleEffectType, ParticleEmitter};
-use crate::physics::{ColliderShape, ContactEvent, PhysicsWorld, RigidBodyHandle};
+use crate::physics::{ContactEvent, PhysicsWorld, RigidBodyHandle};
 use crate::systems::PhysicsResource;
-use crate::time::Time;
 
-/// Speed, m/s, a clump must strike something at to squash and shed leaves:
-/// above what settling and rolling put into its contacts.
+/// Speed, m/s, a clump must strike something at to shed leaves: above what
+/// settling and rolling put into its contacts.
 const IMPACT_SPEED: f32 = 1.2;
 /// Leaves shed per m/s of impact.
 const LEAVES_PER_IMPACT: f32 = 5.0;
@@ -35,168 +29,36 @@ pub const LEAF_COLOURS: [Vector3<f32>; 2] = [
     Vector3::new(0.10, 0.20, 0.04),
 ];
 
-/// Keeps each clump's skin giving: pressed against what a loose clump rests
-/// on, squashed after its landings, and parted round whatever pushes
-/// through any clump's leaves; and sheds leaves where a clump lands.
-///
-/// A clump whose skin is changing is drawn through a `ProceduralMesh`,
-/// rebuilt and uploaded every frame. One that is still is drawn as a
-/// `ModelInstance` of the skin as it came to rest, uploaded once: most
-/// clumps are still most of the time, and a skin is thousands of vertices.
+/// Sheds leaves where a loose clump lands hard.
 ///
 /// Runs after physics, reading the contacts the step made.
-pub struct FoliageSkinSystem;
+pub struct FoliageLandingSystem;
 
-impl<'a> System<'a> for FoliageSkinSystem {
+impl<'a> System<'a> for FoliageLandingSystem {
     type SystemData = (
         Entities<'a>,
         ReadExpect<'a, PhysicsResource>,
-        Read<'a, Time>,
         Read<'a, LazyUpdate>,
-        ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, Foliage>,
-        WriteStorage<'a, ProceduralMesh>,
-        WriteStorage<'a, ModelInstance>,
     );
 
-    fn run(
-        &mut self,
-        (entities, physics, time, lazy, bodies, mut foliage, mut meshes, mut models): Self::SystemData,
-    ) {
-        if foliage.is_empty() {
-            return;
-        }
-        let dt = time.delta_seconds();
+    fn run(&mut self, (entities, physics, lazy, mut foliage): Self::SystemData) {
         let world = &physics.world;
-        let passers = Passer::moving(world, (&bodies).join().map(|b| b.0));
-        let mut scratch = Vec::new();
-        for (entity, clump) in (&entities, &mut foliage).join() {
-            let Some(pose) = clump.pose(world) else {
+        for clump in (&mut foliage).join() {
+            let Some(body) = clump.body() else {
                 continue;
             };
-            let asleep = match clump.rooting {
-                Rooting::Rooted { .. } => true,
-                Rooting::Loose { body } => {
-                    let asleep = world.is_sleeping(body);
-                    if !asleep {
-                        if let Some(impact) = feel_contacts(clump, world, body, &pose) {
-                            shed_leaves(&entities, &lazy, impact.point, impact.speed);
-                        }
-                        clump.bending.press.age(dt);
-                        clump.last_velocity = world
-                            .body(body)
-                            .map_or(Vector3::zeros(), |b| b.linear_velocity());
-                    }
-                    asleep
-                }
-            };
-            clump.bending.squash.step(dt, &clump.give);
-            clump.bending.parting.age(dt);
-            let centre = Point3::from(pose.translation.vector);
-            let reach = clump.shape.bounding_radius();
-            let own = clump.body();
-            for passer in passers.iter().filter(|p| Some(p.body) != own) {
-                if passer.reaches(centre, reach) {
-                    let give = clump.give;
-                    for &pusher in &passer.pushers {
-                        clump.bending.parting.push(passer.body, pusher, &give);
-                    }
-                }
-            }
-
-            let changing = !asleep || clump.bending.is_changing();
-            if !changing && clump.still_drawn {
+            if world.is_sleeping(body) {
                 continue;
             }
-            let drawn = clump.drawn(&pose, &mut scratch);
-            if changing {
-                models.remove(entity);
-                let _ = meshes.insert(
-                    entity,
-                    ProceduralMesh {
-                        primitives: vec![drawn],
-                    },
-                );
-            } else {
-                meshes.remove(entity);
-                let _ = models.insert(entity, still_model(drawn));
+            if let Some(impact) = hardest_landing(clump, world, body) {
+                shed_leaves(&entities, &lazy, impact.point, impact.speed);
             }
-            clump.still_drawn = !changing;
+            clump.last_velocity = world
+                .body(body)
+                .map_or(Vector3::zeros(), |b| b.linear_velocity());
         }
     }
-}
-
-/// An awake body that might be pushing through leaves, as the capsules its
-/// colliders are.
-struct Passer {
-    body: RigidBodyHandle,
-    centre: Point3<f32>,
-    reach: f32,
-    pushers: SmallVec<[Pusher; 2]>,
-}
-
-impl Passer {
-    /// Every awake dynamic body among `candidates`.
-    fn moving(
-        world: &PhysicsWorld,
-        candidates: impl Iterator<Item = RigidBodyHandle>,
-    ) -> Vec<Self> {
-        candidates
-            .filter(|&h| !world.is_sleeping(h))
-            .filter_map(|body| {
-                let rigid = world.body(body).filter(|b| b.is_dynamic())?;
-                let pushers = rigid
-                    .colliders()
-                    .iter()
-                    .filter_map(|&c| world.collider(c))
-                    .map(|collider| {
-                        pusher_of(
-                            collider.shape(),
-                            collider.world_transform(rigid.position(), rigid.rotation()),
-                        )
-                    })
-                    .collect();
-                Some(Self {
-                    body,
-                    centre: rigid.position(),
-                    reach: world.reach(body),
-                    pushers,
-                })
-            })
-            .collect()
-    }
-
-    /// Whether it is near enough a clump at `centre` of `reach` to be in its
-    /// leaves.
-    fn reaches(&self, centre: Point3<f32>, reach: f32) -> bool {
-        (self.centre - centre).magnitude() < reach + self.reach
-    }
-}
-
-/// A collider as the pusher that parts leaves round it: a sphere or a
-/// capsule as itself, a box or a hull as the box it fills, rounded by its
-/// thinnest half. A beam parts the leaves along its length and a slab
-/// beside its face, not in a ball as wide as it is long.
-fn pusher_of(shape: &ColliderShape, at: Isometry3<f32>) -> Pusher {
-    match *shape {
-        ColliderShape::Capsule {
-            half_height,
-            radius,
-        } => Pusher::capsule(at, half_height, radius),
-        ColliderShape::Sphere { radius } => {
-            Pusher::sphere(Point3::from(at.translation.vector), radius)
-        }
-        ColliderShape::Box { half_extents } => Pusher::block(at, half_extents),
-        ColliderShape::ConvexHull { ref hull } => Pusher::block(
-            at * Isometry3::translation(hull.box_center.x, hull.box_center.y, hull.box_center.z),
-            hull.box_half_extents,
-        ),
-    }
-}
-
-/// A skin that has stopped changing, as a model uploaded once.
-pub fn still_model(drawn: MeshPrimitive) -> ModelInstance {
-    ModelInstance::new(Arc::new(Model::flat(vec![ModelPart::new(vec![drawn])])))
 }
 
 /// The hardest landing among a clump's contacts this frame.
@@ -205,66 +67,34 @@ struct Impact {
     speed: f32,
 }
 
-/// Press the clump's skin against every fixed surface its core touches, and
-/// kick its squash if anything stopped it hard.
-///
-/// Only what cannot move presses: the ground, walls, a platform. A moving
-/// body (a character, a crate, another clump's core) parts the leaves round
-/// its own shape instead (`Parting`), and two clumps' leaves interleave
-/// rather than meeting on a flat face.
+/// The hardest of the clump's contacts this frame, if any stopped it hard.
 ///
 /// A landing is told from resting by the velocity the contact took away:
 /// the core's change in velocity since last frame along the contact's
 /// normal. Gravity alone puts a sixth of a metre a second into that each
 /// frame, well under [`IMPACT_SPEED`].
-fn feel_contacts(
-    clump: &mut Foliage,
-    world: &PhysicsWorld,
-    body: RigidBodyHandle,
-    pose: &Isometry3<f32>,
-) -> Option<Impact> {
+fn hardest_landing(clump: &Foliage, world: &PhysicsWorld, body: RigidBodyHandle) -> Option<Impact> {
     let core = world.body(body)?;
     let centre = core.position();
     let stopped = core.linear_velocity() - clump.last_velocity;
-    let mut hardest: Option<Impact> = None;
-    for contact in world.contact_events().iter().filter(|c| involves(c, body)) {
-        // Out of the surface and into the clump, whichever body is which.
-        let normal = if (centre - contact.point).dot(&contact.normal) < 0.0 {
-            -contact.normal
-        } else {
-            contact.normal
-        };
-        if presses(world, contact, body) {
-            clump
-                .bending
-                .press
-                .touch(contact.point, normal, &clump.give);
-        }
-        let speed = stopped.dot(&normal);
-        if speed > IMPACT_SPEED && hardest.as_ref().is_none_or(|h| speed > h.speed) {
-            hardest = Some(Impact {
+    world
+        .contact_events()
+        .iter()
+        .filter(|c| involves(c, body))
+        .filter_map(|contact| {
+            // Out of the surface and into the clump, whichever body is which.
+            let normal = if (centre - contact.point).dot(&contact.normal) < 0.0 {
+                -contact.normal
+            } else {
+                contact.normal
+            };
+            let speed = stopped.dot(&normal);
+            (speed > IMPACT_SPEED).then_some(Impact {
                 point: contact.point,
                 speed,
-            });
-            let local = pose.inverse();
-            clump
-                .bending
-                .squash
-                .kick(local * normal, local * contact.point, speed, &clump.give);
-        }
-    }
-    hardest
-}
-
-/// Whether what `body` touches in `contact` presses its leaves flat: the
-/// static geometry, or a body that does not move by itself.
-fn presses(world: &PhysicsWorld, contact: &ContactEvent, body: RigidBodyHandle) -> bool {
-    let other = if contact.body_b == body {
-        contact.body_a
-    } else {
-        Some(contact.body_b)
-    };
-    other.is_none_or(|h| world.body(h).is_none_or(|b| !b.is_dynamic()))
+            })
+        })
+        .max_by(|a, b| a.speed.total_cmp(&b.speed))
 }
 
 fn involves(contact: &ContactEvent, body: RigidBodyHandle) -> bool {
@@ -344,7 +174,6 @@ impl<'a> System<'a> for FoliageUprootSystem {
             let body = clump.core.spawn(&mut physics.world, &clump.shape, pose);
             physics.world.wake_body(body);
             clump.rooting = Rooting::Loose { body };
-            clump.still_drawn = false;
             let _ = bodies.insert(entity, RigidBodyComponent(body));
             let _ = velocities.insert(entity, Velocity(Vector3::zeros()));
             lazy.create_entity(&entities)
@@ -352,41 +181,5 @@ impl<'a> System<'a> for FoliageUprootSystem {
                 .with(leaf_emitter(UPROOT_LEAVES))
                 .build();
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A long beam parts leaves as a thin capsule along its length.
-    #[test]
-    fn a_beam_pushes_as_a_capsule_along_its_length() {
-        let beam = ColliderShape::Box {
-            half_extents: Vector3::new(3.0, 0.1, 0.1),
-        };
-        let pusher = pusher_of(&beam, Isometry3::identity());
-        assert!(
-            (pusher.radius - 0.1).abs() < 1e-6,
-            "radius {}",
-            pusher.radius
-        );
-        assert_eq!(pusher.core, Vector3::new(2.9, 0.0, 0.0));
-    }
-
-    /// A slab (an arch's abutment) parts leaves as a slab a quarter metre
-    /// thick, not as a capsule as fat as the slab is deep.
-    #[test]
-    fn a_slab_pushes_as_a_slab() {
-        let slab = ColliderShape::Box {
-            half_extents: Vector3::new(2.5, 0.25, 1.6),
-        };
-        let pusher = pusher_of(&slab, Isometry3::identity());
-        assert!(
-            (pusher.radius - 0.25).abs() < 1e-6,
-            "radius {}",
-            pusher.radius
-        );
-        assert!((pusher.core - Vector3::new(2.25, 0.0, 1.35)).magnitude() < 1e-6);
     }
 }

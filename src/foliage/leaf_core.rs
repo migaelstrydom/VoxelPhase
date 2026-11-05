@@ -23,7 +23,10 @@ use crate::physics::{
 /// How a clump's core is built.
 #[derive(Debug, Clone, Copy)]
 pub struct LeafCore {
-    /// Radius of each lobe's core sphere as a share of the lobe's own.
+    /// Radius of each lobe's core sphere as a share of the lobe's own. Large,
+    /// so a resting clump's skin, which never bends, sinks only a little
+    /// into what it rests on; not so large that the cluster rolls like a
+    /// ball.
     pub core_fraction: f32,
     /// Mass per cubic metre of leaves, kg/m³: the clump's whole mass over the
     /// space its lobes fill. Light, so the player shoves it rather than
@@ -44,7 +47,7 @@ pub struct LeafCore {
 impl Default for LeafCore {
     fn default() -> Self {
         Self {
-            core_fraction: 0.6,
+            core_fraction: 0.8,
             bulk_density: 30.0,
             drag_coefficient: 1.0,
             friction: 0.9,
