@@ -115,13 +115,17 @@ fn shed_leaves(entities: &Entities, lazy: &LazyUpdate, point: Point3<f32>, speed
 
 /// An emitter that throws `count` leaves once and is gone.
 pub fn leaf_emitter(count: u32) -> ParticleEmitter {
-    ParticleEmitter::new(ParticleEffectType::Leaves)
+    leaves()
         .with_burst(count)
-        .with_palette(Palette::mixed(&[
-            (LEAF_COLOURS[0], 1.0),
-            (LEAF_COLOURS[1], 1.0),
-        ]))
         .with_lifetime(LEAF_EMITTER_LIFETIME)
+}
+
+/// Leaves in a clump's greens, emitted as the caller sets.
+pub fn leaves() -> ParticleEmitter {
+    ParticleEmitter::new(ParticleEffectType::Leaves).with_palette(Palette::mixed(&[
+        (LEAF_COLOURS[0], 1.0),
+        (LEAF_COLOURS[1], 1.0),
+    ]))
 }
 
 /// Share of an explosion's knockback radius within which it tears a rooted

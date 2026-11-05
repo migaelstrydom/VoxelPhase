@@ -17,7 +17,9 @@ use crate::damage::{
 use crate::explosion::{BlastLightSystem, ExplosionSystem};
 use crate::fire::light::FireLightSystem;
 use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
-use crate::foliage::{FoliageLandingSystem, FoliageRustleSystem, FoliageUprootSystem};
+use crate::foliage::{
+    FoliageLandingSystem, FoliageRustleSystem, FoliageTrailSystem, FoliageUprootSystem,
+};
 use crate::force_field::ForceFieldSystem;
 use crate::fracture::{DebrisCullSystem, FractureSystem};
 use crate::glass::GlassCrackSystem;
@@ -187,6 +189,11 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(
             FoliageRustleSystem::default(),
             "foliage_rustle",
+            &["physics_sync"],
+        )
+        .with(
+            FoliageTrailSystem::default(),
+            "foliage_trail",
             &["physics_sync"],
         )
         // Where a throw would land, predicted from this frame's camera and

@@ -13,6 +13,7 @@
 //!   CharacterControl ──┼─▶ leaf_depth: a wading character's stride shortens
 //!   FoliageLanding ────┼─▶ leaves shed where a loose clump lands hard
 //!   FoliageRustle ─────┼─▶ leaves shed by whatever moves through a clump
+//!   FoliageTrail ──────┼─▶ a trail of leaves behind a clump flying fast
 //!   FoliageUprootSystem┘   a blast near a rooted clump gives it a core
 //! ```
 //!
@@ -31,6 +32,7 @@ mod shape;
 mod skin;
 mod systems;
 mod thicket;
+mod trail;
 
 #[cfg(all(test, feature = "foliage_scenarios"))]
 mod scenarios;
@@ -43,3 +45,4 @@ pub use shape::{FoliageShape, Lobe, ShrubSpec};
 pub use skin::{LeafPalette, Skin, SkinSpec};
 pub use systems::{leaf_emitter, FoliageLandingSystem, FoliageUprootSystem};
 pub use thicket::leaf_depth;
+pub use trail::{FoliageTrailSystem, Trail};

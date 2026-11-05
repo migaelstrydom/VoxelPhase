@@ -20,7 +20,7 @@ visible lobes  ──  drag volume (rides with the clump)
 | Real physics | Drawn, or a rule |
 |---|---|
 | The core's spheres: a dynamic body once loose | The nubbly skin, built once from the lobes and drawn as grown |
-| Leaves dragging whatever is in a lobe (`FoliageDrag`) | Leaves shed on landings, uprooting and by whatever moves through a clump, more per metre the faster it goes (particles, `rustle.rs`) |
+| Leaves dragging whatever is in a lobe (`FoliageDrag`) | Leaves shed on landings, uprooting and by whatever moves through a clump, more per metre the faster it goes (particles, `rustle.rs`); a trail of them behind a clump flying faster than 4 m/s (`trail.rs`) |
 | The world's air dragging a loose clump through its whole lobes (its bulk) | A wading character's shorter stride (`leaf_depth`) |
 | A blast's shove on a freshly uprooted core | |
 
