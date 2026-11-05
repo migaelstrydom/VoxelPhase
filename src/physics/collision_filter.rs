@@ -78,20 +78,12 @@ impl CollisionFilter {
 
     /// A query for no body in particular, looking for colliders in
     /// `layers`: it belongs to every layer, so whatever meets anything meets
-    /// it.
+    /// it. A collider that meets nothing (a marker, not a solid) meets no
+    /// query either, even one looking for every layer.
     pub const fn seeing(layers: Layers) -> Self {
         Self {
             membership: Layers::ALL,
             meets: layers,
-        }
-    }
-
-    /// The filter of a body made of colliders filtered `self` and `other`:
-    /// it belongs to either's layers and meets either's.
-    pub const fn with(self, other: Self) -> Self {
-        Self {
-            membership: self.membership.with(other.membership),
-            meets: self.meets.with(other.meets),
         }
     }
 }
@@ -142,6 +134,17 @@ mod tests {
         assert!(
             CollisionFilter::seeing(DEBRIS.with(Layers::DEFAULT)).meets(&CollisionFilter::DEFAULT)
         );
+    }
+
+    /// A collider that meets nothing is a marker, not a solid: no query
+    /// meets it, even one looking for every layer.
+    #[test]
+    fn a_collider_that_meets_nothing_is_seen_by_no_query() {
+        let marker = CollisionFilter {
+            membership: DEBRIS,
+            meets: Layers::NONE,
+        };
+        assert!(!CollisionFilter::seeing(Layers::ALL).meets(&marker));
     }
 
     /// A query for a body touches only what the body would: not what it

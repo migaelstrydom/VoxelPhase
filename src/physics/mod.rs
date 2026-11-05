@@ -60,6 +60,7 @@ mod narrowphase;
 mod pipeline;
 pub mod profile;
 mod rest_pose;
+mod silhouette;
 mod sleep;
 pub mod solver;
 mod sphere_cast;

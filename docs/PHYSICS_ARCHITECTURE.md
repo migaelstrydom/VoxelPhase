@@ -35,25 +35,28 @@ connects them.
   bit; one the air drags as well has the two combined.
 - **The world has air** (`PhysicsConfig::atmosphere`, `atmosphere.rs`): the ambient
   medium, as gravity is the ambient force. Each substep starts every dynamic body's drag at
-  the air's, `½ρ·ΣCd·A·|v − wind|` over its bulk (`fluid_drag.rs`, the law water uses
-  too; areas cached with the mass properties), and providers' media combine with it. A
-  body the air would take more than `felt_within` (60 m) to slow by a factor of e is left
-  in vacuum: rocks, characters and grenades fly as before, and only bodies light for
-  their size (a cardboard box, a clump of leaves, a big light crate) feel it. A body's
-  drag area is a property of its shape, not of how it is cut up: its silhouette averaged
-  over directions (`DragArea::of`), measured on the first substep after its shape
-  changes. Its drag coefficient is its parts' shapes', unless its bulk declares one
+  the air's, `½ρ·Cd·A·|v − wind|` over its bulk (`fluid_drag.rs`, the law water uses
+  too), and providers' media combine with it. A body the air would take more than
+  `felt_within` (60 m) to slow by a factor of e is left in vacuum: rocks, characters and
+  grenades fly as before, and only bodies light for their size (a cardboard box, a clump
+  of leaves, a big light crate) feel it. A body's drag areas are a property of its shape,
+  not of how it is cut up (`DragArea::of`), measured on the first substep after its shape
+  changes: its silhouette averaged over directions, the union of its parts' outlines
+  (`silhouette.rs`), and for spin that silhouette at the body's reach about its centre of
+  mass. Its drag coefficient is its parts' shapes', unless its bulk declares one
   (`BulkShape::dragging_as`): a porous body, a clump of leaves bounded by spheres, drags
-  as what it is in air and water alike.
-- **A blast strikes a body by the area it shows it.** `PhysicsImpulse::Radial`'s strength is
-  an impulse per square metre (N·s/m²); a body is given that times its envelope's
-  silhouette seen along the blast (`fluid_drag::exposed_area`), so a leaf and a boulder of
+  as what it is in air and water alike. Tests of the solver's energy conservation
+  (`physics_fuzz`, `stability.rs`) set `Atmosphere::VACUUM` themselves, since drag only
+  takes energy away and could hide what a solver adds. `EnergyAudit` takes whatever world
+  it is given, and `level_check`'s disturb pass runs it with the game's air, since it
+  checks the game as it plays.
+- **A blast strikes a body by the area it shows it.** `PhysicsImpulse::Radial`'s strength
+  is an impulse per square metre (N·s/m²); a body is given that times its envelope's
+  silhouette seen along the blast (`silhouette::exposed_area`), so a leaf and a boulder of
   a size are struck alike and the lighter flies further, a plate edge-on is barely moved,
-  and a block behind another is shielded by it. Fracture and glass read the loading per
-  area (`PhysicsImpulse::loading_at`) as the blast's strength at a point. Tests of the solver's energy conservation (`physics_fuzz`, `stability.rs`) set
-  `Atmosphere::VACUUM` themselves, since drag only takes energy away and could hide what
-  a solver adds. `EnergyAudit` takes whatever world it is given, and `level_check`'s
-  disturb pass runs it with the game's air, since it checks the game as it plays.
+  a block behind another is shielded by it, and a gap between parts lets the blast
+  through. Fracture and glass read the loading per area (`PhysicsImpulse::loading_at`) as
+  the blast's strength at a point.
 
 ## Bodies, colliders, constraints
 

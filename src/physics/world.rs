@@ -29,7 +29,7 @@ use super::drive::{
     DriveCommand, ReactionAnchor, SupportConfig, SupportResolver, SupportSets, TractionLedger,
     TractionPlanner, TractionUsage,
 };
-use super::fluid_drag::{self, DragArea};
+use super::fluid_drag::DragArea;
 use super::force_provider::{ForceContext, ForceOutput, MediumDrag, SubstepForceProvider};
 use super::grounding::{GroundedBodies, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
@@ -45,6 +45,7 @@ use super::pipeline::manifold::ManifoldCache;
 use super::pipeline::normal_smoothing::NormalSmoothingConfig;
 use super::pipeline::pair::SolverManifold;
 use super::profile::{FrameProfile, PhysicsStage};
+use super::silhouette;
 use super::sleep::{SleepManager, SleepManagerConfig};
 use super::solver::{ConstraintSolver, ManifoldConditioner, ManifoldConditions, PgsNgsSolver};
 use super::sphere_cast::{CastObstacles, SphereCast, SphereCastHit};
@@ -1656,7 +1657,8 @@ impl PhysicsWorld {
     }
 
     /// Ray probe that identifies which body was hit.
-    /// Skips static bodies and any body in `exclude`.
+    /// Skips static bodies and any body in `exclude`, and colliders that meet
+    /// nothing ([`CollisionFilter::seeing`]).
     pub fn probe_bodies(
         &self,
         origin: Point3<f32>,
@@ -1676,7 +1678,8 @@ impl PhysicsWorld {
     }
 
     /// Ray probe against every body, static ones included, skipping any body
-    /// in `exclude`.
+    /// in `exclude` and colliders that meet nothing
+    /// ([`CollisionFilter::seeing`]).
     ///
     /// The exclusion list is what a *predicted* cast needs and a sensing probe
     /// does not: a trajectory launched from inside the thrower would otherwise
@@ -1713,20 +1716,30 @@ impl PhysicsWorld {
             .map(|(_, hit)| hit)
     }
 
-    /// What `body` is to other colliders, as one filter: it belongs to every
-    /// layer one of its colliders does, and meets every layer one meets. A
+    /// What `body` is to other colliders: the filter its colliders share. A
     /// query cast for the body uses it, so it touches what the body would.
+    ///
+    /// A body is filtered as one. Colliders filtered differently on one body
+    /// would have no single filter that touches what the body does (the
+    /// union of theirs touches what none of them would), so they are a bug.
+    /// `DEFAULT` for a body that is gone or has no colliders.
     pub fn filter_of(&self, body: RigidBodyHandle) -> CollisionFilter {
         let Some(rigid) = self.bodies.get(body.0) else {
             return CollisionFilter::DEFAULT;
         };
-        rigid
+        let mut filters = rigid
             .colliders()
             .iter()
             .filter_map(|c| self.colliders.get(c.0))
-            .map(|c| *c.filter())
-            .reduce(CollisionFilter::with)
-            .unwrap_or(CollisionFilter::DEFAULT)
+            .map(|c| *c.filter());
+        let Some(filter) = filters.next() else {
+            return CollisionFilter::DEFAULT;
+        };
+        debug_assert!(
+            filters.all(|other| other == filter),
+            "a body's colliders share one collision filter"
+        );
+        filter
     }
 
     /// The one ray-versus-bodies loop behind `probe_bodies`, `raycast_excluding`
@@ -2131,7 +2144,7 @@ fn blast_on(
     impulse: &PhysicsImpulse,
 ) -> Option<Vector3<f32>> {
     impulse.impulse_on(body.position(), |travel| {
-        fluid_drag::exposed_area(body.envelope(colliders), body.rotation().inverse() * travel)
+        silhouette::exposed_area(body.envelope(colliders), body.rotation().inverse() * travel)
     })
 }
 

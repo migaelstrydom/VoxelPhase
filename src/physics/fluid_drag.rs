@@ -8,11 +8,11 @@
 
 use std::f32::consts::PI;
 
-use nalgebra::{Isometry3, Point3, Vector2, Vector3};
 use smallvec::SmallVec;
 
 use super::bulk::EnvelopePart;
 use super::collider::ColliderShape;
+use super::silhouette::Silhouette;
 
 /// Drag coefficient of a sphere.
 const SPHERE: f32 = 0.47;
@@ -87,12 +87,13 @@ impl ShapeDrag {
 ///
 /// A property of the body's shape as a whole, not of how it is cut up: a
 /// crate of eight boxes drags as the one box they fill. The linear area is
-/// the body's silhouette, averaged over directions: the 2D convex hull of
-/// every part's projected outline, for each of [`SILHOUETTE_DIRECTIONS`]
-/// directions. Its drag coefficient is the parts' own, weighted by their
-/// area, or the one the body's bulk declares. The spin area takes that silhouette at the parts' arm about the
-/// body's centre of mass, their own spin radius plus their offset squared,
-/// so a dumbbell turns against the air as a dumbbell.
+/// the body's silhouette averaged over directions ([`Silhouette`]: the union
+/// of its parts' outlines, so a gap between parts lets the flow through).
+/// Its drag coefficient is the parts' own, weighted by their area, or the
+/// one the body's bulk declares. The spin area takes that silhouette at the
+/// body's reach about its centre of mass, the furthest any part reaches,
+/// as one part's spin radius is its own furthest reach: a dumbbell turns
+/// against the air at its ends.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct DragArea {
     /// `Cd·A`, m².
@@ -101,29 +102,20 @@ pub struct DragArea {
     pub angular: f32,
 }
 
-/// Directions a body's silhouette is averaged over: enough that a box's
-/// mean comes within a percent or two of Cauchy's exact quarter-surface.
-pub const SILHOUETTE_DIRECTIONS: usize = 32;
-/// Points round each projected circle (a sphere's, a capsule's ends).
-const CIRCLE_POINTS: usize = 24;
-
 impl DragArea {
     /// The drag areas of a body whose envelope is `parts`, each placed in
     /// the body's frame, measured from its centre of mass.
     pub fn of<'a>(parts: impl IntoIterator<Item = EnvelopePart<'a>>) -> Self {
         let parts: SmallVec<[EnvelopePart; 8]> = parts.into_iter().collect();
-        if parts.is_empty() {
-            return Self::default();
-        }
         let mut weighted_coefficient = 0.0;
-        let mut weighted_arm = 0.0;
         let mut total = 0.0;
+        let mut reach: f32 = 0.0;
         for part in &parts {
-            let (drag, offset) = (part.drag(), part.offset);
+            let drag = part.drag();
             weighted_coefficient += drag.coefficient * drag.mean_area;
-            weighted_arm +=
-                (drag.spin_radius_sq + offset.translation.vector.norm_squared()) * drag.mean_area;
             total += drag.mean_area;
+            let arm = part.offset.translation.vector.norm();
+            reach = reach.max(arm + drag.spin_radius_sq.sqrt());
         }
         if total <= 0.0 {
             return Self::default();
@@ -133,195 +125,60 @@ impl DragArea {
         let area = if parts.len() == 1 {
             total
         } else {
-            mean_silhouette(&parts)
+            Silhouette::default().mean_area(&parts)
         };
         let coefficient = weighted_coefficient / total;
-        let arm_sq = weighted_arm / total;
         Self {
             linear: coefficient * area,
-            angular: ANGULAR_COEFFICIENT * area * arm_sq,
+            angular: ANGULAR_COEFFICIENT * area * reach * reach,
         }
     }
-}
-
-/// The area a body whose envelope is `parts` shows to `view`, a unit
-/// direction in the body's frame: what a blast travelling along it strikes.
-pub fn exposed_area<'a>(
-    parts: impl IntoIterator<Item = EnvelopePart<'a>>,
-    view: Vector3<f32>,
-) -> f32 {
-    let parts: SmallVec<[EnvelopePart; 8]> = parts.into_iter().collect();
-    match parts.as_slice() {
-        [] => 0.0,
-        [part] => part
-            .shape
-            .projected_area(part.offset.rotation.inverse() * view),
-        _ => silhouette(&parts, view, &mut Vec::new()),
-    }
-}
-
-/// The parts' silhouette area averaged over directions spread evenly over a
-/// hemisphere (a silhouette and its opposite are the same).
-fn mean_silhouette(parts: &[EnvelopePart]) -> f32 {
-    let golden = PI * (3.0 - 5.0f32.sqrt());
-    let mut points = Vec::new();
-    let mut sum = 0.0;
-    for i in 0..SILHOUETTE_DIRECTIONS {
-        let z = 1.0 - (i as f32 + 0.5) / SILHOUETTE_DIRECTIONS as f32;
-        let ring = (1.0 - z * z).sqrt();
-        let azimuth = golden * i as f32;
-        let view = Vector3::new(ring * azimuth.cos(), ring * azimuth.sin(), z);
-        sum += silhouette(parts, view, &mut points);
-    }
-    sum / SILHOUETTE_DIRECTIONS as f32
-}
-
-/// The area of the parts' silhouette seen along `view`, a unit direction,
-/// with `points` as scratch.
-fn silhouette(parts: &[EnvelopePart], view: Vector3<f32>, points: &mut Vec<Vector2<f32>>) -> f32 {
-    let across = view
-        .cross(&Vector3::x())
-        .try_normalize(1e-6)
-        .unwrap_or_else(|| view.cross(&Vector3::y()).normalize());
-    let up = view.cross(&across);
-    points.clear();
-    for part in parts {
-        outline(part.shape, part.offset, &across, &up, points);
-    }
-    hull_area(points)
-}
-
-/// The points of `shape`'s outline at `offset`, projected onto the plane
-/// spanned by `across` and `up`.
-fn outline(
-    shape: &ColliderShape,
-    offset: &Isometry3<f32>,
-    across: &Vector3<f32>,
-    up: &Vector3<f32>,
-    out: &mut Vec<Vector2<f32>>,
-) {
-    let project = |p: Point3<f32>| Vector2::new(p.coords.dot(across), p.coords.dot(up));
-    let mut circle = |centre: Point3<f32>, radius: f32| {
-        let c = project(centre);
-        out.extend((0..CIRCLE_POINTS).map(|k| {
-            let angle = std::f32::consts::TAU * k as f32 / CIRCLE_POINTS as f32;
-            // Out to the circumscribed polygon, so its area is the circle's
-            // to within a fraction of a percent, not under it.
-            let r = radius / (PI / CIRCLE_POINTS as f32).cos();
-            c + Vector2::new(angle.cos(), angle.sin()) * r
-        }));
-    };
-    match shape {
-        ColliderShape::Sphere { radius } => circle(offset * Point3::origin(), *radius),
-        ColliderShape::Capsule {
-            half_height,
-            radius,
-        } => {
-            let half = (half_height - radius).max(0.0);
-            circle(offset * Point3::new(0.0, half, 0.0), *radius);
-            circle(offset * Point3::new(0.0, -half, 0.0), *radius);
-        }
-        ColliderShape::Box { half_extents } => {
-            for corner in 0..8 {
-                let sign = |bit: usize| if corner & bit == 0 { -1.0 } else { 1.0 };
-                let local = Point3::new(
-                    sign(1) * half_extents.x,
-                    sign(2) * half_extents.y,
-                    sign(4) * half_extents.z,
-                );
-                out.push(project(offset * local));
-            }
-        }
-        ColliderShape::ConvexHull { hull } => {
-            out.extend(
-                hull.vertices
-                    .iter()
-                    .map(|v| project(offset * Point3::from(*v))),
-            );
-        }
-    }
-}
-
-/// Area of the convex hull of `points` (Andrew's monotone chain). Reorders
-/// them.
-fn hull_area(points: &mut [Vector2<f32>]) -> f32 {
-    if points.len() < 3 {
-        return 0.0;
-    }
-    points.sort_unstable_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
-    let cross = |o: Vector2<f32>, a: Vector2<f32>, b: Vector2<f32>| {
-        (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
-    };
-    let mut hull: Vec<Vector2<f32>> = Vec::with_capacity(points.len() * 2);
-    for pass in 0..2 {
-        let start = hull.len();
-        let ordered: Box<dyn Iterator<Item = &Vector2<f32>>> = if pass == 0 {
-            Box::new(points.iter())
-        } else {
-            Box::new(points.iter().rev())
-        };
-        for &p in ordered {
-            while hull.len() >= start + 2
-                && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0
-            {
-                hull.pop();
-            }
-            hull.push(p);
-        }
-        hull.pop();
-    }
-    let n = hull.len();
-    (0..n)
-        .map(|i| {
-            let (a, b) = (hull[i], hull[(i + 1) % n]);
-            a.x * b.y - b.x * a.y
-        })
-        .sum::<f32>()
-        .abs()
-        * 0.5
 }
 
 #[cfg(test)]
 mod tests {
-    use nalgebra::Translation3;
+    use nalgebra::{Isometry3, Vector3};
 
     use super::*;
 
-    fn cube(pieces_per_side: usize) -> f32 {
+    /// A metre cube cut into `pieces_per_side`³ boxes.
+    fn cube(pieces_per_side: usize) -> DragArea {
         let half = 0.5 / pieces_per_side as f32;
         let shape = ColliderShape::Box {
             half_extents: Vector3::repeat(half),
         };
-        let offsets: Vec<Isometry3<f32>> = (0..pieces_per_side.pow(3))
-            .map(|i| {
-                let at = |k: usize| -0.5 + half * (2 * k + 1) as f32;
-                let n = pieces_per_side;
-                Isometry3::from_parts(
-                    Translation3::new(at(i % n), at(i / n % n), at(i / (n * n))),
-                    nalgebra::UnitQuaternion::identity(),
-                )
-            })
+        let at = |k: usize| -0.5 + half * (2 * k + 1) as f32;
+        let n = pieces_per_side;
+        let offsets: Vec<Isometry3<f32>> = (0..n.pow(3))
+            .map(|i| Isometry3::translation(at(i % n), at(i / n % n), at(i / (n * n))))
             .collect();
-        DragArea::of(offsets.iter().map(|o| part(&shape, o, None))).linear
+        DragArea::of(offsets.iter().map(|o| part(&shape, o, None)))
     }
 
-    /// A metre cube drags the same however it is cut: eight boxes and
-    /// twenty-seven measure the same silhouette, and that is the one box's
-    /// exact quarter-surface to within the directions' sampling.
+    /// A metre cube drags and turns the same however it is cut: eight boxes
+    /// and twenty-seven measure the same silhouette and reach, and that is
+    /// the one box's exact quarter-surface to within the directions'
+    /// sampling.
     #[test]
     fn a_body_drags_as_its_shape_however_it_is_cut() {
         let whole = cube(1);
         let cauchy = BOX * 6.0 / 4.0;
-        assert!((whole - cauchy).abs() < 1e-5, "{whole} against {cauchy}");
-        let (eight, twenty_seven) = (cube(2), cube(3));
         assert!(
-            (eight - twenty_seven).abs() < 1e-4 * eight,
-            "8 pieces {eight}, 27 pieces {twenty_seven}"
+            (whole.linear - cauchy).abs() < 1e-5,
+            "{} against {cauchy}",
+            whole.linear
         );
-        assert!(
-            (eight - whole).abs() < 0.01 * whole,
-            "8 pieces {eight} against {whole}"
-        );
+        for cut in [cube(2), cube(3)] {
+            assert!(
+                (cut.linear - whole.linear).abs() < 0.01 * whole.linear,
+                "cut {cut:?} against {whole:?}"
+            );
+            let (cut_reach, whole_reach) = (cut.angular / cut.linear, whole.angular / whole.linear);
+            assert!(
+                (cut_reach - whole_reach).abs() < 1e-4 * whole_reach,
+                "cut {cut:?} against {whole:?}"
+            );
+        }
     }
 
     /// A sphere's silhouette is its great circle, from every side.
@@ -336,23 +193,25 @@ mod tests {
         );
     }
 
-    /// Two balls on a bar turn against the air at their arm, not as if both
-    /// sat at the centre.
+    /// Two balls on a bar drag by their two discs, not by the hull round
+    /// both, and turn against the air at their ends.
     #[test]
-    fn a_dumbbell_turns_against_the_air_at_its_arm() {
+    fn a_dumbbell_drags_by_its_balls_and_turns_at_its_ends() {
         let ball = ColliderShape::Sphere { radius: 0.1 };
-        let centred = Isometry3::identity();
+        let one = DragArea::of([part(&ball, &Isometry3::identity(), None)]);
         let ends = [
             Isometry3::translation(-1.0, 0.0, 0.0),
             Isometry3::translation(1.0, 0.0, 0.0),
         ];
-        let together =
-            DragArea::of([part(&ball, &centred, None), part(&ball, &centred, None)]).angular;
-        let apart = DragArea::of(ends.iter().map(|o| part(&ball, o, None))).angular;
+        let dumbbell = DragArea::of(ends.iter().map(|o| part(&ball, o, None)));
+        // The balls' circles are drawn circumscribed, about half a percent
+        // over, and hide each other only end on.
         assert!(
-            apart > 50.0 * together,
-            "apart {apart}, together {together}"
+            (dumbbell.linear - 2.0 * one.linear).abs() < 0.02 * one.linear,
+            "dumbbell {dumbbell:?}, one ball {one:?}"
         );
+        let reach_sq = dumbbell.angular / (ANGULAR_COEFFICIENT * dumbbell.linear / SPHERE);
+        assert!((reach_sq - 1.21).abs() < 1e-4, "reach² {reach_sq}");
     }
 
     /// A body that declares its drag coefficient drags by it over the same

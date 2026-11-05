@@ -366,7 +366,7 @@ impl RigidBody {
 
     /// Drag areas of what fluids see of this body ([`Self::envelope`]):
     /// none measured since its shape last changed reads as none at all.
-    pub fn drag_area(&self) -> DragArea {
+    pub(crate) fn drag_area(&self) -> DragArea {
         self.drag_area.unwrap_or_default()
     }
 
