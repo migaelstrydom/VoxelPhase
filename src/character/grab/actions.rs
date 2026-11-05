@@ -75,12 +75,12 @@ pub struct ThrowStrength {
 }
 
 impl Default for ThrowStrength {
-    /// A 14 kg clump of leaves leaves at about 19 m/s, a 30 kg crate at 14,
-    /// a 100 kg barrel at 7, and nothing faster than 25.
+    /// Nothing leaves faster than 25 m/s; a 14 kg clump of leaves at about
+    /// 20 m/s, a 30 kg crate at 16 and a 100 kg barrel at 9.
     fn default() -> Self {
         Self {
-            impulse: 1000.0,
-            arm_mass: 40.0,
+            impulse: 1350.0,
+            arm_mass: 54.0,
         }
     }
 }
@@ -308,8 +308,8 @@ mod tests {
         let hand = strength.impulse / strength.arm_mass;
         assert!(strength.speed(0.1) < hand);
         assert!(strength.speed(0.1) > 0.99 * hand);
-        let heavy = strength.speed(1000.0);
-        let alone = strength.impulse / 1000.0;
+        let heavy = strength.speed(5000.0);
+        let alone = strength.impulse / 5000.0;
         assert!((heavy - alone).abs() < 0.05 * alone, "{heavy} vs {alone}");
         assert!(strength.speed(14.0) < strength.speed(2.0));
     }
