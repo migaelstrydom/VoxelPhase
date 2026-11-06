@@ -13,7 +13,7 @@
 //! ```
 //!
 //! Air drags a body by its bulk, the shape fluids see
-//! ([`super::RigidBodyDesc::bulk`]), not its colliders. Every dynamic body
+//! ([`super::ColliderDesc::bulk`]), not its colliders. Every dynamic body
 //! feels it, but it matters only to bodies light for their size: a cardboard
 //! box falls flat at about 7 m/s, and a clump of leaves floats down, while the air
 //! takes a grenade a couple of kilometres to slow by a factor of e, a percent
@@ -84,17 +84,8 @@ mod tests {
 
     /// A dropped body's speed after `seconds` of falling in `world`.
     fn fall(world: &mut PhysicsWorld, desc: ColliderDesc, seconds: f32) -> f32 {
-        fall_as(world, RigidBodyDesc::dynamic(), desc, seconds)
-    }
-
-    /// [`fall`], for a body described by `body`.
-    fn fall_as(
-        world: &mut PhysicsWorld,
-        body: RigidBodyDesc,
-        desc: ColliderDesc,
-        seconds: f32,
-    ) -> f32 {
-        let body = world.create_body(body.position(Point3::new(0.0, 500.0, 0.0)));
+        let body =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, 500.0, 0.0)));
         world.attach_collider(body, desc);
         world.wake_body(body);
         let mut stepper = SequentialStepper::new(1.0 / 240.0, 12);
@@ -187,7 +178,7 @@ mod tests {
         );
     }
 
-    /// A ball whose bulk declares a porous body's drag coefficient falls at
+    /// A ball whose bulk declares a porous clump's drag coefficient falls at
     /// that coefficient's terminal speed, not a smooth ball's.
     #[test]
     fn a_declared_drag_coefficient_sets_the_terminal_speed() {
@@ -195,12 +186,12 @@ mod tests {
         let mass = 0.3;
         let density = mass / (4.0 / 3.0 * std::f32::consts::PI * radius.powi(3));
         let ball = || ColliderDesc::sphere(radius).density(density);
-        let porous = RigidBodyDesc::dynamic().bulk(
+        let porous = ball().bulk(
             BulkShape::displacing(vec![Volume::centred(ColliderShape::Sphere { radius })])
                 .dragging_as(1.0),
         );
         let mut world = PhysicsWorld::new(PhysicsConfig::default());
-        let speed = fall_as(&mut world, porous, ball(), 4.0);
+        let speed = fall(&mut world, porous, 4.0);
         let area = std::f32::consts::PI * radius * radius;
         let terminal = (2.0 * mass * 9.81 / (1.2 * area)).sqrt();
         let smooth = fall(&mut world, ball(), 4.0);

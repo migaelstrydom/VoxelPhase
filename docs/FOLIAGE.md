@@ -40,7 +40,8 @@ carrying its crown's core.
   foot, while a ball of the same mass and size rolls 5 m or more past it
   (`a_clump_tumbles_down_a_slope_and_stops_where_a_ball_rolls_on`).
 - **The world's air, through the clump's whole lobes.** A loose clump's
-  core declares its lobes as its bulk (`LeafCore::bulk`), dragging as a
+  core's pieces each declare the same piece at full size as their bulk
+  (`LeafCore::colliders`), so together they show its whole lobes, dragging as a
   porous bush (`LeafCore::drag_coefficient`, 1.0, about twice a smooth
   ball's), so the engine's air (`physics::Atmosphere`) and water see a ball
   of leaves, not the core. A blast strikes a body by the area it shows it,

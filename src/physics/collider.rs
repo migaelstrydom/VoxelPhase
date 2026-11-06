@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 
+use super::bulk::BulkShape;
 use super::collision_filter::CollisionFilter;
 use super::math::{box_inertia_tensor, capsule_inertia_tensor, sphere_inertia_tensor};
 use crate::collision::ConvexHull;
@@ -179,6 +180,9 @@ pub struct ColliderDesc {
     pub density: f32,
     /// Material properties.
     pub material: ColliderMaterial,
+    /// What weighs the collider and what fluids and blasts see of it, in its
+    /// own frame, where that is not its shape. See [`BulkShape`].
+    pub bulk: Option<BulkShape>,
 }
 
 impl ColliderDesc {
@@ -188,6 +192,7 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
+            bulk: None,
         }
     }
 
@@ -197,6 +202,7 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
+            bulk: None,
         }
     }
 
@@ -206,6 +212,7 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
+            bulk: None,
         }
     }
 
@@ -218,6 +225,7 @@ impl ColliderDesc {
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
+            bulk: None,
         }
     }
 
@@ -244,6 +252,14 @@ impl ColliderDesc {
         self
     }
 
+    /// Declare the collider's bulk apart from its shape, in its own frame:
+    /// what weighs it, and what the media it moves through and blasts see.
+    /// Where it declares mass, the density is not used. See [`BulkShape`].
+    pub fn bulk(mut self, bulk: BulkShape) -> Self {
+        self.bulk = Some(bulk);
+        self
+    }
+
     /// Set the offset translation (position relative to body center of mass).
     pub fn offset_translation(mut self, translation: Vector3<f32>) -> Self {
         self.offset.translation.vector = translation;
@@ -266,10 +282,16 @@ pub struct Collider {
     offset: Isometry3<f32>,
     /// Material properties.
     material: ColliderMaterial,
-    /// Mass computed from shape and density.
+    /// Its declared mass parts' total, or else its shape's at its density.
     mass: f32,
-    /// Local inertia tensor.
+    /// Inertia about the collider's origin, in its frame: its declared mass
+    /// parts', or else its shape's.
     local_inertia: Matrix3<f32>,
+    /// What weighs it and what fluids and blasts see of it, in its frame,
+    /// where that is not its shape. `None` for almost every collider. Read
+    /// through the body's `mass_parts` and `envelope`, which fall back to
+    /// the shape.
+    bulk: Option<Box<BulkShape>>,
     /// Its body's filter ([`super::RigidBody::filter`]), carried here for
     /// the narrowphase and casts, which meet colliders.
     filter: CollisionFilter,
@@ -278,8 +300,14 @@ pub struct Collider {
 impl Collider {
     /// A collider of `desc`, for a body filtered by `filter`.
     pub(crate) fn new(desc: ColliderDesc, filter: CollisionFilter) -> Self {
-        let mass = desc.shape.compute_mass(desc.density);
-        let local_inertia = desc.shape.compute_inertia(mass);
+        let declared = desc
+            .bulk
+            .as_ref()
+            .and_then(|b| Some((b.mass()?, b.inertia()?)));
+        let (mass, local_inertia) = declared.unwrap_or_else(|| {
+            let mass = desc.shape.compute_mass(desc.density);
+            (mass, desc.shape.compute_inertia(mass))
+        });
 
         Self {
             shape: desc.shape,
@@ -287,6 +315,7 @@ impl Collider {
             material: desc.material,
             mass,
             local_inertia,
+            bulk: desc.bulk.map(Box::new),
             filter,
         }
     }
@@ -303,12 +332,21 @@ impl Collider {
         &self.filter
     }
 
+    /// What the collider weighs: its declared mass parts' total if its bulk
+    /// declares any, its shape's at its density otherwise.
     pub fn mass(&self) -> f32 {
         self.mass
     }
 
+    /// Its inertia about its origin, in its frame: its declared mass parts'
+    /// if its bulk declares any, its shape's otherwise.
     pub fn local_inertia(&self) -> &Matrix3<f32> {
         &self.local_inertia
+    }
+
+    /// The bulk declared apart from its shape, if any.
+    pub fn bulk(&self) -> Option<&BulkShape> {
+        self.bulk.as_deref()
     }
 
     /// Local transform relative to the body.

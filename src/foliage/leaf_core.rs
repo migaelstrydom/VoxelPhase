@@ -7,7 +7,8 @@
 //! spheres, not one ball: a single sphere has nothing to stop it rolling, and
 //! the engine's friction has no rolling resistance, while a lumpy cluster
 //! tumbles like a sack and stops. Its bulk, what the air and water see, is
-//! its whole lobes, dragging as a porous bush rather than smooth balls: a
+//! its whole lobes, each core piece carrying the same piece at full size,
+//! dragging as a porous bush rather than smooth balls: a
 //! ball of leaves is mostly air, light for its size, so the world's air slows
 //! it to a floaty fall, and a blast, which strikes it by its size, throws it
 //! a few dozen metres rather than hundreds.
@@ -76,7 +77,9 @@ impl LeafCore {
     /// The core pieces of each lobe, a share of its size. Each lobe's
     /// pieces weigh its share of the clump by volume, so the core's centre
     /// of mass is the lobes' volume-weighted centre, which is where
-    /// [`FoliageShape::centred`] put the origin.
+    /// [`FoliageShape::centred`] put the origin. Each piece's bulk, what
+    /// fluids and blasts see of it, is the same piece at full size, porous
+    /// ([`Self::piece_bulk`]).
     ///
     /// They are placed with the clump's frame at `at` in the body's.
     pub fn colliders(&self, shape: &FoliageShape, at: Isometry3<f32>) -> Vec<ColliderDesc> {
@@ -85,19 +88,30 @@ impl LeafCore {
         let mut colliders = Vec::new();
         for lobe in &shape.lobes {
             let pieces = CorePiece::filling(lobe, self.core_fraction);
+            let whole = CorePiece::filling(lobe, 1.0);
             let piece_volume: f32 = pieces.iter().map(CorePiece::volume).sum();
             let density = mass * lobe.volume() / total / piece_volume;
-            colliders.extend(pieces.iter().map(|piece| {
+            colliders.extend(pieces.iter().zip(&whole).map(|(piece, whole)| {
                 let mut collider = piece
                     .collider()
                     .density(density)
                     .restitution(0.0)
-                    .friction(self.friction);
+                    .friction(self.friction)
+                    .bulk(self.piece_bulk(whole));
                 collider.offset = at * collider.offset;
                 collider
             }));
         }
         colliders
+    }
+
+    /// What fluids and blasts see of one core piece: `whole`, the same piece
+    /// at full size, in the piece's frame, porous. It weighs what the piece
+    /// does.
+    fn piece_bulk(&self, whole: &CorePiece) -> BulkShape {
+        BulkShape::displacing(vec![Volume::centred(whole.shape())])
+            .dragging_as(self.drag_coefficient)
+            .porous(self.solidity)
     }
 
     /// What fluids and blasts see of the clump: every lobe whole, as the
@@ -207,7 +221,6 @@ impl LeafCore {
                 .position(Point3::from(pose.translation.vector))
                 .rotation(pose.rotation)
                 .angular_damping(self.angular_damping)
-                .bulk(self.bulk(shape, Isometry3::identity()))
                 .filter(collision_layers::FOLIAGE_CORE),
         );
         for collider in self.colliders(shape, Isometry3::identity()) {

@@ -276,14 +276,15 @@ Done:
   strikes a trunk, and goes through the outer fifth of a crown's leaves
   before striking its core, as it would a loose clump's. The trunk is
   welded into the ground and let go when the ground goes (`TerrainAnchored`,
-  as a fence post is); a felled tree lands on its crowns. The body declares
-  its crowns' leaves as its bulk, porous, and one `Foliage` clump of them
+  as a fence post is); a felled tree lands on its crowns. Each crown's core
+  carries its leaves as its bulk, porous, as a loose clump's does, and the
+  wood declares an empty one, and one `Foliage` clump of them
   all rides on it. In levels: `Tree(pos, height, crown_radius, crowns)`.
   - **Branches break off** (`BranchBreakSystem`, after the physics step,
     reading the blasts it applied): a blast whose kick on a branch's crowns
     alone (`BulkShape::blast`) passes 250 N·s breaks the branch off. Its
     colliders leave the tree's body, which re-centres (the engine carries
-    joint anchors with a re-centre) and declares what is left, and are built
+    joint anchors with a re-centre) and keeps the bulk its colliders carry, and are built
     as a piece of their own (`PlantPiece`, an entity with its own model and
     leaves) moving as they were, plus the kick. A grenade within about 2 m
     of a side crown takes its branch off, one 3 m away does not. Crowns stay

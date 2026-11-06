@@ -19,9 +19,12 @@ connects them.
   `Sync`. Terrain implements it; the engine never sees chunks, segments or voxels.
 - **Gameplay asks for motion through the drive seam** (`physics::drive`), never by
   writing velocities each frame. See "Drive" below.
-- **Media see a body's bulk, not its colliders.** Water, buoyancy, drag and splash read
-  `RigidBody::envelope()`, and mass properties read `mass_parts()`. Both fall back to the
-  colliders unless the body declares a `BulkShape` (`bulk.rs`).
+- **Media see a body's bulk, not its colliders.** Water, buoyancy, drag, splash and blasts
+  read `RigidBody::envelope()`, and mass properties read `mass_parts()`. Both sum the
+  body's colliders, each standing for itself unless it declares a `BulkShape` (`bulk.rs`,
+  `ColliderDesc::bulk`) in its own frame, which then goes wherever the collider goes. A
+  blast strikes each solidity among the envelope's parts times the union of those parts'
+  silhouettes, summed and capped at the whole union (`silhouette::struck_area`).
 - **Drag pulls towards the medium's motion.** A force provider's `MediumDrag` acts
   relative to the medium's velocity (a current, a falling stream) and to a spin it drives
   (zero in still water; where a stream strikes off centre, the spin at which the struck
@@ -46,7 +49,7 @@ connects them.
   awake after its shape changes: the share of their own silhouettes its parts show,
   averaged over directions (the union of their outlines, `silhouette.rs`), which scales
   the parts' own silhouettes along any flow, exact for a body cut on a grid. Its drag
-  coefficient is its parts' shapes', unless its bulk declares one
+  coefficient is its parts' shapes', except where a collider's bulk declares one
   (`BulkShape::dragging_as`): a porous body, a clump of leaves bounded by spheres, drags
   as what it is in air and water alike. Tests of the solver's energy conservation
   (`physics_fuzz`, `stability.rs`) set `Atmosphere::VACUUM` themselves, since drag only

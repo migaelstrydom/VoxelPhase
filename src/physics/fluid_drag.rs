@@ -86,9 +86,9 @@ impl ShapeDrag {
 /// ([`Silhouette`]), so a gap between parts lets the flow through, and the
 /// share of their own silhouettes the parts show is what scales them along
 /// any one flow ([`Self::exposed`]). Its drag coefficient is the parts' own,
-/// weighted by their area, or the one the body's bulk declares. It spins
-/// against a fluid at its reach about its centre of mass, the furthest any
-/// part reaches: a dumbbell turns at its ends.
+/// each its shape's or the one its collider's bulk declares, weighted by
+/// their area. It spins against a fluid at its reach about its centre of
+/// mass, the furthest any part reaches: a dumbbell turns at its ends.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct DragArea {
     /// Drag coefficient `Cd`.
@@ -414,13 +414,14 @@ mod tests {
 
     fn part<'a>(
         shape: &'a ColliderShape,
-        offset: &'a Isometry3<f32>,
+        offset: &Isometry3<f32>,
         drag_coefficient: Option<f32>,
     ) -> EnvelopePart<'a> {
         EnvelopePart {
             shape,
-            offset,
+            offset: *offset,
             drag_coefficient,
+            solidity: 1.0,
         }
     }
 }

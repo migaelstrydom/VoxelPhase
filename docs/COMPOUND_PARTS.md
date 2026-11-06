@@ -402,6 +402,8 @@ Decisions:
   capped at the whole union's area. A body whose parts share one solidity
   (every body today: a clump's overlapping lobes, a tree's crowns) gets
   exactly today's result, solidity times the union.
+- **A bulk that declares mass but no envelope** leaves the collider's own
+  shape as its envelope, with the bulk's drag coefficient and solidity.
 - **A declaration not shaped like its collider** (a critter's figure on its
   torso collider, a character's figure on its capsule) is re-expressed in
   that collider's frame; it then travels with that collider.

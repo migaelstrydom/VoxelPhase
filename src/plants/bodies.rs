@@ -14,6 +14,11 @@
 //! trunk at its fork, or roots crossing under the foot, cost nothing while
 //! the tree is whole; once a branch breaks off, it and what it left meet
 //! like any two bodies.
+//!
+//! What fluids and blasts see of a plant is its crowns' leaves: each crown's
+//! core carries them as a loose clump's does ([`LeafCore::colliders`]), and
+//! the wood, which adds little to them, declares an empty envelope. Each
+//! collider's bulk goes with it when a branch breaks off.
 
 use nalgebra::{Isometry3, Point3, Translation3, Vector3};
 
@@ -21,8 +26,8 @@ use super::limbs::LimbKind;
 use super::plant::Plant;
 use crate::foliage::LeafCore;
 use crate::physics::{
-    ColliderHandle, ConstraintHandle, ConstraintKind, PhysicsImpulse, PhysicsWorld, RigidBodyDesc,
-    RigidBodyHandle,
+    BulkShape, ColliderHandle, ConstraintHandle, ConstraintKind, PhysicsImpulse, PhysicsWorld,
+    RigidBodyDesc, RigidBodyHandle,
 };
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
 
@@ -115,7 +120,10 @@ impl Joinery {
         let mut colliders = vec![Vec::new(); plant.limbs.limbs.len()];
         for &l in limbs {
             let limb = &plant.limbs.limbs[l];
-            let mut wood = limb.collider().of(&self.wood);
+            let mut wood = limb
+                .collider()
+                .of(&self.wood)
+                .bulk(BulkShape::displacing(Vec::new()));
             wood.offset = Translation3::from(limb.midpoint().coords) * wood.offset;
             colliders[l].extend(world.attach_collider(body, wood));
         }
@@ -126,13 +134,11 @@ impl Joinery {
             }
         }
         let moved = world.recenter_on_colliders(body);
-        let piece = PlantPieceBody {
+        PlantPieceBody {
             body,
             frame: Isometry3::translation(-moved.x, -moved.y, -moved.z),
             colliders,
-        };
-        self.declare_bulk(world, plant, &piece);
-        piece
+        }
     }
 
     /// Welds `piece`'s trunk into the ground where it stands, holding
@@ -227,7 +233,6 @@ impl Joinery {
         }
         let moved = world.recenter_on_colliders(piece.body);
         piece.frame = Translation3::from(-moved) * piece.frame;
-        self.declare_bulk(world, plant, piece);
 
         let broken = self.build(world, plant, &going, at);
         let position = world.body(broken.body)?.position();
@@ -236,16 +241,5 @@ impl Joinery {
         world.wake_body(broken.body);
         world.wake_body(piece.body);
         Some(broken)
-    }
-
-    /// Declares what fluids and blasts see of `piece`: its crowns' leaves,
-    /// porous, which a plant's thin wood adds little to. A piece with no
-    /// crowns is left to its colliders.
-    fn declare_bulk(&self, world: &mut PhysicsWorld, plant: &Plant, piece: &PlantPieceBody) {
-        let masses = plant.masses_on(&piece.limbs());
-        if !masses.is_empty() {
-            let bulk = self.core.bulk(&plant.leaves_of(&masses), piece.frame);
-            world.set_bulk(piece.body, bulk);
-        }
     }
 }

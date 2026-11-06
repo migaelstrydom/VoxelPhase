@@ -1,7 +1,7 @@
 //! A sealed wooden barrel: oak staves round a hollow of air.
 //!
-//! The barrel's hull is its contact envelope; its bulk is declared apart from
-//! it, as a shell of oak two centimetres thick. So it weighs what an empty
+//! The barrel's hull is its contact envelope; its bulk is declared on it,
+//! apart from its shape, as a shell of oak two centimetres thick. So it weighs what an empty
 //! barrel weighs and floats as high as one does, where a hull of solid oak the
 //! same size would weigh six times as much and float more than half under.
 //!
@@ -140,13 +140,13 @@ impl Spawnable for BarrelDef {
                     .position(position)
                     .gravity_scale(1.0)
                     .linear_damping(0.01)
-                    .angular_damping(0.01)
-                    .bulk(barrel_bulk()),
+                    .angular_damping(0.01),
             );
             physics.world.attach_collider(
                 body,
                 ColliderDesc::convex_hull(Arc::new(PROFILE.hull(STAVES, HULL_RINGS)))
-                    .of(&self.substance()),
+                    .of(&self.substance())
+                    .bulk(barrel_bulk()),
             );
             body
         };
@@ -218,12 +218,11 @@ mod tests {
         let body = world.create_body(
             RigidBodyDesc::dynamic()
                 .position(Point3::new(0.0, SURFACE, 0.0))
-                .rotation(on_side)
-                .bulk(bulk),
+                .rotation(on_side),
         );
         world.attach_collider(
             body,
-            ColliderDesc::convex_hull(Arc::new(PROFILE.hull(STAVES, HULL_RINGS))),
+            ColliderDesc::convex_hull(Arc::new(PROFILE.hull(STAVES, HULL_RINGS))).bulk(bulk),
         );
         world.wake_body(body);
 

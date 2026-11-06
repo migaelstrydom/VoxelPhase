@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::atmosphere::Atmosphere;
 use super::body::{BodyDrive, BodyType, RigidBody, RigidBodyDesc, SupportDrive};
-use super::bulk::{BulkShape, EnvelopePart};
+use super::bulk::EnvelopePart;
 use super::ccd::{
     pair_separation, CcdContext, CcdStrategy, ContactPairKey, NarrowphaseOwnership, SweepClampCcd,
 };
@@ -619,7 +619,8 @@ impl PhysicsWorld {
         })
     }
 
-    /// What a fluid sees of a body: its declared envelope, or its colliders.
+    /// What a fluid sees of a body: each collider's declared envelope, or the
+    /// collider.
     /// Empty for a body that does not exist.
     pub fn envelope(&self, handle: RigidBodyHandle) -> impl Iterator<Item = EnvelopePart<'_>> {
         self.bodies
@@ -992,8 +993,9 @@ impl PhysicsWorld {
     /// Detach a single collider from a body, removing it from the physics world.
     ///
     /// Returns the detached `Collider` so the caller can use its shape, offset,
-    /// density, and material to create a new body. Recomputes the body's mass
-    /// properties after removal. Also purges the manifold cache for the collider.
+    /// density, and material to create a new body; its bulk goes with it.
+    /// Recomputes the body's mass properties after removal. Also purges the
+    /// manifold cache for the collider.
     pub fn detach_collider(
         &mut self,
         body_handle: RigidBodyHandle,
@@ -1004,28 +1006,11 @@ impl PhysicsWorld {
             return None;
         }
         self.pose_epoch += 1;
-        // The bulk described the whole body; what is left of it is described
-        // by its own colliders.
-        body.clear_bulk();
 
         self.manifold_cache.remove_collider(collider_handle);
         let collider = self.colliders.remove(collider_handle.0)?;
         self.recompute_mass_properties(body_handle);
         Some(collider)
-    }
-
-    /// Declare `bulk` for a body in place of whatever it had, in its frame as
-    /// it is now: a compound that lost children (which clears its bulk,
-    /// `detach_collider`) declares what is left of it. Returns false for no
-    /// body.
-    pub fn set_bulk(&mut self, handle: RigidBodyHandle, bulk: BulkShape) -> bool {
-        let Some(body) = self.bodies.get_mut(handle.0) else {
-            return false;
-        };
-        body.set_bulk(bulk);
-        self.pose_epoch += 1;
-        self.recompute_mass_properties(handle);
-        true
     }
 
     // === Simulation ===
@@ -1628,9 +1613,6 @@ impl PhysicsWorld {
         }
 
         if let Some(body) = self.bodies.get_mut(body_handle.0) {
-            if let Some(bulk) = body.bulk_mut() {
-                bulk.shift(-local_com);
-            }
             let world_shift = body.rotation() * local_com;
             let angular = body.angular_velocity();
             let linear = body.linear_velocity();
@@ -1651,19 +1633,9 @@ impl PhysicsWorld {
         let mut total_inertia = Matrix3::zeros();
 
         for part in body.mass_parts(&self.colliders) {
-            let m = part.mass;
-            total_mass += m;
-
-            // Rotate the local inertia tensor into the body frame.
-            let r = part.offset.rotation.to_rotation_matrix();
-            let rotated_inertia = r * part.local_inertia * r.transpose();
-
-            // Parallel axis theorem: shift inertia to body center of mass.
-            let d = part.offset.translation.vector;
-            let d_sq = d.dot(&d);
-            let steiner = m * (d_sq * Matrix3::identity() - d * d.transpose());
-
-            total_inertia += rotated_inertia + steiner;
+            total_mass += part.mass;
+            // About the body's origin, its centre of mass once re-centred.
+            total_inertia += part.inertia_in_frame();
         }
 
         if let Some(body) = self.bodies.get_mut(body_handle.0) {
@@ -2138,16 +2110,15 @@ impl PhysicsWorld {
     }
 }
 
-/// The impulse `impulse` gives `body`, by the area its envelope shows it.
+/// The impulse `impulse` gives `body`, by the area its envelope shows it,
+/// each part weighed by its solidity ([`silhouette::struck_area`]).
 fn blast_on(
     body: &RigidBody,
     colliders: &Arena<Collider>,
     impulse: &PhysicsImpulse,
 ) -> Option<Vector3<f32>> {
-    let solidity = body.bulk().map_or(1.0, BulkShape::solidity);
     impulse.impulse_on(body.position(), |travel| {
-        solidity
-            * silhouette::exposed_area(body.envelope(colliders), body.rotation().inverse() * travel)
+        silhouette::struck_area(body.envelope(colliders), body.rotation().inverse() * travel)
     })
 }
 

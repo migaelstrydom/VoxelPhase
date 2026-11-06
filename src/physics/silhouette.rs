@@ -20,6 +20,10 @@
 //! slab at each: past [`MAX_SLABS`] the slabs are even rows instead, and a
 //! row holding a vertex is off by a sliver. Round shapes are drawn as
 //! polygons circumscribing them, a fraction of a percent over.
+//!
+//! What a blast strikes ([`struck_area`]) weighs that union by the parts'
+//! solidities: each solidity among them times the union of its parts,
+//! summed, and never more than the whole union.
 
 use std::f32::consts::{PI, TAU};
 use std::ops::Range;
@@ -54,6 +58,38 @@ pub fn exposed_area<'a>(
             .shape
             .projected_area(part.offset.rotation.inverse() * view),
         _ => Silhouette::default().area(&parts, view),
+    }
+}
+
+/// The area of a blast's loading the body whose envelope is `parts` catches
+/// along `view`, a unit direction in the body's frame: for each solidity
+/// among the parts, that solidity times the union of those parts'
+/// silhouettes, summed, and capped at the whole union's area. Parts that
+/// share one solidity catch that share of their union.
+pub fn struck_area<'a>(
+    parts: impl IntoIterator<Item = EnvelopePart<'a>>,
+    view: Vector3<f32>,
+) -> f32 {
+    let parts: SmallVec<[EnvelopePart; 8]> = parts.into_iter().collect();
+    let mut solidities: SmallVec<[f32; 2]> = SmallVec::new();
+    for part in &parts {
+        if !solidities.contains(&part.solidity) {
+            solidities.push(part.solidity);
+        }
+    }
+    match solidities.as_slice() {
+        [] => 0.0,
+        [solidity] => solidity * exposed_area(parts, view),
+        _ => {
+            let caught: f32 = solidities
+                .iter()
+                .map(|&solidity| {
+                    let alike = parts.iter().filter(|p| p.solidity == solidity).copied();
+                    solidity * exposed_area(alike, view)
+                })
+                .sum();
+            caught.min(exposed_area(parts, view))
+        }
     }
 }
 
@@ -155,7 +191,7 @@ impl Silhouette {
         self.polygons.clear();
         for part in parts {
             self.points.clear();
-            outline(part.shape, part.offset, &across, &up, &mut self.points);
+            outline(part.shape, &part.offset, &across, &up, &mut self.points);
             let start = self.vertices.len();
             convex_hull(&mut self.points, &mut self.vertices);
             let hull = &self.vertices[start..];
@@ -360,11 +396,20 @@ fn covered_width(spans: &mut [(f32, f32)]) -> f32 {
 mod tests {
     use super::*;
 
-    fn part<'a>(shape: &'a ColliderShape, offset: &'a Isometry3<f32>) -> EnvelopePart<'a> {
+    fn part<'a>(shape: &'a ColliderShape, offset: &Isometry3<f32>) -> EnvelopePart<'a> {
+        porous(shape, offset, 1.0)
+    }
+
+    fn porous<'a>(
+        shape: &'a ColliderShape,
+        offset: &Isometry3<f32>,
+        solidity: f32,
+    ) -> EnvelopePart<'a> {
         EnvelopePart {
             shape,
-            offset,
+            offset: *offset,
             drag_coefficient: None,
+            solidity,
         }
     }
 
@@ -426,5 +471,48 @@ mod tests {
         // The circles are drawn circumscribed, about half a percent over.
         assert!((side - 2.0 * disc).abs() < 0.02 * disc, "side {side}");
         assert!((end_on - disc).abs() < 0.01 * disc, "end on {end_on}");
+    }
+
+    /// Parts of one solidity catch that share of their union, as a body of
+    /// one solidity always has.
+    #[test]
+    fn a_uniformly_porous_body_catches_its_share_of_its_union() {
+        let unit = block(0.5);
+        let offsets = [
+            Isometry3::translation(0.0, 0.0, 0.0),
+            Isometry3::translation(0.5, 0.0, 0.3),
+        ];
+        let parts: Vec<EnvelopePart> = offsets.iter().map(|o| porous(&unit, o, 0.3)).collect();
+        let union = exposed_area(parts.iter().copied(), Vector3::z());
+        let struck = struck_area(parts, Vector3::z());
+        assert_eq!(struck, 0.3 * union);
+    }
+
+    /// Apart, a solid square and a porous one each catch their own share;
+    /// overlapping wholly, the two shares together are capped at the one
+    /// square they show.
+    #[test]
+    fn mixed_solidities_sum_their_unions_up_to_the_whole() {
+        let unit = block(0.5);
+        let apart = [
+            Isometry3::translation(-1.0, 0.0, 0.0),
+            Isometry3::translation(1.0, 0.0, 0.0),
+        ];
+        let parts = [porous(&unit, &apart[0], 1.0), porous(&unit, &apart[1], 0.3)];
+        let struck = struck_area(parts, Vector3::z());
+        assert!((struck - 1.3).abs() < 1e-5, "apart {struck}");
+
+        let together = Isometry3::identity();
+        let parts = [porous(&unit, &together, 1.0), porous(&unit, &together, 0.3)];
+        let struck = struck_area(parts, Vector3::z());
+        assert!((struck - 1.0).abs() < 1e-5, "together {struck}");
+
+        let half = [
+            Isometry3::translation(0.0, 0.0, 0.0),
+            Isometry3::translation(0.5, 0.0, 0.3),
+        ];
+        let parts = [porous(&unit, &half[0], 0.5), porous(&unit, &half[1], 0.2)];
+        let struck = struck_area(parts, Vector3::z());
+        assert!((struck - 0.7).abs() < 1e-5, "half over {struck}");
     }
 }

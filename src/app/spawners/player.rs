@@ -68,7 +68,6 @@ pub fn create_player_body(
     locomotion: &LocomotionConfig,
 ) -> (RigidBodyHandle, ConstraintHandle) {
     let body_desc = RigidBodyDesc::dynamic()
-        .bulk(figure(locomotion.collider_half_height))
         .position(position)
         .gravity_scale(1.0)
         .linear_damping(0.0)
@@ -82,7 +81,8 @@ pub fn create_player_body(
     let collider_desc =
         ColliderDesc::capsule(locomotion.collider_half_height, locomotion.collider_radius)
             .restitution(0.0)
-            .friction_model(FrictionModel::Isotropic(0.8));
+            .friction_model(FrictionModel::Isotropic(0.8))
+            .bulk(figure(locomotion.collider_half_height));
     physics.attach_collider(body, collider_desc);
     physics
         .body_mut(body)

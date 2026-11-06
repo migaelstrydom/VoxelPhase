@@ -126,7 +126,6 @@ impl Spawnable for HeartCritterDef {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body_handle = physics.world.create_body(
                 RigidBodyDesc::dynamic()
-                    .bulk(fluff(&rig, clearance))
                     .position(initial_pos)
                     .gravity_scale(1.0)
                     .linear_damping(0.0)
@@ -137,7 +136,8 @@ impl Spawnable for HeartCritterDef {
                 ColliderDesc::capsule(clearance, radius)
                     .density(DENSITY)
                     .restitution(0.0)
-                    .friction_model(FrictionModel::Isotropic(0.8)),
+                    .friction_model(FrictionModel::Isotropic(0.8))
+                    .bulk(fluff(&rig, clearance)),
             );
             // A capsule has nothing to resist a torque about its long axis,
             // so without this it topples the first time it clips a rock.
@@ -203,14 +203,13 @@ mod tests {
     fn critter(world: &mut PhysicsWorld) -> RigidBodyHandle {
         let rig = CritterRigConfig::default();
         let clearance = rig.body_height() * 0.5;
-        let body = world.create_body(
-            RigidBodyDesc::dynamic()
-                .bulk(fluff(&rig, clearance))
-                .position(Point3::new(0.0, clearance, 0.0)),
-        );
+        let body =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, clearance, 0.0)));
         world.attach_collider(
             body,
-            ColliderDesc::capsule(clearance, rig.torso_width * 0.5).density(DENSITY),
+            ColliderDesc::capsule(clearance, rig.torso_width * 0.5)
+                .density(DENSITY)
+                .bulk(fluff(&rig, clearance)),
         );
         body
     }
