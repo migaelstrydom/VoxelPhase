@@ -9,13 +9,14 @@
 //! ```
 //!
 //! A bond's **torn-off side** ([`TornSides`]) is what comes away if it alone
-//! gives way: the side without a tie, else the lighter. A bond does not fail
-//! because the air where it holds is loaded but because what hangs off it is
-//! pushed away from what holds it, so two branches off one fork break apart
-//! from each other, each by the blast on its own crown. A bond in a cycle
-//! frees nothing on its own; it is a seam sharing a load that has other
-//! paths, and is judged where it holds: the blast at its anchor, spikes on
-//! either part.
+//! gives way: the side not held by the world through a tie, else the
+//! lighter. A bond does not fail because the air where it holds is loaded
+//! but because what hangs off it is pushed away from what holds it, so two
+//! branches off one fork break apart from each other, each by the blast on
+//! its own crown. A bond in a cycle, the world's ties included, frees
+//! nothing on its own; it is a seam sharing a load that has other paths,
+//! and is judged where it holds: the blast at its anchor, spikes on either
+//! part.
 //!
 //! Two loads arrive by different routes and are *not* interchangeable numbers,
 //! which is why they are kept apart all the way to the threshold test:

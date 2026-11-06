@@ -20,8 +20,8 @@ use crate::time::Time;
 /// stays off onto a body of its own.
 ///
 /// Each bond is judged by what it would tear off ([`TornSides`]: the side
-/// without a tie, else the lighter), or where it holds if it is in a cycle
-/// and tears nothing off on its own. Two loads:
+/// not held by the world through a tie, else the lighter), or where it
+/// holds if it is in a cycle and tears nothing off on its own. Two loads:
 ///
 /// - **Blast.** `PhysicsImpulseQueue::last_impulses()`' loading per area at
 ///   the torn-off side's centre of mass, so a blast beside one branch takes

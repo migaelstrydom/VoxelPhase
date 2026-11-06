@@ -53,9 +53,10 @@ impl PieceTraits {
 /// Marks a compound body as destructible: its parts, the bonds between them
 /// and the ties holding it up, and the loads they are judged by.
 ///
-/// A bond breaks when the load on what it would tear off (the side without
-/// a tie, else the lighter; for a bond in a cycle, which tears nothing off
-/// on its own, its two parts where it holds) exceeds what it can take,
+/// A bond breaks when the load on what it would tear off (the side not
+/// held by the world through a tie, else the lighter; for a bond in a
+/// cycle, which tears nothing off on its own, its two parts where it
+/// holds) exceeds what it can take,
 /// where the load comes from two sources:
 ///
 /// - a blast, read as its loading per area at the torn-off side's centre of

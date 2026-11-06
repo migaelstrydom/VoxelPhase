@@ -682,8 +682,16 @@ from what holds it.
 on.** For each bond, cut the connection between its two parts (every bond
 between that pair, since a pane held by four stones is held by one
 connection) and ask what comes away, by the kept-group rule: of the two
-sides, the one without a tie, else the lighter. That side is the bond's
-**torn-off side**.
+sides, the one not held by the world, else the lighter. That side is the
+bond's **torn-off side**.
+
+**The world is a part too.** Two parts each tied to the world are joined
+through it: a pane welded along two edges and cracked down the middle
+still hangs from either half's welds. So the search counts the world as
+one more node, joined to every tied part, and a side "held by the world"
+is the side that reaches it. The world never weighs into a side, and a
+bond between two separately tied parts, or between a part and two tied
+ones, is in a cycle through the world.
 
 - **Blast:** the loading per area at the torn-off side's centre of mass,
   N·s/m², against `threshold`. That is where the engine itself strikes a
@@ -708,7 +716,8 @@ and the place it is loaded is where it holds: it is judged at its anchor,
 by spikes on either part, exactly as before.
 
 In graph terms the torn-off sides are those of the bridges of the part
-graph with parallel bonds merged; a bond that is not a bridge has none.
+graph with parallel bonds merged and the world as a node joined to every
+tied part; a bond that is not a bridge has none.
 
 ### What changes for each compound
 
@@ -716,19 +725,21 @@ graph with parallel bonds merged; a bond that is not a bridge has none.
 |---|---|---|
 | tree | trunk ⟷ branch, branch ⟷ sub-branch: all bridges; the trunk is tied | Each branch is judged at its own centre of mass, sub-branches included, and by spikes on itself: a grenade beside one crown takes that branch off and leaves its fork-mates; a landing on the trunk breaks nothing. Recalibrated (below). |
 | table | top ⟷ each leg: bridges | A leg is judged at its middle rather than its top, by spikes on itself. Blast threshold 10 N·s/m² is far below any grenade's reach either way; a chair knocked into the top no longer loads every leg. |
-| framed window | stone frame ⟷ pane at each stone it touches: one connection per pane, a bridge | Every bond of a pane feels the same blast, at the pane's centre: the pane comes out of the frame whole or not at all, instead of letting go of the stones nearest the blast and hanging from the rest. Contact counts spikes on the pane only. Once crazed, its cells form cycles and are judged at their anchors. |
+| framed window | the stonework is one part, untied; each pane is bonded to it at every stone it touches: one connection per pane, a bridge | Every bond of a pane feels the same blast, at the pane's centre: the pane comes out of the frame whole or not at all, instead of letting go of the stones nearest the blast and hanging from the rest. Contact counts spikes on the pane only. Once crazed, its cells form cycles and are judged at their anchors. Were the stones parts of their own, each tied, the pane's bonds would be cycles through the world and judged at their anchors as before. |
 | plank bridge | each plank ⟷ both beams: cycles | None while two or more planks stand. |
-| glass sheet | cells ⟷ touching cells: cycles | None, but for a cell held by a single neighbour, which is judged at its own centre. |
+| glass sheet, held | cells ⟷ touching cells, edge cells tied: cycles, through the world too | None, but for a cell or group held by a single untied neighbour, judged at its own centre. |
+| glass sheet, loose | cells ⟷ touching cells: cycles | None, but for a cell held by a single neighbour, which is judged at its own centre. |
 | stone and ice block | wedges, every pair bonded | None for three or more wedges; two wedges are one bridge, judged at the lighter wedge's centre. |
 | igloo | adjoining blocks: cycles | None, but for a block with a single neighbour (beside the doorway), judged at its own centre. |
 
 ### Cost
 
 Finding the torn-off sides is Tarjan's bridge search over the part graph
-with parallel bonds merged: one depth-first pass, O(parts + bonds). In the
-order that pass visits parts, a bridge's far side is one contiguous run,
-so each side's mass, centre of mass and whether it holds a tie come from
-prefix sums: no side is ever listed. Each part's mass and centre are read
+with parallel bonds merged and the world's node: one depth-first pass,
+O(parts + bonds + ties). In the order that pass visits nodes, a bridge's
+far side is one contiguous run, so whether it reaches the world is one
+comparison, and its mass and centre of mass come from prefix sums: no
+side is ever listed. Each part's mass and centre are read
 from its colliders, O(colliders).
 
 It is computed per compound only in a frame where some bond could break:

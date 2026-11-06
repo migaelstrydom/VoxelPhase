@@ -436,8 +436,9 @@ Things to know when you build one:
   cleaves into two or three wedges the size of the block, and a piece that
   large glittering out of existence in front of the player reads as a bug.
 
-A bond is judged by **what it would tear off**: the side without a tie,
-else the lighter. `Bond::threshold` is measured against the **blast loading
+A bond is judged by **what it would tear off**: the side not held by the
+world through a tie, else the lighter (two tied parts are joined through
+the world, so a part bonded to both tears nothing off). `Bond::threshold` is measured against the **blast loading
 at that side's centre of mass** (at the anchor for a bond in a cycle, which
 tears nothing off on its own), in N·s/m², not against contact forces: a
 grenade's loading falls off linearly from its centre to nothing at its blast
