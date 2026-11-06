@@ -28,10 +28,11 @@ use crate::fire::components::{Flammable, OnFire};
 use crate::fire::light::FireLight;
 use crate::foliage::Foliage;
 use crate::force_field::ForceFieldVisual;
-use crate::fracture::{CompoundFracture, Debris, DebrisBudget};
+use crate::fracture::{CompoundFracture, Debris, DebrisBudget, PieceSplits};
 use crate::glass::BrittleSheet;
 use crate::input::{GameplayActions, InputState};
 use crate::lighting::{ActiveLights, PointLight};
+use crate::model::PartLooks;
 use crate::objective::{GemMotion, Goal, LevelProgress};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
 use crate::physics::PhysicsImpulseQueue;
@@ -128,6 +129,7 @@ impl WorldBuilder {
         world.register::<Flammable>();
         world.register::<OnFire>();
         world.register::<CompoundFracture>();
+        world.register::<PartLooks>();
         world.register::<BrittleSheet>();
         world.register::<BrittleSolid>();
         world.register::<TerrainAnchored>();
@@ -188,6 +190,7 @@ impl WorldBuilder {
         self.world.insert(FrameStart::default());
         self.world.insert(PhysicsImpulseQueue::default());
         self.world.insert(DebrisBudget::default());
+        self.world.insert(PieceSplits::default());
         self.world.insert(RubbleQueue::default());
         self.world.insert(ActiveLights::default());
         self.world.insert(DamageQueue::default());

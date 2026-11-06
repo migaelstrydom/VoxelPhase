@@ -10,9 +10,13 @@
 //!        ▼
 //!   SolidCleaveSystem ── CleaveRule ──▶ tilted cut planes ──▶ split_hull
 //!        │                                                        │
-//!        │            fracture::split_child, rejoin, sever ◀───────┘
+//!        │   fracture::replace_part (wedges made and drawn by the ◀┘
+//!        │   spawnable's FaceMesher), bond the wedges, sever the struck one
 //!        ▼
-//!   CompoundFracture ──▶ FractureSystem frees the loose wedges
+//!   CompoundFracture ──▶ FractureSystem splits the loose wedges off
+//!        │
+//!        ▼ PieceSplit
+//!   SolidShareSystem ──▶ a split-off piece's share of the BrittleSolid
 //! ```
 
 mod components;
@@ -21,4 +25,4 @@ pub mod systems;
 
 pub use components::{BlowMeasure, BrittleSolid};
 pub use plan::{CleavePiece, CleaveRule};
-pub use systems::SolidCleaveSystem;
+pub use systems::{SolidCleaveSystem, SolidShareSystem};

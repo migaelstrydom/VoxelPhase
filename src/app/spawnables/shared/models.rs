@@ -7,44 +7,13 @@ use smallvec::SmallVec;
 
 use crate::collision::convex_hull::{ConvexHull, HullFace};
 use crate::geometry::{generate_cube_indices, generate_cube_vertices};
-use crate::model::{MeshPrimitive, Model, ModelPart};
+use crate::model::{Look, MeshPrimitive, Model, ModelPart};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::MaterialId;
 use crate::rendering::vertex::Vertex;
 
-/// How one piece of a compound object is drawn: half-extents in, mesh out.
-///
-/// A compound body knows its pieces only as box colliders, which is enough to
-/// place them and not enough to draw them — an ice block and a table leg are
-/// the same box and do not look alike. A piece's owner supplies this once, and
-/// everything that has to rebuild the object later (the fracture system, when
-/// a piece breaks off) draws the pieces the way the owner draws them rather
-/// than as plain cuboids.
-/// The piece is passed whole rather than as its half-extents alone so that a
-/// mesh may vary with *where* the piece sits — which is how an object made of
-/// many identical blocks avoids showing the same markings on every one.
-pub type PieceMesh = fn(&PiecePlacement, SurfaceUvs) -> (Vec<Vertex>, Vec<u32>);
-
-/// The default [`PieceMesh`]: a plain box.
-pub fn cuboid_mesh(piece: &PiecePlacement, _uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
-    (
-        generate_cube_vertices(piece.half_extents, Colour::WHITE),
-        generate_cube_indices(),
-    )
-}
-
-/// How one hull-shaped piece of a compound object is drawn: the hull it
-/// collides as in, mesh out.
-///
-/// The counterpart of [`PieceMesh`] for the children that are not boxes. A
-/// hull is its own drawing, so the default — [`hull_mesh`] — needs no help;
-/// this exists for the object whose look is not quite its collision shape,
-/// such as ice, whose edges are chamfered on the drawing and square on the
-/// collider.
-pub type HullMesh = for<'a> fn(&PieceHull<'a>, SurfaceUvs) -> (Vec<Vertex>, Vec<u32>);
-
-/// One hull-shaped piece of a compound object, and where it sits in the body's
-/// frame.
+/// One hull-shaped piece of an object, and where it sits in the frame the
+/// object's texture was laid in.
 ///
 /// The counterpart of [`PiecePlacement`], and it carries the offset for the
 /// same reason: a piece's markings follow from where it is, not only from what
@@ -53,7 +22,7 @@ pub type HullMesh = for<'a> fn(&PieceHull<'a>, SurfaceUvs) -> (Vec<Vertex>, Vec<
 pub struct PieceHull<'a> {
     /// The hull the piece collides as, in its own frame.
     pub hull: &'a ConvexHull,
-    /// Where that frame's origin sits in the body's frame.
+    /// Where that frame's origin sits in the object's texture frame.
     pub offset: Vector3<f32>,
     /// The solid the piece was cut from, as it was before anything broke, in
     /// the frame `offset` leads into. `None` when nobody kept it.
@@ -78,31 +47,6 @@ impl<'a> PieceHull<'a> {
     pub fn within(mut self, whole: Option<&'a ConvexHull>) -> Self {
         self.whole = whole;
         self
-    }
-}
-
-/// How every piece of one compound object is drawn, whatever shape it is.
-///
-/// Carried together because a compound breaks into both kinds at once: an ice
-/// block starts as a box child and becomes hull children the moment it is
-/// cleaved, and the two have to be drawn as the same substance.
-#[derive(Debug, Clone, Copy)]
-pub struct PieceStyle {
-    /// How a box child is drawn.
-    pub boxes: PieceMesh,
-    /// How a convex-hull child is drawn.
-    pub hulls: HullMesh,
-    /// How either one is laid out on its texture.
-    pub uvs: SurfaceUvs,
-}
-
-impl Default for PieceStyle {
-    fn default() -> Self {
-        Self {
-            boxes: cuboid_mesh,
-            hulls: hull_mesh,
-            uvs: SurfaceUvs::Fitted,
-        }
     }
 }
 
@@ -159,41 +103,38 @@ impl SurfaceUvs {
     }
 }
 
-/// How far the pieces of `model` stray from one projection of the whole
-/// object, in texture coordinates. Zero means they are one sheet.
+/// How far the looks of an object's pieces stray from one projection of
+/// the whole object, in texture coordinates. Zero means they are one sheet.
 ///
-/// The measurement behind "the texture changed when it broke". A compound is
-/// assembled out of one mesh per child, and each child is meshed from its own
-/// shape, so nothing about the assembly forces the children to agree — they
-/// agree only if every one of them was told where it sits and read the pattern
-/// there. This reads the finished model back and says whether they did.
-///
-/// `anchor` is the object's texture origin in the body's current frame — see
-/// `CompoundFracture::texture_anchor` — without which this reads zero on an
-/// object whose whole pattern has slid, because the pieces slid together.
+/// The measurement behind "the texture changed when it broke". Each piece is
+/// meshed from its own shape, so nothing about the meshing forces the pieces
+/// to agree — they agree only if every one of them was told where it sits and
+/// read the pattern there. This reads the finished looks back, each with
+/// where its collider sits in the object's texture frame, and says whether
+/// they did.
 ///
 /// `None` for [`SurfaceUvs::Fitted`], which has no single projection to stray
-/// from, and for a model with nothing in it.
+/// from, and for no looks.
 ///
 /// Note that a piece mesh is allowed to move its own markings deliberately —
 /// an object built of identical bricks does it so that its bricks do not look
 /// stamped — and that shows up here as a seam per brick. It is the *drawn from
 /// one shape* pieces, cut where the object broke, that must read zero.
 #[cfg(test)]
-pub fn texture_seam(model: &Model, uvs: SurfaceUvs, anchor: Vector3<f32>) -> Option<f32> {
+pub fn texture_seam<'a>(
+    looks: impl IntoIterator<Item = (&'a Look, Vector3<f32>)>,
+    uvs: SurfaceUvs,
+) -> Option<f32> {
     let SurfaceUvs::PerMetre(scale) = uvs else {
         return None;
     };
     let mut worst: Option<f32> = None;
-    for vertex in model
-        .parts
-        .iter()
-        .flat_map(|part| part.primitives.iter())
-        .flat_map(|primitive| primitive.vertices.iter())
-    {
-        let want = project_at_scale(vertex.pos + anchor, vertex.normal, scale);
-        let stray = (vertex.tex_coords - want).amax();
-        worst = Some(worst.map_or(stray, |w: f32| w.max(stray)));
+    for (look, at) in looks {
+        for vertex in look.primitives.iter().flat_map(|p| p.vertices.iter()) {
+            let want = project_at_scale(vertex.pos + at, vertex.normal, scale);
+            let stray = (vertex.tex_coords - want).amax();
+            worst = Some(worst.map_or(stray, |w: f32| w.max(stray)));
+        }
     }
     worst
 }
@@ -251,94 +192,6 @@ impl PiecePlacement {
     }
 }
 
-/// Build one model from placed pieces, each drawn by `mesh`.
-///
-/// The general form of [`compound_cuboid_model`]: it keeps each piece's
-/// rotation, and it does not assume the pieces are boxes.
-pub fn compound_model(
-    pieces: &[PiecePlacement],
-    mesh: PieceMesh,
-    uvs: SurfaceUvs,
-    material: MaterialId,
-) -> Arc<Model> {
-    let mut all_vertices: Vec<Vertex> = Vec::new();
-    let mut all_indices: Vec<u32> = Vec::new();
-
-    for piece in pieces {
-        let (vertices, indices) = mesh(piece, uvs);
-        let base = all_vertices.len() as u32;
-        let rotation = piece.rotation.to_rotation_matrix();
-
-        all_vertices.extend(vertices.into_iter().map(|mut vertex| {
-            vertex.pos = rotation * vertex.pos + piece.offset;
-            vertex.normal = rotation * vertex.normal;
-            vertex
-        }));
-        all_indices.extend(indices.iter().map(|index| index + base));
-    }
-
-    let parts = vec![ModelPart::new(vec![MeshPrimitive {
-        vertices: all_vertices,
-        indices: all_indices,
-        material,
-    }])];
-
-    Arc::new(Model::flat(parts))
-}
-
-/// One already-meshed piece of a compound object, where it sits in the body's
-/// frame, and what it is drawn with.
-///
-/// The step below [`PiecePlacement`]: a placement says where a *box* goes and
-/// leaves the drawing to a [`PieceMesh`], whereas this carries the mesh
-/// itself, so pieces that are not boxes — a convex shard — can be assembled
-/// into the same model as those that are.
-pub struct PlacedMesh {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
-    pub offset: Vector3<f32>,
-    pub rotation: UnitQuaternion<f32>,
-    pub material: MaterialId,
-}
-
-/// Merge placed meshes into one model, one primitive per material.
-///
-/// Grouped in first-seen order so the model is stable across rebuilds rather
-/// than reshuffling with a hash map's iteration order.
-pub fn assemble_by_material(pieces: Vec<PlacedMesh>) -> Arc<Model> {
-    let mut groups: Vec<(MaterialId, Vec<Vertex>, Vec<u32>)> = Vec::new();
-    for piece in pieces {
-        let slot = match groups.iter().position(|(m, _, _)| *m == piece.material) {
-            Some(slot) => slot,
-            None => {
-                groups.push((piece.material, Vec::new(), Vec::new()));
-                groups.len() - 1
-            }
-        };
-        let (_, vertices, indices) = &mut groups[slot];
-
-        let base = vertices.len() as u32;
-        let rotation = piece.rotation.to_rotation_matrix();
-        vertices.extend(piece.vertices.into_iter().map(|mut vertex| {
-            vertex.pos = rotation * vertex.pos + piece.offset;
-            vertex.normal = rotation * vertex.normal;
-            vertex
-        }));
-        indices.extend(piece.indices.iter().map(|index| index + base));
-    }
-
-    let primitives = groups
-        .into_iter()
-        .map(|(material, vertices, indices)| MeshPrimitive {
-            vertices,
-            indices,
-            material,
-        })
-        .collect();
-
-    Arc::new(Model::flat(vec![ModelPart::new(primitives)]))
-}
-
 /// The mesh of a convex hull, drawn as it collides: one flat-shaded polygon
 /// per hull face, textured by a planar projection of that face.
 ///
@@ -383,27 +236,13 @@ pub fn hull_mesh(piece: &PieceHull, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) 
     (vertices, indices)
 }
 
-/// Build a single-piece model, drawn by `mesh`.
-///
-/// The piece stands on its own, so its geometry is centred on the origin: a
-/// block that has broken off an object is no longer anywhere within it. Its
-/// placement is still passed whole, because a mesh may vary its *markings*
-/// with where the piece used to sit, and a piece that repaints itself as it
-/// comes off is the break made visible in the wrong way.
-pub fn piece_model(
-    piece: &PiecePlacement,
-    mesh: PieceMesh,
-    uvs: SurfaceUvs,
-    material: MaterialId,
-) -> Arc<Model> {
-    let (vertices, indices) = mesh(piece, uvs);
-    let parts = vec![ModelPart::new(vec![MeshPrimitive {
-        vertices,
-        indices,
+/// The look of a plain box with the given half-extents.
+pub fn cuboid_look(half_extents: Vector3<f32>, material: MaterialId) -> Arc<Look> {
+    Arc::new(Look::single(
+        generate_cube_vertices(half_extents, Colour::WHITE),
+        generate_cube_indices(),
         material,
-    }])];
-
-    Arc::new(Model::flat(parts))
+    ))
 }
 
 /// Build a single-box model with the given half-extents.
@@ -471,55 +310,6 @@ pub fn multi_material_compound_cuboid_model(
         verts.extend(generate_offset_cube_vertices(
             half_extents,
             offset,
-            Colour::WHITE,
-        ));
-        let cube_indices = generate_cube_indices();
-        indices.extend(cube_indices.iter().map(|i| i + base_idx));
-    }
-
-    let primitives = groups
-        .into_iter()
-        .map(|(material, vertices, indices)| MeshPrimitive {
-            vertices,
-            indices,
-            material,
-        })
-        .collect();
-
-    let parts = vec![ModelPart::new(primitives)];
-    Arc::new(Model::flat(parts))
-}
-
-/// Build a compound model from multiple boxes with per-box materials and
-/// optional per-box Y-axis rotation.
-///
-/// Same as [`multi_material_compound_cuboid_model`] but each box can be
-/// individually rotated.
-pub fn multi_material_rotated_compound_cuboid_model(
-    boxes: &[(
-        Vector3<f32>,
-        Vector3<f32>,
-        nalgebra::UnitQuaternion<f32>,
-        MaterialId,
-    )],
-) -> Arc<Model> {
-    let mut groups: Vec<(MaterialId, Vec<Vertex>, Vec<u32>)> = Vec::new();
-
-    for &(half_extents, offset, rotation, material) in boxes {
-        let group = groups.iter_mut().find(|(m, _, _)| *m == material);
-        let (_, verts, indices) = match group {
-            Some(g) => g,
-            None => {
-                groups.push((material, Vec::new(), Vec::new()));
-                groups.last_mut().unwrap()
-            }
-        };
-
-        let base_idx = verts.len() as u32;
-        verts.extend(generate_rotated_offset_cube_vertices(
-            half_extents,
-            offset,
-            rotation,
             Colour::WHITE,
         ));
         let cube_indices = generate_cube_indices();
@@ -740,25 +530,6 @@ fn generate_offset_cube_vertices(
         v.pos.x += offset.x;
         v.pos.y += offset.y;
         v.pos.z += offset.z;
-    }
-    verts
-}
-
-/// Generate cube vertices rotated then translated.
-fn generate_rotated_offset_cube_vertices(
-    half_extents: Vector3<f32>,
-    offset: Vector3<f32>,
-    rotation: nalgebra::UnitQuaternion<f32>,
-    colour: Colour,
-) -> Vec<Vertex> {
-    let rot = rotation.to_rotation_matrix();
-    let mut verts = generate_cube_vertices(half_extents, colour);
-    for v in &mut verts {
-        let p = rot * Vector3::new(v.pos.x, v.pos.y, v.pos.z);
-        v.pos.x = p.x + offset.x;
-        v.pos.y = p.y + offset.y;
-        v.pos.z = p.z + offset.z;
-        v.normal = rot * v.normal;
     }
     verts
 }

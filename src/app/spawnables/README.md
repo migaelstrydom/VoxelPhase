@@ -379,57 +379,69 @@ value must match or you get a one-frame visual pop.
 - **Separate entities** (house, temple): each piece is an independent rigid body.
   Any piece can be knocked loose. Simpler to set up.
 - **Compound bodies** (table, plank bridge, igloo): one physics body with
-  multiple colliders at offsets. Build it with `CompoundFracture::boxes(joints,
-  material)` if you want pieces to break apart under force. A joint names its
-  two children by the `ColliderHandle`s `attach_collider` returned, never by
-  their place in the body's collider list, which changes as pieces leave;
-  `with_piece_materials` takes `(handle, material)` pairs for children that are
-  not drawn with `material`. `plank_bridge.rs` and `ice/igloo.rs` show both.
+  multiple colliders at offsets. Give the entity a `CompoundFracture` over a
+  `PartGraph` if you want pieces to break apart under force: a part per set
+  of colliders that never comes apart (`graph.add_part([handle])`), and a
+  `Bond` between parts that touch, with where they meet (`anchor`, in the
+  body's frame), how far a contact spike there still counts (`reach`) and the
+  blast loading that breaks it (`threshold`). Parts name colliders by the
+  `ColliderHandle`s `attach_collider` returned, never by their place in the
+  body's collider list. `plank_bridge.rs` and `ice/igloo.rs` show it.
+- **Give a compound `PartLooks`, not a model of your own.** A look per drawn
+  collider, in the collider's own frame, with its material and texture
+  coordinates baked (`shared::models::cuboid_look` for a plain box); build
+  the spawn-time `ModelInstance` from it with `PartLooks::drawn`. A piece that
+  breaks off takes its looks with it, so it looks exactly as it did on the
+  object, and `PartDrawSystem` redraws whatever changed.
 
 A compound body is the answer whenever a structure has to stay standing but
 must not be part of the world. A static body never falls — blow the terrain out
 from under a static shell and it hangs in the air — while a pile of separate
 dynamic bodies only stands if friction holds it together, which for ice
-(coefficient 0.06) it does not. One dynamic body with welded children is rigid
-until something breaks it, and falls the moment its ground goes.
+(coefficient 0.06) it does not. One dynamic body with bonded parts is rigid
+until something breaks it, and falls the moment its ground goes. Something
+that must not move at all is a dynamic body welded where it stands, with the
+weld recorded as a tie (`graph.tie(constraint, part)`): a held glass sheet is
+welded along its long edges, and each piece it breaks into takes the welds
+of its own parts.
 
-Two things to know when you build one:
+Things to know when you build one:
 
 - **Put the body origin on the centre of mass.** Colliders are offset from the
   origin, and a body that pivots anywhere but its centre of mass carries the
   inertia of an arm that is not there. `PhysicsWorld::recenter_on_colliders`
-  fixes one up after the fact; authoring the offsets around the centre of mass
-  in the first place is better, because then the model matches.
-- **Supply a `piece_mesh` if the children are not plain boxes.** The fracture
-  system knows a child only as a box collider, which says where it is and not
-  what it looks like. `CompoundFracture::boxes(...).with_piece_mesh(my_mesh)`
-  is what stops the object changing shape at the moment it breaks — see
-  `ice/igloo.rs`, whose children are bevelled ice blocks.
-- **Supply a `hull_mesh` too if the object can be cleaved.** A child that is a
-  convex hull is drawn as that hull, which is right for a shard and wrong for
-  anything whose look is not quite its collision shape. Ice is cut into wedges
-  by `SolidCleaveSystem` and a cut wedge has square edges, so `ice/block.rs`
-  passes `.with_hull_mesh(ice_hull_mesh)` to put the chamfer back —
-  `collision::hull_bevel` does that for any hull.
-- **Supply `with_uvs` if the texture is the substance and not a decoration.**
-  A fragment inherits its parent's material, and by default each of its faces
-  is stretched to hold one copy of that texture — so the pattern changes size
-  at the moment the object breaks, by a different amount on every face.
-  `SurfaceUvs::PerMetre(coords_per_metre)` fixes the density instead, and the
-  faces the fragment kept go on wearing the markings they had. `ice/block.rs`
-  derives the number once, in `ice_uvs`, from the same spread its texture was
-  baked at; anything else is a pattern at two magnifications.
+  fixes one up after the fact; bond anchors are in the body's frame, so read
+  them off the colliders after re-centring.
+- **A cuttable object implements `FaceMesher`.** Glass (`GlassCrackSystem`)
+  and brittle solids (`SolidCleaveSystem`) replace a part with pieces whose
+  shapes nobody authored. The spawnable says how a piece is made — its
+  substance, and its look given where it sits in the object's texture frame —
+  and hands that to the cutter's component in a `Cuttable`, listing the
+  colliders that may be cut and where each sits in that frame. `ice/block.rs`
+  (`IceFaces`: chamfered wedges at the block's texture density),
+  `stone/block.rs` (`StoneFaces`: weathered old faces, raw breaks) and
+  `glass_sheet.rs` (`GlassFaces`) show it. A new look for broken stuff lives
+  in the spawnable's file, not in `shared/models.rs`.
+- **Use per-metre UVs if the texture is the substance and not a decoration.**
+  A fragment inherits its parent's material, and a mapping fitted to each face
+  changes the pattern's size at the moment the object breaks, by a different
+  amount on every face. `SurfaceUvs::PerMetre(coords_per_metre)` fixes the
+  density instead, and the faces the fragment kept go on wearing the markings
+  they had. `ice/block.rs` derives the number once, in `ice_uvs`, from the
+  same spread its texture was baked at.
 - **`shedding_debris` is for objects that break into *many* pieces.** The
   debris budget takes the small ones away with a glitter burst once the break
   has been seen, which is right for a pane of glass and wrong for ice: ice
   cleaves into two or three wedges the size of the block, and a piece that
   large glittering out of existence in front of the player reads as a bug.
 
-`FractureJoint::threshold` is measured against the **blast impulse at the
-child**, in N·s, not against contact forces: a grenade delivers about 1100 N·s
-at its centre, falling off linearly to nothing at its blast radius. So a
-threshold of a few hundred means "a grenade within a few metres frees this
-piece", and nothing a body merely leans on will ever break a joint.
+`Bond::threshold` is measured against the **blast loading at the bond's
+anchor**, in N·s/m², not against contact forces: a grenade's loading falls off
+linearly from its centre to nothing at its blast radius. So a low threshold
+means "a grenade within a few metres frees this piece", and nothing a body
+merely leans on will ever break a bond; contact is judged against the
+compound's own `breaking_on_impact_at`. Groups still bonded come off as one
+body, and the group that stays is the tied one, else the heaviest.
 
 ### Realistic densities (kg/m^3)
 

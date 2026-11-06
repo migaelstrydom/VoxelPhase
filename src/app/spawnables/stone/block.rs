@@ -4,11 +4,12 @@
 //! ```text
 //!   StoneBlock ──▶ body + collider (hull or box, as authored)
 //!       │
-//!       ├──▶ ModelInstance   weathered_hull_mesh / weathered_box_mesh
-//!       ├──▶ CompoundFracture  (a compound of one, keeping the whole shape
-//!       │                       so a piece can tell old surface from break)
+//!       ├──▶ PartLooks         weathered_hull_mesh / weathered_box_mesh
+//!       ├──▶ CompoundFracture  (a compound of one part)
 //!       └──▶ BrittleSolid      one cut, when the block is stopped as hard
-//!                              as a long fall stops it
+//!                              as a long fall stops it; its pieces made by
+//!                              StoneFaces, which keeps the whole shape so a
+//!                              piece can tell old surface from break
 //! ```
 
 use std::sync::Arc;
@@ -17,16 +18,14 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::mesh::{weathered_box_mesh, weathered_hull_mesh};
-use crate::app::spawnables::shared::models::{
-    assemble_by_material, piece_model, PieceHull, PiecePlacement, PlacedMesh, SurfaceUvs,
-};
+use crate::app::spawnables::shared::models::{PieceHull, PiecePlacement, SurfaceUvs};
 use crate::cleave::{BlowMeasure, BrittleSolid, CleaveRule};
 use crate::collision::convex_hull::{cube_hull, ConvexHull};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
-use crate::fracture::CompoundFracture;
-use crate::model::Model;
+use crate::fracture::{CompoundFracture, Cuttable, FaceMesher, PartGraph};
+use crate::model::{assemble_by_material, Look, Model, PartLooks, PlacedMesh};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
 use crate::rendering::substance::{ColliderSubstance, Substance};
@@ -111,37 +110,46 @@ impl StoneBlock {
         // no two blocks wear the same ones and neighbours read as cut from one
         // bed of stone.
         let anchor = self.centre.coords;
-        let whole = Arc::new(hull.translated(anchor));
-        let model = match &self.shape {
-            StoneShape::Hull(hull) => weathered_model(hull, anchor, self.uvs, self.material),
-            StoneShape::Box(half_extents) => piece_model(
-                &PiecePlacement::new(*half_extents, anchor),
-                weathered_box_mesh,
-                self.uvs,
-                self.material,
-            ),
+        let faces = StoneFaces {
+            substance: self.substance,
+            material: self.material,
+            uvs: self.uvs,
+            whole: Arc::new(hull.translated(anchor)),
+        };
+        let look = match &self.shape {
+            StoneShape::Hull(hull) => faces.look(hull, anchor),
+            StoneShape::Box(half_extents) => {
+                let (vertices, indices) =
+                    weathered_box_mesh(&PiecePlacement::new(*half_extents, anchor), self.uvs);
+                Look::single(vertices, indices, self.material)
+            }
         };
 
-        let body_handle = {
-            let mut physics = world.write_resource::<PhysicsResource>();
-            let body_handle = physics.world.create_body(
-                RigidBodyDesc::dynamic()
-                    .position(self.centre)
-                    .rotation(self.rotation)
-                    .gravity_scale(1.0)
-                    .linear_damping(0.01)
-                    .angular_damping(0.005),
-            );
-            physics
-                .world
-                .attach_collider(body_handle, self.shape.collider().of(&self.substance));
-            body_handle
-        };
+        let mut physics = world.write_resource::<PhysicsResource>();
+        let body_handle = physics.world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(self.centre)
+                .rotation(self.rotation)
+                .gravity_scale(1.0)
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        let collider = physics
+            .world
+            .attach_collider(body_handle, self.shape.collider().of(&self.substance))
+            .expect("a stone attaches to its own new body");
+        let looks = PartLooks::new([(collider, Arc::new(look))]);
+        let model = looks
+            .drawn(&physics.world, body_handle)
+            .expect("a stone has something to draw");
+        drop(physics);
 
         // A compound of one block, as a lone ice block is: that is all a
         // block needs to be able to crack. Deliberately not
         // `shedding_debris` — the halves of a voussoir are the size of
         // boulders, and one fading out of existence reads as a bug.
+        let mut graph = PartGraph::default();
+        graph.add_part([collider]);
         world
             .create_entity()
             .with(Position(self.centre.coords))
@@ -150,19 +158,45 @@ impl StoneBlock {
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
+            .with(looks)
+            .with(CompoundFracture::new(graph))
             .with(
-                CompoundFracture::boxes(Vec::new(), self.material)
-                    .with_piece_mesh(weathered_box_mesh)
-                    .with_hull_mesh(weathered_hull_mesh)
-                    .with_uvs(self.uvs)
-                    .with_texture_anchor(anchor)
-                    .with_whole_shape(whole),
-            )
-            .with(
-                BrittleSolid::new(stone_cleaving(mass), self.material)
-                    .measured_by(BlowMeasure::Arrest),
+                BrittleSolid::new(
+                    stone_cleaving(mass),
+                    Cuttable::new(Arc::new(faces)).with(collider, anchor),
+                )
+                .measured_by(BlowMeasure::Arrest),
             )
             .build()
+    }
+}
+
+/// How a piece of stone is made when a block cracks: of the block's
+/// substance, drawn weathered where it keeps the block's old surface and raw
+/// where it broke.
+struct StoneFaces {
+    /// What the stone is made of.
+    substance: Substance,
+    /// Which of the caller's materials it wears.
+    material: MaterialId,
+    /// How its texture is laid on.
+    uvs: SurfaceUvs,
+    /// The block as it was before anything broke off it, in its texture
+    /// frame: what tells a piece's old faces from its fresh ones.
+    whole: Arc<ConvexHull>,
+}
+
+impl FaceMesher for StoneFaces {
+    fn collider(&self, hull: Arc<ConvexHull>) -> ColliderDesc {
+        ColliderDesc::convex_hull(hull).of(&self.substance)
+    }
+
+    fn look(&self, hull: &ConvexHull, at: Vector3<f32>) -> Look {
+        let (vertices, indices) = weathered_hull_mesh(
+            &PieceHull::new(hull, at).within(Some(&self.whole)),
+            self.uvs,
+        );
+        Look::single(vertices, indices, self.material)
     }
 }
 
@@ -202,15 +236,14 @@ pub fn stone_cleaving(mass: f32) -> CleaveRule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cleave::SolidCleaveSystem;
-    use crate::debug::{DebugLines, DebugLog};
-    use crate::fracture::FractureSystem;
+    use crate::app::breakage;
+    use crate::debug::DebugLines;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
-    use crate::physics::{ColliderShape, PhysicsConfig, PhysicsImpulseQueue, PhysicsWorld};
+    use crate::physics::{ColliderShape, PhysicsConfig, PhysicsWorld};
     use crate::rendering::substance;
     use crate::time::Time;
-    use specs::{Join, RunNow};
+    use specs::Join;
 
     const FRAME_DT: f32 = 1.0 / 60.0;
 
@@ -221,17 +254,8 @@ mod tests {
     /// One stone block, its lowest face `drop` metres above a floor.
     fn dropped_stone(drop: f32) -> World {
         let mut world = World::new();
-        world.register::<Position>();
-        world.register::<Velocity>();
-        world.register::<Orientation>();
-        world.register::<RigidBodyComponent>();
-        world.register::<ModelInstance>();
-        world.register::<Renderable>();
-        world.register::<CompoundFracture>();
-        world.register::<BrittleSolid>();
+        breakage::register(&mut world);
         world.insert(Time::fixed(FRAME_DT));
-        world.insert(PhysicsImpulseQueue::default());
-        world.insert(DebugLog::default());
 
         let mut config = PhysicsConfig::default();
         config.sleep.enabled = false;
@@ -270,9 +294,7 @@ mod tests {
                     &mut debug,
                 );
             }
-            SolidCleaveSystem.run_now(world);
-            FractureSystem.run_now(world);
-            world.maintain();
+            breakage::run(world);
         }
         let physics = world.read_resource::<PhysicsResource>();
         let bodies = world.read_storage::<RigidBodyComponent>();

@@ -173,7 +173,7 @@ mod frame_order {
     #[storage(VecStorage)]
     struct Spawned;
 
-    /// Stands in for `FractureSystem`: a parallel system that puts a new
+    /// Stands in for a system such as `GrenadeSpawnSystem`: a parallel one that puts a new
     /// entity into the world through `LazyUpdate`.
     struct Spawner {
         done: bool,

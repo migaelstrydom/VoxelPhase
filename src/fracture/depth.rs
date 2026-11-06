@@ -25,9 +25,8 @@ use crate::physics::ColliderHandle;
 /// more than its parent for every piece a break creates.
 ///
 /// Kept by collider handle, so a depth stays with its piece however the
-/// body's collider list is reordered. A piece that leaves the body keeps its
-/// entry until the object goes; a handle is never reused, so it cannot be
-/// mistaken for another.
+/// body's collider list is reordered, and goes with it when it is split off
+/// onto a body of its own.
 #[derive(Debug, Default)]
 pub struct BreakDepths {
     /// Depth of every piece a break created; a child absent is unbroken.
@@ -45,6 +44,21 @@ impl BreakDepths {
     /// Record the depth of a piece a break has just created.
     pub fn set(&mut self, child: ColliderHandle, depth: u32) {
         self.depth.insert(child, depth);
+    }
+
+    /// The depths of `children` alone, for a piece split off with them.
+    pub fn share(&self, children: &[ColliderHandle]) -> Self {
+        Self {
+            depth: children
+                .iter()
+                .filter_map(|c| Some((*c, *self.depth.get(c)?)))
+                .collect(),
+        }
+    }
+
+    /// Forget every piece but `children`.
+    pub fn retain(&mut self, children: &[ColliderHandle]) {
+        self.depth.retain(|child, _| children.contains(child));
     }
 }
 

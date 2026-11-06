@@ -468,6 +468,55 @@ impl PhysicsWorld {
         blast_on(body, &self.colliders, impulse)
     }
 
+    /// The impulse `impulse` gives `colliders` of `handle` alone, struck at
+    /// their centre of mass by the area their envelope shows it, and that
+    /// centre in the world: what one part of a body takes of a blast.
+    /// `None` for no body, colliders with no mass, or out of reach.
+    pub fn impulse_on_colliders(
+        &self,
+        handle: RigidBodyHandle,
+        colliders: &[ColliderHandle],
+        impulse: &PhysicsImpulse,
+    ) -> Option<(Vector3<f32>, Point3<f32>)> {
+        let body = self.body(handle)?;
+        let (_, centre) = self.mass_centre_of(handle, colliders)?;
+        let struck = impulse.impulse_on(centre, |travel| {
+            silhouette::struck_area(
+                bulk::envelope(colliders, &self.colliders),
+                body.rotation().inverse() * travel,
+            )
+        })?;
+        Some((struck, centre))
+    }
+
+    /// What `colliders` of `handle` weigh together, kg, and where their
+    /// centre of mass is in the world. `None` for no body or no mass.
+    pub fn mass_centre_of(
+        &self,
+        handle: RigidBodyHandle,
+        colliders: &[ColliderHandle],
+    ) -> Option<(f32, Point3<f32>)> {
+        let body = self.body(handle)?;
+        let mass: f32 = colliders
+            .iter()
+            .filter_map(|c| self.colliders.get(c.0))
+            .map(Collider::mass)
+            .sum();
+        let centre = bulk::mass_parts(colliders, &self.colliders).centre()?;
+        Some((mass, body.position() + body.rotation() * centre))
+    }
+
+    /// Whether a constraint holds `handle` against the world, so the body
+    /// bears its weight through it rather than through its contacts
+    /// ([`ConstraintKind::anchors_position`]).
+    pub fn is_held_by_world(&self, handle: RigidBodyHandle) -> bool {
+        self.constraints.iter().any(|(_, constraint)| {
+            constraint.active
+                && constraint.kind.anchors_position()
+                && constraint.kind.references_body(handle)
+        })
+    }
+
     /// Apply one-shot impulses to all dynamic bodies.
     fn apply_impulses(&mut self, impulses: &[PhysicsImpulse]) {
         for (idx, body) in self.bodies.iter_mut() {

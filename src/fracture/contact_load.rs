@@ -87,6 +87,19 @@ impl ContactLoadTracker {
         self
     }
 
+    /// The tracker of a piece split off with `colliders`: their baselines,
+    /// the same deadband, and the body's sleep as it was.
+    pub fn share(&self, colliders: &[ColliderHandle]) -> Self {
+        Self {
+            levels: colliders
+                .iter()
+                .filter_map(|c| Some((*c, *self.levels.get(c)?)))
+                .collect(),
+            deadband: self.deadband,
+            was_asleep: self.was_asleep,
+        }
+    }
+
     /// This frame's spike per child, advancing the stored baseline.
     ///
     /// Returns one value per entry of `collider_handles`: how much more contact
@@ -114,13 +127,14 @@ impl ContactLoadTracker {
             return vec![ContactSpike::default(); collider_handles.len()];
         }
 
-        // A body that never moves has no weight to redistribute: its own
-        // mass is not going through its children, so it gets no deadband.
-        // With one, a fixed pane's own mass hid every footstep on it.
+        // A body that never moves, or one the world holds up, carries its
+        // weight through what holds it rather than through its children's
+        // contacts, so it gets no deadband. With one, a held pane's own mass
+        // hid every footstep on it.
         let weight_per_frame = world.config().gravity.magnitude() * frame_dt;
         let body_deadband = world
             .body(body)
-            .filter(|b| !b.is_static())
+            .filter(|b| !b.is_static() && !world.is_held_by_world(body))
             .map(|b| b.mass() * weight_per_frame)
             .unwrap_or(0.0);
         let deadband_of = |handle: ColliderHandle| match self.deadband {

@@ -6,7 +6,7 @@ Design document for compound colliders and runtime fracture — enabling concave
 
 ## Status
 
-Phase 1 (compound colliders) is implemented. Phase 2 (compound fracture) is the next step.
+Both phases are implemented, and Phase 2 has since been reworked around parts, bonds and ties (`docs/COMPOUND_PARTS.md`): a compound is a `PartGraph` of parts that never come apart, bonds judged by the load where they hold, and constraints that hold it up; a group still bonded splits off whole through `PhysicsWorld::split_off`; looks are kept per collider in `model::PartLooks` and drawn by `PartDrawSystem`. Where this document describes per-child joints, freed children and models rebuilt from collider shapes, it is history.
 
 ---
 

@@ -7,8 +7,9 @@ on its colliders. Fracture judges loads and splits the graph of parts; it
 never draws anything and never rebuilds a collider. How a part looks is
 kept by collider handle and drawn by a system of its own.
 
-Status: design, reviewed twice (SOLID and general design), for the lead's
-review. Branch `compound-parts`.
+Status: steps 1–4 of the migration implemented on branch `compound-parts`;
+step 5 (trees) open. Decisions made while implementing step 4 are under
+"Step 4 as built".
 
 ---
 
@@ -571,6 +572,37 @@ Each step leaves the game working and is merged on its own.
    Calibrate a branch's bond in per-area units (today's 250 N·s on the
    crowns) and its contact threshold against a felled tree landing on its
    crowns.
+
+### Step 4 as built
+
+- **Severing frees a part from its ties too.** `CompoundFracture::sever`
+  cuts a part's bonds and gives up its ties, whose constraints the next
+  split removes: a shard knocked out of a held pane falls rather than
+  hanging from its weld.
+- **A piece knocked out at once inherits nothing.** A cutter marks the
+  pieces it severs on the spot (the wedge struck, the cells under a hit)
+  as not inheriting (`NewPart::inherits`), so the old part's bonds and ties
+  go to the nearest piece that stays.
+- **Held edges are welded per cell.** A held glass sheet keeps, per weld,
+  the stretch of edge it holds (`glass::HeldEdges`); crazing a welded cell
+  removes its welds and welds every new cell lying along those stretches.
+- **A welded piece is judged as a sheet at once.** A piece of glass split
+  off with welds gets its share of the `BrittleSheet` and is judged by the
+  remnant rule on its next frame, so a lone welded shard lets go. Other
+  pieces get a share only if they can still break (more than one part, or a
+  part that may craze or cleave again), judged when they next change.
+- **Texture frames are per collider.** `Cuttable` keeps, per cuttable
+  collider, where its origin sits in the object's texture frame; a cut
+  piece's is its parent's plus its offset from the parent. `FaceMesher`
+  reads it, which is all `texture_anchor` was for.
+- **The framed window's stonework is one part**, bonded to each pane at
+  every band the pane touches.
+- **Piece entities are made at once** (`Entities::create` and the storages,
+  not `LazyUpdate`), so the owners' share systems and `PartDrawSystem` see a
+  piece on the frame it splits off.
+- **Dispatcher order:** `glass_crack`, `solid_cleave` → `fracture` →
+  `sheet_share`, `solid_share`, `anchor_share` → `part_draw` → render.
+  `app::breakage` runs the same chain for tools and tests.
 
 Step 4 is the large one. Doing every compound at once avoids two fracture
 code paths side by side; step 3 is what makes that safe, by landing the

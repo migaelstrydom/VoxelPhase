@@ -20,7 +20,8 @@
 //!   IceBoxDef ──┐
 //!   IceWallDef ─┼──▶ IceBlock ──▶ substance::ICE ──┬──▶ ColliderDesc  (slippery)
 //!   IglooDef ───┘        │                         └──▶ Material      (glassy)
-//!                        └──────▶ ice_block_mesh ──────▶ Model
+//!                        ├──────▶ ice_block_mesh ──────▶ PartLooks
+//!                        └──────▶ IceFaces ────────────▶ its wedges, when it cleaves
 //! ```
 
 use std::sync::Arc;
@@ -39,8 +40,8 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::fracture::CompoundFracture;
-use crate::model::{MeshPrimitive, Model, ModelPart};
+use crate::fracture::{CompoundFracture, Cuttable, FaceMesher, PartGraph};
+use crate::model::{Look, PartLooks};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
 use crate::rendering::pattern::{self, Spread};
@@ -188,38 +189,41 @@ impl IceBlock {
     /// Create the body, the collider and the entity.
     pub fn spawn(&self, world: &mut World) -> Entity {
         let substance = ice();
-        let model = ice_block_model(self.half_extents, self.material, self.spread);
+        let (vertices, indices) = ice_block_mesh(self.half_extents, self.spread);
+        let look = Arc::new(Look::single(vertices, indices, self.material));
 
-        let body_handle = {
-            let mut physics = world.write_resource::<PhysicsResource>();
-
-            let body_handle = physics.world.create_body(
-                RigidBodyDesc::dynamic()
-                    .gravity_scale(1.0)
-                    .linear_damping(0.01)
-                    .angular_damping(0.005)
-                    .position(self.centre)
-                    .rotation(self.rotation),
-            );
-
-            // A box rather than the bevelled hull. The six faces of the mesh
-            // sit exactly on the box, so a block resting on a face is resting
-            // where it looks like it is; only the cut edges are a shade inside
-            // their collider, and no gameplay reads that. In exchange the block
-            // takes the engine's best-exercised collision path.
-            physics.world.attach_collider(
+        let mut physics = world.write_resource::<PhysicsResource>();
+        let body_handle = physics.world.create_body(
+            RigidBodyDesc::dynamic()
+                .gravity_scale(1.0)
+                .linear_damping(0.01)
+                .angular_damping(0.005)
+                .position(self.centre)
+                .rotation(self.rotation),
+        );
+        // A box rather than the bevelled hull. The six faces of the mesh
+        // sit exactly on the box, so a block resting on a face is resting
+        // where it looks like it is; only the cut edges are a shade inside
+        // their collider, and no gameplay reads that. In exchange the block
+        // takes the engine's best-exercised collision path.
+        let collider = physics
+            .world
+            .attach_collider(
                 body_handle,
                 ColliderDesc::box_shape(self.half_extents).of(&substance),
-            );
-
-            body_handle
-        };
+            )
+            .expect("a block attaches to its own new body");
+        let looks = PartLooks::new([(collider, look)]);
+        let model = looks
+            .drawn(&physics.world, body_handle)
+            .expect("a block has something to draw");
+        drop(physics);
 
         // Deliberately not `Flammable`. Everything else box-shaped in the
         // library is, and this one is made of water.
         //
         // A compound of one block, which is all a block needs to be able to
-        // break: `SolidCleaveSystem` replaces the one child with the wedges
+        // break: `SolidCleaveSystem` replaces the one part with the wedges
         // it cleaved into, and from then on the block is a compound like any
         // other.
         //
@@ -231,6 +235,12 @@ impl IceBlock {
         // as a bug rather than as settling debris. The cost is that ice piles
         // up: the ceiling on the pieces in a level is the cleave depth, not
         // the budget.
+        let mut graph = PartGraph::default();
+        graph.add_part([collider]);
+        let faces = IceFaces {
+            material: self.material,
+            uvs: ice_uvs(self.spread),
+        };
         world
             .create_entity()
             .with(Position(self.centre.coords))
@@ -239,14 +249,33 @@ impl IceBlock {
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
-            .with(
-                CompoundFracture::boxes(Vec::new(), self.material)
-                    .with_piece_mesh(ice_piece_mesh)
-                    .with_hull_mesh(ice_hull_mesh)
-                    .with_uvs(ice_uvs(self.spread)),
-            )
-            .with(BrittleSolid::new(self.cleaving, self.material))
+            .with(looks)
+            .with(CompoundFracture::new(graph))
+            .with(BrittleSolid::new(
+                self.cleaving,
+                Cuttable::new(Arc::new(faces)).with(collider, Vector3::zeros()),
+            ))
             .build()
+    }
+}
+
+/// How a wedge of ice is made when a block cleaves: of ice, drawn as its
+/// hull chamfered, reading the pattern at its block's density.
+pub(crate) struct IceFaces {
+    /// Which of the caller's materials it wears.
+    pub material: MaterialId,
+    /// How its texture is laid on.
+    pub uvs: SurfaceUvs,
+}
+
+impl FaceMesher for IceFaces {
+    fn collider(&self, hull: Arc<ConvexHull>) -> ColliderDesc {
+        ColliderDesc::convex_hull(hull).of(&ice())
+    }
+
+    fn look(&self, hull: &ConvexHull, at: Vector3<f32>) -> Look {
+        let (vertices, indices) = ice_hull_mesh(&PieceHull::new(hull, at), self.uvs);
+        Look::single(vertices, indices, self.material)
     }
 }
 
@@ -281,12 +310,10 @@ pub fn ice_block_mesh(half_extents: Vector3<f32>, spread: Spread) -> (Vec<Vertex
 
 /// The spread a piece of a compound ice object falls back to.
 ///
-/// [`PieceMesh`](super::super::shared::models::PieceMesh) is a bare function
-/// pointer — it is stored in a fracture component that outlives the spawn —
-/// so a piece mesh cannot carry a spread of its own. It is told one through
-/// [`SurfaceUvs`] instead, and this is what it uses when it is not: walls and
-/// domes are built out of bricks, and a brick is smaller than a tile. See
-/// [`texture_spread`] for the case this is not.
+/// A piece mesh is told its spread through [`SurfaceUvs`], and this is what
+/// it uses when it is not: walls and domes are built out of bricks, and a
+/// brick is smaller than a tile. See [`texture_spread`] for the case this is
+/// not.
 const PIECE_SPREAD: Spread = Spread::ONE;
 
 /// The same mesh, for a block that is one piece of a larger object.
@@ -382,21 +409,6 @@ fn texture_offset(offset: Vector3<f32>, scale: f32) -> Vector2<f32> {
         (offset.x + offset.y * 0.5) * scale,
         (offset.z + offset.y * 0.5) * scale,
     )
-}
-
-/// The block as a single-primitive model, ready for a `ModelInstance`.
-pub fn ice_block_model(
-    half_extents: Vector3<f32>,
-    material: MaterialId,
-    spread: Spread,
-) -> Arc<Model> {
-    let (vertices, indices) = ice_block_mesh(half_extents, spread);
-    let parts = vec![ModelPart::new(vec![MeshPrimitive {
-        vertices,
-        indices,
-        material,
-    }])];
-    Arc::new(Model::flat(parts))
 }
 
 #[cfg(test)]

@@ -117,10 +117,11 @@ Level(
                 // A frozen slab, for the proportions a cube cannot reach.
                 IceBox(pos: (5.0, 0.5, 20.0), half_extents: (2.5, 0.5, 2.5)),
 
-                // Glass. A window to throw things through, and a floor that
+                // Glass. A pane lying loose on the ground to throw things on,
+                // and a floor over a drop, welded along its long edges, that
                 // cracks under a footstep and gives way under anyone who
                 // stops on it — walk across, do not stand.
-                GlassSheet(pos: (1.0, 1.0, 26.0), size: (2.4, 1.8), yaw: 90.0, impact_threshold: 600.0),
+                GlassSheet(pos: (1.0, 0.0075, 26.0), size: (2.4, 1.8), yaw: 90.0, lying: true, fixed: false, impact_threshold: 600.0),
                 FramedWindow(pos: (6.0, 0.0, 15.0), yaw: 90.0, impact_threshold: 600.0),
                 GlassSheet(
                     pos: (-3.0, 0.9, 24.0),

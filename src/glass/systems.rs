@@ -1,26 +1,29 @@
-//! The system that turns hits on a brittle sheet into cracks.
+//! The systems that turn hits on a brittle sheet into cracks, and give a
+//! piece split off a sheet its share of it.
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Isometry3, Point3, Vector3};
 use specs::{Join, Read, ReadStorage, System, WriteStorage};
 
 use super::components::BrittleSheet;
 use super::crazing::cells_within;
+use super::held::{weld_along, HeldEdge};
 use super::polygon::ConvexPolygon;
 use super::remnant::Remnant;
 use crate::components::RigidBodyComponent;
 use crate::debug::DebugLog;
-use crate::fracture::{split_child, ChildSubstance, CompoundFracture, FractureJoint};
+use crate::fracture::{replace_part, Bond, CompoundFracture, PieceSplits};
+use crate::model::PartLooks;
 use crate::physics::{
-    ColliderDesc, ColliderHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle,
+    ColliderHandle, ConstraintHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle,
 };
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 
 /// Fastest a knocked-out shard leaves, in m/s.
 ///
-/// The spike a static sheet records is the whole momentum of whatever hit
+/// The spike a held sheet records is the whole momentum of whatever hit
 /// it, and handing all of that to a few grams of glass would fire them like
 /// bullets. Shards leave at about the speed of what came through.
 const MAX_SHARD_SPEED: f32 = 5.0;
@@ -37,7 +40,7 @@ const JOLT_REFERENCE_AREA: f32 = 0.5;
 /// fracture system.
 ///
 /// Runs after the physics step and *before* `FractureSystem`, so that a hit
-/// on a large pane becomes a web of shards before the joints are judged: the
+/// on a large pane becomes a web of shards before the bonds are judged: the
 /// alternative is a whole pane falling out of a window as one slab.
 pub struct GlassCrackSystem;
 
@@ -46,6 +49,7 @@ impl<'a> System<'a> for GlassCrackSystem {
         specs::Write<'a, PhysicsResource>,
         WriteStorage<'a, BrittleSheet>,
         WriteStorage<'a, CompoundFracture>,
+        WriteStorage<'a, PartLooks>,
         ReadStorage<'a, RigidBodyComponent>,
         Read<'a, PhysicsImpulseQueue>,
         Read<'a, Time>,
@@ -53,13 +57,23 @@ impl<'a> System<'a> for GlassCrackSystem {
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (mut physics, mut sheets, mut fractures, bodies, impulse_queue, time, mut debug_log) =
-            data;
+        let (
+            mut physics,
+            mut sheets,
+            mut fractures,
+            mut looks,
+            bodies,
+            impulse_queue,
+            time,
+            mut debug_log,
+        ) = data;
         let dt = time.delta_seconds();
         let blasts = impulse_queue.last_impulses();
         let mut telemetry = GlassTelemetry::default();
 
-        for (sheet, fracture, body_comp) in (&mut sheets, &mut fractures, &bodies).join() {
+        for (sheet, fracture, looks, body_comp) in
+            (&mut sheets, &mut fractures, &mut looks, &bodies).join()
+        {
             let body_handle = body_comp.0;
             if sheet.whole_glass_area.is_none() {
                 // The pane as spawned, and the structure it was spawned
@@ -70,26 +84,14 @@ impl<'a> System<'a> for GlassCrackSystem {
                 sheet.last_census = census(&physics, fracture, body_handle);
             }
 
-            let hits = gather_hits(
-                &physics,
-                sheet,
-                fracture,
-                body_handle,
-                blasts,
-                dt,
-                &mut telemetry,
-            );
-            let mut cracked = false;
+            let hits = gather_hits(&physics, sheet, body_handle, blasts, dt, &mut telemetry);
             for hit in hits {
-                cracked |= crack(&mut physics, sheet, fracture, body_handle, &hit);
-            }
-            if cracked {
-                fracture.model_stale = true;
+                crack(&mut physics, sheet, fracture, looks, body_handle, &hit);
             }
 
             // Judge what is left whenever the glass has changed at all, not
             // only when this system cracked it: shards are severed under hits
-            // that craze nothing, and the fracture system breaks joints of
+            // that craze nothing, and the fracture system breaks bonds of
             // its own accord. A pane chipped away by either road has to reach
             // the same end as one crazed to bits.
             let census = census(&physics, fracture, body_handle);
@@ -111,6 +113,70 @@ impl<'a> System<'a> for GlassCrackSystem {
         );
     }
 }
+
+/// Gives a piece split off a sheet its share of the sheet, so a cluster of
+/// shards can craze, wear out and let go as the sheet did; and leaves the
+/// sheet the records of what it kept.
+///
+/// Runs after `FractureSystem`, which sends the splits.
+pub struct SheetShareSystem;
+
+impl<'a> System<'a> for SheetShareSystem {
+    type SystemData = (
+        Read<'a, PieceSplits>,
+        WriteStorage<'a, BrittleSheet>,
+        ReadStorage<'a, CompoundFracture>,
+        ReadStorage<'a, RigidBodyComponent>,
+        Read<'a, PhysicsResource>,
+    );
+
+    fn run(&mut self, (splits, mut sheets, fractures, bodies, physics): Self::SystemData) {
+        if splits.is_empty() {
+            return;
+        }
+        let standing = |entity| -> Option<Standing> {
+            let body = bodies.get(entity)?.0;
+            let fracture = fractures.get(entity)?;
+            let children = physics.world.body(body)?.colliders().to_vec();
+            let welds = fracture.graph.ties().iter().map(|t| t.constraint).collect();
+            let census = (children.len(), fracture.graph.bonds().len());
+            Some((children, welds, census))
+        };
+
+        let mut sources = Vec::new();
+        for split in splits.iter() {
+            let Some(sheet) = sheets.get(split.from) else {
+                continue;
+            };
+            if !sources.contains(&split.from) {
+                sources.push(split.from);
+            }
+            let Some((children, welds, census)) = standing(split.piece) else {
+                continue;
+            };
+            // A piece still welded up is judged as a sheet at once: a lone
+            // shard is not one, and must not hang where the pane was.
+            if !welds.is_empty() {
+                let share = sheet.share(&children, &welds, (0, 0));
+                let _ = sheets.insert(split.piece, share);
+            } else if sheet.worth_sharing(&children) {
+                let share = sheet.share(&children, &welds, census);
+                let _ = sheets.insert(split.piece, share);
+            }
+        }
+        for source in sources {
+            if let (Some(sheet), Some((children, welds, _))) =
+                (sheets.get_mut(source), standing(source))
+            {
+                sheet.retain(&children, &welds);
+            }
+        }
+    }
+}
+
+/// How a sheet's piece stands after a split: its cells, its welds, and its
+/// census.
+type Standing = (Vec<ColliderHandle>, Vec<ConstraintHandle>, (usize, usize));
 
 /// The largest loads any glass saw this frame, for the debug log: the
 /// numbers to read off when tuning a threshold.
@@ -142,7 +208,6 @@ struct Hit {
 fn gather_hits(
     physics: &PhysicsResource,
     sheet: &mut BrittleSheet,
-    fracture: &CompoundFracture,
     body_handle: RigidBodyHandle,
     blasts: &[PhysicsImpulse],
     dt: f32,
@@ -169,7 +234,7 @@ fn gather_hits(
     let frame_struck = handles
         .iter()
         .zip(&spikes)
-        .filter(|(handle, _)| !sheet.is_glass(fracture.material_of(**handle)))
+        .filter(|(handle, _)| !sheet.is_glass(**handle))
         .map(|(_, spike)| *spike)
         .max_by(|a, b| a.magnitude.total_cmp(&b.magnitude))
         .filter(|spike| spike.magnitude > threshold)
@@ -178,7 +243,7 @@ fn gather_hits(
         handles
             .iter()
             .zip(&spikes)
-            .filter(|(handle, _)| !sheet.is_glass(fracture.material_of(**handle)))
+            .filter(|(handle, _)| !sheet.is_glass(**handle))
             .map(|(_, spike)| spike.magnitude)
             .fold(0.0, f32::max),
     );
@@ -201,7 +266,7 @@ fn gather_hits(
 
     let mut hits = Vec::new();
     for (index, handle) in handles.iter().enumerate() {
-        if !sheet.is_glass(fracture.material_of(*handle)) {
+        if !sheet.is_glass(*handle) {
             continue;
         }
         let impact = world.impacts().for_collider(*handle);
@@ -258,7 +323,7 @@ fn gather_hits(
                 }
             }
 
-            // A jarred body loads its glass through the joints that carry it:
+            // A jarred body loads its glass through the bonds that carry it:
             // the impulse it took to change the cell's velocity by more than
             // it changed last frame. A window falling on its face shatters.
             //
@@ -314,33 +379,40 @@ fn gather_hits(
     hits
 }
 
-/// Replace the hit child with a web of shards, or knock it out whole if it is
-/// too small to crack. Returns whether the body's colliders changed.
+/// Replace the hit cell with a web of shards, or knock it out whole if it is
+/// too small to crack.
+///
+/// The shards are bonded where they touch; the cell's own bonds go to the
+/// shard nearest each, and its welds to the world are made again, one for
+/// each shard along a held edge.
 fn crack(
     physics: &mut PhysicsResource,
     sheet: &mut BrittleSheet,
     fracture: &mut CompoundFracture,
+    looks: &mut PartLooks,
     body_handle: RigidBodyHandle,
     hit: &Hit,
-) -> bool {
+) {
     let world = &physics.world;
     let Some(body) = world.body(body_handle) else {
-        return false;
+        return;
     };
-    let old_handles: Vec<ColliderHandle> = body.colliders().to_vec();
-    if !old_handles.contains(&hit.child) {
+    let Some(part) = fracture.graph.part_of(hit.child) else {
+        return;
+    };
+    if !body.colliders().contains(&hit.child) {
         // Already replaced by an earlier hit this frame.
-        return false;
+        return;
     }
     let Some(collider) = world.collider(hit.child) else {
-        return false;
+        return;
     };
     let depth = sheet.depths.of(hit.child);
     let frame = sheet.frame;
-    let Some((cell, height)) =
-        frame.polygon_of(collider.shape(), collider.offset().translation.vector)
+    let old_offset = *collider.offset();
+    let Some((cell, height)) = frame.polygon_of(collider.shape(), old_offset.translation.vector)
     else {
-        return false;
+        return;
     };
 
     let hit_local = body
@@ -357,78 +429,109 @@ fn crack(
         .flatten();
     let Some(cells) = cells else {
         if hit.hole_radius > 0.0 {
-            fracture.sever(hit.child, capped_kick(hit.kick, collider.mass(), 1));
+            fracture.sever(part, capped_kick(hit.kick, collider.mass(), 1));
         }
-        return false;
+        return;
     };
 
-    // The neighbours' footprints, for deciding which new shards they join.
-    let mut footprints: Vec<(ColliderHandle, ConvexPolygon)> = old_handles
-        .iter()
-        .filter(|h| **h != hit.child)
-        .filter_map(|h| {
-            let c = world.collider(*h)?;
-            let (polygon, _) = frame.polygon_of(c.shape(), c.offset().translation.vector)?;
-            Some((*h, polygon))
+    // The welds holding the cell go with it; its shards along the held
+    // edges are welded afresh below.
+    let held: Vec<HeldEdge> = fracture
+        .graph
+        .ties_of(&[part])
+        .into_iter()
+        .filter_map(|weld| {
+            fracture.graph.untie(weld);
+            physics.world.remove_constraint(weld);
+            sheet.held.take(weld)
         })
         .collect();
 
-    let Some(substance) = ChildSubstance::of(physics, hit.child) else {
-        return false;
+    // Swap the pane for its shards. Those under the hit come out at once, so
+    // they inherit none of what the pane held.
+    let under = cells_within(&cells, hit_plane, hit.hole_radius);
+    let mut shards = sheet.glass.pieces(
+        hit.child,
+        &old_offset,
+        cells.iter().map(|cell| {
+            let (hull, offset) = frame.shard(cell, height);
+            (
+                Arc::new(hull),
+                Isometry3::translation(offset.x, offset.y, offset.z),
+            )
+        }),
+    );
+    for k in &under {
+        if let Some(shard) = shards.get_mut(*k) {
+            shard.inherits = false;
+        }
+    }
+    let Some(made) = replace_part(physics, fracture, looks, body_handle, part, shards) else {
+        return;
     };
-
-    // Swap the pane for its shards.
-    let shards = cells.iter().map(|cell| {
-        let (hull, offset) = frame.shard(cell, height);
-        substance.clothe(ColliderDesc::convex_hull(Arc::new(hull)).offset_translation(offset))
-    });
-    let Some(pieces) = split_child(physics, fracture, body_handle, hit.child, shards) else {
-        return false;
-    };
-    for piece in &pieces {
-        fracture.set_material(*piece, sheet.material);
-        sheet.depths.set(*piece, depth + 1);
+    sheet.glass.record(hit.child, &made);
+    for piece in &made {
+        sheet.depths.set(piece.collider, depth + 1);
     }
 
-    // Join each new shard to the shards and neighbours it touches.
-    for (k, cell) in cells.iter().enumerate() {
-        let Some(&piece) = pieces.get(k) else {
-            continue;
-        };
-        for (other, polygon) in &footprints {
-            if cell.touches(polygon, MIN_JOINT_OVERLAP) {
-                let threshold = if sheet.is_glass(fracture.material_of(*other)) {
-                    sheet.joint_threshold
-                } else {
-                    sheet.frame_grip
-                };
-                fracture.joints.push(FractureJoint {
-                    child_a: piece,
-                    child_b: *other,
-                    threshold,
+    // Bond each new shard to the shards it touches.
+    for (k, first) in made.iter().enumerate() {
+        for second in &made[k + 1..] {
+            let (a, b) = (&cells[first.index], &cells[second.index]);
+            if a.touches(b, MIN_JOINT_OVERLAP) {
+                let middle = (a.centroid() + b.centroid()) * 0.5;
+                fracture.graph.bond(Bond {
+                    a: first.part,
+                    b: second.part,
+                    anchor: Point3::from(frame.lift(middle, height)),
+                    reach: 2.0 * radius_of(a).min(radius_of(b)),
+                    threshold: sheet.joint_threshold,
                 });
             }
         }
-        footprints.push((piece, cell.clone()));
     }
 
-    // Knock out what was directly under the hit.
-    let under = cells_within(&cells, hit_plane, hit.hole_radius);
-    let count = under.len();
-    for k in under {
-        if let Some(&piece) = pieces.get(k) {
-            let mass = physics.world.collider(piece).map_or(0.0, |c| c.mass());
-            fracture.sever(piece, capped_kick(hit.kick, mass, count));
+    // Weld the shards along each held edge where they lie on it.
+    for edge in &held {
+        for piece in made.iter().filter(|piece| !under.contains(&piece.index)) {
+            if let Some((weld, stretch)) = weld_along(
+                &mut physics.world,
+                body_handle,
+                &frame,
+                &cells[piece.index],
+                edge,
+            ) {
+                fracture.graph.tie(weld, piece.part);
+                sheet.held.insert(weld, stretch);
+            }
         }
     }
 
-    true
+    // Knock out what was directly under the hit.
+    let count = under.len();
+    for k in under {
+        if let Some(piece) = made.iter().find(|piece| piece.index == k) {
+            let mass = physics
+                .world
+                .collider(piece.collider)
+                .map_or(0.0, |c| c.mass());
+            fracture.sever(piece.part, capped_kick(hit.kick, mass, count));
+        }
+    }
 }
 
-/// How much glass is left and in how many pieces, after this frame's split:
-/// the largest connected group of cells, which is the one the fracture system
-/// keeps. Groups are ranked by area, so the remnant is the biggest piece of
-/// glass rather than the most numerous.
+/// How far a cell reaches from its centroid, m.
+fn radius_of(cell: &ConvexPolygon) -> f32 {
+    let centre = cell.centroid();
+    cell.vertices()
+        .iter()
+        .map(|v| (v - centre).norm())
+        .fold(0.0, f32::max)
+}
+
+/// How much glass is left and in how many pieces: the group of cells with
+/// the most glass. Groups are ranked by area, so the remnant is the biggest
+/// piece of glass rather than the most numerous.
 fn remnant(
     physics: &PhysicsResource,
     sheet: &BrittleSheet,
@@ -450,15 +553,18 @@ fn remnant(
             .map_or(0.0, |(polygon, _)| polygon.area())
     };
     fracture
-        .connected_components(body.colliders())
+        .graph
+        .groups()
         .iter()
-        .map(|component| {
-            let glass = component
+        .map(|group| {
+            let colliders = fracture.graph.colliders_of(group);
+            let glass: Vec<&ColliderHandle> = colliders
                 .iter()
-                .filter(|child| sheet.is_glass(fracture.material_of(**child)));
+                .filter(|child| body.colliders().contains(child) && sheet.is_glass(**child))
+                .collect();
             Remnant {
-                area: glass.clone().map(area_of).sum(),
-                cells: glass.count(),
+                area: glass.iter().copied().map(area_of).sum(),
+                cells: glass.len(),
             }
         })
         .fold(Remnant::default(), |best, group| {
@@ -471,7 +577,7 @@ fn remnant(
 }
 
 /// A cheap signature of the sheet's structure: how many children it carries
-/// and how many joints still hold them. Anything that takes glass off the
+/// and how many bonds still hold them. Anything that takes glass off the
 /// sheet moves one of the two, and nothing else does, so comparing it with
 /// the last one judged says exactly when to judge again.
 fn census(
@@ -483,11 +589,12 @@ fn census(
         .world
         .body(body_handle)
         .map_or(0, |b| b.colliders().len());
-    (children, fracture.joints.len())
+    (children, fracture.graph.bonds().len())
 }
 
-/// Drop whatever glass is left. A bare sheet has nothing else, so its body
-/// retires with the glass; a framed one keeps its frame standing, empty.
+/// Drop whatever glass is left. A bare sheet has nothing else, so it gives
+/// itself up — welds and all — and falls as shards; a framed one keeps its
+/// frame standing, empty.
 fn let_go_of_the_glass(
     physics: &PhysicsResource,
     sheet: &BrittleSheet,
@@ -501,13 +608,15 @@ fn let_go_of_the_glass(
     let glass: Vec<ColliderHandle> = children
         .iter()
         .copied()
-        .filter(|child| sheet.is_glass(fracture.material_of(*child)))
+        .filter(|child| sheet.is_glass(*child))
         .collect();
     if glass.len() == children.len() {
         fracture.release();
     } else {
         for child in glass {
-            fracture.sever(child, Vector3::zeros());
+            if let Some(part) = fracture.graph.part_of(child) {
+                fracture.sever(part, Vector3::zeros());
+            }
         }
     }
 }
@@ -527,98 +636,59 @@ fn capped_kick(kick: Vector3<f32>, shard_mass: f32, shares: usize) -> Vector3<f3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::{UnitQuaternion, Vector2};
-    use specs::{Builder, RunNow, World, WorldExt};
+    use nalgebra::Vector2;
+    use specs::{Entity, World, WorldExt};
 
-    use super::super::crazing::CrazeRule;
     use super::super::fatigue::FatigueRule;
-    use super::super::pane::SheetFrame;
-    use super::super::web::CrackWeb;
-    use crate::components::{ModelInstance, Orientation, Position, Renderable, Velocity};
+    use crate::app::breakage;
+    use crate::app::spawnables::{GlassSheetDef, Spawnable};
     use crate::debug::DebugLines;
-    use crate::fracture::FractureSystem;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
-    use crate::physics::{PhysicsConfig, PhysicsWorld, RigidBodyDesc};
+    use crate::physics::{ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc};
     use crate::rendering::material::MaterialId;
 
     const FRAME_DT: f32 = 1.0 / 60.0;
     const SHEET_HEIGHT: f32 = 1.0;
 
-    /// A fixed, lying pane 2 m by 1.5 m at `SHEET_HEIGHT`, as the spawnable
-    /// builds one, in a world with a floor far below.
-    fn glass_floor(
-        impact_threshold: f32,
-        fatigue: Option<FatigueRule>,
-    ) -> (World, RigidBodyHandle) {
+    /// A held, lying pane 2 m by 1.5 m at `SHEET_HEIGHT`, spawned as a level
+    /// spawns one — welded to the world along its two long edges — in a
+    /// world with a floor far below.
+    fn glass_floor(impact_threshold: f32, fatigue: Option<FatigueRule>) -> (World, Entity) {
         let mut world = World::new();
-        world.register::<Position>();
-        world.register::<Velocity>();
-        world.register::<Orientation>();
-        world.register::<RigidBodyComponent>();
-        world.register::<ModelInstance>();
-        world.register::<Renderable>();
-        world.register::<CompoundFracture>();
-        world.register::<BrittleSheet>();
+        breakage::register(&mut world);
         world.insert(Time::fixed(FRAME_DT));
-        world.insert(PhysicsImpulseQueue::default());
-        world.insert(DebugLog::default());
-
-        let frame = SheetFrame::lying(0.015);
-        let half_extents = frame.box_half_extents(0.75, 1.0);
         // Sleep is off: a body set down at rest is put to sleep on its first
         // frame, and a sleeping body loads nothing.
         let mut config = PhysicsConfig::default();
         config.sleep.enabled = false;
-        let mut physics_world = PhysicsWorld::new(config);
-        let body = physics_world.create_body(RigidBodyDesc::static_body().position(Point3::new(
-            0.0,
-            SHEET_HEIGHT,
-            0.0,
-        )));
-        physics_world.attach_collider(
-            body,
-            ColliderDesc::box_shape(half_extents)
-                .density(2500.0)
-                .restitution(0.1)
-                .friction(0.4),
-        );
         world.insert(PhysicsResource::new(
-            physics_world,
+            PhysicsWorld::new(config),
             Box::new(SequentialStepper::new(FRAME_DT, 4)),
         ));
 
-        let crazing = CrazeRule {
-            threshold: impact_threshold,
-            web: CrackWeb {
-                core_radius: 0.08,
-                ring_growth: 1.7,
-                rings: 5,
-                background_spacing: 0.35,
-            },
-            min_area: 0.002,
+        let def = GlassSheetDef {
+            pos: (0.0, SHEET_HEIGHT, 0.0),
+            size: (2.0, 1.5),
+            thickness: GlassSheetDef::default_thickness(),
+            yaw: 0.0,
+            lying: true,
+            fixed: true,
+            impact_threshold,
+            blast_threshold: GlassSheetDef::default_blast_threshold(),
+            bearing: fatigue.map_or(0.0, |rule| rule.bearing),
+            endurance: fatigue.map_or(GlassSheetDef::default_endurance(), |rule| rule.endurance),
         };
-        let mut sheet = BrittleSheet::whole(frame, crazing, 8.0, MaterialId(0));
-        if let Some(rule) = fatigue {
-            sheet = sheet.wearing_out_under(rule, 0.35);
-        }
-        let model =
-            crate::app::spawnables::shared::models::cuboid_model(half_extents, MaterialId(0));
+        let sheet = def.spawn(&mut world, &[MaterialId(0)])[0];
+        (world, sheet)
+    }
+
+    fn body_of(world: &World, entity: Entity) -> RigidBodyHandle {
         world
-            .create_entity()
-            .with(Position(Vector3::new(0.0, SHEET_HEIGHT, 0.0)))
-            .with(Velocity(Vector3::zeros()))
-            .with(Orientation(UnitQuaternion::identity()))
-            .with(RigidBodyComponent(body))
-            .with(ModelInstance::new(model))
-            .with(Renderable)
-            .with(
-                CompoundFracture::boxes(Vec::new(), MaterialId(0))
-                    .breaking_on_impact_at(impact_threshold),
-            )
-            .with(sheet)
-            .build();
-        (world, body)
+            .read_storage::<RigidBodyComponent>()
+            .get(entity)
+            .expect("the sheet has a body")
+            .0
     }
 
     /// A box of `mass` kg dropped from `drop` metres above the pane at
@@ -643,46 +713,43 @@ mod tests {
         body
     }
 
-    /// One game frame: physics, then the two systems in dispatcher order.
+    /// One game frame: physics, then the break pipeline in dispatcher order.
     fn frame(world: &mut World, stepper: &mut SequentialStepper, geometry: &FlatQuadGeometry) {
         {
             let mut physics = world.write_resource::<PhysicsResource>();
             let mut debug = DebugLines::default();
             stepper.step(&mut physics.world, FRAME_DT, geometry, &[], &[], &mut debug);
         }
-        GlassCrackSystem.run_now(world);
-        FractureSystem.run_now(world);
-        world.maintain();
+        breakage::run(world);
     }
 
-    /// Whether some child of the sheet still covers the point `(x, z)`.
-    fn covered(world: &World, body: RigidBodyHandle, x: f32, z: f32) -> bool {
+    /// Whether some child of the sheet's body still covers the point `(x, z)`.
+    fn covered(world: &World, sheet: Entity, x: f32, z: f32) -> bool {
         let physics = world.read_resource::<PhysicsResource>();
         let sheets = world.read_storage::<BrittleSheet>();
-        let sheet = (&sheets).join().next().expect("the sheet is still there");
-        let Some(body) = physics.world.body(body) else {
+        let pane = sheets.get(sheet).expect("the sheet is still there");
+        let Some(body) = physics.world.body(body_of(world, sheet)) else {
             return false;
         };
-        let point = sheet.frame.to_plane(Vector3::new(x, 0.0, z));
+        let point = pane.frame.to_plane(Vector3::new(x, 0.0, z));
         body.colliders().iter().any(|h| {
             let c = physics.world.collider(*h).expect("live collider");
-            sheet
-                .frame
+            pane.frame
                 .polygon_of(c.shape(), c.offset().translation.vector)
                 .is_some_and(|(polygon, _)| polygon.contains(point))
         })
     }
 
-    fn children(world: &World, body: RigidBodyHandle) -> Vec<ColliderHandle> {
+    fn children(world: &World, sheet: Entity) -> Vec<ColliderHandle> {
         let physics = world.read_resource::<PhysicsResource>();
         physics
             .world
-            .body(body)
+            .body(body_of(world, sheet))
             .map_or_else(Vec::new, |b| b.colliders().to_vec())
     }
 
-    fn child_count(world: &World, body: RigidBodyHandle) -> usize {
-        children(world, body).len()
+    fn child_count(world: &World, sheet: Entity) -> usize {
+        children(world, sheet).len()
     }
 
     fn body_height(world: &World, body: RigidBodyHandle) -> f32 {
@@ -691,6 +758,25 @@ mod tests {
             .world
             .body(body)
             .map_or(f32::NAN, |b| b.position().y)
+    }
+
+    /// Every entity with a body: its body, and whether the world holds it up.
+    fn bodies(world: &World) -> Vec<(Entity, RigidBodyHandle, bool)> {
+        let physics = world.read_resource::<PhysicsResource>();
+        let bodies = world.read_storage::<RigidBodyComponent>();
+        (&world.entities(), &bodies)
+            .join()
+            .map(|(e, b)| (e, b.0, physics.world.is_held_by_world(b.0)))
+            .collect()
+    }
+
+    /// No body the glass ever left is empty, and none is lost.
+    fn assert_no_empty_body(world: &World) {
+        let physics = world.read_resource::<PhysicsResource>();
+        for (entity, body, _) in bodies(world) {
+            let colliders = physics.world.body(body).map_or(0, |b| b.colliders().len());
+            assert!(colliders > 0, "{entity:?} is left with an empty body");
+        }
     }
 
     /// The expense of a broken sheet is the children it carries, and a sheet
@@ -717,7 +803,7 @@ mod tests {
         );
 
         let sheets = world.read_storage::<BrittleSheet>();
-        let pane = (&sheets).join().next().expect("the pane is still there");
+        let pane = sheets.get(sheet).expect("the pane is still there");
         assert_eq!(pane.max_craze_depth, 1, "a cell cracks once, by default");
         for (index, shard) in shards.iter().enumerate() {
             assert!(
@@ -727,11 +813,11 @@ mod tests {
         }
     }
 
-    /// The literal complaint that coarse shards brought back: a static pane
-    /// picked apart leaves one shard hanging in mid-air, immovable because
-    /// the body behind it never moves. It has to fall, and it has to fall
-    /// when the glass was taken off by something other than a craze — here
-    /// by severing, as a hit that knocks a shard out whole does.
+    /// The literal complaint that coarse shards brought back: a held pane
+    /// picked apart leaves one shard hanging in mid-air, held by the welds
+    /// behind it. It has to fall, and it has to fall when the glass was
+    /// taken off by something other than a craze — here by severing, as a
+    /// hit that knocks a shard out whole does.
     #[test]
     fn the_last_shard_of_a_picked_apart_pane_does_not_hang_there() {
         let (mut world, sheet) = glass_floor(25.0, None);
@@ -749,42 +835,45 @@ mod tests {
 
         // Take the shards off one at a time, as hits on a broken pane do,
         // and never craze again.
-        for _ in 0..30 {
+        let held = |world: &World| bodies(world).iter().filter(|b| b.2).count();
+        for _ in 0..40 {
+            if held(&world) == 0 {
+                break;
+            }
             {
-                // The freed shard is gone by the next split, so the first
-                // child is always one that is still on the sheet.
                 let Some(&first) = children(&world, sheet).first() else {
                     break;
                 };
                 let mut fractures = world.write_storage::<CompoundFracture>();
-                let Some(fracture) = (&mut fractures).join().next() else {
-                    break;
-                };
-                fracture.sever(first, Vector3::zeros());
+                let fracture = fractures.get_mut(sheet).expect("the sheet can break");
+                let part = fracture.graph.part_of(first).expect("a shard is a part");
+                fracture.sever(part, Vector3::zeros());
             }
             for _ in 0..4 {
                 frame(&mut world, &mut stepper, &geometry);
             }
-            if world.read_storage::<BrittleSheet>().join().count() == 0 {
-                break;
-            }
         }
 
         assert_eq!(
-            world.read_storage::<BrittleSheet>().join().count(),
+            held(&world),
             0,
-            "the pane still holds {} shards",
-            child_count(&world, sheet)
+            "{} pieces of the pane still hang from welds",
+            held(&world)
         );
-        assert_eq!(
-            child_count(&world, sheet),
-            0,
-            "the pane body should be gone"
+        assert_no_empty_body(&world);
+        let body = body_of(&world, sheet);
+        for _ in 0..30 {
+            frame(&mut world, &mut stepper, &geometry);
+        }
+        assert!(
+            body_height(&world, body) < SHEET_HEIGHT - 0.2,
+            "the last of the pane hangs at {}",
+            body_height(&world, body)
         );
     }
 
-    /// What is left of a pane once it is smaller than its remnant limit comes
-    /// free as shards, and the pane's own entity and body are gone.
+    /// What is left of a pane once it is smaller than its remnant limit
+    /// gives up its welds and falls as shards; no body is left empty.
     #[test]
     fn a_pane_worn_down_below_its_limit_lets_go_of_the_rest() {
         let (mut world, sheet) = glass_floor(25.0, None);
@@ -799,23 +888,18 @@ mod tests {
             frame(&mut world, &mut stepper, &geometry);
         }
 
-        assert_eq!(
-            world.read_storage::<BrittleSheet>().join().count(),
-            0,
-            "the pane entity should be gone"
+        let all = bodies(&world);
+        assert!(
+            all.iter().all(|(_, _, held)| !held),
+            "a piece of the pane is still welded up"
         );
-        assert_eq!(
-            child_count(&world, sheet),
-            0,
-            "the pane body should be gone"
+        assert_no_empty_body(&world);
+        let pieces = all.len();
+        assert!(pieces > 8, "only {pieces} pieces came down");
+        assert!(
+            body_height(&world, body_of(&world, sheet)) < SHEET_HEIGHT - 0.3,
+            "the pane's own body did not fall"
         );
-        let freed = (
-            &world.read_storage::<RigidBodyComponent>(),
-            &world.read_storage::<Renderable>(),
-        )
-            .join()
-            .count();
-        assert!(freed > 8, "only {freed} shards were freed");
     }
 
     /// The headline behaviour: a crate through one corner leaves a hole at
@@ -873,9 +957,32 @@ mod tests {
         }
         let fell_at = fell_at.expect("the weight fell through");
         assert!((30..200).contains(&fell_at), "fell at frame {fell_at}");
+        // The rest of the floor holds: what is left of the sheet is still
+        // welded where it was, and is most of a floor.
+        let body = body_of(&world, sheet);
         assert!(
-            covered(&world, sheet, -0.6, -0.6),
-            "the rest of the floor should hold"
+            world
+                .read_resource::<PhysicsResource>()
+                .world
+                .is_held_by_world(body),
+            "the rest of the floor came down"
+        );
+        assert!((body_height(&world, body) - SHEET_HEIGHT).abs() < 0.01);
+        let left = {
+            let sheets = world.read_storage::<BrittleSheet>();
+            let fractures = world.read_storage::<CompoundFracture>();
+            let physics = world.read_resource::<PhysicsResource>();
+            remnant(
+                &physics,
+                sheets.get(sheet).unwrap(),
+                fractures.get(sheet).unwrap(),
+                body,
+            )
+        };
+        assert!(
+            left.area > 0.25 * 3.0,
+            "only {} m² of the 3 m² floor is left",
+            left.area
         );
 
         let (mut world, sheet) = glass_floor(25.0, None);
@@ -889,6 +996,111 @@ mod tests {
             "an untiring pane stays whole"
         );
         assert!(body_height(&world, weight) > SHEET_HEIGHT);
+    }
+
+    /// A held floor cracked right across is two pieces, each welded along
+    /// its own stretch of the held edges, and both stay where they were.
+    /// Each takes its share of the sheet: its own cells, its own welds.
+    #[test]
+    fn a_welded_pane_cracked_across_stays_up_as_two_pieces() {
+        let (mut world, sheet) = glass_floor(25.0, None);
+        let geometry = FlatQuadGeometry::new(50.0);
+        let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+        let body = body_of(&world, sheet);
+
+        // Craze the pane where it stands, knocking nothing out.
+        {
+            let pane = children(&world, sheet)[0];
+            let mut physics = world.write_resource::<PhysicsResource>();
+            let mut sheets = world.write_storage::<BrittleSheet>();
+            let mut fractures = world.write_storage::<CompoundFracture>();
+            let mut looks = world.write_storage::<PartLooks>();
+            crack(
+                &mut physics,
+                sheets.get_mut(sheet).unwrap(),
+                fractures.get_mut(sheet).unwrap(),
+                looks.get_mut(sheet).unwrap(),
+                body,
+                &Hit {
+                    child: pane,
+                    point: Point3::new(0.1, SHEET_HEIGHT, 0.05),
+                    hole_radius: 0.0,
+                    kick: Vector3::zeros(),
+                },
+            );
+        }
+        let welds = world
+            .read_storage::<CompoundFracture>()
+            .get(sheet)
+            .unwrap()
+            .graph
+            .ties()
+            .len();
+        assert!(welds > 4, "only {welds} shards were welded along the edges");
+
+        // Crack it across: every bond between a shard left of x = 0 and one
+        // right of it goes.
+        {
+            let physics = world.read_resource::<PhysicsResource>();
+            let mut fractures = world.write_storage::<CompoundFracture>();
+            let fracture = fractures.get_mut(sheet).unwrap();
+            let side = |part| {
+                let collider = fracture.graph.colliders_of(&[part])[0];
+                physics
+                    .world
+                    .collider(collider)
+                    .unwrap()
+                    .offset()
+                    .translation
+                    .x
+                    > 0.0
+            };
+            let across: Vec<bool> = fracture
+                .graph
+                .bonds()
+                .iter()
+                .map(|bond| side(bond.a) != side(bond.b))
+                .collect();
+            let mut across = across.into_iter();
+            fracture
+                .graph
+                .break_bonds(|_| across.next().unwrap_or(false));
+            fracture.split_pending = true;
+        }
+        for _ in 0..90 {
+            frame(&mut world, &mut stepper, &geometry);
+        }
+
+        let glass: Vec<(Entity, RigidBodyHandle, bool)> = bodies(&world)
+            .into_iter()
+            .filter(|(e, _, _)| world.read_storage::<BrittleSheet>().contains(*e))
+            .collect();
+        assert_eq!(glass.len(), 2, "the floor came apart into {glass:?}");
+        for (entity, body, held) in &glass {
+            assert!(held, "{entity:?} is not held up");
+            let height = body_height(&world, *body);
+            assert!(
+                (height - SHEET_HEIGHT).abs() < 0.01,
+                "{entity:?} sagged to {height}"
+            );
+            let physics = world.read_resource::<PhysicsResource>();
+            let sheets = world.read_storage::<BrittleSheet>();
+            let fractures = world.read_storage::<CompoundFracture>();
+            let own = physics.world.body(*body).unwrap().colliders();
+            assert!(
+                own.iter()
+                    .all(|c| sheets.get(*entity).unwrap().is_glass(*c)),
+                "a piece's sheet does not know its own cells"
+            );
+            for tie in fractures.get(*entity).unwrap().graph.ties() {
+                let holds = physics.world.constraint(tie.constraint).unwrap();
+                assert!(
+                    holds.kind.references_body(*body),
+                    "a weld holds the other half"
+                );
+            }
+        }
+        assert_no_empty_body(&world);
     }
 
     #[test]

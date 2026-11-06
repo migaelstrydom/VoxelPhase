@@ -62,6 +62,16 @@ impl FatigueTracker {
     pub fn damage_of(&self, child: ColliderHandle) -> f32 {
         self.damage.get(&child).copied().unwrap_or(0.0)
     }
+
+    /// The damage of `children` alone, for a piece split off with them.
+    pub fn share(&self, children: &[ColliderHandle]) -> Self {
+        Self {
+            damage: children
+                .iter()
+                .filter_map(|c| Some((*c, *self.damage.get(c)?)))
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]

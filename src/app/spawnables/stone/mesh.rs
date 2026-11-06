@@ -46,16 +46,13 @@ const MIN_DIVISIONS: usize = 3;
 /// ought to be sharp is shaded soft.
 const CREASE_NUDGE: f32 = 0.008;
 
-/// A weathered stone piece drawn from its hull. Fits
-/// [`HullMesh`](crate::app::spawnables::shared::models::HullMesh), so a
-/// cleaved block's wedges are drawn by the same code as the block.
+/// A weathered stone piece drawn from its hull, so a cleaved block's wedges
+/// are drawn by the same code as the block.
 pub fn weathered_hull_mesh(piece: &PieceHull, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
     weathered_mesh(piece.hull, piece.offset, piece.whole, uvs)
 }
 
-/// A weathered stone box. Fits
-/// [`PieceMesh`](crate::app::spawnables::shared::models::PieceMesh), for a
-/// block whose collider is a box.
+/// A weathered stone box, for a block whose collider is a box.
 pub fn weathered_box_mesh(piece: &PiecePlacement, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
     weathered_mesh(&cube_hull(piece.half_extents), piece.offset, None, uvs)
 }

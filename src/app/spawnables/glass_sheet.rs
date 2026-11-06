@@ -2,30 +2,31 @@
 //!
 //! ```text
 //!   GlassSheetDef ──▶ substance::GLASS ──┬──▶ one box collider   (the pane)
-//!                                        ├──▶ CompoundFracture  (no joints yet)
-//!                                        └──▶ BrittleSheet      (how it cracks)
+//!                                        ├──▶ PartLooks         (a cuboid)
+//!                                        ├──▶ CompoundFracture  (one part, no bonds;
+//!                                        │                       held: a weld per long edge)
+//!                                        └──▶ BrittleSheet      (how it cracks, GlassFaces)
 //! ```
 //!
-//! It spawns as one rigid body with one collider and one cuboid model. That
-//! is all it is until something hits it: then the glass system replaces the
-//! collider under the hit with a web of convex shards, the fracture system
-//! knocks out the ones directly under the blow, and the rest stay in place,
-//! cracked, holding each other up — until the next hit, or, for a pane that
-//! is stood on, until it has borne the weight for longer than it can.
+//! It spawns as one dynamic body with one collider. That is all it is until
+//! something hits it: then the glass system replaces the collider under the
+//! hit with a web of convex shards, the fracture system knocks out the ones
+//! directly under the blow, and the rest stay in place, cracked, holding
+//! each other up — until the next hit, or, for a pane that is stood on,
+//! until it has borne the weight for longer than it can.
 //!
-//! Two kinds of pane come out of the same definition:
-//!
-//! - a **window**: upright, fixed in place, with an impact threshold a
-//!   shoulder does not reach but a thrown crate does;
-//! - a **floor**: lying flat, fixed, with a bearing capacity below a
-//!   person's weight, so it crazes under a footstep and gives way under
-//!   someone who stops walking.
+//! A **held** pane (`fixed`) is welded to the world along its two long
+//! edges, a weld per edge, and once it crazes a weld per shard along them:
+//! a glass floor over a drop, cracked right across, stays up as two pieces.
+//! A **loose** one falls over and shatters on whatever it lands on.
 
-use nalgebra::{Point3, Vector2, Vector3};
+use std::sync::Arc;
+
+use nalgebra::{Isometry3, Point3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::models::cuboid_model;
+use super::shared::models::{cuboid_look, hull_mesh, PieceHull, SurfaceUvs};
 use super::shared::orientation::Yaw;
 use super::shared::textures::seed_from_position;
 use super::{MaterialCtx, Spawnable};
@@ -34,8 +35,11 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::fracture::CompoundFracture;
-use crate::glass::{BrittleSheet, ConvexPolygon, CrackWeb, CrazeRule, FatigueRule, SheetFrame};
+use crate::fracture::{CompoundFracture, Cuttable, FaceMesher, PartGraph};
+use crate::glass::{
+    weld_along, BrittleSheet, ConvexPolygon, CrackWeb, CrazeRule, FatigueRule, HeldEdge, SheetFrame,
+};
+use crate::model::{Look, PartLooks};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
 use crate::rendering::pattern;
@@ -69,8 +73,9 @@ pub struct GlassSheetDef {
     #[serde(default)]
     pub lying: bool,
 
-    /// Held in place, as a pane in a frame is. Off gives a loose sheet that
-    /// falls over and shatters on whatever it lands on.
+    /// Held along its two long edges, welded to the world where it stands,
+    /// as a pane spanning a gap is. Off gives a loose sheet that falls over
+    /// and shatters on whatever it lands on.
     #[serde(default = "GlassSheetDef::default_fixed")]
     pub fixed: bool,
 
@@ -79,7 +84,7 @@ pub struct GlassSheetDef {
     #[serde(default = "GlassSheetDef::default_impact_threshold")]
     pub impact_threshold: f32,
 
-    /// Blast impulse, in N·s, that breaks a shard free of its neighbours.
+    /// Blast loading, in N·s/m², that breaks a shard free of its neighbours.
     #[serde(default = "GlassSheetDef::default_blast_threshold")]
     pub blast_threshold: f32,
 
@@ -108,7 +113,7 @@ impl GlassSheetDef {
     }
 
     /// Measured: a 20 kg crate dropped from a metre spikes at about 60 N·s
-    /// on a fixed pane, a person walking across one at 5–15 N·s. A window
+    /// on a held pane, a person walking across one at 5–15 N·s. A window
     /// takes the walker and not the crate.
     pub fn default_impact_threshold() -> f32 {
         50.0
@@ -206,45 +211,100 @@ impl Spawnable for GlassSheetDef {
         let (half_u, half_v) = self.half_size();
         let half_extents = frame.box_half_extents(half_u, half_v);
 
-        let body_handle = {
-            let mut physics = world.write_resource::<PhysicsResource>();
-            let desc = if self.fixed {
-                RigidBodyDesc::static_body()
-            } else {
-                RigidBodyDesc::dynamic()
-                    .linear_damping(0.01)
-                    .angular_damping(0.005)
-            };
-            let body = physics
-                .world
-                .create_body(desc.position(centre).rotation(rotation));
-            physics.world.attach_collider(
-                body,
-                ColliderDesc::box_shape(half_extents).of(&Self::substance()),
-            );
-            body
+        let mut physics = world.write_resource::<PhysicsResource>();
+        let body = physics.world.create_body(
+            RigidBodyDesc::dynamic()
+                .linear_damping(0.01)
+                .angular_damping(0.005)
+                .position(centre)
+                .rotation(rotation),
+        );
+        let Some(pane) = physics.world.attach_collider(
+            body,
+            ColliderDesc::box_shape(half_extents).of(&Self::substance()),
+        ) else {
+            return Vec::new();
         };
 
-        // Contact between shards is judged on the same spike that cracks the
-        // pane: a shard hit hard enough to craze is hit hard enough to fall.
-        let fracture = CompoundFracture::boxes(Vec::new(), material)
-            .breaking_on_impact_at(self.impact_threshold)
-            .shedding_debris();
-        let mut sheet = BrittleSheet::whole(frame, self.crazing(), self.blast_threshold, material);
+        let mut graph = PartGraph::default();
+        let pane_part = graph.add_part([pane]);
+        let glass = Cuttable::new(Arc::new(GlassFaces { material })).with(pane, Vector3::zeros());
+        let mut sheet = BrittleSheet::whole(frame, self.crazing(), self.blast_threshold, glass);
         if let Some(fatigue) = self.fatigue() {
             sheet = sheet.wearing_out_under(fatigue, 0.35);
         }
+        if self.fixed {
+            let whole = ConvexPolygon::rectangle(Vector2::zeros(), half_u, half_v);
+            let pose = Isometry3::from_parts(centre.coords.into(), rotation);
+            for edge in self.long_edges(&frame, &pose) {
+                if let Some((weld, held)) =
+                    weld_along(&mut physics.world, body, &frame, &whole, &edge)
+                {
+                    graph.tie(weld, pane_part);
+                    sheet.held.insert(weld, held);
+                }
+            }
+        }
+
+        // Contact between shards is judged on the same spike that cracks the
+        // pane: a shard hit hard enough to craze is hit hard enough to fall.
+        let fracture = CompoundFracture::new(graph)
+            .breaking_on_impact_at(self.impact_threshold)
+            .shedding_debris();
+        let looks = PartLooks::new([(pane, cuboid_look(half_extents, material))]);
+        let model = looks
+            .drawn(&physics.world, body)
+            .expect("a pane has something to draw");
+        drop(physics);
 
         vec![world
             .create_entity()
             .with(Position(centre.coords))
             .with(Velocity(Vector3::zeros()))
             .with(Orientation(rotation))
-            .with(RigidBodyComponent(body_handle))
-            .with(ModelInstance::new(cuboid_model(half_extents, material)))
+            .with(RigidBodyComponent(body))
+            .with(ModelInstance::new(model))
             .with(Renderable)
+            .with(looks)
             .with(fracture)
             .with(sheet)
             .build()]
+    }
+}
+
+impl GlassSheetDef {
+    /// The pane's two long edges, in the world, at `pose`.
+    fn long_edges(&self, frame: &SheetFrame, pose: &Isometry3<f32>) -> [HeldEdge; 2] {
+        let (half_u, half_v) = self.half_size();
+        let corner = |u: f32, v: f32| pose * Point3::from(frame.lift(Vector2::new(u, v), 0.0));
+        if half_u >= half_v {
+            [-half_v, half_v].map(|v| HeldEdge {
+                from: corner(-half_u, v),
+                to: corner(half_u, v),
+            })
+        } else {
+            [-half_u, half_u].map(|u| HeldEdge {
+                from: corner(u, -half_v),
+                to: corner(u, half_v),
+            })
+        }
+    }
+}
+
+/// How a shard of glass is made: a hull of glass, drawn as it collides with
+/// the pattern fitted to each face, as the pane is.
+pub(crate) struct GlassFaces {
+    /// What the glass is drawn with.
+    pub material: MaterialId,
+}
+
+impl FaceMesher for GlassFaces {
+    fn collider(&self, hull: Arc<ConvexHull>) -> ColliderDesc {
+        ColliderDesc::convex_hull(hull).of(&GlassSheetDef::substance())
+    }
+
+    fn look(&self, hull: &ConvexHull, at: Vector3<f32>) -> Look {
+        let (vertices, indices) = hull_mesh(&PieceHull::new(hull, at), SurfaceUvs::Fitted);
+        Look::single(vertices, indices, self.material)
     }
 }

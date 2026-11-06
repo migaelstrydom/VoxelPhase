@@ -27,15 +27,15 @@
 //!
 //! ```text
 //!   IglooDef::blocks ─┬─▶ colliders (offset + rotated) ─▶ one dynamic body
-//!                     ├─▶ compound_model  ─────────────▶ one draw
-//!                     └─▶ joints, block to block ──────▶ CompoundFracture
+//!                     ├─▶ a look per block ────────────▶ PartLooks, one draw
+//!                     └─▶ bonds, block to block ───────▶ CompoundFracture
 //! ```
 //!
-//! [`CompoundFracture`] carries a joint between every pair of blocks that
-//! touch. A blast drops the joints within its reach, the system works out what
-//! is still connected to what, and whatever has come loose is spawned as
-//! separate bodies — so a grenade takes a hole out of the dome and leaves the
-//! rest of it standing. Short of a blast the igloo is rigid, which is the
+//! [`CompoundFracture`] carries a part per block and a bond between every
+//! pair of blocks that touch. A blast drops the bonds within its reach, the
+//! system works out what is still connected to what, and whatever has come
+//! loose is split off as bodies of its own — so a grenade takes a hole out
+//! of the dome and leaves the rest of it standing. Short of a blast the igloo is rigid, which is the
 //! whole reason it can be a dome of frictionless bricks at all.
 
 use std::f32::consts::{PI, TAU};
@@ -44,17 +44,18 @@ use nalgebra::{Isometry3, Matrix3, Point3, Rotation3, Translation3, UnitQuaterni
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::super::shared::models::{compound_model, PiecePlacement};
+use super::super::shared::models::PiecePlacement;
 use super::super::shared::orientation::Yaw;
 use super::super::shared::textures::seed_from_position;
 use super::super::{MaterialCtx, Spawnable};
-use super::block::{ice, ice_cleaving, ice_hull_mesh, ice_material, ice_piece_mesh, ice_uvs};
+use super::block::{ice, ice_cleaving, ice_material, ice_piece_mesh, ice_uvs, IceFaces};
 use crate::cleave::{BrittleSolid, CleaveRule};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::fracture::{CompoundFracture, FractureJoint};
+use crate::fracture::{Bond, CompoundFracture, Cuttable, PartGraph};
+use crate::model::{Look, PartLooks};
 use crate::physics::{ColliderDesc, ColliderHandle, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
 use crate::rendering::pattern::Spread;
@@ -381,36 +382,50 @@ impl Spawnable for IglooDef {
             .collect();
 
         let substance = ice();
-        let model = compound_model(&pieces, ice_piece_mesh, ice_uvs(BRICK_SPREAD), materials[0]);
+        let uvs = ice_uvs(BRICK_SPREAD);
+        let material = materials[0];
 
-        let body_handle = {
-            let mut physics = world.write_resource::<PhysicsResource>();
+        let mut physics = world.write_resource::<PhysicsResource>();
+        let body_handle = physics.world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(origin)
+                .rotation(yaw.rotation())
+                .gravity_scale(1.0)
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        let children: Vec<Option<ColliderHandle>> = pieces
+            .iter()
+            .map(|piece| {
+                physics.world.attach_collider(
+                    body_handle,
+                    ColliderDesc::box_shape(piece.half_extents)
+                        .of(&substance)
+                        .offset_translation(piece.offset)
+                        .offset_rotation(piece.rotation),
+                )
+            })
+            .collect();
 
-            let body_handle = physics.world.create_body(
-                RigidBodyDesc::dynamic()
-                    .position(origin)
-                    .rotation(yaw.rotation())
-                    .gravity_scale(1.0)
-                    .linear_damping(0.01)
-                    .angular_damping(0.005),
+        // Each block wears its own markings, read where it sits in the dome,
+        // and so does every wedge cut from it.
+        let mut blocks_to_cut = Cuttable::new(std::sync::Arc::new(IceFaces { material, uvs }));
+        let mut looks = PartLooks::default();
+        for (piece, child) in pieces.iter().zip(&children) {
+            let Some(child) = child else {
+                continue;
+            };
+            let (vertices, indices) = ice_piece_mesh(piece, uvs);
+            looks.insert(
+                *child,
+                std::sync::Arc::new(Look::single(vertices, indices, material)),
             );
-
-            let children: Vec<Option<ColliderHandle>> = pieces
-                .iter()
-                .map(|piece| {
-                    physics.world.attach_collider(
-                        body_handle,
-                        ColliderDesc::box_shape(piece.half_extents)
-                            .of(&substance)
-                            .offset_translation(piece.offset)
-                            .offset_rotation(piece.rotation),
-                    )
-                })
-                .collect();
-
-            (body_handle, children)
-        };
-        let (body_handle, children) = body_handle;
+            blocks_to_cut = blocks_to_cut.with(*child, piece.offset);
+        }
+        let model = looks
+            .drawn(&physics.world, body_handle)
+            .expect("a dome has something to draw");
+        drop(physics);
 
         vec![world
             .create_entity()
@@ -420,47 +435,60 @@ impl Spawnable for IglooDef {
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
-            .with(
-                CompoundFracture::boxes(self.joints(&blocks, &children), materials[0])
-                    .with_piece_mesh(ice_piece_mesh)
-                    .with_hull_mesh(ice_hull_mesh)
-                    .with_uvs(ice_uvs(BRICK_SPREAD)),
-            )
+            .with(looks)
+            .with(CompoundFracture::new(self.graph(
+                &blocks,
+                &children,
+                centre_of_mass,
+            )))
             .with(BrittleSolid::new(
                 CleaveRule {
                     threshold: self.cleave_threshold,
                     ..ice_cleaving()
                 },
-                materials[0],
+                blocks_to_cut,
             ))
             .build()]
     }
 }
 
 impl IglooDef {
-    /// Which blocks hold which others up, and how hard they have to be hit to
-    /// stop doing so.
+    /// A part per block, and which blocks hold which others up and how hard
+    /// they have to be hit to stop doing so.
     ///
-    /// One joint per pair of touching blocks, so the dome comes apart where it
-    /// was struck: the fracture system drops the joints inside the blast,
-    /// works out what is still connected to what, and lets the rest fall.
+    /// One bond per pair of touching blocks, held halfway between their
+    /// centres, so the dome comes apart where it was struck: the fracture
+    /// system drops the bonds inside the blast, works out what is still
+    /// connected to what, and lets the rest fall.
     ///
-    /// `children[i]` is block `i`'s collider, `None` if it has none.
-    fn joints(
+    /// `children[i]` is block `i`'s collider, `None` if it has none; the
+    /// body's origin sits at `centre` in the dome's frame.
+    fn graph(
         &self,
         blocks: &[DomeBlock],
         children: &[Option<ColliderHandle>],
-    ) -> Vec<FractureJoint> {
-        adjoining_pairs(blocks)
-            .into_iter()
-            .filter_map(|(a, b)| {
-                Some(FractureJoint {
-                    child_a: (*children.get(a)?)?,
-                    child_b: (*children.get(b)?)?,
-                    threshold: self.fracture_threshold,
-                })
-            })
-            .collect()
+        centre: Point3<f32>,
+    ) -> PartGraph {
+        let mut graph = PartGraph::default();
+        let parts: Vec<_> = children
+            .iter()
+            .map(|child| child.map(|c| graph.add_part([c])))
+            .collect();
+        for (a, b) in adjoining_pairs(blocks) {
+            let (Some(Some(part_a)), Some(Some(part_b))) = (parts.get(a), parts.get(b)) else {
+                continue;
+            };
+            let (block_a, block_b) = (&blocks[a], &blocks[b]);
+            let middle = Point3::from((block_a.centre.coords + block_b.centre.coords) * 0.5);
+            graph.bond(Bond {
+                a: *part_a,
+                b: *part_b,
+                anchor: Point3::from(middle - centre),
+                reach: 2.0 * block_a.half_extents.norm().min(block_b.half_extents.norm()),
+                threshold: self.fracture_threshold,
+            });
+        }
+        graph
     }
 }
 
@@ -615,7 +643,6 @@ mod tests {
     use crate::debug::DebugLines;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::{PhysicsConfig, PhysicsWorld};
-    use crate::rendering::material::MaterialId;
 
     pub fn igloo() -> IglooDef {
         IglooDef {
@@ -783,12 +810,10 @@ mod tests {
     fn the_dome_is_one_connected_structure() {
         let igloo = igloo();
         let blocks = igloo.blocks();
-        let children: Vec<ColliderHandle> =
-            (0..blocks.len()).map(ColliderHandle::for_test).collect();
-        let slots: Vec<Option<ColliderHandle>> = children.iter().copied().map(Some).collect();
-        let fracture = CompoundFracture::boxes(igloo.joints(&blocks, &slots), MaterialId(0));
-
-        let components = fracture.connected_components(&children);
+        let slots: Vec<Option<ColliderHandle>> = (0..blocks.len())
+            .map(|slot| Some(ColliderHandle::for_test(slot)))
+            .collect();
+        let components = igloo.graph(&blocks, &slots, mass_centre(&blocks)).groups();
         assert_eq!(
             components.len(),
             1,

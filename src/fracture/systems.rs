@@ -1,59 +1,58 @@
 //! Fracture ECS system.
 
-use std::sync::Arc;
-
-use nalgebra::{Point3, UnitQuaternion, Vector3};
-use rayon::prelude::*;
-use specs::{Builder, Entities, Join, Read, ReadStorage, System, WriteStorage};
+use nalgebra::{Isometry3, Vector3};
+use specs::{Entities, Entity, Join, Read, System, Write, WriteStorage};
 
 use super::components::CompoundFracture;
 use super::debris::Debris;
-use super::load::{ChildLoad, ChildLoads};
-use crate::app::spawnables::shared::models::{
-    assemble_by_material, piece_model, PieceHull, PiecePlacement, PieceStyle, PlacedMesh,
-};
-use crate::collision::convex_hull::ConvexHull;
-use crate::components::{
-    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
-};
-use crate::model::Model;
-use crate::physics::{
-    ColliderHandle, ColliderShape, CollisionFilter, FrictionModel, PhysicsImpulseQueue,
-    RigidBodyHandle,
-};
-use crate::rendering::material::MaterialId;
+use super::load::BondLoads;
+use super::parts::PartId;
+use super::piece_split::{PieceSplit, PieceSplits};
+use crate::components::{Orientation, Position, Renderable, RigidBodyComponent, Velocity};
+use crate::model::PartLooks;
+use crate::physics::{ColliderHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle};
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 
-/// Breaks joints on compound bodies when the load on a child exceeds what its
-/// joints can hold. After breaking, splits disconnected children into
-/// independent bodies.
+/// Breaks the bonds of compound bodies whose load at the bond exceeds what
+/// it can hold, then splits every group of parts still bonded but the one
+/// that stays off onto a body of its own.
 ///
-/// Two sources add into that load, per child:
+/// Two loads are judged at each bond's anchor:
 ///
-/// - **Blast.** `PhysicsImpulseQueue::last_impulses()` evaluated at the child's
-///   world position, so an explosion's falloff opens a hole where it went off.
-/// - **Impact.** The frame-over-frame *spike* in the contact impulse the solver
-///   pushed through that child, read from `ImpactLedger::for_collider`.
+/// - **Blast.** `PhysicsImpulseQueue::last_impulses()`' loading per area
+///   where the bond holds, so an explosion opens a hole where it went off.
+/// - **Impact.** The frame-over-frame *spike* in the contact impulse the
+///   solver pushed through either part's colliders, felt at the anchor over
+///   the bond's reach.
 ///
 /// Contact is read as a spike and not as a level on purpose. The level includes
 /// whatever the object is already carrying: a heavy compound standing still
-/// pushes `mass * gravity * frame_dt` through its lowest children every frame,
+/// pushes `mass * gravity * frame_dt` through its lowest parts every frame,
 /// which for anything massive is larger than a sensible fracture threshold on
 /// its own. Differencing against last frame leaves resting weight and steady
 /// pushing at roughly zero and keeps only the step change of a real collision.
+///
+/// The group that stays is the tied one, else the heaviest. Every other
+/// group goes whole through `PhysicsWorld::split_off`, taking its ties, its
+/// share of the compound and of the looks, its kick part by part, and a
+/// [`PieceSplit`] for the owners to add their own share.
 pub struct FractureSystem;
 
 impl<'a> System<'a> for FractureSystem {
+    #[allow(clippy::type_complexity)]
     type SystemData = (
         Entities<'a>,
-        specs::Write<'a, PhysicsResource>,
+        Write<'a, PhysicsResource>,
         WriteStorage<'a, CompoundFracture>,
-        ReadStorage<'a, RigidBodyComponent>,
-        WriteStorage<'a, ModelInstance>,
+        WriteStorage<'a, RigidBodyComponent>,
+        WriteStorage<'a, PartLooks>,
         WriteStorage<'a, Position>,
         WriteStorage<'a, Velocity>,
-        Read<'a, specs::LazyUpdate>,
+        WriteStorage<'a, Orientation>,
+        WriteStorage<'a, Renderable>,
+        WriteStorage<'a, Debris>,
+        Write<'a, PieceSplits>,
         Read<'a, PhysicsImpulseQueue>,
         Read<'a, Time>,
     );
@@ -63,546 +62,286 @@ impl<'a> System<'a> for FractureSystem {
             entities,
             mut physics,
             mut fractures,
-            bodies,
-            mut models,
+            mut bodies,
+            mut looks,
             mut positions,
             mut velocities,
-            lazy,
+            mut orientations,
+            mut renderables,
+            mut debris,
+            mut splits,
             impulse_queue,
             time,
         ) = data;
+        splits.clear();
+        let blasts = impulse_queue.last_impulses();
 
-        let last_impulses = impulse_queue.last_impulses();
+        let mut breaking: Vec<(Entity, RigidBodyHandle)> = Vec::new();
+        for (entity, fracture, body) in (&entities, &mut fractures, &bodies).join() {
+            if judge(&physics, fracture, body.0, blasts, time.delta_seconds()) {
+                breaking.push((entity, body.0));
+            }
+        }
 
-        // Collect fracture triggers.
-        let mut triggers: Vec<FractureTrigger> = Vec::new();
-
-        for (entity, fracture, body_comp) in (&entities, &mut fractures, &bodies).join() {
-            let body_handle = body_comp.0;
-            let Some(body) = physics.world.body(body_handle) else {
+        for (entity, body) in breaking {
+            let Some(fracture) = fractures.get_mut(entity) else {
                 continue;
             };
-
-            let body_pos = body.position();
-            let body_rot = body.rotation();
-            let collider_handles: Vec<_> = body.colliders().to_vec();
-
-            // The impact baseline has to advance every frame, including frames
-            // where this body cannot break. Skipping it would let a load build
-            // up unwatched and then read as one huge spike later.
-            let contact_spikes = fracture.contact_load.advance(
-                &physics.world,
-                body_handle,
-                &collider_handles,
-                time.delta_seconds(),
-            );
-
-            if collider_handles.len() <= 1 {
+            let pieces = split(&mut physics, fracture, body, blasts);
+            if pieces.is_empty() {
                 continue;
             }
-
-            // Per-child load. The blast impulse is evaluated at the child's
-            // own world position so distance falloff is respected per piece;
-            // the contact spike is carried with the point it landed at, so a
-            // long child does not report a hit at one end to a joint at the
-            // other.
-            let children: Vec<(ColliderHandle, ChildLoad)> = collider_handles
+            let kept: Vec<ColliderHandle> = physics
+                .world
+                .body(body)
+                .map_or_else(Vec::new, |b| b.colliders().to_vec());
+            let shares: Vec<(CompoundFracture, Option<Debris>)> = pieces
                 .iter()
-                .zip(contact_spikes)
-                .map(|(handle, spike)| {
-                    let collider = physics.world.collider(*handle);
-                    let centre = collider
-                        .map(|c| {
-                            Point3::from(c.world_transform(body_pos, body_rot).translation.vector)
-                        })
-                        .unwrap_or(body_pos);
-                    let blast = last_impulses
-                        .iter()
-                        .filter_map(|imp| imp.loading_at(centre))
-                        .map(|loading| loading.per_area.magnitude())
-                        .sum();
-                    let load = ChildLoad {
-                        blast,
-                        contact: spike.magnitude,
-                        contact_point: spike.point,
-                        centre,
-                        radius: collider.map(|c| c.shape().bounding_radius()).unwrap_or(0.0),
-                    };
-                    (*handle, load)
+                .map(|piece| {
+                    let share = fracture.share(&piece.parts, &piece.colliders);
+                    let debris = fracture.sheds_debris.then(|| {
+                        let size = piece_volume(&physics, &piece.colliders);
+                        Debris::new(entity, size)
+                    });
+                    (share, debris)
                 })
                 .collect();
+            fracture.retain(&kept);
 
-            let loads = ChildLoads::new(children, fracture.contact_threshold);
-            if !fracture.split_pending && !fracture.joints.iter().any(|joint| loads.breaks(joint)) {
-                continue;
-            }
-
-            triggers.push(FractureTrigger {
-                entity,
-                body_handle,
-                collider_handles,
-                loads,
-            });
-        }
-
-        // Execute fracture operations.
-        for trigger in triggers {
-            let Some(fracture) = fractures.get_mut(trigger.entity) else {
-                continue;
-            };
-            let style = fracture.style;
-            let anchor = fracture.texture_anchor;
-            let whole = fracture.whole_shape.clone();
-            let debris_of = fracture.sheds_debris.then_some(trigger.entity);
-
-            // Break the overloaded joints; the rest of the structure survives.
-            fracture.joints.retain(|joint| !trigger.loads.breaks(joint));
-            fracture.split_pending = false;
-
-            // Compute connected components from surviving joints.
-            let components = fracture.connected_components(&trigger.collider_handles);
-            let released = fracture.released;
-
-            if components.len() <= 1 && !released {
-                continue;
-            }
-
-            // Keep the largest component on the original body, unless the
-            // body is giving everything up.
-            let largest_idx = if released {
-                None
-            } else {
-                components
-                    .iter()
-                    .enumerate()
-                    .max_by_key(|(_, c)| c.len())
-                    .map(|(i, _)| i)
-            };
-
-            // Snapshot body state.
-            let Some(body) = physics.world.body(trigger.body_handle) else {
-                continue;
-            };
-            let body_pos = body.position();
-            let body_rot = body.rotation();
-            let body_lin_vel = body.linear_velocity();
-            let body_ang_vel = body.angular_velocity();
-
-            // Snapshot all children that will be split off.
-            let mut split_groups: Vec<Vec<ChildSnapshot>> = Vec::new();
-            for (comp_idx, component) in components.iter().enumerate() {
-                if Some(comp_idx) == largest_idx {
+            for (piece, (share, piece_debris)) in pieces.iter().zip(shares) {
+                let Some(new_body) = physics.world.body(piece.body) else {
                     continue;
+                };
+                let new_entity = entities.create();
+                let piece_looks = looks
+                    .get(entity)
+                    .map(|l| l.share(&piece.colliders))
+                    .unwrap_or_default();
+                let _ = positions.insert(new_entity, Position(new_body.position().coords));
+                let _ = velocities.insert(new_entity, Velocity(new_body.linear_velocity()));
+                let _ = orientations.insert(new_entity, Orientation(new_body.rotation()));
+                let _ = bodies.insert(new_entity, RigidBodyComponent(piece.body));
+                let _ = renderables.insert(new_entity, Renderable);
+                let _ = looks.insert(new_entity, piece_looks);
+                let _ = fractures.insert(new_entity, share);
+                if let Some(piece_debris) = piece_debris {
+                    let _ = debris.insert(new_entity, piece_debris);
                 }
-                let mut group = Vec::new();
-                for &child in component {
-                    if let Some(mut info) = snapshot_child(
-                        &physics,
-                        child,
-                        body_pos,
-                        body_rot,
-                        body_lin_vel,
-                        body_ang_vel,
-                    ) {
-                        info.material = fracture.material_of(child);
-                        info.kick = fracture.kick_of(child);
-                        group.push(info);
-                    }
-                }
-                split_groups.push(group);
+                splits.push(PieceSplit {
+                    from: entity,
+                    piece: new_entity,
+                });
             }
 
-            // Detach the split-off children from the compound body, and
-            // forget them: what they take with them was snapshotted above.
-            let handles_to_detach: Vec<ColliderHandle> = components
-                .iter()
-                .enumerate()
-                .filter(|(comp_idx, _)| Some(*comp_idx) != largest_idx)
-                .flat_map(|(_, component)| component.iter().copied())
-                .collect();
-            for ch in &handles_to_detach {
-                physics.world.detach_collider(trigger.body_handle, *ch);
-                fracture.forget(*ch);
+            // The kept body re-centred on what it holds, so its looks are
+            // drawn again about its new origin as well as without the
+            // pieces that left.
+            if let Some(looks) = looks.get_mut(entity) {
+                looks.retain(&kept);
+                looks.mark_changed();
             }
-            fracture.model_stale = true;
-
-            // Spawn each split-off child as an independent body. Every piece's
-            // mesh is its own business, and a blast frees them by the hundred,
-            // so they are built side by side before the spawning, which has
-            // to take the physics world one piece at a time.
-            let freed: Vec<&ChildSnapshot> = split_groups.iter().flatten().collect();
-            let freed_models: Vec<Option<Arc<Model>>> = freed
-                .par_iter()
-                .map(|info| freed_piece_model(info, style, anchor, whole.as_deref()))
-                .collect();
-            for (info, model) in freed.into_iter().zip(freed_models) {
-                spawn_freed_piece(
-                    &mut physics,
-                    &entities,
-                    &lazy,
-                    info,
-                    model,
-                    body_ang_vel,
-                    last_impulses,
-                    debris_of.map(|origin| Debris::new(origin, info.shape.compute_mass(1.0))),
-                );
-            }
-
-            // A released body has nothing left; it and its entity are done.
-            if released {
-                physics.world.remove_body(trigger.body_handle);
-                let _ = entities.delete(trigger.entity);
-                continue;
-            }
-
-            // The survivors are no longer laid out around the body origin, so
-            // move the origin onto them. Without this the remnant spins about
-            // the vanished compound's centre — a plank pivoting on a phantom
-            // axle metres away, too sluggish to push straight.
-            // The origin moves onto the survivors, so the object's texture
-            // origin has to follow it: everything below draws from the new
-            // frame, and the pieces that came free a moment ago were drawn
-            // from the old one.
-            let moved = physics.world.recenter_on_colliders(trigger.body_handle);
-            if let Some(fracture) = fractures.get_mut(trigger.entity) {
-                fracture.texture_anchor += moved;
-            }
-
-            // Recentering moves the body's origin and shifts every surviving
-            // collider's offset to match, so nothing moves in the world — but
-            // `PhysicsSyncSystem` has already run this frame, so the entity's
-            // own copy of the transform is now a frame out of date. Drawing
-            // the rebuilt model, whose offsets are relative to the new origin,
-            // against the old origin displaces the whole structure by the
-            // centre-of-mass shift for exactly one frame: the object blinks
-            // sideways at the moment it breaks.
-            refresh_transform(
-                &physics,
-                trigger.entity,
-                trigger.body_handle,
-                &mut positions,
-                &mut velocities,
-            );
         }
-
-        rebuild_stale_models(&physics, &mut fractures, &bodies, &mut models);
     }
 }
 
-/// Redraw every compound whose children changed this frame, once each.
-///
-/// The last thing the system does, so that a body reshaped by a cleave or a
-/// craze and then split here is drawn as it finally stands, and only then.
-fn rebuild_stale_models(
+/// Advance a compound's loads for the frame and break the bonds that cannot
+/// hold. Whether it must split.
+fn judge(
     physics: &PhysicsResource,
-    fractures: &mut WriteStorage<CompoundFracture>,
-    bodies: &ReadStorage<RigidBodyComponent>,
-    models: &mut WriteStorage<ModelInstance>,
-) {
-    for (fracture, body, instance) in (fractures, bodies, models).join() {
-        if !std::mem::take(&mut fracture.model_stale) {
+    fracture: &mut CompoundFracture,
+    body: RigidBodyHandle,
+    blasts: &[PhysicsImpulse],
+    dt: f32,
+) -> bool {
+    let Some(rigid) = physics.world.body(body) else {
+        return false;
+    };
+    let colliders = rigid.colliders().to_vec();
+    let pose = Isometry3::from_parts(rigid.position().coords.into(), rigid.rotation());
+
+    // The impact baseline has to advance every frame, including frames where
+    // this body cannot break. Skipping it would let a load build up
+    // unwatched and then read as one huge spike later.
+    let spikes = fracture
+        .contact_load
+        .advance(&physics.world, body, &colliders, dt);
+    if fracture.graph.parts().len() <= 1 && !fracture.released {
+        return false;
+    }
+
+    let loads = BondLoads::new(
+        colliders.into_iter().zip(spikes),
+        blasts,
+        pose,
+        fracture.contact_threshold,
+    );
+    let breaks: Vec<bool> = fracture
+        .graph
+        .bonds()
+        .iter()
+        .map(|bond| loads.breaks(&fracture.graph, bond))
+        .collect();
+    let mut verdicts = breaks.into_iter();
+    let broke = fracture
+        .graph
+        .break_bonds(|_| verdicts.next().unwrap_or(false));
+    broke > 0 || fracture.split_pending
+}
+
+/// One group split off onto a body of its own.
+struct Piece {
+    parts: Vec<PartId>,
+    colliders: Vec<ColliderHandle>,
+    body: RigidBodyHandle,
+}
+
+/// Split every group but the one that stays off `body`, each through
+/// `split_off` with its ties, kicked part by part. The compound's graph
+/// still holds every part when this returns, its anchors in the kept body's
+/// frame; each piece's share is taken from it.
+fn split(
+    physics: &mut PhysicsResource,
+    fracture: &mut CompoundFracture,
+    body: RigidBodyHandle,
+    blasts: &[PhysicsImpulse],
+) -> Vec<Piece> {
+    fracture.split_pending = false;
+    for constraint in fracture.untied.drain(..) {
+        physics.world.remove_constraint(constraint);
+    }
+    if std::mem::take(&mut fracture.released) {
+        for constraint in fracture.graph.release() {
+            physics.world.remove_constraint(constraint);
+        }
+    }
+
+    let groups = fracture.graph.groups();
+    let weight = |part: PartId| -> f32 {
+        fracture
+            .graph
+            .colliders_of(&[part])
+            .iter()
+            .filter_map(|c| physics.world.collider(*c))
+            .map(|c| c.mass())
+            .sum()
+    };
+    let Some(kept) = fracture.graph.kept_group(&groups, weight) else {
+        return Vec::new();
+    };
+    let Some(source) = physics.world.body(body) else {
+        return Vec::new();
+    };
+    let (filter, ignores_static) = (*source.filter(), source.ignores_static());
+
+    let mut pieces = Vec::new();
+    for (index, group) in groups.iter().enumerate() {
+        if index == kept {
             continue;
         }
-        if let Some(model) = compound_model_of(
-            physics,
-            body.0,
-            |child| fracture.material_of(child),
-            fracture.style,
-            fracture.texture_anchor,
-            fracture.whole_shape.as_deref(),
-        ) {
-            instance.model = model;
+        let colliders = fracture.graph.colliders_of(group);
+        let ties = fracture.graph.ties_of(group);
+        // A piece held where it stands stays bedded as the body was; a loose
+        // one meets the ground.
+        let traits = fracture
+            .pieces
+            .body(filter, ignores_static && !ties.is_empty());
+        let Some(made) = physics.world.split_off(body, &colliders, &ties, traits) else {
+            continue;
+        };
+        // The piece's bonds are re-expressed in its own frame when its share
+        // is taken; everything left follows the kept body's origin.
+        let rest: Vec<PartId> = fracture
+            .graph
+            .parts()
+            .iter()
+            .map(|part| part.id)
+            .filter(|id| !group.contains(id))
+            .collect();
+        let kept_moved = -made.kept_moved;
+        fracture
+            .graph
+            .transform_anchors(group, &made.new_frame.inverse());
+        fracture.graph.transform_anchors(
+            &rest,
+            &Isometry3::translation(kept_moved.x, kept_moved.y, kept_moved.z),
+        );
+        for part in group {
+            kick(physics, fracture, made.body, *part, blasts);
         }
+        pieces.push(Piece {
+            parts: group.clone(),
+            colliders,
+            body: made.body,
+        });
     }
-}
 
-/// Copy a body's transform onto its entity, for a system that moved the body
-/// after this frame's physics sync had already run.
-fn refresh_transform(
-    physics: &PhysicsResource,
-    entity: specs::Entity,
-    body_handle: RigidBodyHandle,
-    positions: &mut WriteStorage<Position>,
-    velocities: &mut WriteStorage<Velocity>,
-) {
-    let Some(body) = physics.world.body(body_handle) else {
-        return;
-    };
-    if let Some(position) = positions.get_mut(entity) {
-        position.0 = body.position().coords;
+    // What severed a part that stayed still pushes it.
+    for part in &groups[kept] {
+        kick(physics, fracture, body, *part, &[]);
     }
-    if let Some(velocity) = velocities.get_mut(entity) {
-        velocity.0 = body.linear_velocity();
-    }
+    fracture.kicks.clear();
+    pieces
 }
 
-/// Trigger data collected from the join pass.
-struct FractureTrigger {
-    entity: specs::Entity,
-    body_handle: RigidBodyHandle,
-    collider_handles: Vec<ColliderHandle>,
-    /// What each child is carrying.
-    loads: ChildLoads,
-}
-
-/// Snapshot of a child collider's state, captured before detachment.
-struct ChildSnapshot {
-    /// Material this child is drawn with, copied from the compound's per-child
-    /// record so a freed piece keeps the look it had while attached.
-    material: MaterialId,
-    /// Impulse handed to the piece as it leaves, from whoever severed it.
-    kick: Vector3<f32>,
-    shape: ColliderShape,
-    mass: f32,
-    restitution: f32,
-    friction: FrictionModel,
-    /// The filter of the body it leaves, which its own body keeps.
-    filter: CollisionFilter,
-    world_pos: Point3<f32>,
-    world_rot: nalgebra::UnitQuaternion<f32>,
-    lin_vel: Vector3<f32>,
-    /// Where the child sat in the compound's frame, kept only so its mesh can
-    /// be drawn with the markings it wore while attached.
-    local_offset: Vector3<f32>,
-}
-
-fn snapshot_child(
-    physics: &PhysicsResource,
-    collider_handle: ColliderHandle,
-    body_pos: Point3<f32>,
-    body_rot: nalgebra::UnitQuaternion<f32>,
-    body_lin_vel: Vector3<f32>,
-    body_ang_vel: Vector3<f32>,
-) -> Option<ChildSnapshot> {
-    let collider = physics.world.collider(collider_handle)?;
-    let world_xform = collider.world_transform(body_pos, body_rot);
-    let world_pos = Point3::from(world_xform.translation.vector);
-    let r = world_pos - body_pos;
-
-    Some(ChildSnapshot {
-        // Both overwritten by the caller, which holds the compound's records.
-        material: MaterialId(0),
-        kick: Vector3::zeros(),
-        shape: collider.shape().clone(),
-        mass: collider.mass(),
-        restitution: collider.material().restitution,
-        friction: collider.material().friction,
-        filter: *collider.filter(),
-        world_pos,
-        world_rot: world_xform.rotation,
-        lin_vel: body_lin_vel + body_ang_vel.cross(&r),
-        local_offset: collider.offset().translation.vector,
-    })
-}
-
-/// The model a freed piece is drawn with, standing on its own.
-///
-/// `None` for a shape no style draws. Pure, so a blast's worth of pieces can
-/// be built side by side.
-fn freed_piece_model(
-    info: &ChildSnapshot,
-    style: PieceStyle,
-    anchor: Vector3<f32>,
-    whole: Option<&ConvexHull>,
-) -> Option<Arc<Model>> {
-    match &info.shape {
-        ColliderShape::Box { half_extents } => Some(piece_model(
-            &PiecePlacement::new(*half_extents, info.local_offset + anchor),
-            style.boxes,
-            style.uvs,
-            info.material,
-        )),
-        ColliderShape::ConvexHull { hull } => {
-            let (vertices, indices) = (style.hulls)(
-                &PieceHull::new(hull, info.local_offset + anchor).within(whole),
-                style.uvs,
-            );
-            Some(assemble_by_material(vec![PlacedMesh {
-                vertices,
-                indices,
-                offset: Vector3::zeros(),
-                rotation: nalgebra::UnitQuaternion::identity(),
-                material: info.material,
-            }]))
-        }
-        _ => None,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn spawn_freed_piece(
+/// Push `part`, now on `body`, at its own centre of mass: its share of
+/// `blasts`, by the area its colliders show them, and whatever severed it.
+/// A group struck off-centre spins.
+fn kick(
     physics: &mut PhysicsResource,
-    entities: &Entities,
-    lazy: &specs::LazyUpdate,
-    info: &ChildSnapshot,
-    model: Option<Arc<Model>>,
-    body_ang_vel: Vector3<f32>,
-    impulse_sources: &[crate::physics::PhysicsImpulse],
-    debris: Option<Debris>,
+    fracture: &CompoundFracture,
+    body: RigidBodyHandle,
+    part: PartId,
+    blasts: &[PhysicsImpulse],
 ) {
-    // The blast strikes the piece by the area it shows it, so light pieces
-    // fly off faster than heavy ones of a size.
-    let explosion_kick: Vector3<f32> = impulse_sources
-        .iter()
-        .filter_map(|imp| {
-            imp.impulse_on(info.world_pos, |travel| {
-                info.shape.projected_area(info.world_rot.inverse() * travel)
-            })
-        })
-        .sum();
-    let piece_vel = info.lin_vel + (explosion_kick + info.kick) / info.mass;
-
-    let new_body_desc = crate::physics::RigidBodyDesc::dynamic()
-        .position(info.world_pos)
-        .rotation(info.world_rot)
-        .linear_velocity(piece_vel)
-        .angular_velocity(body_ang_vel)
-        .linear_damping(0.01)
-        .angular_damping(0.005)
-        .filter(info.filter);
-
-    let new_body_handle = physics.world.create_body(new_body_desc);
-
-    let density = info.mass / info.shape.compute_mass(1.0);
-    let new_collider_desc =
-        collider_desc_from_shape(&info.shape, density, info.restitution, info.friction);
-    physics
-        .world
-        .attach_collider(new_body_handle, new_collider_desc);
-
-    let Some(piece_model) = model else {
+    let colliders = fracture.graph.colliders_of(&[part]);
+    let Some((_, centre)) = physics.world.mass_centre_of(body, &colliders) else {
         return;
     };
-
-    let mut piece = lazy
-        .create_entity(entities)
-        .with(Position(info.world_pos.coords))
-        .with(Velocity(piece_vel))
-        .with(Orientation(info.world_rot))
-        .with(RigidBodyComponent(new_body_handle))
-        .with(ModelInstance::new(piece_model))
-        .with(Renderable);
-    if let Some(debris) = debris {
-        piece = piece.with(debris);
-    }
-    piece.build();
-}
-
-/// The model of a compound body as its colliders stand right now: box
-/// children and hull children each drawn by `style`, each wearing the
-/// material `material_of` gives it.
-///
-/// `None` if the body has no drawable child, which is not the same as an
-/// empty model — a caller that has nothing to draw should keep what it had
-/// rather than blank the object.
-pub(crate) fn compound_model_of(
-    physics: &PhysicsResource,
-    body_handle: RigidBodyHandle,
-    material_of: impl Fn(ColliderHandle) -> MaterialId,
-    style: PieceStyle,
-    anchor: Vector3<f32>,
-    whole: Option<&ConvexHull>,
-) -> Option<Arc<Model>> {
-    let body = physics.world.body(body_handle)?;
-
-    // Read off serially, meshed in parallel: a freshly cleaved dome is
-    // hundreds of chamfered wedges, and each one's mesh is its own business.
-    let children: Vec<(ColliderShape, Vector3<f32>, UnitQuaternion<f32>, MaterialId)> = body
-        .colliders()
+    let blast: Vector3<f32> = blasts
         .iter()
-        .filter_map(|ch| {
-            let c = physics.world.collider(*ch)?;
-            Some((
-                c.shape().clone(),
-                c.offset().translation.vector,
-                c.offset().rotation,
-                material_of(*ch),
-            ))
-        })
-        .collect();
-
-    let pieces: Vec<PlacedMesh> = children
-        .par_iter()
-        .filter_map(|(shape, offset, rotation, material)| {
-            let (offset, rotation) = (*offset, *rotation);
-            if !offset.iter().all(|v| v.is_finite()) {
-                log::error!("Fracture: NaN/Inf in remaining collider offset {offset:?}");
-                return None;
-            }
-            let (vertices, indices) = match shape {
-                ColliderShape::Box { half_extents } => {
-                    if !half_extents.iter().all(|v| v.is_finite()) {
-                        log::error!(
-                            "Fracture: NaN/Inf in remaining collider extents {half_extents:?}"
-                        );
-                        return None;
-                    }
-                    // Rotation carried through: a child that was laid at an
-                    // angle must still be at that angle after the break, or an
-                    // object made of tilted pieces straightens itself out the
-                    // moment it loses one.
-                    (style.boxes)(
-                        &PiecePlacement::new(*half_extents, offset + anchor).rotated(rotation),
-                        style.uvs,
-                    )
-                }
-                ColliderShape::ConvexHull { hull } => (style.hulls)(
-                    &PieceHull::new(hull, offset + anchor).within(whole),
-                    style.uvs,
-                ),
-                _ => return None,
-            };
-            Some(PlacedMesh {
-                vertices,
-                indices,
-                offset,
-                rotation,
-                material: *material,
-            })
-        })
-        .collect();
-
-    if pieces.is_empty() {
-        return None;
+        .filter_map(|blast| physics.world.impulse_on_colliders(body, &colliders, blast))
+        .map(|(impulse, _)| impulse)
+        .sum();
+    let impulse = blast + fracture.kick_of(part);
+    if impulse != Vector3::zeros() {
+        physics.world.apply_impulse_at_point(body, impulse, centre);
     }
-    Some(assemble_by_material(pieces))
 }
 
-/// Create a `ColliderDesc` with identity offset from a detached shape.
-fn collider_desc_from_shape(
-    shape: &ColliderShape,
-    density: f32,
-    restitution: f32,
-    friction: FrictionModel,
-) -> crate::physics::ColliderDesc {
-    let desc = match shape {
-        ColliderShape::Box { half_extents } => {
-            crate::physics::ColliderDesc::box_shape(*half_extents)
-        }
-        ColliderShape::Sphere { radius } => crate::physics::ColliderDesc::sphere(*radius),
-        ColliderShape::Capsule {
-            half_height,
-            radius,
-        } => crate::physics::ColliderDesc::capsule(*half_height, *radius),
-        ColliderShape::ConvexHull { hull } => {
-            crate::physics::ColliderDesc::convex_hull(hull.clone())
-        }
-    };
-    desc.density(density)
-        .restitution(restitution)
-        .friction_model(friction)
+/// The volume of a piece's colliders together, m³: the size the debris
+/// budget ranks it by.
+fn piece_volume(physics: &PhysicsResource, colliders: &[ColliderHandle]) -> f32 {
+    colliders
+        .iter()
+        .filter_map(|c| physics.world.collider(*c))
+        .map(|c| c.shape().compute_mass(1.0))
+        .sum()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use nalgebra::{Point3, Vector3};
+    use specs::{Builder, Join, RunNow, World, WorldExt};
+
     use super::*;
+    use crate::components::ModelInstance;
     use crate::debug::DebugLines;
-    use crate::fracture::{ContactLoadTracker, FractureJoint};
+    use crate::fracture::{Bond, ContactLoadTracker, PartGraph};
+    use crate::geometry::{generate_cube_indices, generate_cube_vertices};
+    use crate::model::Look;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
-    use crate::physics::{ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc};
+    use crate::physics::{
+        ColliderDesc, ConstraintKind, PhysicsConfig, PhysicsImpulse, PhysicsWorld, RigidBodyDesc,
+    };
+    use crate::rendering::colour::Colour;
+    use crate::rendering::material::MaterialId;
+    use crate::systems::PartDrawSystem;
 
     const FRAME_DT: f32 = 1.0 / 60.0;
+    const HALF: Vector3<f32> = Vector3::new(0.5, 0.5, 0.5);
 
     /// A four-block slab, the shape of one course of an igloo wall, heavy
     /// enough that its own weight is the interesting quantity.
@@ -621,7 +360,7 @@ mod tests {
                 world
                     .attach_collider(
                         body,
-                        ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5))
+                        ColliderDesc::box_shape(HALF)
                             .offset_translation(Vector3::new(i as f32 - 1.5, 0.0, 0.0))
                             .density(900.0)
                             .restitution(0.0),
@@ -632,7 +371,7 @@ mod tests {
         (body, handles)
     }
 
-    /// Run the world and report the largest per-child spike seen over the
+    /// Run the world and report the largest per-collider spike seen over the
     /// frames in `window`, exactly as `FractureSystem` would read it.
     ///
     /// `drive`, when given, is forced onto the body's linear velocity every
@@ -680,8 +419,6 @@ mod tests {
 
         let mut resting_world = PhysicsWorld::new(awake.clone());
         let (resting, resting_colliders) = compound_slab(&mut resting_world, 0.5, Vector3::zeros());
-        // Skip the frames where it is still settling onto the quad; what is
-        // measured is a slab that is simply standing there.
         let resting_peak = peak_spike(
             &mut resting_world,
             resting,
@@ -691,8 +428,6 @@ mod tests {
             None,
         );
 
-        // The same slab with something shoving it along the ground — the case
-        // the old system excluded contact entirely to avoid.
         let mut pushed_world = PhysicsWorld::new(awake);
         let (pushed, pushed_colliders) = compound_slab(&mut pushed_world, 0.5, Vector3::zeros());
         let pushed_peak = peak_spike(
@@ -724,392 +459,6 @@ mod tests {
         );
     }
 
-    /// A freed piece is drawn by joining over storages, and `LazyUpdate` does
-    /// not put it into them until `world.maintain()`. The frame loop must
-    /// therefore maintain *before* the thread-local render pass: the compound's
-    /// model drops a piece the moment it breaks off, so if the piece's own
-    /// entity is not there yet, the structure blinks out as it comes apart.
-    #[test]
-    fn a_lazily_created_piece_is_invisible_until_the_world_is_maintained() {
-        use specs::{Builder, Join, World, WorldExt};
-
-        let mut world = World::new();
-        world.register::<Renderable>();
-        let lazy_created = {
-            let entities = world.entities();
-            let lazy = world.read_resource::<specs::LazyUpdate>();
-            lazy.create_entity(&entities).with(Renderable).build()
-        };
-
-        let visible = |world: &World| {
-            let renderables = world.read_storage::<Renderable>();
-            let entities = world.entities();
-            (&entities, &renderables).join().count()
-        };
-
-        assert_eq!(
-            visible(&world),
-            0,
-            "a lazily created entity was joinable before maintain; \
-             the render-order hazard this guards has changed"
-        );
-
-        world.maintain();
-
-        assert_eq!(visible(&world), 1, "maintain did not apply the creation");
-        assert!(world.is_alive(lazy_created));
-    }
-
-    /// The flicker this guards: a structure jumped sideways for one frame at
-    /// the moment it broke.
-    ///
-    /// Detaching pieces moves the compound's origin onto what is left, and
-    /// every surviving collider's offset shifts to match, so nothing actually
-    /// moves. But this system runs after the frame's physics sync, so unless it
-    /// refreshes the entity itself, the rebuilt model — whose offsets are
-    /// relative to the new origin — is drawn against the old one.
-    #[test]
-    fn a_broken_compound_is_drawn_where_its_body_actually_is() {
-        use crate::physics::{PhysicsImpulse, PhysicsImpulseQueue};
-        use specs::{Builder, RunNow, World, WorldExt};
-
-        let mut world = World::new();
-        world.register::<Position>();
-        world.register::<Velocity>();
-        world.register::<Orientation>();
-        world.register::<RigidBodyComponent>();
-        world.register::<ModelInstance>();
-        world.register::<Renderable>();
-        world.register::<CompoundFracture>();
-        world.insert(crate::time::Time::default());
-
-        // A row of four boxes, joined in a chain, so that blasting one end off
-        // moves the centre of mass a long way along the row.
-        let origin = Point3::new(0.0, 10.0, 0.0);
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let body = physics_world.create_body(RigidBodyDesc::dynamic().position(origin));
-        let children: Vec<ColliderHandle> = (0..4)
-            .map(|i| {
-                physics_world
-                    .attach_collider(
-                        body,
-                        ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5))
-                            .offset_translation(Vector3::new(i as f32 - 1.5, 0.0, 0.0))
-                            .density(500.0),
-                    )
-                    .expect("collider attaches to a live body")
-            })
-            .collect();
-        world.insert(PhysicsResource::new(
-            physics_world,
-            Box::new(SequentialStepper::new(FRAME_DT, 4)),
-        ));
-
-        let joints = children
-            .windows(2)
-            .map(|pair| FractureJoint {
-                child_a: pair[0],
-                child_b: pair[1],
-                threshold: 10.0,
-            })
-            .collect();
-        let entity = world
-            .create_entity()
-            .with(Position(origin.coords))
-            .with(Velocity(Vector3::zeros()))
-            .with(Orientation(nalgebra::UnitQuaternion::identity()))
-            .with(RigidBodyComponent(body))
-            .with(ModelInstance::new(piece_model(
-                &PiecePlacement::new(Vector3::new(0.5, 0.5, 0.5), Vector3::zeros()),
-                crate::app::spawnables::shared::models::cuboid_mesh,
-                crate::app::spawnables::shared::models::SurfaceUvs::Fitted,
-                crate::rendering::material::MaterialId(0),
-            )))
-            .with(Renderable)
-            .with(CompoundFracture::boxes(
-                joints,
-                crate::rendering::material::MaterialId(0),
-            ))
-            .build();
-
-        // A blast at the far end of the row, tight enough to reach only the
-        // outermost box.
-        let mut queue = PhysicsImpulseQueue::default();
-        queue.push(PhysicsImpulse::radial(
-            origin + Vector3::new(-1.5, 0.0, 0.0),
-            0.9,
-            5_000.0,
-            0.0,
-        ));
-        let _ = queue.drain().count();
-        world.insert(queue);
-
-        FractureSystem.run_now(&world);
-
-        let recentred = {
-            let physics = world.read_resource::<PhysicsResource>();
-            let body = physics.world.body(body).expect("the remnant survives");
-            assert!(
-                body.colliders().len() < 4,
-                "nothing broke off, so there is no recentring to check"
-            );
-            body.position()
-        };
-        assert!(
-            (recentred - origin).magnitude() > 0.1,
-            "the remnant's origin did not move, so this test proves nothing"
-        );
-
-        let positions = world.read_storage::<Position>();
-        let drawn = positions.get(entity).expect("the remnant keeps a position");
-        assert!(
-            (drawn.0 - recentred.coords).magnitude() < 1e-5,
-            "drawn at {:?} but the body is at {:?}",
-            drawn.0,
-            recentred.coords
-        );
-    }
-
-    /// Every freed piece must be drawable on the very frame it breaks off, at
-    /// the place it broke off from. It leaves the compound's model that frame,
-    /// so any gap or displacement here is a piece that visibly blinks.
-    #[test]
-    fn a_freed_piece_is_drawable_where_it_broke_off() {
-        use crate::physics::{PhysicsImpulse, PhysicsImpulseQueue};
-        use specs::{Builder, Join, RunNow, World, WorldExt};
-
-        let mut world = World::new();
-        world.register::<Position>();
-        world.register::<Velocity>();
-        world.register::<Orientation>();
-        world.register::<RigidBodyComponent>();
-        world.register::<ModelInstance>();
-        world.register::<Renderable>();
-        world.register::<CompoundFracture>();
-        world.insert(crate::time::Time::default());
-
-        let origin = Point3::new(0.0, 10.0, 0.0);
-        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
-        let body = physics_world.create_body(RigidBodyDesc::dynamic().position(origin));
-        let children: Vec<ColliderHandle> = (0..4)
-            .map(|i| {
-                physics_world
-                    .attach_collider(
-                        body,
-                        ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5))
-                            .offset_translation(Vector3::new(i as f32 - 1.5, 0.0, 0.0))
-                            .density(500.0),
-                    )
-                    .expect("collider attaches to a live body")
-            })
-            .collect();
-        world.insert(PhysicsResource::new(
-            physics_world,
-            Box::new(SequentialStepper::new(FRAME_DT, 4)),
-        ));
-
-        let joints = children
-            .windows(2)
-            .map(|pair| FractureJoint {
-                child_a: pair[0],
-                child_b: pair[1],
-                threshold: 10.0,
-            })
-            .collect();
-        world
-            .create_entity()
-            .with(Position(origin.coords))
-            .with(Velocity(Vector3::zeros()))
-            .with(Orientation(nalgebra::UnitQuaternion::identity()))
-            .with(RigidBodyComponent(body))
-            .with(ModelInstance::new(piece_model(
-                &PiecePlacement::new(Vector3::new(0.5, 0.5, 0.5), Vector3::zeros()),
-                crate::app::spawnables::shared::models::cuboid_mesh,
-                crate::app::spawnables::shared::models::SurfaceUvs::Fitted,
-                crate::rendering::material::MaterialId(0),
-            )))
-            .with(Renderable)
-            .with(CompoundFracture::boxes(
-                joints,
-                crate::rendering::material::MaterialId(0),
-            ))
-            .build();
-        world.maintain();
-
-        // The outermost box sat at x = -1.5 relative to the origin.
-        let broken_off = origin + Vector3::new(-1.5, 0.0, 0.0);
-        let mut queue = PhysicsImpulseQueue::default();
-        queue.push(PhysicsImpulse::radial(broken_off, 0.9, 5_000.0, 0.0));
-        let _ = queue.drain().count();
-        world.insert(queue);
-
-        let drawn = |world: &World| -> Vec<Vector3<f32>> {
-            let models = world.read_storage::<ModelInstance>();
-            let positions = world.read_storage::<Position>();
-            let renderables = world.read_storage::<Renderable>();
-            let entities = world.entities();
-            (&entities, &models, &positions, &renderables)
-                .join()
-                .map(|(_, _, p, _)| p.0)
-                .collect()
-        };
-
-        assert_eq!(drawn(&world).len(), 1, "one compound before the break");
-
-        FractureSystem.run_now(&world);
-        // Exactly what the frame loop does before the render pass runs.
-        world.maintain();
-
-        let after = drawn(&world);
-        assert_eq!(
-            after.len(),
-            2,
-            "the compound and its freed piece should both be drawable on the \
-             break frame, found {} drawable entities",
-            after.len()
-        );
-        assert!(
-            after
-                .iter()
-                .any(|p| (p - broken_off.coords).magnitude() < 1e-4),
-            "no drawable entity sits where the piece broke off ({:?}); found {:?}",
-            broken_off.coords,
-            after
-        );
-        for p in &after {
-            assert!(p.iter().all(|c| c.is_finite()), "non-finite position {p:?}");
-        }
-    }
-
-    /// The rebuilt remnant model must still span the pieces it is made of.
-    ///
-    /// The trace can say an entity was drawn and where its origin was, but not
-    /// whether its geometry is right: a model whose per-piece offsets were lost
-    /// draws every box on top of the others, at the body's origin, which is
-    /// what "collapsed to the centre of mass" would look like.
-    #[test]
-    fn a_rebuilt_remnant_still_spans_its_surviving_pieces() {
-        use crate::physics::{PhysicsImpulse, PhysicsImpulseQueue};
-        use specs::{Builder, RunNow, World, WorldExt};
-
-        let mut world = World::new();
-        world.register::<Position>();
-        world.register::<Velocity>();
-        world.register::<Orientation>();
-        world.register::<RigidBodyComponent>();
-        world.register::<ModelInstance>();
-        world.register::<Renderable>();
-        world.register::<CompoundFracture>();
-        world.insert(crate::time::Time::default());
-
-        let origin = Point3::new(0.0, 10.0, 0.0);
-        let half = Vector3::new(0.5, 0.5, 0.5);
-        let mut pw = PhysicsWorld::new(PhysicsConfig::default());
-        let body = pw.create_body(RigidBodyDesc::dynamic().position(origin));
-        let children: Vec<ColliderHandle> = (0..4)
-            .map(|i| {
-                pw.attach_collider(
-                    body,
-                    ColliderDesc::box_shape(half)
-                        .offset_translation(Vector3::new(i as f32 - 1.5, 0.0, 0.0))
-                        .density(500.0),
-                )
-                .expect("collider attaches to a live body")
-            })
-            .collect();
-        world.insert(PhysicsResource::new(
-            pw,
-            Box::new(SequentialStepper::new(FRAME_DT, 4)),
-        ));
-
-        let joints = children
-            .windows(2)
-            .map(|pair| FractureJoint {
-                child_a: pair[0],
-                child_b: pair[1],
-                threshold: 10.0,
-            })
-            .collect();
-        let entity = world
-            .create_entity()
-            .with(Position(origin.coords))
-            .with(Velocity(Vector3::zeros()))
-            .with(Orientation(nalgebra::UnitQuaternion::identity()))
-            .with(RigidBodyComponent(body))
-            .with(ModelInstance::new(piece_model(
-                &PiecePlacement::new(half, Vector3::zeros()),
-                crate::app::spawnables::shared::models::cuboid_mesh,
-                crate::app::spawnables::shared::models::SurfaceUvs::Fitted,
-                crate::rendering::material::MaterialId(0),
-            )))
-            .with(Renderable)
-            .with(CompoundFracture::boxes(
-                joints,
-                crate::rendering::material::MaterialId(0),
-            ))
-            .build();
-        world.maintain();
-
-        let mut queue = PhysicsImpulseQueue::default();
-        queue.push(PhysicsImpulse::radial(
-            origin + Vector3::new(-1.5, 0.0, 0.0),
-            0.9,
-            5_000.0,
-            0.0,
-        ));
-        let _ = queue.drain().count();
-        world.insert(queue);
-
-        FractureSystem.run_now(&world);
-        world.maintain();
-
-        // Where the model says its geometry is, in the body's own frame.
-        let models = world.read_storage::<ModelInstance>();
-        let model = &models.get(entity).expect("the remnant keeps a model").model;
-        let (mut model_min, mut model_max) = (
-            Vector3::repeat(f32::INFINITY),
-            Vector3::repeat(f32::NEG_INFINITY),
-        );
-        let mut vertex_count = 0;
-        for part in &model.parts {
-            for primitive in &part.primitives {
-                for vertex in &primitive.vertices {
-                    model_min = model_min.inf(&vertex.pos);
-                    model_max = model_max.sup(&vertex.pos);
-                    vertex_count += 1;
-                }
-            }
-        }
-
-        // Where the physics says it is, in the same frame.
-        let physics = world.read_resource::<PhysicsResource>();
-        let remnant = physics.world.body(body).expect("the remnant survives");
-        let (mut solid_min, mut solid_max) = (
-            Vector3::repeat(f32::INFINITY),
-            Vector3::repeat(f32::NEG_INFINITY),
-        );
-        for handle in remnant.colliders() {
-            let collider = physics.world.collider(*handle).unwrap();
-            let centre = collider.offset().translation.vector;
-            solid_min = solid_min.inf(&(centre - half));
-            solid_max = solid_max.sup(&(centre + half));
-        }
-
-        assert_eq!(vertex_count, 24 * remnant.colliders().len());
-        assert!(
-            (model_min - solid_min).magnitude() < 1e-4
-                && (model_max - solid_max).magnitude() < 1e-4,
-            "model spans {model_min:?}..{model_max:?} but the colliders span \
-             {solid_min:?}..{solid_max:?}"
-        );
-        // And it must actually be spread out, not stacked at the origin.
-        assert!(
-            (model_max.x - model_min.x) > 2.0,
-            "the remnant's boxes collapsed onto each other: x span {}",
-            model_max.x - model_min.x
-        );
-    }
-
     /// Waking up is not an impact. The solver stops reporting impulses for a
     /// sleeping body, and the frame it wakes its children are carrying their
     /// full share again — which must not read as having arrived all at once.
@@ -1133,7 +482,6 @@ mod tests {
         }
         assert!(slept, "the slab never settled; the test cannot run");
 
-        // Nudge it awake without hitting it: a velocity a shove would impart.
         world
             .body_mut(body)
             .unwrap()
@@ -1156,5 +504,439 @@ mod tests {
             "waking read as a spike of {peak}, a large share of one frame of \
              weight ({weight_per_frame})"
         );
+    }
+
+    /// A body held up by the world carries its weight through what holds
+    /// it, so a spike on it is judged without the body's weight taken off.
+    #[test]
+    fn a_body_held_by_the_world_gets_no_deadband() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let (body, _) = compound_slab(&mut world, 3.0, Vector3::zeros());
+        assert!(!world.is_held_by_world(body));
+        world.create_constraint(ConstraintKind::world_fixed(
+            body,
+            Point3::new(0.0, 3.0, 0.0),
+            Vector3::zeros(),
+            &nalgebra::UnitQuaternion::identity(),
+            0.0,
+            f32::INFINITY,
+        ));
+        assert!(world.is_held_by_world(body));
+    }
+
+    /// A world with the fracture and drawing systems' storages and a row of
+    /// `count` boxes at `origin`, a part each, bonded to the next at the face
+    /// they share, each drawn as a cube.
+    fn row_world(count: usize, origin: Point3<f32>) -> (World, specs::Entity, RigidBodyHandle) {
+        let mut world = World::new();
+        crate::app::breakage::register(&mut world);
+        world.insert(Time::fixed(FRAME_DT));
+
+        let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
+        let body = physics_world.create_body(RigidBodyDesc::dynamic().position(origin));
+        let centre = (count as f32 - 1.0) * 0.5;
+        let children: Vec<ColliderHandle> = (0..count)
+            .map(|i| {
+                physics_world
+                    .attach_collider(
+                        body,
+                        ColliderDesc::box_shape(HALF)
+                            .offset_translation(Vector3::new(i as f32 - centre, 0.0, 0.0))
+                            .density(500.0),
+                    )
+                    .expect("collider attaches to a live body")
+            })
+            .collect();
+        let mut graph = PartGraph::default();
+        let parts: Vec<PartId> = children.iter().map(|c| graph.add_part([*c])).collect();
+        for (i, pair) in parts.windows(2).enumerate() {
+            graph.bond(Bond {
+                a: pair[0],
+                b: pair[1],
+                anchor: Point3::new(i as f32 + 0.5 - centre, 0.0, 0.0),
+                reach: 2.0,
+                threshold: 10.0,
+            });
+        }
+        let look = Arc::new(Look::single(
+            generate_cube_vertices(HALF, Colour::WHITE),
+            generate_cube_indices(),
+            MaterialId(0),
+        ));
+        let looks = PartLooks::new(children.iter().map(|c| (*c, look.clone())));
+        world.insert(PhysicsResource::new(
+            physics_world,
+            Box::new(SequentialStepper::new(FRAME_DT, 4)),
+        ));
+        let entity = world
+            .create_entity()
+            .with(Position(origin.coords))
+            .with(Velocity(Vector3::zeros()))
+            .with(Orientation(nalgebra::UnitQuaternion::identity()))
+            .with(RigidBodyComponent(body))
+            .with(Renderable)
+            .with(looks)
+            .with(CompoundFracture::new(graph))
+            .build();
+        (world, entity, body)
+    }
+
+    /// A blast this frame, as the physics step leaves it for the systems after.
+    fn blast_at(world: &mut World, at: Point3<f32>, radius: f32) {
+        let mut queue = PhysicsImpulseQueue::default();
+        queue.push(PhysicsImpulse::radial(at, radius, 5_000.0, 0.0));
+        let _ = queue.drain().count();
+        world.insert(queue);
+    }
+
+    fn split_and_draw(world: &mut World) {
+        FractureSystem.run_now(world);
+        PartDrawSystem.run_now(world);
+        world.maintain();
+    }
+
+    /// Every entity with a body: its body and how many colliders it holds.
+    fn pieces(world: &World) -> Vec<(specs::Entity, RigidBodyHandle, usize)> {
+        let physics = world.read_resource::<PhysicsResource>();
+        let bodies = world.read_storage::<RigidBodyComponent>();
+        (&world.entities(), &bodies)
+            .join()
+            .map(|(e, b)| {
+                let count = physics.world.body(b.0).map_or(0, |b| b.colliders().len());
+                (e, b.0, count)
+            })
+            .collect()
+    }
+
+    /// The flicker this guards: a structure jumped sideways for one frame at
+    /// the moment it broke. Splitting moves the compound's origin onto what is
+    /// left, and the drawing system, running after, must draw it there.
+    #[test]
+    fn a_broken_compound_is_drawn_where_its_body_actually_is() {
+        let origin = Point3::new(0.0, 10.0, 0.0);
+        let (mut world, entity, body) = row_world(4, origin);
+        blast_at(&mut world, origin + Vector3::new(-1.5, 0.0, 0.0), 0.9);
+
+        split_and_draw(&mut world);
+
+        let recentred = {
+            let physics = world.read_resource::<PhysicsResource>();
+            let body = physics.world.body(body).expect("the remnant survives");
+            assert!(
+                body.colliders().len() < 4,
+                "nothing broke off, so there is no recentring to check"
+            );
+            body.position()
+        };
+        assert!(
+            (recentred - origin).magnitude() > 0.1,
+            "the remnant's origin did not move, so this test proves nothing"
+        );
+        let positions = world.read_storage::<Position>();
+        let drawn = positions.get(entity).expect("the remnant keeps a position");
+        assert!(
+            (drawn.0 - recentred.coords).magnitude() < 1e-5,
+            "drawn at {:?} but the body is at {:?}",
+            drawn.0,
+            recentred.coords
+        );
+    }
+
+    /// Every piece must be drawable on the very frame it breaks off, at the
+    /// place it broke off from. It leaves the compound's model that frame,
+    /// so any gap or displacement here is a piece that visibly blinks.
+    #[test]
+    fn a_split_piece_is_drawable_where_it_broke_off() {
+        let origin = Point3::new(0.0, 10.0, 0.0);
+        let (mut world, _, _) = row_world(4, origin);
+        let broken_off = origin + Vector3::new(-1.5, 0.0, 0.0);
+        blast_at(&mut world, origin + Vector3::new(-1.5, 0.0, 0.0), 0.9);
+
+        split_and_draw(&mut world);
+
+        let models = world.read_storage::<ModelInstance>();
+        let positions = world.read_storage::<Position>();
+        let drawn: Vec<Vector3<f32>> = (&models, &positions).join().map(|(_, p)| p.0).collect();
+        assert_eq!(drawn.len(), 2, "the compound and its piece are drawn");
+        assert!(
+            drawn
+                .iter()
+                .any(|p| (p - broken_off.coords).magnitude() < 1e-4),
+            "no drawn entity sits where the piece broke off: {drawn:?}"
+        );
+    }
+
+    /// The rebuilt remnant model must still span the pieces it is made of,
+    /// each look at its own collider, not stacked at the body's origin.
+    #[test]
+    fn a_rebuilt_remnant_still_spans_its_surviving_pieces() {
+        let origin = Point3::new(0.0, 10.0, 0.0);
+        let (mut world, entity, body) = row_world(4, origin);
+        blast_at(&mut world, origin + Vector3::new(-1.5, 0.0, 0.0), 0.9);
+
+        split_and_draw(&mut world);
+
+        let models = world.read_storage::<ModelInstance>();
+        let model = &models.get(entity).expect("the remnant keeps a model").model;
+        let (mut model_min, mut model_max) = (
+            Vector3::repeat(f32::INFINITY),
+            Vector3::repeat(f32::NEG_INFINITY),
+        );
+        let mut vertex_count = 0;
+        for vertex in model
+            .parts
+            .iter()
+            .flat_map(|part| &part.primitives)
+            .flat_map(|primitive| &primitive.vertices)
+        {
+            model_min = model_min.inf(&vertex.pos);
+            model_max = model_max.sup(&vertex.pos);
+            vertex_count += 1;
+        }
+
+        let physics = world.read_resource::<PhysicsResource>();
+        let remnant = physics.world.body(body).expect("the remnant survives");
+        let (mut solid_min, mut solid_max) = (
+            Vector3::repeat(f32::INFINITY),
+            Vector3::repeat(f32::NEG_INFINITY),
+        );
+        for handle in remnant.colliders() {
+            let centre = physics
+                .world
+                .collider(*handle)
+                .unwrap()
+                .offset()
+                .translation
+                .vector;
+            solid_min = solid_min.inf(&(centre - HALF));
+            solid_max = solid_max.sup(&(centre + HALF));
+        }
+
+        assert_eq!(vertex_count, 24 * remnant.colliders().len());
+        assert!(
+            (model_min - solid_min).magnitude() < 1e-4
+                && (model_max - solid_max).magnitude() < 1e-4,
+            "model spans {model_min:?}..{model_max:?} but the colliders span \
+             {solid_min:?}..{solid_max:?}"
+        );
+        assert!(
+            model_max.x - model_min.x > 2.0,
+            "the remnant's boxes collapsed"
+        );
+    }
+
+    /// Two planks still bonded to each other fly as one body, as the bond
+    /// says, rather than as a plank each.
+    #[test]
+    fn a_still_joined_pair_flies_as_one_body() {
+        let origin = Point3::new(0.0, 10.0, 0.0);
+        let (mut world, entity, body) = row_world(4, origin);
+        // Break the middle bond alone: two pairs.
+        {
+            let mut fractures = world.write_storage::<CompoundFracture>();
+            let fracture = fractures.get_mut(entity).unwrap();
+            fracture.graph.break_bonds(|bond| bond.anchor.x.abs() < 0.1);
+            fracture.split_pending = true;
+        }
+
+        split_and_draw(&mut world);
+
+        let all = pieces(&world);
+        assert_eq!(all.len(), 2, "the row came apart as {all:?}");
+        assert!(all.iter().all(|(_, _, count)| *count == 2), "{all:?}");
+        let splits = world.read_resource::<PieceSplits>();
+        let split = *splits.iter().next().expect("the split was told");
+        assert_eq!(split.from, entity);
+        let (piece, piece_body, _) = *all.iter().find(|p| p.0 != entity).unwrap();
+        assert_eq!(split.piece, piece);
+        assert_ne!(piece_body, body);
+
+        // The piece's share is its own parts, bond and looks.
+        let fractures = world.read_storage::<CompoundFracture>();
+        let share = fractures.get(piece).expect("the piece can break again");
+        assert_eq!(share.graph.parts().len(), 2);
+        assert_eq!(share.graph.bonds().len(), 1);
+        let looks = world.read_storage::<PartLooks>();
+        assert_eq!(looks.get(piece).unwrap().len(), 2);
+        assert_eq!(looks.get(entity).unwrap().len(), 2);
+        assert_eq!(fractures.get(entity).unwrap().graph.parts().len(), 2);
+
+        // Its bond is held where the two planks meet, in its own frame.
+        let physics = world.read_resource::<PhysicsResource>();
+        let bond = share.graph.bonds()[0];
+        let rigid = physics.world.body(piece_body).unwrap();
+        let world_anchor = rigid.position() + rigid.rotation() * bond.anchor.coords;
+        let meet = share
+            .graph
+            .colliders_of(&[bond.a, bond.b])
+            .iter()
+            .map(|c| {
+                let offset = physics
+                    .world
+                    .collider(*c)
+                    .unwrap()
+                    .offset()
+                    .translation
+                    .vector;
+                rigid.position() + rigid.rotation() * offset
+            })
+            .fold(Vector3::zeros(), |sum, p| sum + p.coords)
+            * 0.5;
+        assert!(
+            (world_anchor.coords - meet).norm() < 1e-4,
+            "the piece's bond moved: {world_anchor:?} against {meet:?}"
+        );
+    }
+
+    /// Without ties the heaviest group stays on the compound's body, however
+    /// few parts it has; with one, the tied group stays.
+    #[test]
+    fn the_heaviest_group_stays_unless_another_is_tied() {
+        let origin = Point3::new(0.0, 10.0, 0.0);
+        let (world, entity, body) = row_world(3, origin);
+        let colliders = {
+            let physics = world.read_resource::<PhysicsResource>();
+            physics.world.body(body).unwrap().colliders().to_vec()
+        };
+        // Make the last box heavy, then cut it loose: it stays, the pair goes.
+        {
+            let mut physics = world.write_resource::<PhysicsResource>();
+            physics.world.detach_collider(body, colliders[2]);
+        }
+        let heavy = world
+            .write_resource::<PhysicsResource>()
+            .world
+            .attach_collider(
+                body,
+                ColliderDesc::box_shape(HALF)
+                    .offset_translation(Vector3::new(1.0, 0.0, 0.0))
+                    .density(50_000.0),
+            )
+            .unwrap();
+        {
+            let mut fractures = world.write_storage::<CompoundFracture>();
+            let fracture = fractures.get_mut(entity).unwrap();
+            let mut graph = PartGraph::default();
+            let a = graph.add_part([colliders[0]]);
+            let b = graph.add_part([colliders[1]]);
+            graph.add_part([heavy]);
+            graph.bond(Bond {
+                a,
+                b,
+                anchor: Point3::new(-0.5, 0.0, 0.0),
+                reach: 2.0,
+                threshold: 10.0,
+            });
+            fracture.graph = graph;
+            fracture.split_pending = true;
+        }
+        FractureSystem.run_now(&world);
+        {
+            let physics = world.read_resource::<PhysicsResource>();
+            assert_eq!(physics.world.body(body).unwrap().colliders(), &[heavy]);
+        }
+
+        // Tie the light end of a fresh row: it stays.
+        let (mut world, entity, body) = row_world(3, origin);
+        let light = {
+            let physics = world.read_resource::<PhysicsResource>();
+            physics.world.body(body).unwrap().colliders()[0]
+        };
+        {
+            let mut physics = world.write_resource::<PhysicsResource>();
+            let weld = physics.world.create_constraint(ConstraintKind::world_fixed(
+                body,
+                origin + Vector3::new(-1.0, 0.0, 0.0),
+                Vector3::new(-1.0, 0.0, 0.0),
+                &nalgebra::UnitQuaternion::identity(),
+                0.0,
+                f32::INFINITY,
+            ));
+            let mut fractures = world.write_storage::<CompoundFracture>();
+            let fracture = fractures.get_mut(entity).unwrap();
+            let part = fracture.graph.part_of(light).unwrap();
+            fracture.graph.tie(weld, part);
+            fracture.graph.break_bonds(|bond| bond.holds(part));
+            fracture.split_pending = true;
+        }
+        split_and_draw(&mut world);
+        let physics = world.read_resource::<PhysicsResource>();
+        assert_eq!(physics.world.body(body).unwrap().colliders(), &[light]);
+        assert!(physics.world.is_held_by_world(body));
+        drop(physics);
+        assert_eq!(pieces(&world).len(), 2);
+    }
+
+    /// Release gives up every tie and bond: each part becomes a piece, the
+    /// heaviest keeps the body, and no body is left empty or held.
+    #[test]
+    fn release_lets_every_part_go_and_leaves_no_body_empty() {
+        let origin = Point3::new(0.0, 10.0, 0.0);
+        let (mut world, entity, body) = row_world(4, origin);
+        {
+            let mut physics = world.write_resource::<PhysicsResource>();
+            let weld = physics.world.create_constraint(ConstraintKind::world_fixed(
+                body,
+                origin,
+                Vector3::zeros(),
+                &nalgebra::UnitQuaternion::identity(),
+                0.0,
+                f32::INFINITY,
+            ));
+            let mut fractures = world.write_storage::<CompoundFracture>();
+            let fracture = fractures.get_mut(entity).unwrap();
+            let first = fracture.graph.parts()[0].id;
+            fracture.graph.tie(weld, first);
+            fracture.release();
+        }
+
+        split_and_draw(&mut world);
+
+        let all = pieces(&world);
+        assert_eq!(all.len(), 4, "{all:?}");
+        let physics = world.read_resource::<PhysicsResource>();
+        for (_, piece_body, count) in &all {
+            assert_eq!(*count, 1);
+            assert!(!physics.world.is_held_by_world(*piece_body));
+        }
+        assert!(world.read_storage::<Renderable>().contains(entity));
+    }
+
+    /// A group struck off its centre spins: its kick lands at each part's
+    /// own centre of mass, not at the body's.
+    #[test]
+    fn a_kick_off_a_pieces_centre_spins_it() {
+        let origin = Point3::new(0.0, 10.0, 0.0);
+        let (mut world, entity, _) = row_world(3, origin);
+        {
+            let mut fractures = world.write_storage::<CompoundFracture>();
+            let fracture = fractures.get_mut(entity).unwrap();
+            // The first two stay bonded and come away; only the end one is
+            // pushed.
+            let parts: Vec<PartId> = fracture.graph.parts().iter().map(|p| p.id).collect();
+            fracture
+                .graph
+                .break_bonds(|bond| bond.holds(parts[1]) && bond.holds(parts[2]));
+            fracture.split_pending = true;
+            // Make the pair the lighter group by giving the kept one more.
+            fracture
+                .kicks
+                .insert(parts[0], Vector3::new(0.0, 100.0, 0.0));
+        }
+        // Weigh the end box down so the pair is the piece that leaves.
+        let pair_body = {
+            FractureSystem.run_now(&world);
+            world.maintain();
+            let physics = world.read_resource::<PhysicsResource>();
+            let all = pieces(&world);
+            let (_, pair, _) = *all.iter().find(|p| p.2 == 2).expect("a pair split off");
+            let spin = physics.world.body(pair).unwrap().angular_velocity();
+            assert!(
+                spin.norm() > 1e-3,
+                "a kick at one end did not turn the pair"
+            );
+            pair
+        };
+        let _ = pair_body;
     }
 }

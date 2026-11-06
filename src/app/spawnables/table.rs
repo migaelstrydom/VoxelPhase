@@ -5,7 +5,7 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::finish::{ColliderSurface, MaterialSurface};
-use super::shared::models::compound_cuboid_model;
+use super::shared::models::cuboid_look;
 use super::shared::orientation::Yaw;
 use super::shared::textures::seed_from_position;
 use super::shared::textures::TextureRng;
@@ -15,7 +15,8 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::fracture::{CompoundFracture, FractureJoint};
+use crate::fracture::{Bond, CompoundFracture, PartGraph};
+use crate::model::PartLooks;
 use crate::physics::{ColliderDesc, ColliderHandle, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
 use crate::rendering::physical_finish::PhysicalSurface;
@@ -125,72 +126,66 @@ impl Spawnable for TableDef {
             Vector3::new(leg_x, leg_y, leg_z),
         ];
 
-        let mut boxes = vec![(top_he, Vector3::new(0.0, top_y, 0.0))];
-        for &pos in &leg_positions {
-            boxes.push((leg_he, pos));
-        }
-
-        // Create compound physics body
-        let body_handle = {
-            let mut physics = world.write_resource::<PhysicsResource>();
-
-            let body_desc = RigidBodyDesc::dynamic()
+        let material = materials[0];
+        let rotation = Yaw::degrees(self.yaw).rotation();
+        let mut physics = world.write_resource::<PhysicsResource>();
+        let body_handle = physics.world.create_body(
+            RigidBodyDesc::dynamic()
                 .position(initial_pos)
-                .rotation(Yaw::degrees(self.yaw).rotation())
+                .rotation(rotation)
                 .gravity_scale(1.0)
                 .linear_damping(0.01)
-                .angular_damping(0.005);
-
-            let body_handle = physics.world.create_body(body_desc);
-
-            let top = physics.world.attach_collider(
-                body_handle,
-                ColliderDesc::box_shape(top_he)
-                    .offset_translation(Vector3::new(0.0, top_y, 0.0))
-                    .with_physical_surface(self.surface()),
-            );
-
-            let legs: Vec<ColliderHandle> = leg_positions
-                .iter()
-                .filter_map(|&pos| {
-                    physics.world.attach_collider(
-                        body_handle,
-                        ColliderDesc::box_shape(leg_he)
-                            .offset_translation(pos)
-                            .with_physical_surface(self.surface()),
-                    )
-                })
-                .collect();
-
-            // The body's origin is its centre of mass, which the heavy top
-            // holds well above the frame the parts were laid out in.
-            let centre_of_mass = physics.world.recenter_on_colliders(body_handle);
-            (body_handle, centre_of_mass, top, legs)
-        };
-        let (body_handle, centre_of_mass, top, legs) = body_handle;
-
-        // The model is laid out about the same centre as the colliders.
-        let boxes: Vec<_> = boxes
-            .into_iter()
-            .map(|(half_extents, at)| (half_extents, at - centre_of_mass))
-            .collect();
-        let model = compound_cuboid_model(&boxes, materials[0]);
-        let rotation = Yaw::degrees(self.yaw).rotation();
-        let centre = initial_pos + rotation * centre_of_mass;
-
-        // Each leg is joined to the top.
-        let joint_threshold = 10.0;
-        let joints = top
-            .into_iter()
-            .flat_map(|top| {
-                legs.iter().map(move |leg| FractureJoint {
-                    child_a: top,
-                    child_b: *leg,
-                    threshold: joint_threshold,
-                })
+                .angular_damping(0.005),
+        );
+        let mut looks = PartLooks::default();
+        let top = physics.world.attach_collider(
+            body_handle,
+            ColliderDesc::box_shape(top_he)
+                .offset_translation(Vector3::new(0.0, top_y, 0.0))
+                .with_physical_surface(self.surface()),
+        );
+        if let Some(top) = top {
+            looks.insert(top, cuboid_look(top_he, material));
+        }
+        let legs: Vec<(ColliderHandle, Vector3<f32>)> = leg_positions
+            .iter()
+            .filter_map(|&pos| {
+                let leg = physics.world.attach_collider(
+                    body_handle,
+                    ColliderDesc::box_shape(leg_he)
+                        .offset_translation(pos)
+                        .with_physical_surface(self.surface()),
+                )?;
+                looks.insert(leg, cuboid_look(leg_he, material));
+                Some((leg, pos))
             })
             .collect();
-        let fracture = CompoundFracture::boxes(joints, materials[0]);
+
+        // The body's origin is its centre of mass, which the heavy top
+        // holds well above the frame the parts were laid out in.
+        let centre_of_mass = physics.world.recenter_on_colliders(body_handle);
+        let model = looks
+            .drawn(&physics.world, body_handle)
+            .expect("a table has something to draw");
+        drop(physics);
+        let centre = initial_pos + rotation * centre_of_mass;
+
+        // Each leg is bonded to the top where it meets it.
+        let bond_threshold = 10.0;
+        let mut graph = PartGraph::default();
+        if let Some(top) = top {
+            let top = graph.add_part([top]);
+            for (leg, at) in legs {
+                let leg = graph.add_part([leg]);
+                graph.bond(Bond {
+                    a: top,
+                    b: leg,
+                    anchor: Point3::from(at + Vector3::new(0.0, leg_he.y, 0.0) - centre_of_mass),
+                    reach: 2.0 * leg_he.norm(),
+                    threshold: bond_threshold,
+                });
+            }
+        }
 
         vec![world
             .create_entity()
@@ -200,7 +195,8 @@ impl Spawnable for TableDef {
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
-            .with(fracture)
+            .with(looks)
+            .with(CompoundFracture::new(graph))
             .build()]
     }
 }

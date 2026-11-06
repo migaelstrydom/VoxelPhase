@@ -1,8 +1,12 @@
-//! Terrain anchor system: releases anchored bodies when their terrain is destroyed.
+//! Terrain anchor systems: releasing anchored bodies when their terrain is
+//! destroyed, and sharing an anchoring out when a compound splits.
 
+use nalgebra::{Isometry3, Point3};
 use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::components::{ModelInstance, RigidBodyComponent, TerrainAnchored};
+use crate::fracture::PieceSplits;
+use crate::physics::{ConstraintHandle, PhysicsWorld, RigidBodyHandle};
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 
@@ -66,6 +70,92 @@ impl<'a> System<'a> for TerrainAnchorSystem {
             anchored.remove(entity);
         }
     }
+}
+
+/// Gives a piece split off an anchored compound its share of the anchoring:
+/// the constraints that moved with it, and the anchor points nearer those
+/// than any that stayed. The piece's body already keeps the compound's
+/// `ignores_static`, since it took ties.
+pub struct AnchorShareSystem;
+
+impl<'a> System<'a> for AnchorShareSystem {
+    type SystemData = (
+        Read<'a, PieceSplits>,
+        WriteStorage<'a, TerrainAnchored>,
+        ReadStorage<'a, RigidBodyComponent>,
+        Read<'a, PhysicsResource>,
+    );
+
+    fn run(&mut self, (splits, mut anchored, bodies, physics): Self::SystemData) {
+        for split in splits.iter() {
+            let (Some(piece_body), Some(from_body)) =
+                (bodies.get(split.piece), bodies.get(split.from))
+            else {
+                continue;
+            };
+            let Some(anchor) = anchored.get_mut(split.from) else {
+                continue;
+            };
+            let Some(share) = anchor_share(&physics.world, anchor, from_body.0, piece_body.0)
+            else {
+                continue;
+            };
+            let _ = anchored.insert(split.piece, share);
+        }
+    }
+}
+
+/// Take from `anchor`, on `from`, what now holds `piece`: `None` if nothing
+/// moved.
+fn anchor_share(
+    world: &PhysicsWorld,
+    anchor: &mut TerrainAnchored,
+    from: RigidBodyHandle,
+    piece: RigidBodyHandle,
+) -> Option<TerrainAnchored> {
+    let holds = |constraint: &ConstraintHandle, body| {
+        world
+            .constraint(*constraint)
+            .is_some_and(|c| c.kind.references_body(body))
+    };
+    let (moved, stayed): (Vec<ConstraintHandle>, Vec<ConstraintHandle>) = anchor
+        .constraints
+        .iter()
+        .partition(|constraint| holds(constraint, piece));
+    if moved.is_empty() {
+        return None;
+    }
+
+    let held_at = |constraints: &[ConstraintHandle], body| -> Vec<Point3<f32>> {
+        let Some(rigid) = world.body(body) else {
+            return Vec::new();
+        };
+        let pose = Isometry3::from_parts(rigid.position().coords.into(), rigid.rotation());
+        constraints
+            .iter()
+            .filter_map(|c| world.constraint(*c)?.kind.anchor_on(body))
+            .map(|local| pose * Point3::from(local))
+            .collect()
+    };
+    let (moved_at, stayed_at) = (held_at(&moved, piece), held_at(&stayed, from));
+    let nearest = |point: &Point3<f32>, places: &[Point3<f32>]| {
+        places
+            .iter()
+            .map(|p| (p - point).norm())
+            .fold(f32::INFINITY, f32::min)
+    };
+    let (piece_points, kept_points): (Vec<Point3<f32>>, Vec<Point3<f32>>) = anchor
+        .anchor_points
+        .iter()
+        .partition(|point| nearest(point, &moved_at) < nearest(point, &stayed_at));
+
+    anchor.constraints = stayed;
+    anchor.anchor_points = kept_points;
+    Some(TerrainAnchored {
+        constraints: moved,
+        anchor_points: piece_points,
+        released_model: None,
+    })
 }
 
 #[cfg(test)]
@@ -189,5 +279,54 @@ mod tests {
             physics.world.constraint(weld).is_none(),
             "the menhir's weld survived release"
         );
+    }
+
+    /// A welded compound split in two: the piece takes the weld that moved
+    /// with it and the anchor point beside it; the rest stays.
+    #[test]
+    fn a_split_piece_takes_its_share_of_the_anchoring() {
+        use crate::physics::{ColliderDesc, ConstraintKind, PhysicsConfig, RigidBodyDesc};
+        use nalgebra::{UnitQuaternion, Vector3};
+
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let body = world.create_body(RigidBodyDesc::dynamic());
+        let [left, right] = [-1.0f32, 1.0].map(|x| {
+            world
+                .attach_collider(
+                    body,
+                    ColliderDesc::box_shape(Vector3::repeat(0.4))
+                        .offset_translation(Vector3::new(x, 0.0, 0.0)),
+                )
+                .unwrap()
+        });
+        let weld = |world: &mut PhysicsWorld, x: f32| {
+            world.create_constraint(ConstraintKind::world_fixed(
+                body,
+                Point3::new(x, -0.4, 0.0),
+                Vector3::new(x, -0.4, 0.0),
+                &UnitQuaternion::identity(),
+                0.0,
+                f32::INFINITY,
+            ))
+        };
+        let (left_weld, right_weld) = (weld(&mut world, -1.0), weld(&mut world, 1.0));
+        let mut anchor = TerrainAnchored {
+            constraints: vec![left_weld, right_weld],
+            anchor_points: vec![Point3::new(-1.0, -0.5, 0.0), Point3::new(1.0, -0.5, 0.0)],
+            released_model: None,
+        };
+        let traits = crate::fracture::PieceTraits::default().body(Default::default(), true);
+        let piece = world
+            .split_off(body, &[right], &[right_weld], traits)
+            .unwrap()
+            .body;
+
+        let share = anchor_share(&world, &mut anchor, body, piece).expect("a weld moved");
+
+        assert_eq!(share.constraints, vec![right_weld]);
+        assert_eq!(share.anchor_points, vec![Point3::new(1.0, -0.5, 0.0)]);
+        assert_eq!(anchor.constraints, vec![left_weld]);
+        assert_eq!(anchor.anchor_points, vec![Point3::new(-1.0, -0.5, 0.0)]);
+        let _ = left;
     }
 }

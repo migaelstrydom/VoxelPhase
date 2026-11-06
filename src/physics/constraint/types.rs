@@ -438,6 +438,63 @@ impl ConstraintKind {
         }
     }
 
+    /// Where this constraint holds `handle`, in that body's frame: the
+    /// anchor of its end on the body. `None` for a kind that holds no point
+    /// of a body, or a constraint not on it.
+    pub fn anchor_on(&self, handle: RigidBodyHandle) -> Option<Vector3<f32>> {
+        match self {
+            ConstraintKind::BallJoint {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                ..
+            }
+            | ConstraintKind::Fixed {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                ..
+            }
+            | ConstraintKind::Hinge {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                ..
+            } => {
+                if *body_b == handle {
+                    Some(*local_anchor_b)
+                } else if *body_a == Some(handle) {
+                    Some(*local_anchor_a)
+                } else {
+                    None
+                }
+            }
+            ConstraintKind::FollowPoint {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                ..
+            } => {
+                if *body_b == handle {
+                    Some(*local_anchor_b)
+                } else if *body_a == handle {
+                    Some(*local_anchor_a)
+                } else {
+                    None
+                }
+            }
+            ConstraintKind::KeepUpright { .. }
+            | ConstraintKind::KeepAttitude { .. }
+            | ConstraintKind::SpringSlider(_)
+            | ConstraintKind::MediumDrive { .. }
+            | ConstraintKind::Suspension(_) => None,
+        }
+    }
+
     /// Whether `rebind` can move an end of this constraint: the kinds
     /// `shift_anchor` follows. A drive, a slider or a suspension cannot be
     /// rebound.

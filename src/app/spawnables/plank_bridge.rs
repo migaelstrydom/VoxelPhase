@@ -2,15 +2,16 @@
 //!
 //! Two long beams (stringers) run end to end. Cross-planks are laid across
 //! them haphazardly: slightly rotated, varying widths, with small gaps.
-//! The whole structure is a single compound body with fracture joints so
-//! it shatters on explosion.
+//! The whole structure is a single compound body, a part per beam and per
+//! plank, every plank bonded to both beams where it crosses them, so it
+//! shatters on explosion.
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::finish::{ColliderSurface, MaterialSurface};
-use super::shared::models::multi_material_rotated_compound_cuboid_model;
+use super::shared::models::cuboid_look;
 use super::shared::orientation::Yaw;
 use super::shared::textures::seed_from_position;
 use super::shared::textures::TextureRng;
@@ -20,7 +21,8 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::fracture::{CompoundFracture, FractureJoint};
+use crate::fracture::{Bond, CompoundFracture, PartGraph};
+use crate::model::PartLooks;
 use crate::physics::{ColliderDesc, ColliderHandle, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
 use crate::rendering::physical_finish::PhysicalSurface;
@@ -56,7 +58,7 @@ pub struct PlankBridgeDef {
     /// format — anchors, placements and the other oriented spawnables.
     #[serde(default)]
     pub yaw: f32,
-    /// Blast impulse, in N·s, that breaks a plank off. Small: a grenade
+    /// Blast loading, in N·s/m², that breaks a plank off. Small: a grenade
     /// anywhere near this bridge should take it apart.
     #[serde(default = "PlankBridgeDef::default_fracture_threshold")]
     pub fracture_threshold: f32,
@@ -64,7 +66,7 @@ pub struct PlankBridgeDef {
     ///
     /// Three orders of magnitude above the blast threshold because the two
     /// measure different things: 2.7 tonnes of bridge settling five
-    /// centimetres already pushes 1143 N·s through a joint, which is nothing
+    /// centimetres already pushes 1143 N·s through a bond, which is nothing
     /// a grenade could do.
     #[serde(default = "PlankBridgeDef::default_contact_threshold")]
     pub contact_threshold: f32,
@@ -115,32 +117,36 @@ impl PlankBridgeDef {
         Vector3::new(span_x, self.plank_half_extents.1, self.plank_half_extents.2)
     }
 
-    /// The bridge's fracture: every plank joined to both beams, the beams
-    /// wearing `beam` and the planks `plank`.
+    /// The bridge's parts: each beam and each plank, every plank bonded to
+    /// both beams where it crosses them, on top of the beam.
     ///
-    /// The fracture system paints a freed piece and the remnant from these
-    /// materials, so a beam that breaks off must be recorded as one, or it
-    /// comes away wearing the planks' material.
-    fn fracture(
+    /// Each collider comes with its offset in the body's frame, which is the
+    /// frame bond anchors are held in.
+    fn graph(
         &self,
-        beams: &[ColliderHandle],
-        planks: &[ColliderHandle],
-        beam: MaterialId,
-        plank: MaterialId,
-    ) -> CompoundFracture {
-        let joints = planks
+        beams: &[(ColliderHandle, Vector3<f32>)],
+        planks: &[(ColliderHandle, Vector3<f32>)],
+    ) -> PartGraph {
+        let mut graph = PartGraph::default();
+        let beams: Vec<_> = beams
             .iter()
-            .flat_map(|plank| {
-                beams.iter().map(|beam| FractureJoint {
-                    child_a: *beam,
-                    child_b: *plank,
-                    threshold: self.fracture_threshold,
-                })
-            })
+            .map(|(beam, at)| (graph.add_part([*beam]), *at))
             .collect();
-        CompoundFracture::boxes(joints, plank)
-            .with_piece_materials(beams.iter().map(|b| (*b, beam)))
-            .breaking_on_impact_at(self.contact_threshold)
+        let reach = 2.0 * self.plank_he().norm();
+        let beam_top = self.beam_he().y;
+        for (plank, plank_at) in planks {
+            let plank = graph.add_part([*plank]);
+            for (beam, beam_at) in &beams {
+                graph.bond(Bond {
+                    a: *beam,
+                    b: plank,
+                    anchor: Point3::new(beam_at.x, beam_at.y + beam_top, plank_at.z),
+                    reach,
+                    threshold: self.fracture_threshold,
+                });
+            }
+        }
+        graph
     }
 
     /// The one declaration of the bridge's timber physics. Beams and planks
@@ -261,72 +267,63 @@ impl Spawnable for PlankBridgeDef {
             })
             .collect();
 
-        // Build compound model.
-        let identity_rot = UnitQuaternion::identity();
-        let mut boxes: Vec<(Vector3<f32>, Vector3<f32>, UnitQuaternion<f32>, MaterialId)> =
-            Vec::new();
-        for &offset in &beam_offsets {
-            boxes.push((beam_he, offset, identity_rot, beam_mat));
-        }
-        for &(offset, varied_he, rotation) in &planks {
-            boxes.push((varied_he, offset, rotation, plank_mat));
-        }
         let orientation = Yaw::degrees(self.yaw).rotation();
 
         // Physics compound body.
-        let body_handle = {
-            let mut physics = world.write_resource::<PhysicsResource>();
-
-            let body_desc = RigidBodyDesc::dynamic()
+        let mut physics = world.write_resource::<PhysicsResource>();
+        let body_handle = physics.world.create_body(
+            RigidBodyDesc::dynamic()
                 .position(center)
                 .rotation(orientation)
                 .gravity_scale(1.0)
                 .linear_damping(0.01)
-                .angular_damping(0.005);
-
-            let body_handle = physics.world.create_body(body_desc);
-
-            let beams: Vec<ColliderHandle> = beam_offsets
-                .iter()
-                .filter_map(|&offset| {
-                    physics.world.attach_collider(
-                        body_handle,
-                        ColliderDesc::box_shape(beam_he)
-                            .offset_translation(offset)
-                            .with_physical_surface(self.surface()),
-                    )
-                })
-                .collect();
-
-            // Planks — match the varied half-extents and rotation from the model.
-            let plank_colliders: Vec<ColliderHandle> = planks
-                .iter()
-                .filter_map(|&(offset, varied_he, rotation)| {
-                    physics.world.attach_collider(
-                        body_handle,
-                        ColliderDesc::box_shape(varied_he)
-                            .offset_translation(offset)
-                            .offset_rotation(rotation)
-                            .with_physical_surface(self.surface()),
-                    )
-                })
-                .collect();
-
-            // The body's origin is its centre of mass, which the planks
-            // lift above the bottom of the beams the parts were laid out from.
-            let centre_of_mass = physics.world.recenter_on_colliders(body_handle);
-            (body_handle, centre_of_mass, beams, plank_colliders)
-        };
-        let (body_handle, centre_of_mass, beams, plank_colliders) = body_handle;
-
-        // The model is laid out about the same centre as the colliders.
-        for (_, offset, _, _) in &mut boxes {
-            *offset -= centre_of_mass;
+                .angular_damping(0.005),
+        );
+        let mut looks = PartLooks::default();
+        let beams: Vec<ColliderHandle> = beam_offsets
+            .iter()
+            .filter_map(|&offset| {
+                physics.world.attach_collider(
+                    body_handle,
+                    ColliderDesc::box_shape(beam_he)
+                        .offset_translation(offset)
+                        .with_physical_surface(self.surface()),
+                )
+            })
+            .collect();
+        for beam in &beams {
+            looks.insert(*beam, cuboid_look(beam_he, beam_mat));
         }
-        let model = multi_material_rotated_compound_cuboid_model(&boxes);
-        let centre = center + orientation * centre_of_mass;
+        let plank_colliders: Vec<ColliderHandle> = planks
+            .iter()
+            .filter_map(|&(offset, varied_he, rotation)| {
+                let plank = physics.world.attach_collider(
+                    body_handle,
+                    ColliderDesc::box_shape(varied_he)
+                        .offset_translation(offset)
+                        .offset_rotation(rotation)
+                        .with_physical_surface(self.surface()),
+                )?;
+                looks.insert(plank, cuboid_look(varied_he, plank_mat));
+                Some(plank)
+            })
+            .collect();
 
-        let fracture = self.fracture(&beams, &plank_colliders, beam_mat, plank_mat);
+        // The body's origin is its centre of mass, which the planks
+        // lift above the bottom of the beams the parts were laid out from.
+        let centre_of_mass = physics.world.recenter_on_colliders(body_handle);
+        let placed = |colliders: &[ColliderHandle]| -> Vec<(ColliderHandle, Vector3<f32>)> {
+            colliders
+                .iter()
+                .filter_map(|c| Some((*c, physics.world.collider(*c)?.offset().translation.vector)))
+                .collect()
+        };
+        let graph = self.graph(&placed(&beams), &placed(&plank_colliders));
+        let model = looks
+            .drawn(&physics.world, body_handle)
+            .expect("a bridge has something to draw");
+        drop(physics);
+        let centre = center + orientation * centre_of_mass;
 
         vec![world
             .create_entity()
@@ -336,7 +333,8 @@ impl Spawnable for PlankBridgeDef {
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
-            .with(fracture)
+            .with(looks)
+            .with(CompoundFracture::new(graph).breaking_on_impact_at(self.contact_threshold))
             .build()]
     }
 }
@@ -460,11 +458,11 @@ fn nail_holes(u: f32, v: f32) -> f32 {
 mod contact_fracture {
     use super::*;
     use crate::debug::DebugLines;
-    use crate::fracture::{ChildLoad, ChildLoads, ContactLoadTracker};
+    use crate::fracture::{BondLoads, ContactLoadTracker};
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
     use crate::physics::{ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc};
-    use nalgebra::Point3;
+    use nalgebra::{Isometry3, Point3};
 
     const FRAME_DT: f32 = 1.0 / 60.0;
 
@@ -483,7 +481,7 @@ mod contact_fracture {
         }
     }
 
-    /// Largest contact load any joint felt, and how many of the sixteen joints
+    /// Largest contact load any bond felt, and how many of the sixteen bonds
     /// the authored contact threshold would break, over one scenario.
     fn run(label: &str, height: f32, vel: Vector3<f32>) -> (f32, usize) {
         let d = def();
@@ -536,79 +534,76 @@ mod contact_fracture {
                         .unwrap(),
                 );
             }
-            // Joints as the spawnable builds them: every plank to both beams.
-            let joints = d
-                .fracture(
-                    &colliders[..2],
-                    &colliders[2..],
-                    MaterialId(0),
-                    MaterialId(0),
-                )
-                .joints;
+            // Bonds as the spawnable builds them: every plank to both beams.
+            let placed: Vec<(ColliderHandle, Vector3<f32>)> = colliders
+                .iter()
+                .map(|c| (*c, world.collider(*c).unwrap().offset().translation.vector))
+                .collect();
+            let graph = d.graph(&placed[..2], &placed[2..]);
+            let bonds = graph.bonds().to_vec();
             let mass = world.body(body).unwrap().mass();
             let geometry = FlatQuadGeometry::new(60.0);
             let mut stepper = SequentialStepper::new(FRAME_DT, 4);
             let mut debug = DebugLines::default();
             let mut tracker = ContactLoadTracker::default();
             let mut peak = 0.0f32;
-            let mut peak_joint = 0.0f32;
-            let mut broken = vec![false; joints.len()];
+            let mut peak_bond = 0.0f32;
+            let mut broken = vec![false; bonds.len()];
             for _ in 0..240 {
                 stepper.step(&mut world, FRAME_DT, &geometry, &[], &[], &mut debug);
                 let spikes = tracker.advance(&world, body, &colliders, FRAME_DT);
                 peak = peak.max(spikes.iter().fold(0.0f32, |m, s| m.max(s.magnitude)));
 
-                let body_pos = world.body(body).unwrap().position();
-                let body_rot = world.body(body).unwrap().rotation();
-                let children: Vec<(ColliderHandle, ChildLoad)> = colliders
-                    .iter()
-                    .zip(&spikes)
-                    .map(|(h, spike)| {
-                        let c = world.collider(*h).unwrap();
-                        let load = ChildLoad {
-                            blast: 0.0,
-                            contact: spike.magnitude,
-                            contact_point: spike.point,
-                            centre: Point3::from(
-                                c.world_transform(body_pos, body_rot).translation.vector,
-                            ),
-                            radius: c.shape().bounding_radius(),
-                        };
-                        (*h, load)
-                    })
-                    .collect();
-                let loads = ChildLoads::new(children, None);
-                for (idx, joint) in joints.iter().enumerate() {
-                    let load = loads.contact_load(joint);
-                    peak_joint = peak_joint.max(load);
+                let rigid = world.body(body).unwrap();
+                let pose = Isometry3::from_parts(rigid.position().coords.into(), rigid.rotation());
+                let loads = BondLoads::new(colliders.iter().copied().zip(spikes), &[], pose, None);
+                for (idx, bond) in bonds.iter().enumerate() {
+                    let load = loads.contact_load(&graph, bond);
+                    peak_bond = peak_bond.max(load);
                     if load > d.contact_threshold {
                         broken[idx] = true;
                     }
                 }
             }
             let _ = (mass, peak);
-            (peak_joint, broken.iter().filter(|b| **b).count())
+            (peak_bond, broken.iter().filter(|b| **b).count())
         }
     }
 
-    /// The bridge is two substances, and breaking must not repaint it.
+    /// The bridge is two substances, and breaking must not repaint it: each
+    /// beam and plank wears its own material as its own look, which goes
+    /// wherever its collider goes.
     #[test]
     fn beams_and_planks_keep_their_own_materials() {
-        let d = def();
-        let beam = MaterialId(7);
-        let plank = MaterialId(9);
-        let beams = [ColliderHandle::for_test(0), ColliderHandle::for_test(1)];
-        let planks: Vec<ColliderHandle> = (2..2 + d.plank_count as usize)
-            .map(ColliderHandle::for_test)
-            .collect();
-        let fracture = d.fracture(&beams, &planks, beam, plank);
+        use specs::{World, WorldExt};
 
-        assert_eq!(fracture.material_of(beams[0]), beam, "the left beam");
-        assert_eq!(fracture.material_of(beams[1]), beam, "the right beam");
-        assert!(
-            planks.iter().all(|p| fracture.material_of(*p) == plank),
-            "every plank"
-        );
+        let mut world = World::new();
+        crate::app::breakage::register(&mut world);
+        world.insert(PhysicsResource::new(
+            PhysicsWorld::new(PhysicsConfig::default()),
+            Box::new(SequentialStepper::new(FRAME_DT, 4)),
+        ));
+        let (beam, plank) = (MaterialId(7), MaterialId(9));
+        let bridge = def().spawn(&mut world, &[beam, plank])[0];
+
+        let physics = world.read_resource::<PhysicsResource>();
+        let looks = world.read_storage::<PartLooks>();
+        let looks = looks.get(bridge).expect("the bridge has looks");
+        let body = world
+            .read_storage::<RigidBodyComponent>()
+            .get(bridge)
+            .unwrap()
+            .0;
+        let worn: Vec<MaterialId> = physics
+            .world
+            .body(body)
+            .unwrap()
+            .colliders()
+            .iter()
+            .map(|c| looks.get(*c).expect("every part is drawn").primitives[0].material)
+            .collect();
+        assert_eq!(&worn[..2], &[beam, beam], "the beams");
+        assert!(worn[2..].iter().all(|m| *m == plank), "every plank");
     }
 
     /// The bug this guards: the bridge came apart the moment it was touched.
@@ -647,6 +642,6 @@ mod contact_fracture {
     #[test]
     fn a_bridge_slammed_into_the_ground_comes_apart() {
         let (_, broken) = run("slam", 2.0, Vector3::new(0.0, -8.0, 0.0));
-        assert!(broken >= 8, "a hard slam broke only {broken} of 16 joints");
+        assert!(broken >= 8, "a hard slam broke only {broken} of 16 bonds");
     }
 }

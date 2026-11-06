@@ -10,10 +10,10 @@
 //!   ═══════════════════════════  sill, then a slate base slab it stands on
 //! ```
 //!
-//! One dynamic compound body. The stone is welded together at a threshold
-//! nothing in the game reaches; the three panes are glass children of the
-//! same body, held to the frame at `frame_grip` and crazing where they are
-//! hit exactly as a [`GlassSheet`](super::GlassSheetDef) does. Because the
+//! One dynamic compound body. The stone is one part, which never comes
+//! apart; the three panes are glass parts of the same body, bonded to each
+//! stone they touch at `frame_grip` and crazing where they are hit exactly
+//! as a [`GlassSheet`](super::GlassSheetDef) does. Because the
 //! body is dynamic the frame itself can be knocked over, and a frame that
 //! stops dead loads its glass through the joints that carry it: a window
 //! toppled onto its face shatters, one nudged does not.
@@ -28,7 +28,10 @@ use nalgebra::{Point3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::models::{build_convex_hull, PieceStyle, SolidFace};
+use super::glass_sheet::GlassFaces;
+use super::shared::models::{
+    build_convex_hull, cuboid_look, hull_mesh, PieceHull, SolidFace, SurfaceUvs,
+};
 use super::shared::orientation::Yaw;
 use super::shared::textures::seed_from_position;
 use super::{MaterialCtx, Spawnable};
@@ -37,9 +40,9 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::fracture::systems::compound_model_of;
-use crate::fracture::{CompoundFracture, Deadband, FractureJoint};
+use crate::fracture::{Bond, CompoundFracture, Cuttable, Deadband, FaceMesher, PartGraph};
 use crate::glass::{BrittleSheet, ConvexPolygon, CrackWeb, CrazeRule, SheetFrame};
+use crate::model::{Look, PartLooks};
 use crate::physics::{ColliderDesc, ColliderHandle, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
 use crate::rendering::pattern;
@@ -48,8 +51,6 @@ use crate::systems::PhysicsResource;
 
 const TEXTURE_SIZE: u32 = 128;
 
-/// Joint threshold, in N·s, between pieces of stone: never reached.
-const WELD: f32 = 1.0e6;
 /// Hairline the glass sits inside its band, so no shard starts flush with
 /// the stone and freezes against it in CCD.
 const GLAZING_GAP: f32 = 0.0008;
@@ -384,13 +385,12 @@ impl Spawnable for FramedWindowDef {
                 .angular_damping(0.005),
         );
 
-        let mut child_materials: Vec<(ColliderHandle, MaterialId)> = Vec::new();
-        let mut joints = Vec::new();
-        let mut keystone: Option<ColliderHandle> = None;
-        let mut stone_footprints: Vec<(ColliderHandle, ConvexPolygon)> = Vec::new();
+        let mut looks = PartLooks::default();
+        let mut stones: Vec<ColliderHandle> = Vec::new();
+        let mut stone_footprints: Vec<ConvexPolygon> = Vec::new();
 
         for piece in &design.stone {
-            let (desc, material, footprint) = match piece {
+            let (desc, look, footprint) = match piece {
                 Stone::Block {
                     half_extents,
                     offset,
@@ -408,17 +408,18 @@ impl Spawnable for FramedWindowDef {
                         ColliderDesc::box_shape(*half_extents)
                             .offset_translation(*offset)
                             .of(substance),
-                        material,
+                        cuboid_look(*half_extents, material),
                         footprint,
                     )
                 }
                 Stone::Band(quad) => {
                     let (hull, centroid) = stone_frame.prism(quad);
+                    let look = hull_look(&hull, marble);
                     (
                         ColliderDesc::convex_hull(Arc::new(hull))
                             .offset_translation(stone_frame.lift(centroid, 0.0))
                             .of(&substance::MARBLE),
-                        marble,
+                        look,
                         Some(quad.clone()),
                     )
                 }
@@ -426,81 +427,81 @@ impl Spawnable for FramedWindowDef {
                     base_centre,
                     half,
                     height,
-                } => (
-                    ColliderDesc::convex_hull(Arc::new(pyramid(*half, *height)))
-                        .offset_translation(*base_centre)
-                        .of(&substance::MARBLE),
-                    marble,
-                    None,
-                ),
+                } => {
+                    let hull = pyramid(*half, *height);
+                    let look = hull_look(&hull, marble);
+                    (
+                        ColliderDesc::convex_hull(Arc::new(hull))
+                            .offset_translation(*base_centre)
+                            .of(&substance::MARBLE),
+                        look,
+                        None,
+                    )
+                }
             };
             let Some(child) = physics.world.attach_collider(body, desc) else {
                 continue;
             };
-            child_materials.push((child, material));
-            // Every stone is welded to the first.
-            match keystone {
-                Some(first) => joints.push(FractureJoint {
-                    child_a: first,
-                    child_b: child,
-                    threshold: WELD,
-                }),
-                None => keystone = Some(child),
-            }
-            if let Some(polygon) = footprint {
-                stone_footprints.push((child, polygon));
-            }
+            looks.insert(child, look);
+            stones.push(child);
+            stone_footprints.extend(footprint);
         }
 
+        // The stonework is one part: nothing in the game takes it apart.
+        let mut graph = PartGraph::default();
+        let frame = graph.add_part(stones);
+        let faces = Arc::new(GlassFaces {
+            material: glass_material,
+        });
+        let mut glass = Cuttable::new(faces.clone());
         for pane in &design.glass {
             let Some(glazed) = pane.inset(GLAZING_GAP) else {
                 continue;
             };
             let (hull, centroid) = glass_frame.prism(&glazed);
+            let hull = Arc::new(hull);
             let Some(child) = physics.world.attach_collider(
                 body,
-                ColliderDesc::convex_hull(Arc::new(hull))
-                    .offset_translation(glass_frame.lift(centroid, 0.0))
-                    .of(&substance::GLASS),
+                faces
+                    .collider(hull.clone())
+                    .offset_translation(glass_frame.lift(centroid, 0.0)),
             ) else {
                 continue;
             };
-            child_materials.push((child, glass_material));
-            for (stone, polygon) in &stone_footprints {
+            looks.insert(child, Arc::new(faces.look(&hull, Vector3::zeros())));
+            glass = glass.with(child, Vector3::zeros());
+            // Each pane is held by every stone it touches, where it touches.
+            let pane_part = graph.add_part([child]);
+            for polygon in &stone_footprints {
                 if glazed.touches(polygon, 0.01) {
-                    joints.push(FractureJoint {
-                        child_a: child,
-                        child_b: *stone,
+                    let centre = polygon.centroid();
+                    let reach = polygon
+                        .vertices()
+                        .iter()
+                        .map(|v| (v - centre).norm())
+                        .fold(0.0, f32::max);
+                    graph.bond(Bond {
+                        a: frame,
+                        b: pane_part,
+                        anchor: Point3::from(stone_frame.lift(centre, 0.0)),
+                        reach: 2.0 * reach,
                         threshold: self.frame_grip,
                     });
                 }
             }
         }
 
-        let fracture = CompoundFracture::boxes(joints, marble)
-            .with_piece_materials(child_materials)
+        let fracture = CompoundFracture::new(graph)
             .breaking_on_impact_at(self.impact_threshold)
             .with_deadband(Deadband::OwnWeight)
             .shedding_debris();
-        let model = compound_model_of(
-            &physics,
-            body,
-            |child| fracture.material_of(child),
-            PieceStyle::default(),
-            Vector3::zeros(),
-            None,
-        )
-        .expect("a window has something to draw");
+        let model = looks
+            .drawn(&physics.world, body)
+            .expect("a window has something to draw");
         drop(physics);
 
-        let sheet = BrittleSheet::whole(
-            glass_frame,
-            self.crazing(),
-            self.blast_threshold,
-            glass_material,
-        )
-        .held_by_frame(self.frame_grip)
-        .with_deadband(Deadband::OwnWeight);
+        let sheet = BrittleSheet::whole(glass_frame, self.crazing(), self.blast_threshold, glass)
+            .with_deadband(Deadband::OwnWeight);
 
         vec![world
             .create_entity()
@@ -510,23 +511,31 @@ impl Spawnable for FramedWindowDef {
             .with(RigidBodyComponent(body))
             .with(ModelInstance::new(model))
             .with(Renderable)
+            .with(looks)
             .with(fracture)
             .with(sheet)
             .build()]
     }
 }
 
+/// The look of a stone hull, drawn as it collides.
+fn hull_look(hull: &ConvexHull, material: MaterialId) -> Arc<Look> {
+    let (vertices, indices) =
+        hull_mesh(&PieceHull::new(hull, Vector3::zeros()), SurfaceUvs::Fitted);
+    Arc::new(Look::single(vertices, indices, material))
+}
+
 #[cfg(test)]
 mod tests {
-    use specs::{Join, RunNow};
+    use specs::Join;
 
     use super::*;
-    use crate::debug::{DebugLines, DebugLog};
-    use crate::fracture::{Debris, FractureSystem};
-    use crate::glass::GlassCrackSystem;
+    use crate::app::breakage;
+    use crate::debug::DebugLines;
+    use crate::fracture::Debris;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
-    use crate::physics::{PhysicsConfig, PhysicsImpulseQueue, PhysicsWorld};
+    use crate::physics::{PhysicsConfig, PhysicsWorld};
     use crate::time::Time;
 
     const FRAME_DT: f32 = 1.0 / 60.0;
@@ -547,18 +556,8 @@ mod tests {
     /// A world with one window standing on flat ground, ready to step.
     fn standing_window() -> (World, Entity) {
         let mut world = World::new();
-        world.register::<Position>();
-        world.register::<Velocity>();
-        world.register::<Orientation>();
-        world.register::<RigidBodyComponent>();
-        world.register::<ModelInstance>();
-        world.register::<Renderable>();
-        world.register::<CompoundFracture>();
-        world.register::<BrittleSheet>();
-        world.register::<Debris>();
+        breakage::register(&mut world);
         world.insert(Time::fixed(FRAME_DT));
-        world.insert(PhysicsImpulseQueue::default());
-        world.insert(DebugLog::default());
         world.insert(PhysicsResource::new(
             PhysicsWorld::new(PhysicsConfig::default()),
             Box::new(SequentialStepper::new(FRAME_DT, 4)),
@@ -574,9 +573,7 @@ mod tests {
             let mut debug = DebugLines::default();
             stepper.step(&mut physics.world, FRAME_DT, geometry, &[], &[], &mut debug);
         }
-        GlassCrackSystem.run_now(world);
-        FractureSystem.run_now(world);
-        world.maintain();
+        breakage::run(world);
     }
 
     fn children(world: &World, entity: Entity) -> Vec<ColliderHandle> {
@@ -590,14 +587,13 @@ mod tests {
 
     fn glass_children(world: &World, entity: Entity) -> usize {
         let children = children(world, entity);
-        let fractures = world.read_storage::<CompoundFracture>();
         let sheets = world.read_storage::<BrittleSheet>();
-        let (Some(fracture), Some(sheet)) = (fractures.get(entity), sheets.get(entity)) else {
+        let Some(sheet) = sheets.get(entity) else {
             return 0;
         };
         children
             .iter()
-            .filter(|child| sheet.is_glass(fracture.material_of(**child)))
+            .filter(|child| sheet.is_glass(**child))
             .count()
     }
 
@@ -695,15 +691,13 @@ mod tests {
             freed_shards(&world)
         );
         let children = children(&world, entity);
-        let fractures = world.read_storage::<CompoundFracture>();
-        let fracture = fractures.get(entity).expect("the frame is still there");
         let sheets = world.read_storage::<BrittleSheet>();
         let sheet = sheets
             .get(entity)
             .expect("the sheet component stays with the frame");
         let stone_left = children
             .iter()
-            .filter(|child| !sheet.is_glass(fracture.material_of(**child)))
+            .filter(|child| !sheet.is_glass(**child))
             .count();
         assert_eq!(stone_left, stone, "the stonework lost pieces");
     }

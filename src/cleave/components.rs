@@ -4,29 +4,28 @@ use nalgebra::Vector3;
 use specs::{Component, VecStorage};
 
 use super::plan::CleaveRule;
-use crate::fracture::{BreakDepths, ContactLoadTracker, Deadband};
+use crate::fracture::{BreakDepths, ContactLoadTracker, Cuttable, Deadband};
 use crate::physics::ColliderHandle;
-use crate::rendering::material::MaterialId;
 
 /// A compound body whose children break into wedges where they are struck.
 ///
 /// Sits beside a [`CompoundFracture`](crate::fracture::CompoundFracture) as
 /// [`BrittleSheet`](crate::glass::BrittleSheet) does: this component decides
-/// how a child *divides*, that one decides when the divisions *let go*. A
+/// how a part *divides*, that one decides when the divisions *let go*. A
 /// block that is hit hard enough is replaced by the two or three wedges it
-/// cleaved into, joined to each other and to whatever its neighbours were,
-/// and the fracture system takes it from there.
+/// cleaved into, bonded to each other, each of the block's bonds passed to
+/// the wedge nearest it, and the fracture system takes it from there.
 ///
 /// An object needs no special build to carry one: an igloo is already a
-/// compound of ice blocks with a joint per touching pair, and a single block
+/// compound of ice blocks with a bond per touching pair, and a single block
 /// is a compound of one.
 #[derive(Component)]
 #[storage(VecStorage)]
 pub struct BrittleSolid {
     /// When a block cleaves and into what.
     pub cleaving: CleaveRule,
-    /// Impulse, in N·s, that breaks a joint between two wedges of the same
-    /// block.
+    /// Blast loading, in N·s/m², that breaks a bond between two wedges of
+    /// the same block.
     ///
     /// Well below what it took to crack the block, because the block is
     /// already cracked: what holds two wedges together afterwards is the key
@@ -39,10 +38,10 @@ pub struct BrittleSolid {
     /// piece out whole instead of dividing it further. One means the wedges
     /// of the first break are the pieces that fall.
     pub max_cleave_depth: u32,
-    /// What marks a child as breakable: a child wearing any other material
-    /// is something else — a stone footing under an ice wall — and is never
-    /// cleaved.
-    pub material: MaterialId,
+    /// The breakable blocks and how a wedge of them is made: a collider it
+    /// does not cover is something else — a stone footing under an ice wall
+    /// — and is never cleaved.
+    pub blocks: Cuttable,
     /// Contact spikes per child, read on this component's own baseline so
     /// cleaving can run before the fracture system judges the same frame.
     pub contact_load: ContactLoadTracker,
@@ -92,12 +91,12 @@ const WEDGE_BOND: f32 = 0.25;
 
 impl BrittleSolid {
     /// An object of whole blocks, none yet broken.
-    pub fn new(cleaving: CleaveRule, material: MaterialId) -> Self {
+    pub fn new(cleaving: CleaveRule, blocks: Cuttable) -> Self {
         Self {
             cleaving,
             joint_threshold: cleaving.threshold * WEDGE_BOND,
             max_cleave_depth: DEFAULT_MAX_CLEAVE_DEPTH,
-            material,
+            blocks,
             contact_load: ContactLoadTracker::default(),
             depths: BreakDepths::default(),
             measure: BlowMeasure::default(),
@@ -141,26 +140,80 @@ impl BrittleSolid {
         self
     }
 
-    /// Whether the child wearing `material` is one of the breakable blocks.
-    pub fn is_brittle(&self, material: MaterialId) -> bool {
-        material == self.material
+    /// Whether `child` is one of the breakable blocks.
+    pub fn is_brittle(&self, child: ColliderHandle) -> bool {
+        self.blocks.covers(child)
     }
 
     /// Whether a hit on `child` cleaves it, or takes it out whole.
     pub fn may_cleave(&self, child: ColliderHandle) -> bool {
         self.depths.of(child) < self.max_cleave_depth
     }
+
+    /// Whether a piece split off with `children` is still solid enough to
+    /// need this: more than one block, or a block that may cleave again.
+    pub fn worth_sharing(&self, children: &[ColliderHandle]) -> bool {
+        children.len() > 1
+            || children
+                .iter()
+                .any(|c| self.is_brittle(*c) && self.may_cleave(*c))
+    }
+
+    /// The solid of a piece split off with `children`: the same rules, the
+    /// records of its own blocks, and the body's motion as it was.
+    pub fn share(&self, children: &[ColliderHandle]) -> Self {
+        Self {
+            cleaving: self.cleaving,
+            joint_threshold: self.joint_threshold,
+            max_cleave_depth: self.max_cleave_depth,
+            blocks: self.blocks.share(children),
+            contact_load: self.contact_load.share(children),
+            depths: self.depths.share(children),
+            measure: self.measure,
+            last_velocity: self.last_velocity,
+        }
+    }
+
+    /// Forget the records of every block but `children`.
+    pub fn retain(&mut self, children: &[ColliderHandle]) {
+        self.blocks.retain(children);
+        self.contact_load = self.contact_load.share(children);
+        self.depths.retain(children);
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::cleave::CleaveRule;
 
     const DT: f32 = 1.0 / 60.0;
 
     fn solid() -> BrittleSolid {
-        BrittleSolid::new(CleaveRule::default(), MaterialId(0)).measured_by(BlowMeasure::Arrest)
+        BrittleSolid::new(CleaveRule::default(), Cuttable::new(Arc::new(Nothing)))
+            .measured_by(BlowMeasure::Arrest)
+    }
+
+    /// A mesher for a solid whose blocks are never cut here.
+    struct Nothing;
+
+    impl crate::fracture::FaceMesher for Nothing {
+        fn collider(
+            &self,
+            hull: Arc<crate::collision::convex_hull::ConvexHull>,
+        ) -> crate::physics::ColliderDesc {
+            crate::physics::ColliderDesc::convex_hull(hull)
+        }
+
+        fn look(
+            &self,
+            _hull: &crate::collision::convex_hull::ConvexHull,
+            _at: Vector3<f32>,
+        ) -> crate::model::Look {
+            crate::model::Look::default()
+        }
     }
 
     /// Falling freely is not a blow, however fast.

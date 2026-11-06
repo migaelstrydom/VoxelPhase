@@ -6,7 +6,7 @@ use crate::animation::peeper::{PeeperAnimationSystem, PeeperProbeConfigSystem};
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
 use crate::character::ledge::LedgeSensorSystem;
 use crate::character::{ContactGroundingSystem, ImmersionSystem};
-use crate::cleave::SolidCleaveSystem;
+use crate::cleave::{SolidCleaveSystem, SolidShareSystem};
 use crate::creature::{
     AlertTelegraphSystem, BrainSystem, CollectionSystem, MeleeAttackSystem, PerceptionSystem,
     RollerLocomotionSystem, SwimmerLocomotionSystem,
@@ -22,7 +22,7 @@ use crate::foliage::{
 };
 use crate::force_field::ForceFieldSystem;
 use crate::fracture::{DebrisCullSystem, FractureSystem};
-use crate::glass::GlassCrackSystem;
+use crate::glass::{GlassCrackSystem, SheetShareSystem};
 use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
 use crate::objective::{GemMotionSystem, GoalSystem, ObjectiveHudSystem, ProgressSystem};
@@ -37,8 +37,9 @@ use crate::rubble::{BoulderCullSystem, RubbleSpawnSystem, ScreeSystem};
 use crate::sensing::SensorProbeSystem;
 use crate::sled::HoverSledSystem;
 use crate::systems::{
-    CameraControlSystem, CharacterControlSystem, PhysicsSyncSystem, PlayerInputSystem,
-    RenderSystem, TerrainAnchorSystem, TerrainUpdateSystem, WaterSystem,
+    AnchorShareSystem, CameraControlSystem, CharacterControlSystem, PartDrawSystem,
+    PhysicsSyncSystem, PlayerInputSystem, RenderSystem, TerrainAnchorSystem, TerrainUpdateSystem,
+    WaterSystem,
 };
 use crate::trampoline::TrampolineBedSystem;
 use crate::traversal::TraversalPlanSystem;
@@ -109,8 +110,20 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "fracture",
             &["physics_sync", "glass_crack", "solid_cleave"],
         )
+        // A piece split off a compound gets its owners' shares: a cluster of
+        // glass its sheet, a wedge its solid, a welded piece its anchoring.
+        .with(SheetShareSystem, "sheet_share", &["fracture"])
+        .with(SolidShareSystem, "solid_share", &["fracture"])
+        .with(AnchorShareSystem, "anchor_share", &["fracture"])
         // Pieces the fracture freed and the level's budget will not keep.
         .with(DebrisCullSystem, "debris_cull", &["fracture"])
+        // Breakable bodies drawn as their parts now stand, after everything
+        // that cut, split or re-centred them this frame.
+        .with(
+            PartDrawSystem,
+            "part_draw",
+            &["fracture", "sheet_share", "solid_share", "anchor_share"],
+        )
         // Reads the blasts the step just applied, as fracture does.
         .with(BranchBreakSystem, "branch_break", &["physics_sync"])
         // Animation and sensing. Probes are configured from last-frame

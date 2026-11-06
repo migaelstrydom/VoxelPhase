@@ -19,26 +19,24 @@
 //! substances, the weathered mesh, and the stone's own cleave rule.
 
 use nalgebra::{Matrix4, Point3, Vector2, Vector3};
-use specs::{Join, RunNow, World, WorldExt};
+use specs::{Join, World, WorldExt};
 
+use crate::app::breakage;
 use crate::app::spawnables::shared::models::PieceHull;
 use crate::app::spawnables::shared::models::PiecePlacement;
 use crate::app::spawnables::Spawnable;
 use crate::app::spawnables::{
     stone_cleaving, weathered_box_mesh, weathered_hull_mesh, StoneTexture, VoussoirArchDef,
 };
-use crate::cleave::{BrittleSolid, CleavePiece, SolidCleaveSystem};
+use crate::cleave::CleavePiece;
 use crate::collision::convex_hull::ConvexHull;
-use crate::components::{
-    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
-};
+use crate::components::{ModelInstance, RigidBodyComponent};
 use crate::core::error::EngineResult;
-use crate::debug::{DebugLines, DebugLog};
-use crate::fracture::{CompoundFracture, FractureSystem};
+use crate::debug::DebugLines;
 use crate::physics::bench_harness::geometry::FlatQuadGeometry;
 use crate::physics::stepping::{SequentialStepper, Stepper};
 use crate::physics::ColliderShape;
-use crate::physics::{PhysicsConfig, PhysicsImpulseQueue, PhysicsWorld};
+use crate::physics::{PhysicsConfig, PhysicsWorld};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::MaterialId;
 use crate::rendering::material::SurfaceParams;
@@ -317,17 +315,8 @@ const FRAME_DT: f32 = 1.0 / 60.0;
 /// the ring would hang in the air.
 fn collapse_world() -> World {
     let mut world = World::new();
-    world.register::<Position>();
-    world.register::<Velocity>();
-    world.register::<Orientation>();
-    world.register::<RigidBodyComponent>();
-    world.register::<ModelInstance>();
-    world.register::<Renderable>();
-    world.register::<CompoundFracture>();
-    world.register::<BrittleSolid>();
+    breakage::register(&mut world);
     world.insert(Time::fixed(FRAME_DT));
-    world.insert(PhysicsImpulseQueue::default());
-    world.insert(DebugLog::default());
     let mut config = PhysicsConfig::default();
     config.sleep.enabled = false;
     world.insert(PhysicsResource::new(
@@ -355,8 +344,6 @@ fn settle(world: &mut World, frames: usize) {
                 &mut debug,
             );
         }
-        SolidCleaveSystem.run_now(world);
-        FractureSystem.run_now(world);
-        world.maintain();
+        breakage::run(world);
     }
 }

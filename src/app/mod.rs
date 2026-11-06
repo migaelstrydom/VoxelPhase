@@ -1,6 +1,7 @@
 //! Application wiring: the window and frame loop, ECS dispatcher setup, world assembly, the spawnable library and the camera/player spawners.
 
 mod app;
+pub mod breakage;
 pub(crate) mod creatures;
 mod debug_snapshot;
 mod dispatcher_builder;

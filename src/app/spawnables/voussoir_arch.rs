@@ -274,34 +274,22 @@ fn voussoir_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cleave::{BrittleSolid, SolidCleaveSystem};
-    use crate::components::{
-        ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
-    };
-    use crate::debug::{DebugLines, DebugLog};
-    use crate::fracture::{CompoundFracture, FractureSystem};
+    use crate::app::breakage;
+    use crate::components::RigidBodyComponent;
+    use crate::debug::DebugLines;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
-    use crate::physics::{PhysicsConfig, PhysicsImpulseQueue, PhysicsWorld};
+    use crate::physics::{PhysicsConfig, PhysicsWorld};
     use crate::systems::PhysicsResource;
     use crate::time::Time;
-    use specs::{Join, RunNow, WorldExt};
+    use specs::{Join, WorldExt};
 
     const FRAME_DT: f32 = 1.0 / 60.0;
 
     fn world_with_arch() -> (World, Vec<Entity>) {
         let mut world = World::new();
-        world.register::<Position>();
-        world.register::<Velocity>();
-        world.register::<Orientation>();
-        world.register::<RigidBodyComponent>();
-        world.register::<ModelInstance>();
-        world.register::<Renderable>();
-        world.register::<CompoundFracture>();
-        world.register::<BrittleSolid>();
+        breakage::register(&mut world);
         world.insert(Time::fixed(FRAME_DT));
-        world.insert(PhysicsImpulseQueue::default());
-        world.insert(DebugLog::default());
         // Asleep, the ring would hang in the air when its abutment goes: a
         // removed body wakes nothing that was resting on it.
         let mut config = PhysicsConfig::default();
@@ -331,9 +319,7 @@ mod tests {
                     &mut debug,
                 );
             }
-            SolidCleaveSystem.run_now(world);
-            FractureSystem.run_now(world);
-            world.maintain();
+            breakage::run(world);
         }
     }
 

@@ -993,9 +993,10 @@ pub enum LevelObject {
         stagger: bool,
     },
     /// A pane of glass that cracks where it is hit and drops the shards.
-    /// Upright and fixed it is a window; lying, fixed and given a `bearing`
-    /// below a person's weight it is a floor that gives way under anyone who
-    /// stops on it.
+    /// Lying, fixed (welded to the world along its long edges) and given a
+    /// `bearing` below a person's weight it is a floor over a drop that gives
+    /// way under anyone who stops on it; loose it falls and shatters on
+    /// whatever it lands on.
     GlassSheet {
         /// Centre of the pane.
         pos: (f32, f32, f32),
@@ -1011,13 +1012,14 @@ pub enum LevelObject {
         /// Flat like a floor rather than upright like a window.
         #[serde(default)]
         lying: bool,
-        /// Held in place. Off gives a loose sheet that topples and shatters.
+        /// Welded to the world along its two long edges. Off gives a loose
+        /// sheet that topples and shatters.
         #[serde(default = "GlassSheetDef::default_fixed")]
         fixed: bool,
         /// Contact spike in N·s that cracks the glass.
         #[serde(default = "GlassSheetDef::default_impact_threshold")]
         impact_threshold: f32,
-        /// Blast impulse in N·s that frees a shard.
+        /// Blast loading in N·s/m² that frees a shard.
         #[serde(default = "GlassSheetDef::default_blast_threshold")]
         blast_threshold: f32,
         /// Newtons the pane bears indefinitely; zero never tires.
@@ -2072,8 +2074,8 @@ impl LevelObject {
             // The one thing in the library authored to cross a gap. Reporting
             // the void under its middle would be reporting that it works.
             LevelObject::PlankBridge { .. } => Support::Spanning,
-            // A fixed pane hangs in its frame; a glass floor over a drop is
-            // the whole reason to have one.
+            // A held pane is welded along its edges; a glass floor over a
+            // drop is the whole reason to have one.
             LevelObject::GlassSheet { fixed: true, .. } => Support::Spanning,
             LevelObject::Dropped(inner) => inner.support(),
             _ => Support::Bedded,

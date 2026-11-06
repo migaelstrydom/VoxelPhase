@@ -1,17 +1,17 @@
-//! The system that turns blows on a brittle solid into cleaved wedges.
+//! The systems that turn blows on a brittle solid into cleaved wedges, and
+//! give a piece split off a solid its share of it.
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Isometry3, Point3, Translation3, Vector3};
 use specs::{Join, Read, ReadStorage, System, WriteStorage};
 
 use super::components::{BlowMeasure, BrittleSolid};
 use crate::components::RigidBodyComponent;
 use crate::debug::DebugLog;
-use crate::fracture::{split_child, ChildSubstance, CompoundFracture, FractureJoint};
-use crate::physics::{
-    ColliderDesc, ColliderHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle,
-};
+use crate::fracture::{replace_part, Bond, CompoundFracture, PieceSplits};
+use crate::model::PartLooks;
+use crate::physics::{ColliderHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle};
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 
@@ -38,15 +38,17 @@ const CLEAVE_INSET: f32 = 0.004;
 /// fracture system.
 ///
 /// Runs after the physics step and *before* `FractureSystem`, so that a blow
-/// on a block becomes wedges before the joints are judged: the alternative is
+/// on a block becomes wedges before the bonds are judged: the alternative is
 /// a whole block leaving the wall it was part of, intact.
 pub struct SolidCleaveSystem;
 
 impl<'a> System<'a> for SolidCleaveSystem {
+    #[allow(clippy::type_complexity)]
     type SystemData = (
         specs::Write<'a, PhysicsResource>,
         WriteStorage<'a, BrittleSolid>,
         WriteStorage<'a, CompoundFracture>,
+        WriteStorage<'a, PartLooks>,
         ReadStorage<'a, RigidBodyComponent>,
         Read<'a, PhysicsImpulseQueue>,
         Read<'a, Time>,
@@ -54,31 +56,79 @@ impl<'a> System<'a> for SolidCleaveSystem {
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (mut physics, mut solids, mut fractures, bodies, impulse_queue, time, mut debug_log) =
-            data;
+        let (
+            mut physics,
+            mut solids,
+            mut fractures,
+            mut looks,
+            bodies,
+            impulse_queue,
+            time,
+            mut debug_log,
+        ) = data;
         let dt = time.delta_seconds();
         let blasts = impulse_queue.last_impulses();
         let mut loudest = 0.0f32;
 
-        for (solid, fracture, body_comp) in (&mut solids, &mut fractures, &bodies).join() {
+        for (solid, fracture, looks, body_comp) in
+            (&mut solids, &mut fractures, &mut looks, &bodies).join()
+        {
             let body_handle = body_comp.0;
-            let hits = gather_hits(
-                &physics,
-                solid,
-                fracture,
-                body_handle,
-                blasts,
-                dt,
-                &mut loudest,
-            );
+            let hits = gather_hits(&physics, solid, body_handle, blasts, dt, &mut loudest);
             for hit in hits {
-                if cleave(&mut physics, solid, fracture, body_handle, &hit) {
-                    fracture.model_stale = true;
-                }
+                cleave(&mut physics, solid, fracture, looks, body_handle, &hit);
             }
         }
 
         debug_log.add("Cleave/MaxSpike", format!("{loudest:.1} N·s"));
+    }
+}
+
+/// Gives a piece split off a brittle solid its share of it, so its wedges
+/// can cleave and its blocks break as the whole did; and leaves the solid the
+/// records of what it kept.
+///
+/// Runs after `FractureSystem`, which sends the splits.
+pub struct SolidShareSystem;
+
+impl<'a> System<'a> for SolidShareSystem {
+    type SystemData = (
+        Read<'a, PieceSplits>,
+        WriteStorage<'a, BrittleSolid>,
+        ReadStorage<'a, RigidBodyComponent>,
+        Read<'a, PhysicsResource>,
+    );
+
+    fn run(&mut self, (splits, mut solids, bodies, physics): Self::SystemData) {
+        if splits.is_empty() {
+            return;
+        }
+        let children = |entity| -> Option<Vec<ColliderHandle>> {
+            let body = bodies.get(entity)?.0;
+            Some(physics.world.body(body)?.colliders().to_vec())
+        };
+
+        let mut sources = Vec::new();
+        for split in splits.iter() {
+            let Some(solid) = solids.get(split.from) else {
+                continue;
+            };
+            if !sources.contains(&split.from) {
+                sources.push(split.from);
+            }
+            let Some(children) = children(split.piece) else {
+                continue;
+            };
+            if solid.worth_sharing(&children) {
+                let share = solid.share(&children);
+                let _ = solids.insert(split.piece, share);
+            }
+        }
+        for source in sources {
+            if let (Some(solid), Some(children)) = (solids.get_mut(source), children(source)) {
+                solid.retain(&children);
+            }
+        }
     }
 }
 
@@ -98,7 +148,6 @@ struct Hit {
 fn gather_hits(
     physics: &PhysicsResource,
     solid: &mut BrittleSolid,
-    fracture: &CompoundFracture,
     body_handle: RigidBodyHandle,
     blasts: &[PhysicsImpulse],
     dt: f32,
@@ -132,7 +181,7 @@ fn gather_hits(
 
     let mut hits = Vec::new();
     for (handle, spike) in handles.iter().zip(&spikes) {
-        if !solid.is_brittle(fracture.material_of(*handle)) {
+        if !solid.is_brittle(*handle) {
             continue;
         }
         let blow = match solid.measure {
@@ -188,25 +237,31 @@ fn gather_hits(
 
 /// Replace the struck block with the wedges it cleaves into, or knock it out
 /// whole if it is too small or already as broken as this object goes.
-/// Returns whether the body's colliders changed.
+///
+/// The wedges are bonded to each other; each of the block's own bonds goes
+/// to the wedge nearest it.
 fn cleave(
     physics: &mut PhysicsResource,
     solid: &mut BrittleSolid,
     fracture: &mut CompoundFracture,
+    looks: &mut PartLooks,
     body_handle: RigidBodyHandle,
     hit: &Hit,
-) -> bool {
+) {
     let world = &physics.world;
     let Some(body) = world.body(body_handle) else {
-        return false;
+        return;
+    };
+    let Some(part) = fracture.graph.part_of(hit.child) else {
+        return;
     };
     // Its place in the body's list, which seeds the cut and nothing else.
     let Some(place) = body.colliders().iter().position(|h| *h == hit.child) else {
         // Already replaced by an earlier hit this frame.
-        return false;
+        return;
     };
     let Some(collider) = world.collider(hit.child) else {
-        return false;
+        return;
     };
     let depth = solid.depths.of(hit.child);
     let offset = *collider.offset();
@@ -229,86 +284,68 @@ fn cleave(
         .flatten();
     let Some(pieces) = pieces else {
         // A wedge, not a block. It comes out whole.
-        fracture.sever(hit.child, capped_kick(hit.kick, collider.mass(), 1));
-        return false;
+        fracture.sever(part, capped_kick(hit.kick, collider.mass(), 1));
+        return;
     };
 
-    let Some(substance) = ChildSubstance::of(physics, hit.child) else {
-        return false;
+    // The wedge the blow lands on comes away at once, so it inherits none of
+    // what the block held: the wedges that stay hold it.
+    let struck_index = nearest_piece(&pieces, in_block);
+    let mut wedges = solid.blocks.pieces(
+        hit.child,
+        &offset,
+        pieces.iter().map(|piece| {
+            let at = offset.translation.vector + offset.rotation * piece.centre;
+            (
+                Arc::new(piece.hull.scaled(1.0 - CLEAVE_INSET)),
+                Isometry3::from_parts(Translation3::from(at), offset.rotation),
+            )
+        }),
+    );
+    if let Some(wedge) = struck_index.and_then(|index| wedges.get_mut(index)) {
+        wedge.inherits = false;
+    }
+    let Some(made) = replace_part(physics, fracture, looks, body_handle, part, wedges) else {
+        return;
     };
-    // Whatever held the block holds each of its wedges: working out afresh
-    // which neighbour each wedge touches would need the proximity of two
-    // rotated boxes, and a wedge that lost its grip on the wall mid-dome
-    // would drop the courses above it.
-    let inherited: Vec<(ColliderHandle, f32)> = fracture
-        .joints
-        .iter()
-        .filter_map(|joint| match (joint.child_a, joint.child_b) {
-            (a, b) if a == hit.child => Some((b, joint.threshold)),
-            (a, b) if b == hit.child => Some((a, joint.threshold)),
-            _ => None,
-        })
-        .collect();
-
-    let descs = pieces.iter().map(|piece| {
-        substance.clothe(
-            ColliderDesc::convex_hull(Arc::new(piece.hull.scaled(1.0 - CLEAVE_INSET)))
-                .offset_translation(offset.translation.vector + offset.rotation * piece.centre)
-                .offset_rotation(offset.rotation),
-        )
-    });
-    let Some(wedges) = split_child(physics, fracture, body_handle, hit.child, descs) else {
-        return false;
-    };
-    for wedge in &wedges {
-        fracture.set_material(*wedge, solid.material);
-        solid.depths.set(*wedge, depth + 1);
+    solid.blocks.record(hit.child, &made);
+    for wedge in &made {
+        solid.depths.set(wedge.collider, depth + 1);
     }
 
-    // Every wedge keeps the block's old joints, and is keyed to its fellows.
-    for (position, wedge) in wedges.iter().enumerate() {
-        for (other, threshold) in &inherited {
-            fracture.joints.push(FractureJoint {
-                child_a: *wedge,
-                child_b: *other,
-                threshold: *threshold,
-            });
-        }
-        for fellow in &wedges[position + 1..] {
-            fracture.joints.push(FractureJoint {
-                child_a: *wedge,
-                child_b: *fellow,
+    // The wedges are keyed to each other where they meet.
+    for (k, first) in made.iter().enumerate() {
+        for second in &made[k + 1..] {
+            let (a, b) = (&pieces[first.index], &pieces[second.index]);
+            let middle = (a.centre + b.centre) * 0.5;
+            fracture.graph.bond(Bond {
+                a: first.part,
+                b: second.part,
+                anchor: Point3::from(offset.translation.vector + offset.rotation * middle),
+                reach: 2.0 * a.hull.bounding_radius.min(b.hull.bounding_radius),
                 threshold: solid.joint_threshold,
             });
         }
     }
 
     // The wedge the blow landed on comes away; the rest hold until their own
-    // joints give. Without this a blow that breaks a block leaves every piece
+    // bonds give. Without this a blow that breaks a block leaves every piece
     // of it exactly where it was, and nothing looks broken.
-    if let Some(struck) = nearest_piece(&pieces, in_block, &wedges) {
-        let mass = physics.world.collider(struck).map_or(0.0, |c| c.mass());
-        fracture.sever(struck, capped_kick(hit.kick, mass, 1));
+    if let Some(struck) = made.iter().find(|wedge| Some(wedge.index) == struck_index) {
+        let mass = physics
+            .world
+            .collider(struck.collider)
+            .map_or(0.0, |c| c.mass());
+        fracture.sever(struck.part, capped_kick(hit.kick, mass, 1));
     }
-
-    true
 }
 
-/// The collider of the wedge whose centre is nearest the blow.
-fn nearest_piece(
-    pieces: &[super::plan::CleavePiece],
-    hit: Vector3<f32>,
-    wedges: &[ColliderHandle],
-) -> Option<ColliderHandle> {
-    pieces
-        .iter()
-        .zip(wedges)
-        .min_by(|a, b| {
-            (a.0.centre - hit)
-                .magnitude_squared()
-                .total_cmp(&(b.0.centre - hit).magnitude_squared())
-        })
-        .map(|(_, index)| *index)
+/// Which of `pieces` has its centre nearest the blow.
+fn nearest_piece(pieces: &[super::plan::CleavePiece], hit: Vector3<f32>) -> Option<usize> {
+    (0..pieces.len()).min_by(|a, b| {
+        let distance = |index: &usize| (pieces[*index].centre - hit).magnitude_squared();
+        distance(a).total_cmp(&distance(b))
+    })
 }
 
 /// A wedge's share of the blow, held to `MAX_PIECE_SPEED`.
@@ -327,77 +364,80 @@ fn capped_kick(kick: Vector3<f32>, mass: f32, shares: usize) -> Vector3<f32> {
 mod tests {
     use super::*;
     use nalgebra::UnitQuaternion;
-    use specs::{Builder, Entity, RunNow, World, WorldExt};
+    use specs::{Entity, RunNow, World, WorldExt};
 
     use super::super::plan::CleaveRule;
+    use crate::app::breakage;
     use crate::app::spawnables::shared::models::texture_seam;
     use crate::app::spawnables::{ice_cleaving, ice_texture_spread, ice_uvs, IceBlock};
-    use crate::components::{ModelInstance, Orientation, Position, Renderable, Velocity};
     use crate::debug::DebugLines;
-    use crate::fracture::FractureSystem;
-    use crate::model::Model;
+    use crate::fracture::{ContactLoadTracker, PartGraph};
+    use crate::fracture::{FractureSystem, PieceSplits};
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
-    use crate::physics::{PhysicsConfig, PhysicsWorld, RigidBodyDesc};
+    use crate::physics::{
+        ColliderDesc, ConstraintKind, PhysicsConfig, PhysicsWorld, RigidBodyDesc,
+    };
     use crate::rendering::material::MaterialId;
-    use std::sync::Arc;
+    use crate::systems::PartDrawSystem;
 
     const FRAME_DT: f32 = 1.0 / 60.0;
     const BLOCK_HEIGHT: f32 = 1.0;
     const HALF: Vector3<f32> = Vector3::new(0.3, 0.15, 0.2);
 
-    /// One fixed block of ice at `BLOCK_HEIGHT`, as a compound of one, with a
-    /// floor far below.
-    fn ice_block(threshold: f32) -> (World, RigidBodyHandle) {
+    /// A world with the break pipeline and no sleep: a body set down at rest
+    /// is put to sleep on its first frame, and a sleeping body loads nothing.
+    fn pipeline_world() -> World {
         let mut world = World::new();
-        world.register::<Position>();
-        world.register::<Velocity>();
-        world.register::<Orientation>();
-        world.register::<RigidBodyComponent>();
-        world.register::<ModelInstance>();
-        world.register::<Renderable>();
-        world.register::<CompoundFracture>();
-        world.register::<BrittleSolid>();
+        breakage::register(&mut world);
         world.insert(Time::fixed(FRAME_DT));
-        world.insert(PhysicsImpulseQueue::default());
-        world.insert(DebugLog::default());
-
         let mut config = PhysicsConfig::default();
         config.sleep.enabled = false;
-        let mut physics_world = PhysicsWorld::new(config);
-        let body = physics_world.create_body(RigidBodyDesc::static_body().position(Point3::new(
-            0.0,
-            BLOCK_HEIGHT,
-            0.0,
-        )));
-        physics_world.attach_collider(
-            body,
-            ColliderDesc::box_shape(HALF).density(900.0).friction(0.05),
-        );
         world.insert(PhysicsResource::new(
-            physics_world,
+            PhysicsWorld::new(config),
             Box::new(SequentialStepper::new(FRAME_DT, 4)),
         ));
-
-        let model = crate::app::spawnables::shared::models::cuboid_model(HALF, MaterialId(0));
         world
-            .create_entity()
-            .with(Position(Vector3::new(0.0, BLOCK_HEIGHT, 0.0)))
-            .with(Velocity(Vector3::zeros()))
-            .with(Orientation(UnitQuaternion::identity()))
-            .with(RigidBodyComponent(body))
-            .with(ModelInstance::new(model))
-            .with(Renderable)
-            .with(CompoundFracture::boxes(Vec::new(), MaterialId(0)))
-            .with(BrittleSolid::new(
-                CleaveRule {
-                    threshold,
-                    ..CleaveRule::default()
-                },
-                MaterialId(0),
-            ))
-            .build();
-        (world, body)
+    }
+
+    /// One block of ice at `BLOCK_HEIGHT`, as a compound of one, welded to
+    /// the world where it stands, with a floor far below.
+    fn ice_block(threshold: f32) -> (World, Entity, RigidBodyHandle) {
+        let mut world = pipeline_world();
+        let mut block = IceBlock::new(
+            Point3::new(0.0, BLOCK_HEIGHT, 0.0),
+            HALF,
+            MaterialId(0),
+            ice_texture_spread(HALF),
+        );
+        block.cleaving = CleaveRule {
+            threshold,
+            ..CleaveRule::default()
+        };
+        let entity = block.spawn(&mut world);
+        let body = world
+            .read_storage::<RigidBodyComponent>()
+            .get(entity)
+            .unwrap()
+            .0;
+        let weld = world
+            .write_resource::<PhysicsResource>()
+            .world
+            .create_constraint(ConstraintKind::world_fixed(
+                body,
+                Point3::new(0.0, BLOCK_HEIGHT, 0.0),
+                Vector3::zeros(),
+                &UnitQuaternion::identity(),
+                0.0,
+                f32::INFINITY,
+            ));
+        {
+            let mut fractures = world.write_storage::<CompoundFracture>();
+            let fracture = fractures.get_mut(entity).unwrap();
+            let block = fracture.graph.parts()[0].id;
+            fracture.graph.tie(weld, block);
+        }
+        (world, entity, body)
     }
 
     /// A box of `mass` kg dropped from `drop` metres onto the block.
@@ -421,21 +461,27 @@ mod tests {
         body
     }
 
-    fn frame(world: &mut World, stepper: &mut SequentialStepper, geometry: &FlatQuadGeometry) {
-        step(world, stepper, geometry);
-        FractureSystem.run_now(world);
-        world.maintain();
+    fn step_physics(
+        world: &mut World,
+        stepper: &mut SequentialStepper,
+        geometry: &FlatQuadGeometry,
+    ) {
+        let mut physics = world.write_resource::<PhysicsResource>();
+        let mut debug = DebugLines::default();
+        stepper.step(&mut physics.world, FRAME_DT, geometry, &[], &[], &mut debug);
     }
 
-    /// A frame without the fracture system, which frees the struck wedge the
-    /// same frame the block breaks. Tests that ask what the *break* did stop
-    /// here; tests that ask what the object looks like afterwards do not.
+    /// One whole game frame: physics, then the break pipeline.
+    fn frame(world: &mut World, stepper: &mut SequentialStepper, geometry: &FlatQuadGeometry) {
+        step_physics(world, stepper, geometry);
+        breakage::run(world);
+    }
+
+    /// A frame without the fracture system, which splits the struck wedge off
+    /// the same frame the block breaks. Tests that ask what the *break* did
+    /// stop here; tests that ask what the object looks like afterwards do not.
     fn step(world: &mut World, stepper: &mut SequentialStepper, geometry: &FlatQuadGeometry) {
-        {
-            let mut physics = world.write_resource::<PhysicsResource>();
-            let mut debug = DebugLines::default();
-            stepper.step(&mut physics.world, FRAME_DT, geometry, &[], &[], &mut debug);
-        }
+        step_physics(world, stepper, geometry);
         SolidCleaveSystem.run_now(world);
         world.maintain();
     }
@@ -445,18 +491,17 @@ mod tests {
         physics.world.body(body).map_or(0, |b| b.colliders().len())
     }
 
-    /// Three blocks in a row, joined end to end, as a course of a wall or a
+    /// Three blocks in a row, bonded end to end, as a course of a wall or a
     /// dome is. The middle one is the one that gets hit.
-    fn row_of_three() -> (World, RigidBodyHandle) {
-        let (world, body) = ice_block(20.0);
-        // The first child is the middle block; the two it holds come after.
+    fn row_of_three() -> (World, Entity, RigidBodyHandle) {
+        let (world, entity, body) = ice_block(20.0);
         let (middle, sides) = {
             let mut physics = world.write_resource::<PhysicsResource>();
             let middle = physics.world.body(body).expect("the block").colliders()[0];
-            let sides: Vec<ColliderHandle> = [-1.0, 1.0]
+            let sides: Vec<(ColliderHandle, f32)> = [-1.0, 1.0]
                 .into_iter()
                 .filter_map(|side| {
-                    physics.world.attach_collider(
+                    let collider = physics.world.attach_collider(
                         body,
                         ColliderDesc::box_shape(HALF)
                             .density(900.0)
@@ -466,59 +511,52 @@ mod tests {
                                 0.0,
                                 0.0,
                             )),
-                    )
+                    )?;
+                    Some((collider, side))
                 })
                 .collect();
             (middle, sides)
         };
         let mut fractures = world.write_storage::<CompoundFracture>();
-        let fracture = (&mut fractures).join().next().expect("the row");
-        *fracture = CompoundFracture::boxes(
-            sides
-                .iter()
-                .map(|side| FractureJoint {
-                    child_a: middle,
-                    child_b: *side,
-                    threshold: 1.0e9,
-                })
-                .collect(),
-            MaterialId(0),
-        );
+        let fracture = fractures.get_mut(entity).expect("the row");
+        let ties = fracture.graph.ties().to_vec();
+        let mut graph = PartGraph::default();
+        let middle_part = graph.add_part([middle]);
+        for tie in ties {
+            graph.tie(tie.constraint, middle_part);
+        }
+        for (side, sign) in sides {
+            let part = graph.add_part([side]);
+            graph.bond(Bond {
+                a: middle_part,
+                b: part,
+                anchor: Point3::new(sign * (HALF.x + 0.005), 0.0, 0.0),
+                reach: 2.0 * HALF.norm(),
+                threshold: 1.0e9,
+            });
+        }
+        fracture.graph = graph;
         drop(fractures);
         let mut solids = world.write_storage::<BrittleSolid>();
-        let solid = (&mut solids).join().next().expect("the row");
-        solid.contact_load = crate::fracture::ContactLoadTracker::default();
-        solid.depths = crate::fracture::BreakDepths::default();
+        let solid = solids.get_mut(entity).expect("the row");
+        solid.contact_load = ContactLoadTracker::default();
         drop(solids);
-        (world, body)
+        (world, entity, body)
     }
 
     /// A block that cleaves in the middle of a structure must not take the
-    /// structure apart with it: its wedges inherit what it was holding, or
-    /// everything the block was carrying is suddenly connected to nothing
-    /// and the fracture system drops it.
+    /// structure apart with it: each of its bonds goes to the wedge nearest
+    /// it, or everything the block was carrying is suddenly connected to
+    /// nothing and the fracture system drops it.
     #[test]
     fn a_cleaved_block_still_holds_what_it_was_holding() {
-        let (mut world, body) = row_of_three();
+        let (mut world, entity, body) = row_of_three();
         let geometry = FlatQuadGeometry::new(50.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
 
         let _hammer = drop_box(&mut world, 0.0, 1.0, 40.0);
         for _ in 0..30 {
-            {
-                let mut physics = world.write_resource::<PhysicsResource>();
-                let mut debug = DebugLines::default();
-                stepper.step(
-                    &mut physics.world,
-                    FRAME_DT,
-                    &geometry,
-                    &[],
-                    &[],
-                    &mut debug,
-                );
-            }
-            SolidCleaveSystem.run_now(&world);
-            world.maintain();
+            step(&mut world, &mut stepper, &geometry);
             if child_count(&world, body) > 3 {
                 break;
             }
@@ -528,19 +566,30 @@ mod tests {
             "the middle block never broke"
         );
 
-        let physics = world.read_resource::<PhysicsResource>();
-        let children = physics.world.body(body).expect("the row").colliders();
+        // Both sides are still bonded to a wedge, and the wedges to each
+        // other bar the one the blow cut loose.
         let fractures = world.read_storage::<CompoundFracture>();
-        let fracture = (&fractures).join().next().expect("the row");
-        let groups = fracture.connected_components(children);
+        let fracture = fractures.get(entity).expect("the row");
+        let groups = fracture.graph.groups();
         let biggest = groups.iter().map(Vec::len).max().expect("a structure");
-        assert!(biggest >= 3, "the row fell into {groups:?}");
+        let parts = fracture.graph.parts().len();
+        assert!(
+            biggest >= parts - 1,
+            "the row fell into {groups:?} of {parts} parts"
+        );
+        let sides_held = fracture
+            .graph
+            .bonds()
+            .iter()
+            .filter(|bond| bond.threshold >= 1.0e9)
+            .count();
+        assert_eq!(sides_held, 2, "a side lost its hold on the cleaved block");
     }
 
     /// A block that has already cracked must not hold like one that has not.
     #[test]
     fn a_cracked_block_does_not_hold_like_a_whole_one() {
-        let (mut world, block) = ice_block(20.0);
+        let (mut world, entity, block) = ice_block(20.0);
         let geometry = FlatQuadGeometry::new(50.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
 
@@ -558,16 +607,14 @@ mod tests {
         // sheds the one wedge that was hit and then stands there cracked and
         // rigid, which is what a player sees as a bug.
         let fractures = world.read_storage::<CompoundFracture>();
-        let fracture = (&fractures).join().next().expect("the block");
-        assert!(
-            !fracture.joints.is_empty(),
-            "the wedges are keyed to nothing"
-        );
-        for joint in &fracture.joints {
+        let fracture = fractures.get(entity).expect("the block");
+        let parts = fracture.graph.parts().len();
+        assert!(parts > 1);
+        for bond in fracture.graph.bonds() {
             assert!(
-                joint.threshold < 20.0,
-                "a wedge is held at {} N·s, as strongly as the whole block was",
-                joint.threshold
+                bond.threshold < 20.0,
+                "a wedge is held at {}, as strongly as the whole block was",
+                bond.threshold
             );
         }
     }
@@ -578,7 +625,7 @@ mod tests {
     fn a_cracked_block_left_alone_keeps_its_wedges() {
         // At the real ice threshold, not the harness's low one: the bond is a
         // fraction of it, and a fraction of a small number is jitter.
-        let (mut world, block) = ice_block(ice_cleaving().threshold);
+        let (mut world, _, block) = ice_block(ice_cleaving().threshold);
         let geometry = FlatQuadGeometry::new(50.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
 
@@ -610,10 +657,10 @@ mod tests {
     }
 
     /// The whole point: a struck block is a few wedges afterwards, and they
-    /// are wedges rather than boxes.
+    /// are wedges rather than boxes, each drawn.
     #[test]
     fn a_struck_block_is_replaced_by_the_wedges_it_cleaved_into() {
-        let (mut world, block) = ice_block(20.0);
+        let (mut world, entity, block) = ice_block(20.0);
         let geometry = FlatQuadGeometry::new(50.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
         assert_eq!(child_count(&world, block), 1, "one whole block to start");
@@ -633,6 +680,8 @@ mod tests {
             "a block should break into two or three pieces, not {}",
             body.colliders().len()
         );
+        let looks = world.read_storage::<PartLooks>();
+        let looks = looks.get(entity).unwrap();
         for handle in body.colliders() {
             let collider = physics.world.collider(*handle).expect("live collider");
             assert!(
@@ -642,6 +691,7 @@ mod tests {
                 ),
                 "a cleaved piece should be a hull, not a box"
             );
+            assert!(looks.get(*handle).is_some(), "a wedge has no look");
         }
     }
 
@@ -649,7 +699,7 @@ mod tests {
     /// every frame, and a resting load must never read as a blow.
     #[test]
     fn a_block_nobody_touches_stays_whole() {
-        let (mut world, block) = ice_block(20.0);
+        let (mut world, _, block) = ice_block(20.0);
         let geometry = FlatQuadGeometry::new(50.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
         for _ in 0..120 {
@@ -662,10 +712,10 @@ mod tests {
     /// block did, so the body's mass and centre of mass are what they were.
     #[test]
     fn the_wedges_weigh_what_the_block_weighed() {
-        let (mut world, block) = ice_block(20.0);
+        let (mut world, _, block) = ice_block(20.0);
         let geometry = FlatQuadGeometry::new(50.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
-        let whole: f32 = {
+        let mass_of = |world: &World| -> f32 {
             let physics = world.read_resource::<PhysicsResource>();
             let body = physics.world.body(block).unwrap();
             body.colliders()
@@ -674,39 +724,17 @@ mod tests {
                 .map(|c| c.mass())
                 .sum()
         };
+        let whole = mass_of(&world);
 
         let _hammer = drop_box(&mut world, 0.0, 1.0, 40.0);
-        // The fracture system is left out: it frees the struck wedge the
-        // same frame the block breaks, and the question here is what the
-        // split itself did to the body, not what left it afterwards.
+        // The fracture system is left out: it splits the struck wedge off
+        // the same frame the block breaks, and the question here is what the
+        // cut itself did to the body, not what left it afterwards.
         let mut after = whole;
         for _ in 0..90 {
-            {
-                let mut physics = world.write_resource::<PhysicsResource>();
-                let mut debug = DebugLines::default();
-                stepper.step(
-                    &mut physics.world,
-                    FRAME_DT,
-                    &geometry,
-                    &[],
-                    &[],
-                    &mut debug,
-                );
-            }
-            SolidCleaveSystem.run_now(&world);
-            world.maintain();
-
-            let physics = world.read_resource::<PhysicsResource>();
-            let Some(body) = physics.world.body(block) else {
-                break;
-            };
-            if body.colliders().len() > 1 {
-                after = body
-                    .colliders()
-                    .iter()
-                    .filter_map(|h| physics.world.collider(*h))
-                    .map(|c| c.mass())
-                    .sum();
+            step(&mut world, &mut stepper, &geometry);
+            if child_count(&world, block) > 1 {
+                after = mass_of(&world);
                 break;
             }
         }
@@ -724,32 +752,8 @@ mod tests {
 
     /// A real ice slab, spawned the way a level spawns one, resting on the
     /// ground.
-    ///
-    /// The other harness in this file builds a stand-in: a box collider and a
-    /// plain cuboid model, which is all the behavioural tests need. This one
-    /// goes through `IceBlock` itself, because what it asks about is the
-    /// object's *look*, and the look is exactly what a stand-in leaves out.
     fn ice_slab() -> (World, Entity) {
-        let mut world = World::new();
-        world.register::<Position>();
-        world.register::<Velocity>();
-        world.register::<Orientation>();
-        world.register::<RigidBodyComponent>();
-        world.register::<ModelInstance>();
-        world.register::<Renderable>();
-        world.register::<CompoundFracture>();
-        world.register::<BrittleSolid>();
-        world.insert(Time::fixed(FRAME_DT));
-        world.insert(PhysicsImpulseQueue::default());
-        world.insert(DebugLog::default());
-
-        let mut config = PhysicsConfig::default();
-        config.sleep.enabled = false;
-        world.insert(PhysicsResource::new(
-            PhysicsWorld::new(config),
-            Box::new(SequentialStepper::new(FRAME_DT, 4)),
-        ));
-
+        let mut world = pipeline_world();
         let block = IceBlock::new(
             Point3::new(0.0, SLAB.y, 0.0),
             SLAB,
@@ -785,10 +789,31 @@ mod tests {
         body
     }
 
-    /// The model the player is looking at, as the renderer would get it.
-    fn drawn(world: &World, block: Entity) -> Arc<Model> {
-        let models = world.read_storage::<ModelInstance>();
-        models.get(block).expect("the slab is drawn").model.clone()
+    /// The seam of every piece of ice in the world: each look against where
+    /// its collider sits in the slab's texture frame.
+    fn seam(world: &World) -> Option<f32> {
+        let physics = world.read_resource::<PhysicsResource>();
+        let looks = world.read_storage::<PartLooks>();
+        let solids = world.read_storage::<BrittleSolid>();
+        let bodies = world.read_storage::<RigidBodyComponent>();
+        let mut pieces = Vec::new();
+        for (looks, solid, body) in (&looks, &solids, &bodies).join() {
+            for collider in physics
+                .world
+                .body(body.0)
+                .map_or(&[][..], |b| b.colliders())
+            {
+                if let (Some(look), Some(at)) =
+                    (looks.get(*collider), solid.blocks.texture_at(*collider))
+                {
+                    pieces.push((look.clone(), at));
+                }
+            }
+        }
+        texture_seam(
+            pieces.iter().map(|(look, at)| (&**look, *at)),
+            ice_uvs(ice_texture_spread(SLAB)),
+        )
     }
 
     /// The whole of the complaint, end to end and through the real objects: a
@@ -801,59 +826,87 @@ mod tests {
     /// jumps sideways at the crack, which is what a player sees as the block
     /// changing texture.
     ///
-    /// Asserted with [`texture_seam`], which is what the running game reports
-    /// on F3, so the number in the log and the number in this test are the
-    /// same number.
+    /// And a piece that comes away looks exactly as it did on the block: it
+    /// takes the very look it had, not one redrawn from its shape.
     #[test]
     fn a_cracked_slab_is_still_one_sheet_of_ice() {
         let (mut world, block) = ice_slab();
         let geometry = FlatQuadGeometry::new(50.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
-        let uvs = ice_uvs(ice_texture_spread(SLAB));
-
-        let anchor_of = |world: &World| {
-            let fractures = world.read_storage::<CompoundFracture>();
-            fractures
-                .get(block)
-                .expect("the slab can break")
-                .texture_anchor
-        };
         assert_eq!(
-            texture_seam(&drawn(&world, block), uvs, anchor_of(&world)).map(|seam| seam < 1e-4),
+            seam(&world).map(|seam| seam < 1e-4),
             Some(true),
             "the whole slab is not one sheet to begin with"
         );
 
         let _hammer = slab_hammer(&mut world, 0.8, 4.0, 3000.0);
-        let body = {
-            let bodies = world.read_storage::<RigidBodyComponent>();
-            bodies.get(block).expect("the slab has a body").0
-        };
+        let body = world
+            .read_storage::<RigidBodyComponent>()
+            .get(block)
+            .expect("the slab has a body")
+            .0;
+        let spawned_at = world
+            .read_resource::<PhysicsResource>()
+            .world
+            .body(body)
+            .unwrap()
+            .position();
+
         // The *whole* break, fracture system included, so that a wedge comes
         // free and the remnant is re-centred on what is left. Re-centring is
         // the step that moves the ground the pattern is projected from, and a
         // test that stops at the cleave never reaches it.
-        let mut cracked = false;
+        let mut looks_before_split = Vec::new();
+        let mut split = false;
         for _ in 0..240 {
-            frame(&mut world, &mut stepper, &geometry);
-            cracked |= child_count(&world, body) > 1;
-            if cracked && anchor_of(&world) != Vector3::zeros() {
+            step(&mut world, &mut stepper, &geometry);
+            {
+                let looks = world.read_storage::<PartLooks>();
+                let physics = world.read_resource::<PhysicsResource>();
+                let colliders = physics.world.body(body).unwrap().colliders().to_vec();
+                let mine = looks.get(block).unwrap();
+                looks_before_split = colliders
+                    .iter()
+                    .filter_map(|c| Some((*c, mine.get(*c)?.clone())))
+                    .collect();
+            }
+            FractureSystem.run_now(&world);
+            SolidShareSystem.run_now(&world);
+            PartDrawSystem.run_now(&world);
+            world.maintain();
+            if !world.read_resource::<PieceSplits>().is_empty() {
+                split = true;
                 break;
             }
         }
-        assert!(cracked, "the slab never cracked");
-
-        let anchor = anchor_of(&world);
-        assert_ne!(
-            anchor,
-            Vector3::zeros(),
+        assert!(split, "nothing ever came off the slab");
+        let moved = world
+            .read_resource::<PhysicsResource>()
+            .world
+            .body(body)
+            .unwrap()
+            .position();
+        assert!(
+            (moved - spawned_at).norm() > 1e-3,
             "the remnant was never re-centred, so this proves nothing"
         );
 
-        let seam = texture_seam(&drawn(&world, block), uvs, anchor).expect("ice has a projection");
+        let looks = world.read_storage::<PartLooks>();
+        for (collider, before) in &looks_before_split {
+            let now = (&looks)
+                .join()
+                .find_map(|looks| looks.get(*collider))
+                .expect("a piece of the slab lost its look");
+            assert!(
+                Arc::ptr_eq(now, before),
+                "a piece was drawn afresh as it came away"
+            );
+        }
+        drop(looks);
+        let seam = seam(&world).expect("ice has a projection");
         assert!(
             seam < 1e-4,
-            "the remnant reads the pattern {seam} from where the block wore it"
+            "a piece reads the pattern {seam} from where the block wore it"
         );
     }
 }
