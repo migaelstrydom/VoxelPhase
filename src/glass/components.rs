@@ -8,6 +8,7 @@ use super::jolt::JoltTracker;
 use super::pane::SheetFrame;
 use super::remnant::RemnantRule;
 use crate::fracture::{BreakDepths, ContactLoadTracker, Deadband};
+use crate::physics::ColliderHandle;
 use crate::rendering::material::MaterialId;
 
 /// A flat compound body whose children crack into webs where they are hit.
@@ -95,9 +96,9 @@ impl BrittleSheet {
             remnant: RemnantRule::default(),
             whole_glass_area: None,
             last_census: (0, 0),
-            contact_load: ContactLoadTracker::new(1),
-            damage: FatigueTracker::new(1),
-            depths: BreakDepths::new(1),
+            contact_load: ContactLoadTracker::default(),
+            damage: FatigueTracker::default(),
+            depths: BreakDepths::default(),
             jolt: JoltTracker::default(),
         }
     }
@@ -130,7 +131,7 @@ impl BrittleSheet {
     }
 
     /// Whether a hit on `child` cracks it into a web, or takes it out whole.
-    pub fn may_craze(&self, child: usize) -> bool {
+    pub fn may_craze(&self, child: ColliderHandle) -> bool {
         self.depths.of(child) < self.max_craze_depth
     }
 

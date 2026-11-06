@@ -98,7 +98,7 @@ impl<'a> System<'a> for GlassCrackSystem {
                 let left = remnant(&physics, sheet, fracture, body_handle);
                 let whole = sheet.whole_glass_area.unwrap_or(0.0);
                 if !sheet.remnant.holds(left, whole) {
-                    let_go_of_the_glass(sheet, fracture);
+                    let_go_of_the_glass(&physics, sheet, fracture, body_handle);
                 }
             }
         }
@@ -168,29 +168,30 @@ fn gather_hits(
     let threshold = sheet.crazing.threshold;
     let frame_struck = handles
         .iter()
-        .enumerate()
-        .filter(|(index, _)| !sheet.is_glass(fracture.material_of(*index)))
-        .map(|(index, _)| spikes[index])
+        .zip(&spikes)
+        .filter(|(handle, _)| !sheet.is_glass(fracture.material_of(**handle)))
+        .map(|(_, spike)| *spike)
         .max_by(|a, b| a.magnitude.total_cmp(&b.magnitude))
         .filter(|spike| spike.magnitude > threshold)
         .map(|spike| spike.point);
     telemetry.stone_spike = telemetry.stone_spike.max(
         handles
             .iter()
-            .enumerate()
-            .filter(|(index, _)| !sheet.is_glass(fracture.material_of(*index)))
-            .map(|(index, _)| spikes[index].magnitude)
+            .zip(&spikes)
+            .filter(|(handle, _)| !sheet.is_glass(fracture.material_of(**handle)))
+            .map(|(_, spike)| spike.magnitude)
             .fold(0.0, f32::max),
     );
     let failed = match &sheet.fatigue {
         Some(rule) if dt > 0.0 => {
-            let forces: Vec<f32> = handles
+            let forces: Vec<(ColliderHandle, f32)> = handles
                 .iter()
                 .map(|h| {
-                    world
+                    let force = world
                         .impacts()
                         .for_collider(*h)
-                        .map_or(0.0, |i| i.total_impulse / dt)
+                        .map_or(0.0, |i| i.total_impulse / dt);
+                    (*h, force)
                 })
                 .collect();
             sheet.damage.advance(rule, &forces, dt)
@@ -200,7 +201,7 @@ fn gather_hits(
 
     let mut hits = Vec::new();
     for (index, handle) in handles.iter().enumerate() {
-        if !sheet.is_glass(fracture.material_of(index)) {
+        if !sheet.is_glass(fracture.material_of(*handle)) {
             continue;
         }
         let impact = world.impacts().for_collider(*handle);
@@ -291,7 +292,7 @@ fn gather_hits(
             }
         }
 
-        if failed.contains(&index) {
+        if failed.contains(handle) {
             let point = landed_at;
             let hole_radius = sheet.fatigue_hole_radius.max(impactor_radius);
             hit = Some(match hit {
@@ -327,14 +328,14 @@ fn crack(
         return false;
     };
     let old_handles: Vec<ColliderHandle> = body.colliders().to_vec();
-    let Some(child) = old_handles.iter().position(|h| *h == hit.child) else {
+    if !old_handles.contains(&hit.child) {
         // Already replaced by an earlier hit this frame.
         return false;
-    };
+    }
     let Some(collider) = world.collider(hit.child) else {
         return false;
     };
-    let depth = sheet.depths.of(child);
+    let depth = sheet.depths.of(hit.child);
     let frame = sheet.frame;
     let Some((cell, height)) =
         frame.polygon_of(collider.shape(), collider.offset().translation.vector)
@@ -351,26 +352,24 @@ fn crack(
     // A shard rather than a pane — too small to crack, or already as broken
     // down as this sheet goes. It comes out whole if it was hit hard enough.
     let cells = sheet
-        .may_craze(child)
+        .may_craze(hit.child)
         .then(|| sheet.crazing.craze(&cell, hit_plane, frame.thickness, salt))
         .flatten();
     let Some(cells) = cells else {
         if hit.hole_radius > 0.0 {
-            fracture.sever(child, capped_kick(hit.kick, collider.mass(), 1));
+            fracture.sever(hit.child, capped_kick(hit.kick, collider.mass(), 1));
         }
         return false;
     };
 
-    // The neighbours' footprints, for deciding which new shards they join,
-    // keyed by the index each had before the split.
-    let neighbours: Vec<(usize, ConvexPolygon)> = old_handles
+    // The neighbours' footprints, for deciding which new shards they join.
+    let mut footprints: Vec<(ColliderHandle, ConvexPolygon)> = old_handles
         .iter()
-        .enumerate()
-        .filter(|(_, h)| **h != hit.child)
-        .filter_map(|(index, h)| {
+        .filter(|h| **h != hit.child)
+        .filter_map(|h| {
             let c = world.collider(*h)?;
             let (polygon, _) = frame.polygon_of(c.shape(), c.offset().translation.vector)?;
-            Some((index, polygon))
+            Some((*h, polygon))
         })
         .collect();
 
@@ -383,30 +382,17 @@ fn crack(
         let (hull, offset) = frame.shard(cell, height);
         substance.clothe(ColliderDesc::convex_hull(Arc::new(hull)).offset_translation(offset))
     });
-    let Some(split) = split_child(physics, fracture, body_handle, hit.child, shards) else {
+    let Some(pieces) = split_child(physics, fracture, body_handle, hit.child, shards) else {
         return false;
     };
-
-    // Everything else indexed by child follows the body's new collider order.
-    sheet.contact_load.reindex(&split.order);
-    sheet.damage.reindex(&split.order);
-    sheet.depths.reindex(&split.order);
-    for index in &split.pieces {
-        fracture.materials[*index] = sheet.material;
-        sheet.depths.set(*index, depth + 1);
+    for piece in &pieces {
+        fracture.set_material(*piece, sheet.material);
+        sheet.depths.set(*piece, depth + 1);
     }
 
     // Join each new shard to the shards and neighbours it touches.
-    let old_index_of = |old: usize| split.order.iter().position(|o| *o == Some(old));
-    let mut footprints: Vec<(usize, ConvexPolygon)> = Vec::new();
-    for (old, polygon) in neighbours {
-        if let Some(index) = old_index_of(old) {
-            footprints.push((index, polygon));
-        }
-    }
-    let new_indices: Vec<usize> = split.pieces.clone();
     for (k, cell) in cells.iter().enumerate() {
-        let Some(&index) = new_indices.get(k) else {
+        let Some(&piece) = pieces.get(k) else {
             continue;
         };
         for (other, polygon) in &footprints {
@@ -417,27 +403,22 @@ fn crack(
                     sheet.frame_grip
                 };
                 fracture.joints.push(FractureJoint {
-                    child_a: index,
+                    child_a: piece,
                     child_b: *other,
                     threshold,
                 });
             }
         }
-        footprints.push((index, cell.clone()));
+        footprints.push((piece, cell.clone()));
     }
 
     // Knock out what was directly under the hit.
     let under = cells_within(&cells, hit_plane, hit.hole_radius);
     let count = under.len();
     for k in under {
-        if let Some(&index) = new_indices.get(k) {
-            let mass = physics
-                .world
-                .body(body_handle)
-                .and_then(|b| b.colliders().get(index).copied())
-                .and_then(|h| physics.world.collider(h))
-                .map_or(0.0, |c| c.mass());
-            fracture.sever(index, capped_kick(hit.kick, mass, count));
+        if let Some(&piece) = pieces.get(k) {
+            let mass = physics.world.collider(piece).map_or(0.0, |c| c.mass());
+            fracture.sever(piece, capped_kick(hit.kick, mass, count));
         }
     }
 
@@ -457,11 +438,10 @@ fn remnant(
     let Some(body) = physics.world.body(body_handle) else {
         return Remnant::default();
     };
-    let handles = body.colliders();
-    let area_of = |child: &usize| -> f32 {
-        handles
-            .get(*child)
-            .and_then(|h| physics.world.collider(*h))
+    let area_of = |child: &ColliderHandle| -> f32 {
+        physics
+            .world
+            .collider(*child)
             .and_then(|c| {
                 sheet
                     .frame
@@ -470,7 +450,7 @@ fn remnant(
             .map_or(0.0, |(polygon, _)| polygon.area())
     };
     fracture
-        .connected_components()
+        .connected_components(body.colliders())
         .iter()
         .map(|component| {
             let glass = component
@@ -508,11 +488,22 @@ fn census(
 
 /// Drop whatever glass is left. A bare sheet has nothing else, so its body
 /// retires with the glass; a framed one keeps its frame standing, empty.
-fn let_go_of_the_glass(sheet: &BrittleSheet, fracture: &mut CompoundFracture) {
-    let glass: Vec<usize> = (0..fracture.child_count)
+fn let_go_of_the_glass(
+    physics: &PhysicsResource,
+    sheet: &BrittleSheet,
+    fracture: &mut CompoundFracture,
+    body_handle: RigidBodyHandle,
+) {
+    let children = physics
+        .world
+        .body(body_handle)
+        .map_or(&[][..], |body| body.colliders());
+    let glass: Vec<ColliderHandle> = children
+        .iter()
+        .copied()
         .filter(|child| sheet.is_glass(fracture.material_of(*child)))
         .collect();
-    if glass.len() == fracture.child_count {
+    if glass.len() == children.len() {
         fracture.release();
     } else {
         for child in glass {
@@ -622,7 +613,7 @@ mod tests {
             .with(ModelInstance::new(model))
             .with(Renderable)
             .with(
-                CompoundFracture::boxes(Vec::new(), 1, MaterialId(0))
+                CompoundFracture::boxes(Vec::new(), MaterialId(0))
                     .breaking_on_impact_at(impact_threshold),
             )
             .with(sheet)
@@ -682,9 +673,16 @@ mod tests {
         })
     }
 
-    fn child_count(world: &World, body: RigidBodyHandle) -> usize {
+    fn children(world: &World, body: RigidBodyHandle) -> Vec<ColliderHandle> {
         let physics = world.read_resource::<PhysicsResource>();
-        physics.world.body(body).map_or(0, |b| b.colliders().len())
+        physics
+            .world
+            .body(body)
+            .map_or_else(Vec::new, |b| b.colliders().to_vec())
+    }
+
+    fn child_count(world: &World, body: RigidBodyHandle) -> usize {
+        children(world, body).len()
     }
 
     fn body_height(world: &World, body: RigidBodyHandle) -> f32 {
@@ -711,19 +709,20 @@ mod tests {
             frame(&mut world, &mut stepper, &geometry);
         }
 
-        let children = child_count(&world, sheet);
+        let shards = children(&world, sheet);
+        let count = shards.len();
         assert!(
-            children > 10,
-            "the pane should have crazed into a web, not {children} children"
+            count > 10,
+            "the pane should have crazed into a web, not {count} children"
         );
 
         let sheets = world.read_storage::<BrittleSheet>();
         let pane = (&sheets).join().next().expect("the pane is still there");
         assert_eq!(pane.max_craze_depth, 1, "a cell cracks once, by default");
-        for child in 0..children {
+        for (index, shard) in shards.iter().enumerate() {
             assert!(
-                !pane.may_craze(child),
-                "shard {child} of {children} would craze again"
+                !pane.may_craze(*shard),
+                "shard {index} of {count} would craze again"
             );
         }
     }
@@ -752,16 +751,16 @@ mod tests {
         // and never craze again.
         for _ in 0..30 {
             {
+                // The freed shard is gone by the next split, so the first
+                // child is always one that is still on the sheet.
+                let Some(&first) = children(&world, sheet).first() else {
+                    break;
+                };
                 let mut fractures = world.write_storage::<CompoundFracture>();
                 let Some(fracture) = (&mut fractures).join().next() else {
                     break;
                 };
-                if fracture.child_count == 0 {
-                    break;
-                }
-                // The freed shard is gone by the next split, so the first
-                // child is always one that is still on the sheet.
-                fracture.sever(0, Vector3::zeros());
+                fracture.sever(first, Vector3::zeros());
             }
             for _ in 0..4 {
                 frame(&mut world, &mut stepper, &geometry);

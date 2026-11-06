@@ -5,6 +5,7 @@ use specs::{Component, VecStorage};
 
 use super::plan::CleaveRule;
 use crate::fracture::{BreakDepths, ContactLoadTracker, Deadband};
+use crate::physics::ColliderHandle;
 use crate::rendering::material::MaterialId;
 
 /// A compound body whose children break into wedges where they are struck.
@@ -90,15 +91,15 @@ const DEFAULT_MAX_CLEAVE_DEPTH: u32 = 1;
 const WEDGE_BOND: f32 = 0.25;
 
 impl BrittleSolid {
-    /// An object of `child_count` whole blocks, none yet broken.
-    pub fn new(cleaving: CleaveRule, material: MaterialId, child_count: usize) -> Self {
+    /// An object of whole blocks, none yet broken.
+    pub fn new(cleaving: CleaveRule, material: MaterialId) -> Self {
         Self {
             cleaving,
             joint_threshold: cleaving.threshold * WEDGE_BOND,
             max_cleave_depth: DEFAULT_MAX_CLEAVE_DEPTH,
             material,
-            contact_load: ContactLoadTracker::new(child_count),
-            depths: BreakDepths::new(child_count),
+            contact_load: ContactLoadTracker::default(),
+            depths: BreakDepths::default(),
             measure: BlowMeasure::default(),
             last_velocity: None,
         }
@@ -146,7 +147,7 @@ impl BrittleSolid {
     }
 
     /// Whether a hit on `child` cleaves it, or takes it out whole.
-    pub fn may_cleave(&self, child: usize) -> bool {
+    pub fn may_cleave(&self, child: ColliderHandle) -> bool {
         self.depths.of(child) < self.max_cleave_depth
     }
 }
@@ -159,7 +160,7 @@ mod tests {
     const DT: f32 = 1.0 / 60.0;
 
     fn solid() -> BrittleSolid {
-        BrittleSolid::new(CleaveRule::default(), MaterialId(0), 1).measured_by(BlowMeasure::Arrest)
+        BrittleSolid::new(CleaveRule::default(), MaterialId(0)).measured_by(BlowMeasure::Arrest)
     }
 
     /// Falling freely is not a blow, however fast.

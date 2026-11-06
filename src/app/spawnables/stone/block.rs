@@ -151,7 +151,7 @@ impl StoneBlock {
             .with(ModelInstance::new(model))
             .with(Renderable)
             .with(
-                CompoundFracture::boxes(Vec::new(), 1, self.material)
+                CompoundFracture::boxes(Vec::new(), self.material)
                     .with_piece_mesh(weathered_box_mesh)
                     .with_hull_mesh(weathered_hull_mesh)
                     .with_uvs(self.uvs)
@@ -159,7 +159,7 @@ impl StoneBlock {
                     .with_whole_shape(whole),
             )
             .with(
-                BrittleSolid::new(stone_cleaving(mass), self.material, 1)
+                BrittleSolid::new(stone_cleaving(mass), self.material)
                     .measured_by(BlowMeasure::Arrest),
             )
             .build()

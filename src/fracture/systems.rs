@@ -106,7 +106,7 @@ impl<'a> System<'a> for FractureSystem {
             // the contact spike is carried with the point it landed at, so a
             // long child does not report a hit at one end to a joint at the
             // other.
-            let children: Vec<ChildLoad> = collider_handles
+            let children: Vec<(ColliderHandle, ChildLoad)> = collider_handles
                 .iter()
                 .zip(contact_spikes)
                 .map(|(handle, spike)| {
@@ -121,13 +121,14 @@ impl<'a> System<'a> for FractureSystem {
                         .filter_map(|imp| imp.loading_at(centre))
                         .map(|loading| loading.per_area.magnitude())
                         .sum();
-                    ChildLoad {
+                    let load = ChildLoad {
                         blast,
                         contact: spike.magnitude,
                         contact_point: spike.point,
                         centre,
                         radius: collider.map(|c| c.shape().bounding_radius()).unwrap_or(0.0),
-                    }
+                    };
+                    (*handle, load)
                 })
                 .collect();
 
@@ -149,7 +150,6 @@ impl<'a> System<'a> for FractureSystem {
             let Some(fracture) = fractures.get_mut(trigger.entity) else {
                 continue;
             };
-            let materials = fracture.materials.clone();
             let style = fracture.style;
             let anchor = fracture.texture_anchor;
             let whole = fracture.whole_shape.clone();
@@ -160,7 +160,7 @@ impl<'a> System<'a> for FractureSystem {
             fracture.split_pending = false;
 
             // Compute connected components from surviving joints.
-            let components = fracture.connected_components();
+            let components = fracture.connected_components(&trigger.collider_handles);
             let released = fracture.released;
 
             if components.len() <= 1 && !released {
@@ -195,44 +195,36 @@ impl<'a> System<'a> for FractureSystem {
                     continue;
                 }
                 let mut group = Vec::new();
-                for &child_idx in component {
-                    if child_idx < trigger.collider_handles.len() {
-                        if let Some(mut info) = snapshot_child(
-                            &physics,
-                            trigger.collider_handles[child_idx],
-                            body_pos,
-                            body_rot,
-                            body_lin_vel,
-                            body_ang_vel,
-                        ) {
-                            info.material = materials
-                                .get(child_idx)
-                                .or_else(|| materials.last())
-                                .copied()
-                                .unwrap_or(MaterialId(0));
-                            info.kick = fracture.kick_of(child_idx);
-                            group.push(info);
-                        }
+                for &child in component {
+                    if let Some(mut info) = snapshot_child(
+                        &physics,
+                        child,
+                        body_pos,
+                        body_rot,
+                        body_lin_vel,
+                        body_ang_vel,
+                    ) {
+                        info.material = fracture.material_of(child);
+                        info.kick = fracture.kick_of(child);
+                        group.push(info);
                     }
                 }
                 split_groups.push(group);
             }
 
-            // Detach the split-off children from the compound body.
-            let mut handles_to_detach: Vec<ColliderHandle> = Vec::new();
-            for (comp_idx, component) in components.iter().enumerate() {
-                if Some(comp_idx) == largest_idx {
-                    continue;
-                }
-                for &child_idx in component {
-                    if child_idx < trigger.collider_handles.len() {
-                        handles_to_detach.push(trigger.collider_handles[child_idx]);
-                    }
-                }
-            }
+            // Detach the split-off children from the compound body, and
+            // forget them: what they take with them was snapshotted above.
+            let handles_to_detach: Vec<ColliderHandle> = components
+                .iter()
+                .enumerate()
+                .filter(|(comp_idx, _)| Some(*comp_idx) != largest_idx)
+                .flat_map(|(_, component)| component.iter().copied())
+                .collect();
             for ch in &handles_to_detach {
                 physics.world.detach_collider(trigger.body_handle, *ch);
+                fracture.forget(*ch);
             }
+            fracture.model_stale = true;
 
             // Spawn each split-off child as an independent body. Every piece's
             // mesh is its own business, and a blast frees them by the hundred,
@@ -291,30 +283,6 @@ impl<'a> System<'a> for FractureSystem {
                 &mut positions,
                 &mut velocities,
             );
-
-            // Update the fracture component to the body's collider list as it
-            // now stands. Detaching swaps the last collider into the hole it
-            // leaves, so the survivors are *not* in the order the component
-            // listed them; the order has to be read back off the body, or a
-            // surviving child inherits its neighbour's material and load.
-            let kept: Vec<usize> = physics
-                .world
-                .body(trigger.body_handle)
-                .map(|body| {
-                    body.colliders()
-                        .iter()
-                        .filter_map(|handle| {
-                            trigger.collider_handles.iter().position(|h| h == handle)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let new_count = kept.len();
-            let Some(fracture) = fractures.get_mut(trigger.entity) else {
-                continue;
-            };
-            fracture.remap_children(&kept, new_count);
-            fracture.model_stale = true;
         }
 
         rebuild_stale_models(&physics, &mut fractures, &bodies, &mut models);
@@ -338,7 +306,7 @@ fn rebuild_stale_models(
         if let Some(model) = compound_model_of(
             physics,
             body.0,
-            &fracture.materials,
+            |child| fracture.material_of(child),
             fracture.style,
             fracture.texture_anchor,
             fracture.whole_shape.as_deref(),
@@ -373,15 +341,14 @@ struct FractureTrigger {
     entity: specs::Entity,
     body_handle: RigidBodyHandle,
     collider_handles: Vec<ColliderHandle>,
-    /// What each child is carrying, indexed by child position in the collider
-    /// list.
+    /// What each child is carrying.
     loads: ChildLoads,
 }
 
 /// Snapshot of a child collider's state, captured before detachment.
 struct ChildSnapshot {
     /// Material this child is drawn with, copied from the compound's per-child
-    /// list so a freed piece keeps the look it had while attached.
+    /// record so a freed piece keeps the look it had while attached.
     material: MaterialId,
     /// Impulse handed to the piece as it leaves, from whoever severed it.
     kick: Vector3<f32>,
@@ -413,7 +380,7 @@ fn snapshot_child(
     let r = world_pos - body_pos;
 
     Some(ChildSnapshot {
-        // Both overwritten by the caller, which knows this child's index.
+        // Both overwritten by the caller, which holds the compound's records.
         material: MaterialId(0),
         kick: Vector3::zeros(),
         shape: collider.shape().clone(),
@@ -522,8 +489,8 @@ fn spawn_freed_piece(
 }
 
 /// The model of a compound body as its colliders stand right now: box
-/// children and hull children each drawn by `style`, each wearing its own
-/// material.
+/// children and hull children each drawn by `style`, each wearing the
+/// material `material_of` gives it.
 ///
 /// `None` if the body has no drawable child, which is not the same as an
 /// empty model — a caller that has nothing to draw should keep what it had
@@ -531,27 +498,25 @@ fn spawn_freed_piece(
 pub(crate) fn compound_model_of(
     physics: &PhysicsResource,
     body_handle: RigidBodyHandle,
-    materials: &[MaterialId],
+    material_of: impl Fn(ColliderHandle) -> MaterialId,
     style: PieceStyle,
     anchor: Vector3<f32>,
     whole: Option<&ConvexHull>,
 ) -> Option<Arc<Model>> {
     let body = physics.world.body(body_handle)?;
-    let fallback = materials.last().copied().unwrap_or(MaterialId(0));
 
     // Read off serially, meshed in parallel: a freshly cleaved dome is
     // hundreds of chamfered wedges, and each one's mesh is its own business.
     let children: Vec<(ColliderShape, Vector3<f32>, UnitQuaternion<f32>, MaterialId)> = body
         .colliders()
         .iter()
-        .enumerate()
-        .filter_map(|(child, ch)| {
+        .filter_map(|ch| {
             let c = physics.world.collider(*ch)?;
             Some((
                 c.shape().clone(),
                 c.offset().translation.vector,
                 c.offset().rotation,
-                materials.get(child).copied().unwrap_or(fallback),
+                material_of(*ch),
             ))
         })
         .collect();
@@ -683,7 +648,7 @@ mod tests {
         let geometry = FlatQuadGeometry::new(50.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
         let mut debug = DebugLines::default();
-        let mut tracker = ContactLoadTracker::new(colliders.len());
+        let mut tracker = ContactLoadTracker::default();
         let mut peak = 0.0f32;
 
         for frame in 0..frames {
@@ -823,25 +788,28 @@ mod tests {
         let origin = Point3::new(0.0, 10.0, 0.0);
         let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
         let body = physics_world.create_body(RigidBodyDesc::dynamic().position(origin));
-        for i in 0..4 {
-            physics_world
-                .attach_collider(
-                    body,
-                    ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5))
-                        .offset_translation(Vector3::new(i as f32 - 1.5, 0.0, 0.0))
-                        .density(500.0),
-                )
-                .expect("collider attaches to a live body");
-        }
+        let children: Vec<ColliderHandle> = (0..4)
+            .map(|i| {
+                physics_world
+                    .attach_collider(
+                        body,
+                        ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5))
+                            .offset_translation(Vector3::new(i as f32 - 1.5, 0.0, 0.0))
+                            .density(500.0),
+                    )
+                    .expect("collider attaches to a live body")
+            })
+            .collect();
         world.insert(PhysicsResource::new(
             physics_world,
             Box::new(SequentialStepper::new(FRAME_DT, 4)),
         ));
 
-        let joints = (0..3)
-            .map(|i| FractureJoint {
-                child_a: i,
-                child_b: i + 1,
+        let joints = children
+            .windows(2)
+            .map(|pair| FractureJoint {
+                child_a: pair[0],
+                child_b: pair[1],
                 threshold: 10.0,
             })
             .collect();
@@ -860,7 +828,6 @@ mod tests {
             .with(Renderable)
             .with(CompoundFracture::boxes(
                 joints,
-                4,
                 crate::rendering::material::MaterialId(0),
             ))
             .build();
@@ -924,25 +891,28 @@ mod tests {
         let origin = Point3::new(0.0, 10.0, 0.0);
         let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
         let body = physics_world.create_body(RigidBodyDesc::dynamic().position(origin));
-        for i in 0..4 {
-            physics_world
-                .attach_collider(
-                    body,
-                    ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5))
-                        .offset_translation(Vector3::new(i as f32 - 1.5, 0.0, 0.0))
-                        .density(500.0),
-                )
-                .expect("collider attaches to a live body");
-        }
+        let children: Vec<ColliderHandle> = (0..4)
+            .map(|i| {
+                physics_world
+                    .attach_collider(
+                        body,
+                        ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5))
+                            .offset_translation(Vector3::new(i as f32 - 1.5, 0.0, 0.0))
+                            .density(500.0),
+                    )
+                    .expect("collider attaches to a live body")
+            })
+            .collect();
         world.insert(PhysicsResource::new(
             physics_world,
             Box::new(SequentialStepper::new(FRAME_DT, 4)),
         ));
 
-        let joints = (0..3)
-            .map(|i| FractureJoint {
-                child_a: i,
-                child_b: i + 1,
+        let joints = children
+            .windows(2)
+            .map(|pair| FractureJoint {
+                child_a: pair[0],
+                child_b: pair[1],
                 threshold: 10.0,
             })
             .collect();
@@ -961,7 +931,6 @@ mod tests {
             .with(Renderable)
             .with(CompoundFracture::boxes(
                 joints,
-                4,
                 crate::rendering::material::MaterialId(0),
             ))
             .build();
@@ -1037,24 +1006,27 @@ mod tests {
         let half = Vector3::new(0.5, 0.5, 0.5);
         let mut pw = PhysicsWorld::new(PhysicsConfig::default());
         let body = pw.create_body(RigidBodyDesc::dynamic().position(origin));
-        for i in 0..4 {
-            pw.attach_collider(
-                body,
-                ColliderDesc::box_shape(half)
-                    .offset_translation(Vector3::new(i as f32 - 1.5, 0.0, 0.0))
-                    .density(500.0),
-            )
-            .expect("collider attaches to a live body");
-        }
+        let children: Vec<ColliderHandle> = (0..4)
+            .map(|i| {
+                pw.attach_collider(
+                    body,
+                    ColliderDesc::box_shape(half)
+                        .offset_translation(Vector3::new(i as f32 - 1.5, 0.0, 0.0))
+                        .density(500.0),
+                )
+                .expect("collider attaches to a live body")
+            })
+            .collect();
         world.insert(PhysicsResource::new(
             pw,
             Box::new(SequentialStepper::new(FRAME_DT, 4)),
         ));
 
-        let joints = (0..3)
-            .map(|i| FractureJoint {
-                child_a: i,
-                child_b: i + 1,
+        let joints = children
+            .windows(2)
+            .map(|pair| FractureJoint {
+                child_a: pair[0],
+                child_b: pair[1],
                 threshold: 10.0,
             })
             .collect();
@@ -1073,7 +1045,6 @@ mod tests {
             .with(Renderable)
             .with(CompoundFracture::boxes(
                 joints,
-                4,
                 crate::rendering::material::MaterialId(0),
             ))
             .build();
@@ -1149,7 +1120,7 @@ mod tests {
         let (body, colliders) = compound_slab(&mut world, 0.5, Vector3::zeros());
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
         let mut debug = DebugLines::default();
-        let mut tracker = ContactLoadTracker::new(colliders.len());
+        let mut tracker = ContactLoadTracker::default();
 
         let mut slept = false;
         for _ in 0..600 {

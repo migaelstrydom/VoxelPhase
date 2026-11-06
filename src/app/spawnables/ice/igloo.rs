@@ -55,7 +55,7 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::fracture::{CompoundFracture, FractureJoint};
-use crate::physics::{ColliderDesc, RigidBodyDesc};
+use crate::physics::{ColliderDesc, ColliderHandle, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
 use crate::rendering::pattern::Spread;
 use crate::rendering::substance::ColliderSubstance;
@@ -395,18 +395,22 @@ impl Spawnable for IglooDef {
                     .angular_damping(0.005),
             );
 
-            for piece in &pieces {
-                physics.world.attach_collider(
-                    body_handle,
-                    ColliderDesc::box_shape(piece.half_extents)
-                        .of(&substance)
-                        .offset_translation(piece.offset)
-                        .offset_rotation(piece.rotation),
-                );
-            }
+            let children: Vec<Option<ColliderHandle>> = pieces
+                .iter()
+                .map(|piece| {
+                    physics.world.attach_collider(
+                        body_handle,
+                        ColliderDesc::box_shape(piece.half_extents)
+                            .of(&substance)
+                            .offset_translation(piece.offset)
+                            .offset_rotation(piece.rotation),
+                    )
+                })
+                .collect();
 
-            body_handle
+            (body_handle, children)
         };
+        let (body_handle, children) = body_handle;
 
         vec![world
             .create_entity()
@@ -417,7 +421,7 @@ impl Spawnable for IglooDef {
             .with(ModelInstance::new(model))
             .with(Renderable)
             .with(
-                CompoundFracture::boxes(self.joints(&blocks), blocks.len(), materials[0])
+                CompoundFracture::boxes(self.joints(&blocks, &children), materials[0])
                     .with_piece_mesh(ice_piece_mesh)
                     .with_hull_mesh(ice_hull_mesh)
                     .with_uvs(ice_uvs(BRICK_SPREAD)),
@@ -428,7 +432,6 @@ impl Spawnable for IglooDef {
                     ..ice_cleaving()
                 },
                 materials[0],
-                blocks.len(),
             ))
             .build()]
     }
@@ -441,21 +444,38 @@ impl IglooDef {
     /// One joint per pair of touching blocks, so the dome comes apart where it
     /// was struck: the fracture system drops the joints inside the blast,
     /// works out what is still connected to what, and lets the rest fall.
-    fn joints(&self, blocks: &[DomeBlock]) -> Vec<FractureJoint> {
-        let mut joints = Vec::new();
-        for (index, block) in blocks.iter().enumerate() {
-            for (other_index, other) in blocks.iter().enumerate().skip(index + 1) {
-                if block.adjoins(other) {
-                    joints.push(FractureJoint {
-                        child_a: index,
-                        child_b: other_index,
-                        threshold: self.fracture_threshold,
-                    });
-                }
+    ///
+    /// `children[i]` is block `i`'s collider, `None` if it has none.
+    fn joints(
+        &self,
+        blocks: &[DomeBlock],
+        children: &[Option<ColliderHandle>],
+    ) -> Vec<FractureJoint> {
+        adjoining_pairs(blocks)
+            .into_iter()
+            .filter_map(|(a, b)| {
+                Some(FractureJoint {
+                    child_a: (*children.get(a)?)?,
+                    child_b: (*children.get(b)?)?,
+                    threshold: self.fracture_threshold,
+                })
+            })
+            .collect()
+    }
+}
+
+/// Every pair of blocks that touch, by their places in `blocks`, each pair
+/// once and in order.
+fn adjoining_pairs(blocks: &[DomeBlock]) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    for (index, block) in blocks.iter().enumerate() {
+        for (other_index, other) in blocks.iter().enumerate().skip(index + 1) {
+            if block.adjoins(other) {
+                pairs.push((index, other_index));
             }
         }
-        joints
     }
+    pairs
 }
 
 /// The centre of mass of a set of blocks, which all share one density.
@@ -763,9 +783,12 @@ mod tests {
     fn the_dome_is_one_connected_structure() {
         let igloo = igloo();
         let blocks = igloo.blocks();
-        let fracture = CompoundFracture::boxes(igloo.joints(&blocks), blocks.len(), MaterialId(0));
+        let children: Vec<ColliderHandle> =
+            (0..blocks.len()).map(ColliderHandle::for_test).collect();
+        let slots: Vec<Option<ColliderHandle>> = children.iter().copied().map(Some).collect();
+        let fracture = CompoundFracture::boxes(igloo.joints(&blocks, &slots), MaterialId(0));
 
-        let components = fracture.connected_components();
+        let components = fracture.connected_components(&children);
         assert_eq!(
             components.len(),
             1,
@@ -782,8 +805,8 @@ mod tests {
         let igloo = igloo();
         let blocks = igloo.blocks();
 
-        for joint in igloo.joints(&blocks) {
-            let (a, b) = (&blocks[joint.child_a], &blocks[joint.child_b]);
+        for (a, b) in adjoining_pairs(&blocks) {
+            let (a, b) = (&blocks[a], &blocks[b]);
             if a.ring != b.ring || a.centre.y > igloo.door_height {
                 continue;
             }
@@ -928,7 +951,7 @@ mod contact_fracture {
         let geometry = FlatQuadGeometry::new(80.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
         let mut debug = DebugLines::default();
-        let mut tracker = ContactLoadTracker::new(colliders.len());
+        let mut tracker = ContactLoadTracker::default();
         let mut peak = 0.0f32;
 
         for _ in 0..frames {

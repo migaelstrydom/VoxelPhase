@@ -380,7 +380,11 @@ value must match or you get a one-frame visual pop.
   Any piece can be knocked loose. Simpler to set up.
 - **Compound bodies** (table, plank bridge, igloo): one physics body with
   multiple colliders at offsets. Build it with `CompoundFracture::boxes(joints,
-  child_count, material)` if you want pieces to break apart under force.
+  material)` if you want pieces to break apart under force. A joint names its
+  two children by the `ColliderHandle`s `attach_collider` returned, never by
+  their place in the body's collider list, which changes as pieces leave;
+  `with_piece_materials` takes `(handle, material)` pairs for children that are
+  not drawn with `material`. `plank_bridge.rs` and `ice/igloo.rs` show both.
 
 A compound body is the answer whenever a structure has to stay standing but
 must not be part of the world. A static body never falls — blow the terrain out

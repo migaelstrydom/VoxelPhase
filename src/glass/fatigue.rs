@@ -9,6 +9,10 @@
 //! weaker for it, which is also what makes a glass floor a place to keep
 //! moving on.
 
+use rustc_hash::FxHashMap;
+
+use crate::physics::ColliderHandle;
+
 /// What a pane can bear, and for how long it can bear more.
 #[derive(Debug, Clone, Copy)]
 pub struct FatigueRule {
@@ -20,52 +24,43 @@ pub struct FatigueRule {
     pub endurance: f32,
 }
 
-/// Per-child damage, from 0 (sound) to 1 (failed).
+/// Per-child damage, from 0 (sound) to 1 (failed), kept by collider.
 #[derive(Debug, Default)]
 pub struct FatigueTracker {
-    damage: Vec<f32>,
+    /// Damage of every child seen on the last advance.
+    damage: FxHashMap<ColliderHandle, f32>,
 }
 
 impl FatigueTracker {
-    pub fn new(child_count: usize) -> Self {
-        Self {
-            damage: vec![0.0; child_count],
-        }
-    }
-
-    /// Add `dt` seconds of `forces` (newtons, indexed by child) and report
-    /// the children that have just failed. A failed child stays at full
-    /// damage until it is removed.
-    pub fn advance(&mut self, rule: &FatigueRule, forces: &[f32], dt: f32) -> Vec<usize> {
-        self.damage.resize(forces.len(), 0.0);
+    /// Add `dt` seconds of `forces` (newtons, by child) and report the
+    /// children that have just failed. A failed child stays at full damage
+    /// until it is removed; a child not listed is forgotten, and one not seen
+    /// before starts sound.
+    pub fn advance(
+        &mut self,
+        rule: &FatigueRule,
+        forces: &[(ColliderHandle, f32)],
+        dt: f32,
+    ) -> Vec<ColliderHandle> {
+        let mut damage = FxHashMap::default();
         let mut failed = Vec::new();
-        for (child, force) in forces.iter().enumerate() {
-            if self.damage[child] >= 1.0 {
-                continue;
+        for &(child, force) in forces {
+            let mut sum = self.damage.get(&child).copied().unwrap_or(0.0);
+            if sum < 1.0 {
+                let excess = (force / rule.bearing - 1.0).max(0.0);
+                sum += excess * dt / rule.endurance;
+                if sum >= 1.0 {
+                    failed.push(child);
+                }
             }
-            let excess = (force / rule.bearing - 1.0).max(0.0);
-            self.damage[child] += excess * dt / rule.endurance;
-            if self.damage[child] >= 1.0 {
-                failed.push(child);
-            }
+            damage.insert(child, sum);
         }
+        self.damage = damage;
         failed
     }
 
-    pub fn damage_of(&self, child: usize) -> f32 {
-        self.damage.get(child).copied().unwrap_or(0.0)
-    }
-
-    /// Follow the children through a change to the body's collider list:
-    /// `order[new]` is the old index now at `new`, `None` for a fresh cell.
-    pub fn reindex(&mut self, order: &[Option<usize>]) {
-        self.damage = order
-            .iter()
-            .map(|old| {
-                old.and_then(|old| self.damage.get(old).copied())
-                    .unwrap_or(0.0)
-            })
-            .collect();
+    pub fn damage_of(&self, child: ColliderHandle) -> f32 {
+        self.damage.get(&child).copied().unwrap_or(0.0)
     }
 }
 
@@ -78,40 +73,55 @@ mod tests {
         endurance: 0.5,
     };
 
+    fn child(slot: usize) -> ColliderHandle {
+        ColliderHandle::for_test(slot)
+    }
+
     #[test]
     fn a_load_within_the_bearing_never_fails() {
-        let mut tracker = FatigueTracker::new(1);
+        let mut tracker = FatigueTracker::default();
         for _ in 0..6000 {
-            assert!(tracker.advance(&RULE, &[400.0], 1.0 / 60.0).is_empty());
+            assert!(tracker
+                .advance(&RULE, &[(child(0), 400.0)], 1.0 / 60.0)
+                .is_empty());
         }
-        assert_eq!(tracker.damage_of(0), 0.0);
+        assert_eq!(tracker.damage_of(child(0)), 0.0);
     }
 
     #[test]
     fn twice_the_bearing_fails_after_the_endurance() {
-        let mut tracker = FatigueTracker::new(2);
+        let mut tracker = FatigueTracker::default();
         let mut failed_at = None;
         for frame in 0..120 {
-            let failed = tracker.advance(&RULE, &[800.0, 100.0], 1.0 / 60.0);
+            let failed =
+                tracker.advance(&RULE, &[(child(0), 800.0), (child(1), 100.0)], 1.0 / 60.0);
             if !failed.is_empty() {
                 failed_at = Some((frame, failed));
                 break;
             }
         }
         let (frame, failed) = failed_at.expect("the loaded cell fails");
-        assert_eq!(failed, vec![0]);
+        assert_eq!(failed, vec![child(0)]);
         assert!((28..=31).contains(&frame), "failed at frame {frame}");
-        assert_eq!(tracker.damage_of(1), 0.0);
+        assert_eq!(tracker.damage_of(child(1)), 0.0);
     }
 
     #[test]
-    fn damage_follows_its_cell_through_a_reindex() {
-        let mut tracker = FatigueTracker::new(3);
-        tracker.advance(&RULE, &[1200.0, 400.0, 800.0], 0.1);
-        let before = tracker.damage_of(2);
-        tracker.reindex(&[Some(2), None, Some(0)]);
-        assert_eq!(tracker.damage_of(0), before);
-        assert_eq!(tracker.damage_of(1), 0.0);
-        assert!(tracker.damage_of(2) > before);
+    fn damage_follows_its_cell_through_a_reshuffle() {
+        let mut tracker = FatigueTracker::default();
+        tracker.advance(
+            &RULE,
+            &[(child(0), 1200.0), (child(1), 400.0), (child(2), 800.0)],
+            0.1,
+        );
+        let before = tracker.damage_of(child(2));
+        tracker.advance(
+            &RULE,
+            &[(child(2), 400.0), (child(3), 400.0), (child(0), 400.0)],
+            0.1,
+        );
+        assert_eq!(tracker.damage_of(child(2)), before);
+        assert_eq!(tracker.damage_of(child(3)), 0.0);
+        assert!(tracker.damage_of(child(0)) > before);
     }
 }

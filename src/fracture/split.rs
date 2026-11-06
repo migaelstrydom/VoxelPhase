@@ -5,17 +5,11 @@
 //!             │
 //!             ▼
 //!   detach b, attach b1 b2  ──▶  body: [ a ][ c ][ b1 ][ b2 ]
-//!             │
-//!             ▼
-//!   order = [Some(0), Some(2), None, None]
 //! ```
 //!
-//! The awkward part is not the swap but everything indexed by child. A body
-//! keeps its colliders in a list, detaching one moves the last into its
-//! place, and every joint, material, kick, spike baseline and damage figure
-//! the object holds is indexed by position in that list. So a split reports
-//! the permutation it caused — `order[new]` is the old index now sitting at
-//! `new` — and each thing keyed by child follows it across.
+//! Everything the object records about a child is keyed by its collider
+//! handle, which detaching and attaching leave alone, so the split only has
+//! to forget the child that went and report the handles of the pieces.
 //!
 //! What a piece *is* stays with the caller: a sheet of glass cuts a polygon
 //! into shards and a block of ice cleaves along a plane, and neither is this
@@ -26,24 +20,18 @@ use crate::systems::PhysicsResource;
 
 use super::components::CompoundFracture;
 
-/// What a split did to a body's child list.
-pub struct ChildSplit {
-    /// `order[new]` is the index this child had before the split, or `None`
-    /// for one of the new pieces. Everything the caller keys by child is
-    /// reindexed with it.
-    pub order: Vec<Option<usize>>,
-    /// Where the new pieces ended up, in the order their colliders were
-    /// given. Shorter than that list if the engine refused one.
-    pub pieces: Vec<usize>,
-}
-
-/// Swap `child` for `pieces` on `body_handle`, and reindex the fracture with
-/// the permutation that caused.
+/// Swap `child` for `pieces` on `body_handle`, and forget the child's joints
+/// and records in the fracture.
 ///
 /// The body's mass properties come out unchanged if the pieces fill the same
 /// volume the child did, which is what a fracture of a solid means; the body
 /// is not recentred, because its centre of mass has not moved. That happens
 /// later, when pieces actually leave.
+///
+/// Returns the new pieces' handles, in the order their colliders were given;
+/// shorter than that list if the engine refused one. A new piece arrives
+/// with no joints, no load history, no kick and the compound's material:
+/// whoever added it says what it is joined to and what it wears.
 ///
 /// `None` if the child is not on this body. An empty `pieces` list is a way
 /// of removing a child outright, and is allowed.
@@ -53,9 +41,13 @@ pub fn split_child(
     body_handle: RigidBodyHandle,
     child: ColliderHandle,
     pieces: impl IntoIterator<Item = ColliderDesc>,
-) -> Option<ChildSplit> {
-    let before: Vec<ColliderHandle> = physics.world.body(body_handle)?.colliders().to_vec();
-    if !before.contains(&child) {
+) -> Option<Vec<ColliderHandle>> {
+    if !physics
+        .world
+        .body(body_handle)?
+        .colliders()
+        .contains(&child)
+    {
         return None;
     }
 
@@ -67,18 +59,8 @@ pub fn split_child(
         .collect();
     world.wake_body(body_handle);
 
-    let now: Vec<ColliderHandle> = world.body(body_handle)?.colliders().to_vec();
-    let order: Vec<Option<usize>> = now
-        .iter()
-        .map(|handle| before.iter().position(|old| old == handle))
-        .collect();
-    fracture.reindex(&order);
-
-    let pieces = fresh
-        .iter()
-        .filter_map(|handle| now.iter().position(|h| h == handle))
-        .collect();
-    Some(ChildSplit { order, pieces })
+    fracture.forget(child);
+    Some(fresh)
 }
 
 /// The density and surface properties of a collider, so pieces cut from it

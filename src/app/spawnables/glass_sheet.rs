@@ -227,7 +227,7 @@ impl Spawnable for GlassSheetDef {
 
         // Contact between shards is judged on the same spike that cracks the
         // pane: a shard hit hard enough to craze is hit hard enough to fall.
-        let fracture = CompoundFracture::boxes(Vec::new(), 1, material)
+        let fracture = CompoundFracture::boxes(Vec::new(), material)
             .breaking_on_impact_at(self.impact_threshold)
             .shedding_debris();
         let mut sheet = BrittleSheet::whole(frame, self.crazing(), self.blast_threshold, material);

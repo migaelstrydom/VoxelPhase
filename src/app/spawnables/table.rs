@@ -16,7 +16,7 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::fracture::{CompoundFracture, FractureJoint};
-use crate::physics::{ColliderDesc, RigidBodyDesc};
+use crate::physics::{ColliderDesc, ColliderHandle, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
 use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
@@ -143,28 +143,31 @@ impl Spawnable for TableDef {
 
             let body_handle = physics.world.create_body(body_desc);
 
-            physics.world.attach_collider(
+            let top = physics.world.attach_collider(
                 body_handle,
                 ColliderDesc::box_shape(top_he)
                     .offset_translation(Vector3::new(0.0, top_y, 0.0))
                     .with_physical_surface(self.surface()),
             );
 
-            for &pos in &leg_positions {
-                physics.world.attach_collider(
-                    body_handle,
-                    ColliderDesc::box_shape(leg_he)
-                        .offset_translation(pos)
-                        .with_physical_surface(self.surface()),
-                );
-            }
+            let legs: Vec<ColliderHandle> = leg_positions
+                .iter()
+                .filter_map(|&pos| {
+                    physics.world.attach_collider(
+                        body_handle,
+                        ColliderDesc::box_shape(leg_he)
+                            .offset_translation(pos)
+                            .with_physical_surface(self.surface()),
+                    )
+                })
+                .collect();
 
             // The body's origin is its centre of mass, which the heavy top
             // holds well above the frame the parts were laid out in.
             let centre_of_mass = physics.world.recenter_on_colliders(body_handle);
-            (body_handle, centre_of_mass)
+            (body_handle, centre_of_mass, top, legs)
         };
-        let (body_handle, centre_of_mass) = body_handle;
+        let (body_handle, centre_of_mass, top, legs) = body_handle;
 
         // The model is laid out about the same centre as the colliders.
         let boxes: Vec<_> = boxes
@@ -175,35 +178,19 @@ impl Spawnable for TableDef {
         let rotation = Yaw::degrees(self.yaw).rotation();
         let centre = initial_pos + rotation * centre_of_mass;
 
-        // 5 children: [0] top slab, [1..4] legs.
-        // 4 joints: each leg connects to the top.
+        // Each leg is joined to the top.
         let joint_threshold = 10.0;
-        let fracture = CompoundFracture::boxes(
-            vec![
-                FractureJoint {
-                    child_a: 0,
-                    child_b: 1,
+        let joints = top
+            .into_iter()
+            .flat_map(|top| {
+                legs.iter().map(move |leg| FractureJoint {
+                    child_a: top,
+                    child_b: *leg,
                     threshold: joint_threshold,
-                },
-                FractureJoint {
-                    child_a: 0,
-                    child_b: 2,
-                    threshold: joint_threshold,
-                },
-                FractureJoint {
-                    child_a: 0,
-                    child_b: 3,
-                    threshold: joint_threshold,
-                },
-                FractureJoint {
-                    child_a: 0,
-                    child_b: 4,
-                    threshold: joint_threshold,
-                },
-            ],
-            5,
-            materials[0],
-        );
+                })
+            })
+            .collect();
+        let fracture = CompoundFracture::boxes(joints, materials[0]);
 
         vec![world
             .create_entity()

@@ -25,4 +25,11 @@ impl ColliderHandle {
     pub(crate) fn raw_parts(self) -> (usize, u64) {
         self.0.into_raw_parts()
     }
+
+    /// A handle naming slot `slot`, for tests of records keyed by collider
+    /// that need no world behind them.
+    #[cfg(test)]
+    pub(crate) fn for_test(slot: usize) -> Self {
+        Self(Index::from_raw_parts(slot, 0))
+    }
 }

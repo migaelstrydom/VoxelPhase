@@ -240,12 +240,12 @@ impl IceBlock {
             .with(ModelInstance::new(model))
             .with(Renderable)
             .with(
-                CompoundFracture::boxes(Vec::new(), 1, self.material)
+                CompoundFracture::boxes(Vec::new(), self.material)
                     .with_piece_mesh(ice_piece_mesh)
                     .with_hull_mesh(ice_hull_mesh)
                     .with_uvs(ice_uvs(self.spread)),
             )
-            .with(BrittleSolid::new(self.cleaving, self.material, 1))
+            .with(BrittleSolid::new(self.cleaving, self.material))
             .build()
     }
 }

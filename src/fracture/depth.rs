@@ -17,43 +17,34 @@
 //! block cleaving into wedges — because the cost it guards against is the
 //! same one, and so is the remedy.
 
+use rustc_hash::FxHashMap;
+
+use crate::physics::ColliderHandle;
+
 /// Per-child break depth: 0 for a child the object was spawned with, one
 /// more than its parent for every piece a break creates.
+///
+/// Kept by collider handle, so a depth stays with its piece however the
+/// body's collider list is reordered. A piece that leaves the body keeps its
+/// entry until the object goes; a handle is never reused, so it cannot be
+/// mistaken for another.
 #[derive(Debug, Default)]
 pub struct BreakDepths {
-    depth: Vec<u32>,
+    /// Depth of every piece a break created; a child absent is unbroken.
+    depth: FxHashMap<ColliderHandle, u32>,
 }
 
 impl BreakDepths {
-    /// An object of `child_count` unbroken children.
-    pub fn new(child_count: usize) -> Self {
-        Self {
-            depth: vec![0; child_count],
-        }
-    }
-
     /// How deep `child` was born. A child the tracker has never seen counts
     /// as unbroken, so an object that gains a collider some other way is
     /// still allowed to break.
-    pub fn of(&self, child: usize) -> u32 {
-        self.depth.get(child).copied().unwrap_or(0)
+    pub fn of(&self, child: ColliderHandle) -> u32 {
+        self.depth.get(&child).copied().unwrap_or(0)
     }
 
     /// Record the depth of a piece a break has just created.
-    pub fn set(&mut self, child: usize, depth: u32) {
-        if self.depth.len() <= child {
-            self.depth.resize(child + 1, 0);
-        }
-        self.depth[child] = depth;
-    }
-
-    /// Follow the children through a change to the body's collider list:
-    /// `order[new]` is the old index now at `new`, `None` for a fresh piece.
-    pub fn reindex(&mut self, order: &[Option<usize>]) {
-        self.depth = order
-            .iter()
-            .map(|old| old.map_or(0, |old| self.of(old)))
-            .collect();
+    pub fn set(&mut self, child: ColliderHandle, depth: u32) {
+        self.depth.insert(child, depth);
     }
 }
 
@@ -61,29 +52,24 @@ impl BreakDepths {
 mod tests {
     use super::*;
 
+    fn child(slot: usize) -> ColliderHandle {
+        ColliderHandle::for_test(slot)
+    }
+
     #[test]
     fn a_fresh_object_is_unbroken() {
-        let depths = BreakDepths::new(3);
-        assert_eq!(depths.of(0), 0);
-        assert_eq!(depths.of(2), 0);
-        assert_eq!(depths.of(9), 0);
+        let depths = BreakDepths::default();
+        assert_eq!(depths.of(child(0)), 0);
+        assert_eq!(depths.of(child(2)), 0);
+        assert_eq!(depths.of(child(9)), 0);
     }
 
     #[test]
-    fn depth_follows_its_piece_through_a_reindex() {
-        let mut depths = BreakDepths::new(3);
-        depths.set(2, 1);
-        depths.reindex(&[Some(2), None, Some(0)]);
-        assert_eq!(depths.of(0), 1);
-        assert_eq!(depths.of(1), 0);
-        assert_eq!(depths.of(2), 0);
-    }
-
-    #[test]
-    fn a_piece_set_past_the_end_grows_the_tracker() {
-        let mut depths = BreakDepths::new(1);
-        depths.set(4, 2);
-        assert_eq!(depths.of(4), 2);
-        assert_eq!(depths.of(3), 0);
+    fn depth_stays_with_its_piece() {
+        let mut depths = BreakDepths::default();
+        depths.set(child(2), 1);
+        assert_eq!(depths.of(child(2)), 1);
+        assert_eq!(depths.of(child(0)), 0);
+        assert_eq!(depths.of(child(1)), 0);
     }
 }

@@ -17,5 +17,5 @@ pub use contact_load::{ContactLoadTracker, ContactSpike, Deadband};
 pub use debris::{Debris, DebrisBudget, DebrisCullSystem};
 pub use depth::BreakDepths;
 pub use load::{ChildLoad, ChildLoads};
-pub use split::{split_child, ChildSplit, ChildSubstance};
+pub use split::{split_child, ChildSubstance};
 pub use systems::FractureSystem;

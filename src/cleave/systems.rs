@@ -124,20 +124,20 @@ fn gather_hits(
     };
     // An arrest is the whole body's; it lands on the child that took the
     // biggest share of the contact.
-    let struck = spikes
+    let struck = handles
         .iter()
-        .enumerate()
+        .zip(&spikes)
         .max_by(|a, b| a.1.magnitude.total_cmp(&b.1.magnitude))
-        .map(|(index, _)| index);
+        .map(|(handle, _)| *handle);
 
     let mut hits = Vec::new();
-    for (index, handle) in handles.iter().enumerate() {
-        if !solid.is_brittle(fracture.material_of(index)) {
+    for (handle, spike) in handles.iter().zip(&spikes) {
+        if !solid.is_brittle(fracture.material_of(*handle)) {
             continue;
         }
         let blow = match solid.measure {
-            BlowMeasure::ContactSpike => spikes[index].magnitude,
-            BlowMeasure::Arrest if struck == Some(index) => arrest,
+            BlowMeasure::ContactSpike => spike.magnitude,
+            BlowMeasure::Arrest if struck == Some(*handle) => arrest,
             BlowMeasure::Arrest => 0.0,
         };
         *loudest = loudest.max(blow);
@@ -200,14 +200,15 @@ fn cleave(
     let Some(body) = world.body(body_handle) else {
         return false;
     };
-    let Some(child) = body.colliders().iter().position(|h| *h == hit.child) else {
+    // Its place in the body's list, which seeds the cut and nothing else.
+    let Some(place) = body.colliders().iter().position(|h| *h == hit.child) else {
         // Already replaced by an earlier hit this frame.
         return false;
     };
     let Some(collider) = world.collider(hit.child) else {
         return false;
     };
-    let depth = solid.depths.of(child);
+    let depth = solid.depths.of(hit.child);
     let offset = *collider.offset();
 
     // The blow, in the block's own frame: through the body's rotation, then
@@ -220,15 +221,15 @@ fn cleave(
     let in_block = offset
         .rotation
         .inverse_transform_vector(&(in_body - offset.translation.vector));
-    let salt = in_block.x.to_bits() ^ in_block.y.to_bits().rotate_left(11) ^ (child as u32);
+    let salt = in_block.x.to_bits() ^ in_block.y.to_bits().rotate_left(11) ^ (place as u32);
 
     let pieces = solid
-        .may_cleave(child)
+        .may_cleave(hit.child)
         .then(|| solid.cleaving.cleave(collider.shape(), in_block, salt))
         .flatten();
     let Some(pieces) = pieces else {
         // A wedge, not a block. It comes out whole.
-        fracture.sever(child, capped_kick(hit.kick, collider.mass(), 1));
+        fracture.sever(hit.child, capped_kick(hit.kick, collider.mass(), 1));
         return false;
     };
 
@@ -239,12 +240,12 @@ fn cleave(
     // which neighbour each wedge touches would need the proximity of two
     // rotated boxes, and a wedge that lost its grip on the wall mid-dome
     // would drop the courses above it.
-    let inherited: Vec<(usize, f32)> = fracture
+    let inherited: Vec<(ColliderHandle, f32)> = fracture
         .joints
         .iter()
         .filter_map(|joint| match (joint.child_a, joint.child_b) {
-            (a, b) if a == child => Some((b, joint.threshold)),
-            (a, b) if b == child => Some((a, joint.threshold)),
+            (a, b) if a == hit.child => Some((b, joint.threshold)),
+            (a, b) if b == hit.child => Some((a, joint.threshold)),
             _ => None,
         })
         .collect();
@@ -256,32 +257,26 @@ fn cleave(
                 .offset_rotation(offset.rotation),
         )
     });
-    let Some(split) = split_child(physics, fracture, body_handle, hit.child, descs) else {
+    let Some(wedges) = split_child(physics, fracture, body_handle, hit.child, descs) else {
         return false;
     };
-
-    solid.contact_load.reindex(&split.order);
-    solid.depths.reindex(&split.order);
-    for index in &split.pieces {
-        fracture.materials[*index] = solid.material;
-        solid.depths.set(*index, depth + 1);
+    for wedge in &wedges {
+        fracture.set_material(*wedge, solid.material);
+        solid.depths.set(*wedge, depth + 1);
     }
 
     // Every wedge keeps the block's old joints, and is keyed to its fellows.
-    let now_at = |old: usize| split.order.iter().position(|o| *o == Some(old));
-    for (position, index) in split.pieces.iter().enumerate() {
+    for (position, wedge) in wedges.iter().enumerate() {
         for (other, threshold) in &inherited {
-            if let Some(other) = now_at(*other) {
-                fracture.joints.push(FractureJoint {
-                    child_a: *index,
-                    child_b: other,
-                    threshold: *threshold,
-                });
-            }
-        }
-        for fellow in &split.pieces[position + 1..] {
             fracture.joints.push(FractureJoint {
-                child_a: *index,
+                child_a: *wedge,
+                child_b: *other,
+                threshold: *threshold,
+            });
+        }
+        for fellow in &wedges[position + 1..] {
+            fracture.joints.push(FractureJoint {
+                child_a: *wedge,
                 child_b: *fellow,
                 threshold: solid.joint_threshold,
             });
@@ -291,28 +286,23 @@ fn cleave(
     // The wedge the blow landed on comes away; the rest hold until their own
     // joints give. Without this a blow that breaks a block leaves every piece
     // of it exactly where it was, and nothing looks broken.
-    if let Some(struck) = nearest_piece(&pieces, in_block, &split.pieces) {
-        let mass = physics
-            .world
-            .body(body_handle)
-            .and_then(|b| b.colliders().get(struck).copied())
-            .and_then(|h| physics.world.collider(h))
-            .map_or(0.0, |c| c.mass());
+    if let Some(struck) = nearest_piece(&pieces, in_block, &wedges) {
+        let mass = physics.world.collider(struck).map_or(0.0, |c| c.mass());
         fracture.sever(struck, capped_kick(hit.kick, mass, 1));
     }
 
     true
 }
 
-/// The child index of the wedge whose centre is nearest the blow.
+/// The collider of the wedge whose centre is nearest the blow.
 fn nearest_piece(
     pieces: &[super::plan::CleavePiece],
     hit: Vector3<f32>,
-    indices: &[usize],
-) -> Option<usize> {
+    wedges: &[ColliderHandle],
+) -> Option<ColliderHandle> {
     pieces
         .iter()
-        .zip(indices)
+        .zip(wedges)
         .min_by(|a, b| {
             (a.0.centre - hit)
                 .magnitude_squared()
@@ -398,14 +388,13 @@ mod tests {
             .with(RigidBodyComponent(body))
             .with(ModelInstance::new(model))
             .with(Renderable)
-            .with(CompoundFracture::boxes(Vec::new(), 1, MaterialId(0)))
+            .with(CompoundFracture::boxes(Vec::new(), MaterialId(0)))
             .with(BrittleSolid::new(
                 CleaveRule {
                     threshold,
                     ..CleaveRule::default()
                 },
                 MaterialId(0),
-                1,
             ))
             .build();
         (world, body)
@@ -460,42 +449,46 @@ mod tests {
     /// dome is. The middle one is the one that gets hit.
     fn row_of_three() -> (World, RigidBodyHandle) {
         let (world, body) = ice_block(20.0);
-        {
+        // The first child is the middle block; the two it holds come after.
+        let (middle, sides) = {
             let mut physics = world.write_resource::<PhysicsResource>();
-            for side in [-1.0, 1.0] {
-                physics.world.attach_collider(
-                    body,
-                    ColliderDesc::box_shape(HALF)
-                        .density(900.0)
-                        .friction(0.05)
-                        .offset_translation(Vector3::new(side * (HALF.x * 2.0 + 0.01), 0.0, 0.0)),
-                );
-            }
-        }
-        // Child 0 is the middle block; the two it holds are 1 and 2.
+            let middle = physics.world.body(body).expect("the block").colliders()[0];
+            let sides: Vec<ColliderHandle> = [-1.0, 1.0]
+                .into_iter()
+                .filter_map(|side| {
+                    physics.world.attach_collider(
+                        body,
+                        ColliderDesc::box_shape(HALF)
+                            .density(900.0)
+                            .friction(0.05)
+                            .offset_translation(Vector3::new(
+                                side * (HALF.x * 2.0 + 0.01),
+                                0.0,
+                                0.0,
+                            )),
+                    )
+                })
+                .collect();
+            (middle, sides)
+        };
         let mut fractures = world.write_storage::<CompoundFracture>();
         let fracture = (&mut fractures).join().next().expect("the row");
         *fracture = CompoundFracture::boxes(
-            vec![
-                FractureJoint {
-                    child_a: 0,
-                    child_b: 1,
+            sides
+                .iter()
+                .map(|side| FractureJoint {
+                    child_a: middle,
+                    child_b: *side,
                     threshold: 1.0e9,
-                },
-                FractureJoint {
-                    child_a: 0,
-                    child_b: 2,
-                    threshold: 1.0e9,
-                },
-            ],
-            3,
+                })
+                .collect(),
             MaterialId(0),
         );
         drop(fractures);
         let mut solids = world.write_storage::<BrittleSolid>();
         let solid = (&mut solids).join().next().expect("the row");
-        solid.contact_load = crate::fracture::ContactLoadTracker::new(3);
-        solid.depths = crate::fracture::BreakDepths::new(3);
+        solid.contact_load = crate::fracture::ContactLoadTracker::default();
+        solid.depths = crate::fracture::BreakDepths::default();
         drop(solids);
         (world, body)
     }
@@ -535,18 +528,13 @@ mod tests {
             "the middle block never broke"
         );
 
+        let physics = world.read_resource::<PhysicsResource>();
+        let children = physics.world.body(body).expect("the row").colliders();
         let fractures = world.read_storage::<CompoundFracture>();
         let fracture = (&fractures).join().next().expect("the row");
-        let biggest = fracture
-            .connected_components()
-            .into_iter()
-            .max_by_key(Vec::len)
-            .expect("a structure");
-        assert!(
-            biggest.len() >= 3,
-            "the row fell into {:?}",
-            fracture.connected_components()
-        );
+        let groups = fracture.connected_components(children);
+        let biggest = groups.iter().map(Vec::len).max().expect("a structure");
+        assert!(biggest >= 3, "the row fell into {groups:?}");
     }
 
     /// A block that has already cracked must not hold like one that has not.

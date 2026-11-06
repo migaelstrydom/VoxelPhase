@@ -31,8 +31,10 @@
 //! once and the bridge does not shed planks, it ceases to exist.
 
 use nalgebra::Point3;
+use rustc_hash::FxHashMap;
 
 use super::components::FractureJoint;
+use crate::physics::ColliderHandle;
 
 /// How hard one child of a compound is being pushed, and where.
 #[derive(Debug, Clone)]
@@ -64,16 +66,20 @@ impl Default for ChildLoad {
 /// The loads on every child of one compound body, ready to judge its joints.
 #[derive(Debug, Default)]
 pub struct ChildLoads {
-    children: Vec<ChildLoad>,
+    /// The load on each child, by its collider.
+    children: FxHashMap<ColliderHandle, ChildLoad>,
     /// Contact spike, at the joint, above which a joint lets go. `None` falls
     /// back to the joint's own blast threshold.
     contact_threshold: Option<f32>,
 }
 
 impl ChildLoads {
-    pub fn new(children: Vec<ChildLoad>, contact_threshold: Option<f32>) -> Self {
+    pub fn new(
+        children: impl IntoIterator<Item = (ColliderHandle, ChildLoad)>,
+        contact_threshold: Option<f32>,
+    ) -> Self {
         Self {
-            children,
+            children: children.into_iter().collect(),
             contact_threshold,
         }
     }
@@ -87,8 +93,8 @@ impl ChildLoads {
     /// Either endpoint can break it, and either load can do the breaking.
     pub fn breaks(&self, joint: &FractureJoint) -> bool {
         let (Some(a), Some(b)) = (
-            self.children.get(joint.child_a),
-            self.children.get(joint.child_b),
+            self.children.get(&joint.child_a),
+            self.children.get(&joint.child_b),
         ) else {
             return false;
         };
@@ -114,8 +120,8 @@ impl ChildLoads {
     /// against, so the tests that choose that number read it directly.
     pub fn contact_load(&self, joint: &FractureJoint) -> f32 {
         let (Some(a), Some(b)) = (
-            self.children.get(joint.child_a),
-            self.children.get(joint.child_b),
+            self.children.get(&joint.child_a),
+            self.children.get(&joint.child_b),
         ) else {
             return 0.0;
         };
@@ -169,10 +175,21 @@ mod tests {
 
     fn joint(threshold: f32) -> FractureJoint {
         FractureJoint {
-            child_a: 0,
-            child_b: 1,
+            child_a: ColliderHandle::for_test(0),
+            child_b: ColliderHandle::for_test(1),
             threshold,
         }
+    }
+
+    /// Loads on the children `0, 1, ...`, in that order.
+    fn loads(children: Vec<ChildLoad>, contact_threshold: Option<f32>) -> ChildLoads {
+        ChildLoads::new(
+            children
+                .into_iter()
+                .enumerate()
+                .map(|(slot, load)| (ColliderHandle::for_test(slot), load)),
+            contact_threshold,
+        )
     }
 
     /// The bridge's shape: one long beam, many small planks along it, every
@@ -183,8 +200,8 @@ mod tests {
         let near_plank = child(0.0, -3.5, 1.0, 0.0);
         let far_plank = child(0.0, 3.5, 1.0, 0.0);
 
-        let near = ChildLoads::new(vec![beam.clone(), near_plank], Some(1_000.0));
-        let far = ChildLoads::new(vec![beam, far_plank], Some(1_000.0));
+        let near = loads(vec![beam.clone(), near_plank], Some(1_000.0));
+        let far = loads(vec![beam, far_plank], Some(1_000.0));
 
         assert!(near.breaks(&joint(8.0)), "the struck end should let go");
         assert!(!far.breaks(&joint(8.0)), "the far end should hold");
@@ -197,7 +214,7 @@ mod tests {
         let mut a = child(0.0, 0.0, 1.0, 0.0);
         a.blast = 20.0;
         let b = child(0.0, 0.0, 1.0, 0.0);
-        let loads = ChildLoads::new(vec![a, b], Some(1_000.0));
+        let loads = loads(vec![a, b], Some(1_000.0));
 
         // 20 N·s of blast clears an 8 N·s joint even though the contact
         // threshold it would never reach is a hundred times larger.
@@ -210,7 +227,7 @@ mod tests {
     fn an_unauthored_contact_threshold_falls_back_to_the_joint() {
         let a = child(50.0, 0.0, 1.0, 0.0);
         let b = child(0.0, 0.0, 1.0, 0.0);
-        let loads = ChildLoads::new(vec![a, b], None);
+        let loads = loads(vec![a, b], None);
 
         assert!(loads.breaks(&joint(8.0)));
         assert!(!loads.breaks(&joint(500.0)));
@@ -218,7 +235,7 @@ mod tests {
 
     #[test]
     fn a_joint_naming_a_child_that_is_gone_does_not_break() {
-        let loads = ChildLoads::new(vec![child(1e9, 0.0, 1.0, 0.0)], Some(1.0));
+        let loads = loads(vec![child(1e9, 0.0, 1.0, 0.0)], Some(1.0));
         assert!(!loads.breaks(&joint(1.0)));
     }
 

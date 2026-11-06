@@ -3,11 +3,13 @@
 use std::sync::Arc;
 
 use nalgebra::Vector3;
+use rustc_hash::FxHashMap;
 use specs::{Component, VecStorage};
 
 use super::contact_load::{ContactLoadTracker, Deadband};
 use crate::app::spawnables::shared::models::{HullMesh, PieceMesh, PieceStyle, SurfaceUvs};
 use crate::collision::convex_hull::ConvexHull;
+use crate::physics::ColliderHandle;
 use crate::rendering::material::MaterialId;
 
 /// A structural joint between two children of a compound body.
@@ -16,12 +18,19 @@ use crate::rendering::material::MaterialId;
 /// exceeds `threshold`.
 #[derive(Debug, Clone)]
 pub struct FractureJoint {
-    /// Index of the first child in the body's collider list.
-    pub child_a: usize,
-    /// Index of the second child in the body's collider list.
-    pub child_b: usize,
+    /// The first child's collider.
+    pub child_a: ColliderHandle,
+    /// The second child's collider.
+    pub child_b: ColliderHandle,
     /// Impulse magnitude (N-s) above which this joint breaks.
     pub threshold: f32,
+}
+
+impl FractureJoint {
+    /// Whether this joint holds `child`.
+    pub fn holds(&self, child: ColliderHandle) -> bool {
+        self.child_a == child || self.child_b == child
+    }
 }
 
 /// Marks a compound body as destructible.
@@ -42,18 +51,16 @@ pub struct FractureJoint {
 ///
 /// After breaking, the system computes connected components from the surviving
 /// joints and splits disconnected groups into independent bodies.
+///
+/// Every per-child record is keyed by the child's collider handle, which a
+/// collider keeps whatever happens to the body's collider list around it.
 #[derive(Component, Debug)]
 #[storage(VecStorage)]
 pub struct CompoundFracture {
     /// Structural joints between children.
     pub joints: Vec<FractureJoint>,
-    /// Number of children (colliders) in the compound body.
-    /// Tracked separately because joint edges alone don't tell us
-    /// about isolated nodes (children with no joints).
-    pub child_count: usize,
     /// Per-child contact load history, the baseline the impact spike is
-    /// measured against. Kept in step with `child_count` through
-    /// [`CompoundFracture::remap_children`].
+    /// measured against.
     pub contact_load: ContactLoadTracker,
     /// Contact spike at a joint, in N·s, above which that joint lets go.
     ///
@@ -63,14 +70,15 @@ pub struct CompoundFracture {
     /// contact on the joint's blast threshold, which is right only for a
     /// compound light enough that the two are comparable.
     pub contact_threshold: Option<f32>,
-    /// Rendering material of each child, indexed by child.
+    /// What a child with no entry in `materials` is drawn with.
+    pub material: MaterialId,
+    /// Rendering material of each child that differs from `material`.
     ///
     /// Per child rather than per object because a compound need not be made of
     /// one substance: the plank bridge's beams and planks wear different
     /// materials, and a single material for the whole object re-textured every
-    /// beam the moment anything broke off it. Kept in step with `child_count`
-    /// through [`CompoundFracture::remap_children`].
-    pub materials: Vec<MaterialId>,
+    /// beam the moment anything broke off it.
+    pub materials: FxHashMap<ColliderHandle, MaterialId>,
     /// How this compound's children are drawn, by shape.
     ///
     /// The system knows a box child only as a collider, which is where it is
@@ -81,14 +89,14 @@ pub struct CompoundFracture {
     /// help — the hull is its own drawing — which is why the default draws it
     /// exactly as it collides.
     pub style: PieceStyle,
-    /// Impulse, in N·s, to hand each child if it comes free this frame,
-    /// indexed by child. Zero for a child nobody has pushed.
+    /// Impulse, in N·s, to hand each child if it comes free this frame. No
+    /// entry for a child nobody has pushed.
     ///
     /// Set by whoever severs a child for a reason the solver did not see —
     /// a shard knocked out of a window carries the momentum of what hit it,
     /// and the hit itself was absorbed by the compound before the shard
     /// existed as a body. Consumed when the child is spawned free.
-    pub kicks: Vec<Vector3<f32>>,
+    pub kicks: FxHashMap<ColliderHandle, Vector3<f32>>,
     /// Whether joints were removed by something other than this frame's load
     /// judgement, so the split step must run even though no joint broke under
     /// load. Cleared when the split runs.
@@ -143,16 +151,17 @@ pub struct CompoundFracture {
 }
 
 impl CompoundFracture {
-    /// A destructible compound whose children are plain boxes.
-    pub fn boxes(joints: Vec<FractureJoint>, child_count: usize, material: MaterialId) -> Self {
+    /// A destructible compound whose children are plain boxes, all drawn
+    /// with `material` unless [`Self::with_piece_materials`] says otherwise.
+    pub fn boxes(joints: Vec<FractureJoint>, material: MaterialId) -> Self {
         Self {
             joints,
-            child_count,
-            contact_load: ContactLoadTracker::new(child_count),
+            contact_load: ContactLoadTracker::default(),
             contact_threshold: None,
-            materials: vec![material; child_count],
+            material,
+            materials: FxHashMap::default(),
             style: PieceStyle::default(),
-            kicks: vec![Vector3::zeros(); child_count],
+            kicks: FxHashMap::default(),
             split_pending: false,
             sheds_debris: false,
             released: false,
@@ -183,19 +192,23 @@ impl CompoundFracture {
     }
 
     /// The material each child is drawn with, for a compound that is not all
-    /// one substance. Indexed in step with the body's collider list.
-    pub fn with_piece_materials(mut self, materials: Vec<MaterialId>) -> Self {
-        self.materials = materials;
+    /// one substance.
+    pub fn with_piece_materials(
+        mut self,
+        materials: impl IntoIterator<Item = (ColliderHandle, MaterialId)>,
+    ) -> Self {
+        self.materials.extend(materials);
         self
     }
 
-    /// The material of one child, or the last one given if the list is short.
-    pub fn material_of(&self, child: usize) -> MaterialId {
-        self.materials
-            .get(child)
-            .or_else(|| self.materials.last())
-            .copied()
-            .unwrap_or(MaterialId(0))
+    /// Draw `child` with `material`.
+    pub fn set_material(&mut self, child: ColliderHandle, material: MaterialId) {
+        self.materials.insert(child, material);
+    }
+
+    /// The material of one child: its own, or the compound's if it has none.
+    pub fn material_of(&self, child: ColliderHandle) -> MaterialId {
+        self.materials.get(&child).copied().unwrap_or(self.material)
     }
 
     /// The contact spike, in N·s, that breaks one of this compound's joints.
@@ -239,13 +252,18 @@ impl CompoundFracture {
     /// For a child that fails for a reason the joint judgement cannot see —
     /// it fatigued, or it sat under a hit that a finer structure absorbed —
     /// rather than for a load the solver put through it.
-    pub fn sever(&mut self, child: usize, kick: Vector3<f32>) {
-        self.joints
-            .retain(|joint| joint.child_a != child && joint.child_b != child);
-        if child < self.kicks.len() {
-            self.kicks[child] += kick;
-        }
+    pub fn sever(&mut self, child: ColliderHandle, kick: Vector3<f32>) {
+        self.joints.retain(|joint| !joint.holds(child));
+        *self.kicks.entry(child).or_insert_with(Vector3::zeros) += kick;
         self.split_pending = true;
+    }
+
+    /// Drop everything recorded about `child`, which has left the body: its
+    /// joints, its material and its kick.
+    pub fn forget(&mut self, child: ColliderHandle) {
+        self.joints.retain(|joint| !joint.holds(child));
+        self.materials.remove(&child);
+        self.kicks.remove(&child);
     }
 
     /// Judge contact spikes against each child's own weight rather than the
@@ -261,108 +279,53 @@ impl CompoundFracture {
         self.split_pending = true;
     }
 
-    /// The impulse a freed child leaves with, indexed by child.
-    pub fn kick_of(&self, child: usize) -> Vector3<f32> {
+    /// The impulse a freed child leaves with.
+    pub fn kick_of(&self, child: ColliderHandle) -> Vector3<f32> {
         self.kicks
-            .get(child)
+            .get(&child)
             .copied()
             .unwrap_or_else(Vector3::zeros)
     }
 
-    /// Compute connected components from the surviving joints.
-    /// Returns a list of components, each a sorted list of child indices.
-    pub fn connected_components(&self) -> Vec<Vec<usize>> {
-        let n = self.child_count;
-        let mut visited = vec![false; n];
-        let mut components = Vec::new();
-
-        // Build adjacency from surviving joints.
-        let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    /// The groups of `children` still joined to each other through surviving
+    /// joints. Joints naming a collider not in `children` are ignored.
+    ///
+    /// Groups come in the order of the first child of each in `children`, and
+    /// each lists its children in the order `children` gives them: pass the
+    /// body's collider list, and the groups follow the body.
+    pub fn connected_components(&self, children: &[ColliderHandle]) -> Vec<Vec<ColliderHandle>> {
+        let place: FxHashMap<ColliderHandle, usize> = children
+            .iter()
+            .enumerate()
+            .map(|(place, child)| (*child, place))
+            .collect();
+        let mut adjacent: Vec<Vec<usize>> = vec![Vec::new(); children.len()];
         for joint in &self.joints {
-            if joint.child_a < n && joint.child_b < n {
-                adj[joint.child_a].push(joint.child_b);
-                adj[joint.child_b].push(joint.child_a);
+            if let (Some(&a), Some(&b)) = (place.get(&joint.child_a), place.get(&joint.child_b)) {
+                adjacent[a].push(b);
+                adjacent[b].push(a);
             }
         }
 
-        for start in 0..n {
+        let mut visited = vec![false; children.len()];
+        let mut components = Vec::new();
+        for start in 0..children.len() {
             if visited[start] {
                 continue;
             }
             let mut component = Vec::new();
             let mut stack = vec![start];
             while let Some(node) = stack.pop() {
-                if visited[node] {
+                if std::mem::replace(&mut visited[node], true) {
                     continue;
                 }
-                visited[node] = true;
                 component.push(node);
-                for &neighbor in &adj[node] {
-                    if !visited[neighbor] {
-                        stack.push(neighbor);
-                    }
-                }
+                stack.extend(adjacent[node].iter().filter(|n| !visited[**n]));
             }
             component.sort_unstable();
-            components.push(component);
+            components.push(component.into_iter().map(|node| children[node]).collect());
         }
-
         components
-    }
-
-    /// Remap child indices after some children have been removed.
-    /// `kept` lists the old indices that survive, in new-index order.
-    pub fn remap_children(&mut self, kept: &[usize], new_count: usize) {
-        let mut order: Vec<Option<usize>> = kept.iter().map(|&old| Some(old)).collect();
-        order.resize(new_count, None);
-        self.reindex(&order);
-    }
-
-    /// Reindex the children after the body's collider list has changed shape.
-    ///
-    /// `order[new]` is the old index of the child now at position `new`, or
-    /// `None` for a child that is new to the compound. Joints between two
-    /// survivors follow them; joints touching a child that is gone are
-    /// dropped; a new child arrives with no joints, no load history, no kick,
-    /// and the compound's last material. Whoever added it says what it is
-    /// joined to and what it wears.
-    pub fn reindex(&mut self, order: &[Option<usize>]) {
-        let mut old_to_new = vec![None; self.child_count];
-        for (new_idx, old_idx) in order.iter().enumerate() {
-            if let Some(old_idx) = old_idx {
-                if *old_idx < old_to_new.len() {
-                    old_to_new[*old_idx] = Some(new_idx);
-                }
-            }
-        }
-
-        self.joints.retain(|j| {
-            old_to_new.get(j.child_a).copied().flatten().is_some()
-                && old_to_new.get(j.child_b).copied().flatten().is_some()
-        });
-
-        for joint in &mut self.joints {
-            joint.child_a = old_to_new[joint.child_a].unwrap();
-            joint.child_b = old_to_new[joint.child_b].unwrap();
-        }
-
-        self.contact_load.reindex(order);
-        self.materials = order
-            .iter()
-            .map(|old| {
-                old.map(|old| self.material_of(old))
-                    .unwrap_or_else(|| self.material_of(usize::MAX))
-            })
-            .collect();
-        self.kicks = order
-            .iter()
-            .map(|old| {
-                old.map(|old| self.kick_of(old))
-                    .unwrap_or_else(Vector3::zeros)
-            })
-            .collect();
-
-        self.child_count = order.len();
     }
 }
 
@@ -370,10 +333,14 @@ impl CompoundFracture {
 mod tests {
     use super::*;
 
+    fn child(slot: usize) -> ColliderHandle {
+        ColliderHandle::for_test(slot)
+    }
+
     fn joint(a: usize, b: usize) -> FractureJoint {
         FractureJoint {
-            child_a: a,
-            child_b: b,
+            child_a: child(a),
+            child_b: child(b),
             threshold: 1.0,
         }
     }
@@ -387,29 +354,46 @@ mod tests {
     fn a_surviving_child_keeps_the_material_it_had() {
         let beam = MaterialId(7);
         let plank = MaterialId(9);
-        let mut fracture = CompoundFracture::boxes(vec![joint(0, 2)], 4, plank)
-            .with_piece_materials(vec![beam, beam, plank, plank]);
+        let mut fracture = CompoundFracture::boxes(vec![joint(0, 2)], plank)
+            .with_piece_materials([(child(0), beam), (child(1), beam)]);
 
-        assert_eq!(fracture.material_of(0), beam);
-        assert_eq!(fracture.material_of(3), plank);
+        assert_eq!(fracture.material_of(child(0)), beam);
+        assert_eq!(fracture.material_of(child(3)), plank);
 
-        // Keep one beam and one plank; both must keep their own material.
-        fracture.remap_children(&[1, 3], 2);
+        // Lose one beam and one plank; the others must keep their own material.
+        fracture.forget(child(0));
+        fracture.forget(child(2));
 
-        assert_eq!(fracture.material_of(0), beam);
-        assert_eq!(fracture.material_of(1), plank);
+        assert_eq!(fracture.material_of(child(1)), beam);
+        assert_eq!(fracture.material_of(child(3)), plank);
     }
 
     /// A compound built from one material still behaves as it always did.
     #[test]
     fn a_single_material_compound_paints_every_child_the_same() {
         let only = MaterialId(3);
-        let fracture = CompoundFracture::boxes(Vec::new(), 3, only);
+        let fracture = CompoundFracture::boxes(Vec::new(), only);
 
-        for child in 0..3 {
-            assert_eq!(fracture.material_of(child), only);
+        for slot in 0..3 {
+            assert_eq!(fracture.material_of(child(slot)), only);
         }
-        // And a child index past the end still answers with something sane.
-        assert_eq!(fracture.material_of(99), only);
+        // And a child it has never heard of still answers with something sane.
+        assert_eq!(fracture.material_of(child(99)), only);
+    }
+
+    /// Groups follow the list they are read against, whatever order the
+    /// joints were made in.
+    #[test]
+    fn groups_follow_the_order_of_the_children() {
+        let fracture = CompoundFracture::boxes(vec![joint(3, 0), joint(1, 2)], MaterialId(0));
+        let children = [child(2), child(0), child(1), child(3), child(4)];
+        assert_eq!(
+            fracture.connected_components(&children),
+            vec![
+                vec![child(2), child(1)],
+                vec![child(0), child(3)],
+                vec![child(4)],
+            ]
+        );
     }
 }

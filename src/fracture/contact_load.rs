@@ -29,6 +29,7 @@
 //!   take against a frame that was never solved, so that frame re-baselines.
 
 use nalgebra::Point3;
+use rustc_hash::FxHashMap;
 
 use crate::physics::{ColliderHandle, PhysicsWorld, RigidBodyHandle};
 
@@ -70,8 +71,8 @@ pub enum Deadband {
 /// context to tell a real impact from the solver resuming work.
 #[derive(Debug, Default)]
 pub struct ContactLoadTracker {
-    /// Last frame's contact impulse per child, indexed by child.
-    levels: Vec<f32>,
+    /// Last frame's contact impulse per child, for the children seen then.
+    levels: FxHashMap<ColliderHandle, f32>,
     /// Whose weight the churn deadband is taken from.
     deadband: Deadband,
     /// Whether the body was asleep when `advance` last ran, so that the frame
@@ -80,15 +81,6 @@ pub struct ContactLoadTracker {
 }
 
 impl ContactLoadTracker {
-    /// A tracker for a compound with `child_count` children, carrying no load.
-    pub fn new(child_count: usize) -> Self {
-        Self {
-            levels: vec![0.0; child_count],
-            deadband: Deadband::default(),
-            was_asleep: false,
-        }
-    }
-
     /// The same tracker judging spikes against a different weight.
     pub fn with_deadband(mut self, deadband: Deadband) -> Self {
         self.deadband = deadband;
@@ -106,6 +98,10 @@ impl ContactLoadTracker {
     /// Must be called every frame for every tracked body, including frames
     /// where nothing can break: a baseline that stops advancing lets load build
     /// up unwatched and then reads as one large spike later.
+    ///
+    /// The baseline is kept by collider, so a child keeps its own across any
+    /// change to the list around it; a child not seen last frame starts from
+    /// no load, and one no longer listed is forgotten.
     pub fn advance(
         &mut self,
         world: &PhysicsWorld,
@@ -113,8 +109,6 @@ impl ContactLoadTracker {
         collider_handles: &[ColliderHandle],
         frame_dt: f32,
     ) -> Vec<ContactSpike> {
-        self.levels.resize(collider_handles.len(), 0.0);
-
         if world.is_sleeping(body) {
             self.was_asleep = true;
             return vec![ContactSpike::default(); collider_handles.len()];
@@ -138,75 +132,98 @@ impl ContactLoadTracker {
         };
 
         let waking = std::mem::replace(&mut self.was_asleep, false);
-        let mut spikes = Vec::with_capacity(collider_handles.len());
-        for (child, handle) in collider_handles.iter().enumerate() {
-            let impact = world.impacts().for_collider(*handle);
-            let level = impact.map(|i| i.total_impulse).unwrap_or(0.0);
-            spikes.push(ContactSpike {
+        let readings: Vec<ContactReading> = collider_handles
+            .iter()
+            .map(|handle| {
+                let impact = world.impacts().for_collider(*handle);
+                ContactReading {
+                    child: *handle,
+                    level: impact.map(|i| i.total_impulse).unwrap_or(0.0),
+                    point: impact.map(|i| i.point).unwrap_or_else(Point3::origin),
+                    deadband: deadband_of(*handle),
+                }
+            })
+            .collect();
+        self.take(&readings, waking)
+    }
+
+    /// Turn this frame's readings into spikes against the stored baseline,
+    /// and make them the baseline.
+    fn take(&mut self, readings: &[ContactReading], waking: bool) -> Vec<ContactSpike> {
+        let spikes = readings
+            .iter()
+            .map(|reading| ContactSpike {
                 magnitude: if waking {
                     0.0
                 } else {
-                    (level - self.levels[child] - deadband_of(*handle)).max(0.0)
+                    let last = self.levels.get(&reading.child).copied().unwrap_or(0.0);
+                    (reading.level - last - reading.deadband).max(0.0)
                 },
-                point: impact.map(|i| i.point).unwrap_or_else(Point3::origin),
-            });
-            self.levels[child] = level;
-        }
-        spikes
-    }
-
-    /// Reindex the baseline after some children have been removed.
-    ///
-    /// `kept` lists the old indices that survive, in new-index order. A
-    /// survivor that keeps carrying a steady load across a break must not read
-    /// that load as new just because its index moved.
-    pub fn remap(&mut self, kept: &[usize]) {
-        self.levels = kept
-            .iter()
-            .map(|&old| self.levels.get(old).copied().unwrap_or(0.0))
-            .collect();
-    }
-
-    /// Reindex the baseline after children have been removed *and added*.
-    ///
-    /// `order[new]` names the old index of the child now at `new`, or `None`
-    /// for a child that did not exist last frame, which starts from no load.
-    pub fn reindex(&mut self, order: &[Option<usize>]) {
-        self.levels = order
-            .iter()
-            .map(|old| {
-                old.and_then(|old| self.levels.get(old).copied())
-                    .unwrap_or(0.0)
+                point: reading.point,
             })
             .collect();
+        self.levels = readings.iter().map(|r| (r.child, r.level)).collect();
+        spikes
     }
+}
+
+/// One child's contact this frame, as the tracker reads it.
+struct ContactReading {
+    child: ColliderHandle,
+    /// Contact impulse the child took this frame, N·s.
+    level: f32,
+    /// Where the largest single impulse into it landed, in world space.
+    point: Point3<f32>,
+    /// Share of the body's weight a spike on it must clear, N·s.
+    deadband: f32,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn reading(slot: usize, level: f32) -> ContactReading {
+        ContactReading {
+            child: ColliderHandle::for_test(slot),
+            level,
+            point: Point3::origin(),
+            deadband: 0.0,
+        }
+    }
+
+    fn magnitudes(spikes: Vec<ContactSpike>) -> Vec<f32> {
+        spikes.into_iter().map(|s| s.magnitude).collect()
+    }
+
     /// A survivor that keeps carrying the same load across a break must not
-    /// read that load as new the moment its index shifts down.
+    /// read that load as new the moment its place in the list shifts down.
     #[test]
-    fn the_baseline_follows_its_child_through_a_remap() {
-        let mut tracker = ContactLoadTracker::new(4);
-        tracker.levels = vec![10.0, 20.0, 30.0, 40.0];
+    fn the_baseline_follows_its_child_through_a_break() {
+        let mut tracker = ContactLoadTracker::default();
+        tracker.take(
+            &[
+                reading(0, 10.0),
+                reading(1, 20.0),
+                reading(2, 30.0),
+                reading(3, 40.0),
+            ],
+            false,
+        );
 
-        tracker.remap(&[1, 3]);
+        let spikes = tracker.take(&[reading(3, 40.0), reading(1, 20.0)], false);
 
-        assert_eq!(tracker.levels, vec![20.0, 40.0]);
+        assert_eq!(magnitudes(spikes), vec![0.0, 0.0]);
     }
 
     /// Children that were not being tracked at all start from zero rather than
     /// inheriting a neighbour's load.
     #[test]
-    fn a_remap_past_the_end_starts_from_no_load() {
-        let mut tracker = ContactLoadTracker::new(2);
-        tracker.levels = vec![10.0, 20.0];
+    fn a_child_not_seen_before_starts_from_no_load() {
+        let mut tracker = ContactLoadTracker::default();
+        tracker.take(&[reading(0, 10.0), reading(1, 20.0)], false);
 
-        tracker.remap(&[1, 7]);
+        let spikes = tracker.take(&[reading(1, 20.0), reading(7, 20.0)], false);
 
-        assert_eq!(tracker.levels, vec![20.0, 0.0]);
+        assert_eq!(magnitudes(spikes), vec![0.0, 20.0]);
     }
 }
