@@ -27,7 +27,7 @@ use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
 use crate::objective::{GemMotionSystem, GoalSystem, ObjectiveHudSystem, ProgressSystem};
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
-use crate::plants::BranchBreakSystem;
+use crate::plants::PlantShareSystem;
 use crate::platform::MovingPlatformSystem;
 use crate::projectile::{
     GrenadeSpawnSystem, GrenadeVisualSystem, HeldGrenadeSystem, LifetimeSystem,
@@ -111,10 +111,12 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["physics_sync", "glass_crack", "solid_cleave"],
         )
         // A piece split off a compound gets its owners' shares: a cluster of
-        // glass its sheet, a wedge its solid, a welded piece its anchoring.
+        // glass its sheet, a wedge its solid, a welded piece its anchoring, a
+        // branch its leaves.
         .with(SheetShareSystem, "sheet_share", &["fracture"])
         .with(SolidShareSystem, "solid_share", &["fracture"])
         .with(AnchorShareSystem, "anchor_share", &["fracture"])
+        .with(PlantShareSystem, "plant_share", &["fracture"])
         // Pieces the fracture freed and the level's budget will not keep.
         .with(DebrisCullSystem, "debris_cull", &["fracture"])
         // Breakable bodies drawn as their parts now stand, after everything
@@ -122,10 +124,14 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(
             PartDrawSystem,
             "part_draw",
-            &["fracture", "sheet_share", "solid_share", "anchor_share"],
+            &[
+                "fracture",
+                "sheet_share",
+                "solid_share",
+                "anchor_share",
+                "plant_share",
+            ],
         )
-        // Reads the blasts the step just applied, as fracture does.
-        .with(BranchBreakSystem, "branch_break", &["physics_sync"])
         // Animation and sensing. Probes are configured from last-frame
         // animator state, fired against this-frame physics, and consumed
         // by the animator in the same frame — no one-frame lag on ground

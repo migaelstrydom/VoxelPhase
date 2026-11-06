@@ -32,8 +32,6 @@ use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 use super::collider::{Collider, ColliderShape};
 use super::fluid_drag::ShapeDrag;
 use super::handle::ColliderHandle;
-use super::impulses::PhysicsImpulse;
-use super::silhouette;
 
 /// A shape placed in a collider's frame.
 #[derive(Debug, Clone)]
@@ -199,21 +197,6 @@ impl BulkShape {
                 .iter()
                 .map(|part| part.placed(&Isometry3::identity()).inertia_in_frame())
                 .sum()
-        })
-    }
-
-    /// The impulse `impulse` gives this bulk with its frame at `pose`, as it
-    /// gives a collider declaring it: by the area its envelope shows the
-    /// blast, times its solidity, struck at its frame's origin. For a part
-    /// of a body to judge what a blast does to it alone. `None` out of
-    /// reach, or with no envelope declared.
-    pub fn blast(&self, pose: &Isometry3<f32>, impulse: &PhysicsImpulse) -> Option<Vector3<f32>> {
-        let volumes = self.envelope.as_deref()?;
-        let parts = volumes
-            .iter()
-            .map(|volume| self.envelope_part(volume, &Isometry3::identity()));
-        impulse.impulse_on(Point3::from(pose.translation.vector), |travel| {
-            silhouette::struck_area(parts, pose.rotation.inverse() * travel)
         })
     }
 
@@ -423,7 +406,9 @@ mod tests {
     use std::f32::consts::{FRAC_PI_2, PI};
 
     use super::*;
-    use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
+    use crate::physics::{
+        ColliderDesc, PhysicsImpulse, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
+    };
     use crate::water::buoyancy::{lift, StillWater};
 
     fn capsule(half_height: f32, radius: f32) -> ColliderShape {

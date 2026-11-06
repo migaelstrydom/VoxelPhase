@@ -5,8 +5,9 @@
 //! ```text
 //!   GlassCrackSystem ─┐
 //!   SolidCleaveSystem ┴▶ FractureSystem ──▶ SheetShareSystem ─┐
-//!                                           SolidShareSystem  ├▶ PartDrawSystem
-//!                                           AnchorShareSystem ┘
+//!                                           SolidShareSystem  │
+//!                                           AnchorShareSystem ├▶ PartDrawSystem
+//!                                           PlantShareSystem ─┘
 //! ```
 
 use specs::{RunNow, World, WorldExt};
@@ -16,10 +17,12 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, TerrainAnchored, Velocity,
 };
 use crate::debug::DebugLog;
+use crate::foliage::Foliage;
 use crate::fracture::{CompoundFracture, Debris, FractureSystem, PieceSplits};
 use crate::glass::{BrittleSheet, GlassCrackSystem, SheetShareSystem};
 use crate::model::PartLooks;
 use crate::physics::PhysicsImpulseQueue;
+use crate::plants::{PlantPiece, PlantShareSystem};
 use crate::systems::{AnchorShareSystem, PartDrawSystem};
 
 /// Register what the break pipeline reads and writes, for a world built by
@@ -37,6 +40,8 @@ pub fn register(world: &mut World) {
     world.register::<BrittleSolid>();
     world.register::<Debris>();
     world.register::<TerrainAnchored>();
+    world.register::<PlantPiece>();
+    world.register::<Foliage>();
     world.insert(PieceSplits::default());
     world.insert(PhysicsImpulseQueue::default());
     world.insert(DebugLog::default());
@@ -50,6 +55,7 @@ pub fn run(world: &mut World) {
     SheetShareSystem.run_now(world);
     SolidShareSystem.run_now(world);
     AnchorShareSystem.run_now(world);
+    PlantShareSystem.run_now(world);
     PartDrawSystem.run_now(world);
     world.maintain();
 }

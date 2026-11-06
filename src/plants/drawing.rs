@@ -1,11 +1,12 @@
 //! How a plant is drawn: each limb's bark and each crown's leaves, meshed
-//! once in the plant's frame, from which any piece of it is drawn.
+//! once in the plant's frame, from which the look of each collider of it is
+//! made.
 //!
 //! ```text
 //!   Plant ──PlantDrawing::grow──▶ bark per limb (whole, and snapped for a branch)
 //!                                 leaves per crown
-//!   PlantDrawing + a piece's limbs + its frame ──model──▶ one bark primitive,
-//!                                                          one leaf primitive
+//!   PlantDrawing ──bark(limb, base) / leaves(crown)──▶ a Look, in the frame
+//!                  of the collider it is drawn on (PartLooks)
 //! ```
 
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use super::bark::{BarkSpec, LimbBase};
 use super::limbs::LimbKind;
 use super::plant::Plant;
 use crate::foliage::{Skin, SkinSpec};
-use crate::model::{Model, ModelPart};
+use crate::model::Look;
 use crate::rendering::material::MaterialId;
 
 /// The materials a plant is drawn in.
@@ -77,40 +78,27 @@ impl PlantDrawing {
         }
     }
 
-    /// The model of the piece of `plant` holding `limbs`, with the plant's
-    /// frame at `frame` in the piece's: a branch whose parent is not in the
-    /// piece is drawn snapped off it.
-    pub fn model(&self, plant: &Plant, limbs: &[usize], frame: &Isometry3<f32>) -> Arc<Model> {
-        let bark = limbs.iter().map(|&l| {
-            let broken = plant.limbs.limbs[l]
-                .parent
-                .is_some_and(|p| !limbs.contains(&p));
-            match (&self.snapped[l], broken) {
-                (Some(snapped), true) => snapped,
-                _ => &self.whole[l],
-            }
-        });
-        let leaves = plant.masses_on(limbs).into_iter().map(|m| &self.leaves[m]);
-        let mut primitives = vec![joined(bark).moved(frame).primitive(self.look.bark)];
-        let leaves = joined(leaves);
-        if !leaves.indices.is_empty() {
-            primitives.push(leaves.moved(frame).primitive(self.look.leaves));
-        }
-        Arc::new(Model::flat(vec![ModelPart::new(primitives)]))
+    /// Limb `l`'s bark with its base drawn as `base`, in the frame at `at`
+    /// in the plant's (its collider's). A limb that never breaks off is
+    /// always drawn whole.
+    pub fn bark(&self, l: usize, base: LimbBase, at: &Isometry3<f32>) -> Arc<Look> {
+        let skin = match (base, &self.snapped[l]) {
+            (LimbBase::Snapped, Some(snapped)) => snapped,
+            _ => &self.whole[l],
+        };
+        Self::look(skin, at, self.look.bark)
     }
-}
 
-/// `skins` as one mesh.
-fn joined<'a>(skins: impl Iterator<Item = &'a Skin>) -> Skin {
-    let mut all = Skin {
-        vertices: Vec::new(),
-        indices: Vec::new(),
-    };
-    for skin in skins {
-        let first = all.vertices.len() as u32;
-        all.vertices.extend_from_slice(&skin.vertices);
-        all.indices
-            .extend(skin.indices.iter().map(|index| first + index));
+    /// Crown `m`'s leaves, in the frame at `at` in the plant's.
+    pub fn leaves(&self, m: usize, at: &Isometry3<f32>) -> Arc<Look> {
+        Self::look(&self.leaves[m], at, self.look.leaves)
     }
-    all
+
+    /// `skin` drawn in `material`, moved from the plant's frame into the one
+    /// at `at`.
+    fn look(skin: &Skin, at: &Isometry3<f32>, material: MaterialId) -> Arc<Look> {
+        Arc::new(Look {
+            primitives: vec![skin.clone().moved(&at.inverse()).primitive(material)],
+        })
+    }
 }

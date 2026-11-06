@@ -1,6 +1,6 @@
 //! A plant's woody frame: limbs, each a rod from a base to a tip.
 
-use nalgebra::{Point3, UnitQuaternion, Vector3};
+use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
 
 use crate::physics::ColliderDesc;
 
@@ -51,13 +51,22 @@ impl Limb {
         }
     }
 
-    /// A capsule collider along it, centred on its midpoint.
-    pub fn collider(&self) -> ColliderDesc {
-        let along = self.tip - self.base;
-        let turn = UnitQuaternion::rotation_between(&Vector3::y(), &along)
+    /// Where its collider's frame is in the plant's: at its midpoint, with
+    /// y along it.
+    pub fn pose(&self) -> Isometry3<f32> {
+        let turn = UnitQuaternion::rotation_between(&Vector3::y(), &(self.tip - self.base))
             .unwrap_or_else(UnitQuaternion::identity);
+        Isometry3::from_parts(Translation3::from(self.midpoint().coords), turn)
+    }
+
+    /// A capsule collider along it, placed at [`Limb::pose`] in the plant's
+    /// frame.
+    pub fn collider(&self) -> ColliderDesc {
         let radius = self.collider_radius();
-        ColliderDesc::capsule(along.magnitude() * 0.5 + radius, radius).offset_rotation(turn)
+        let mut collider =
+            ColliderDesc::capsule((self.tip - self.base).magnitude() * 0.5 + radius, radius);
+        collider.offset = self.pose();
+        collider
     }
 }
 
@@ -70,6 +79,13 @@ pub struct Limbs {
 }
 
 impl Limbs {
+    /// Whether limb `l`, in a piece holding `held`, is a branch broken off
+    /// the limb it grew from.
+    pub fn broken_off(&self, l: usize, held: &[usize]) -> bool {
+        let limb = &self.limbs[l];
+        limb.kind == LimbKind::Branch && limb.parent.is_some_and(|p| !held.contains(&p))
+    }
+
     /// `limb` and every limb growing from it, however indirectly, in limb
     /// order.
     pub fn subtree(&self, limb: usize) -> Vec<usize> {

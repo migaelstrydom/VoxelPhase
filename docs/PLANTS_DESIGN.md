@@ -280,21 +280,33 @@ Done:
   carries its leaves as its bulk, porous, as a loose clump's does, and the
   wood declares an empty one, and one `Foliage` clump of them
   all rides on it. In levels: `Tree(pos, height, crown_radius, crowns)`.
-  - **Branches break off** (`BranchBreakSystem`, after the physics step,
-    reading the blasts it applied): a blast whose kick on a branch's crowns
-    alone (`BulkShape::blast`) passes 250 N·s breaks the branch off. Its
-    colliders leave the tree's body, which re-centres (the engine carries
-    joint anchors with a re-centre) and keeps the bulk its colliders carry, and are built
-    as a piece of their own (`PlantPiece`, an entity with its own model and
-    leaves) moving as they were, plus the kick. A grenade within about 2 m
-    of a side crown takes its branch off, one 3 m away does not. Crowns stay
-    on their limbs: a crown breaking off its own limb read wrong in play,
-    above all on a cypress, and was taken out.
+  - **Branches break off** as the tree is an ordinary compound
+    (`docs/COMPOUND_PARTS.md`): a part for the trunk with its roots and
+    main crown, one for each branch with its crown, each branch bonded to
+    the limb it grows from at its fork, and the trunk's weld a tie on the
+    trunk's part, so the trunk always keeps the tree's body and entity.
+    Fracture judges each bond at its fork: a blast's loading there past
+    500 N·s/m² (`Joinery::branch_strength`) breaks it, and a grenade 2 m
+    beyond a side crown loads its fork with about 680, one 3 m beyond with
+    about 290. Every branch off one fork shares its anchor, so they break
+    together. Contact spikes felt at the fork, over the branch's length,
+    break it past 500 N·s (`branch_toughness`, which fracture never lets
+    fall below the blast threshold): a tree felled onto its crowns puts
+    about 130 through a fork, one dropped lying on its side from 6 m about
+    310, from 20 m about 660, so only a very hard landing breaks one. The
+    branch leaves through `split_off` with its crown's colliders and their
+    bulk, moving as it was plus its parts' share of the blast;
+    `PlantShareSystem`, on `PieceSplit`, gives the piece its `PlantPiece`
+    and its crowns' `Foliage`, rebuilds the tree's, and swaps the branch's
+    bark for its snapped look. Crowns stay on their limbs: a crown breaking
+    off its own limb read wrong in play, above all on a cypress, and was
+    taken out.
   - **Snapped ends:** a branch broken off is drawn with its base snapped,
     splinters round a broken face of fresh wood (`LimbBase::Snapped`); every
     other limb end is rounded shut, so no piece shows an open tube. Each
-    plant's meshes are made once (`PlantDrawing`), each piece drawn from
-    them as one bark and one leaf primitive.
+    plant's meshes are made once (`PlantDrawing`), in the plant's frame,
+    and handed out as looks by collider (`PartLooks`): its bark on each
+    limb's capsule, its leaves on one core piece per crown.
   - **Roots** (`RootSpec`, shared by every kind): four or five limbs from
     just under the ground at the trunk's foot, reaching 6 to 9 trunk radii
     out and 2.5 to 4.5 down, tapering, sunk further where the ground falls
@@ -303,8 +315,9 @@ Done:
     through the ground until it is let go, as a menhir's foot does. Felled,
     they show, and meet the ground.
   - Left for later: a trunk that snaps, crowns that sway, a branch broken
-    off by a hard landing (the welds that held branches broke under any
-    load; the compound only judges blasts), a scar where a branch left.
+    off by an ordinary hard landing (fracture judges contact no lower than
+    a bond's blast threshold, which leaves branches too tough for it), a
+    scar where a branch left.
 
 - **The cypress** (`CypressSpec`, `Cypress(pos, height, radius)` in levels):
   one tall crown, the column shrub's shape, on a short bare trunk that runs

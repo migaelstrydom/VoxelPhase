@@ -2,7 +2,7 @@
 //! its ground to show its roots, a branch snapped off lying on the ground,
 //! and the tree it left.
 //!
-//! The meshes are the game's own (`plants::PlantDrawing`), posed by hand
+//! The meshes are the game's own looks (`plants::PlantDrawing`), posed by hand
 //! rather than broken by a blast, so the sheet is the same every run;
 //! `character_viewer branch_blast` shows the break under real physics.
 
@@ -10,7 +10,7 @@ use nalgebra::{Isometry3, Matrix4, Point3, Translation3, UnitQuaternion, Vector3
 
 use crate::app::spawnables::{bark_material, leaf_material};
 use crate::core::error::EngineResult;
-use crate::plants::{BarkSpec, LollipopSpec, Plant, PlantDrawing, PlantLook};
+use crate::plants::{BarkSpec, LimbBase, LollipopSpec, Plant, PlantDrawing, PlantLook};
 use crate::rendering::material::{MaterialId, SurfaceParams};
 use crate::rendering::visual_bench::scene::{
     SceneCamera, SceneContext, SceneEnvironment, SceneMesh, SceneShot, VisualScene,
@@ -129,7 +129,9 @@ struct Look {
 }
 
 impl Look {
-    /// The piece of `plant` holding `limbs`, its frame at `pose`.
+    /// The piece of `plant` holding `limbs`, its frame at `pose`: each
+    /// limb's bark, snapped where it broke off a limb not in the piece, and
+    /// each crown's leaves, all drawn in the plant's frame.
     fn meshes(
         &self,
         drawing: &PlantDrawing,
@@ -137,15 +139,25 @@ impl Look {
         limbs: &[usize],
         pose: Isometry3<f32>,
     ) -> Vec<SceneMesh> {
-        let model = drawing.model(plant, limbs, &Isometry3::identity());
+        let plant_frame = Isometry3::identity();
+        let bark = limbs.iter().map(|&l| {
+            let base = if plant.limbs.broken_off(l, limbs) {
+                LimbBase::Snapped
+            } else {
+                LimbBase::Rounded
+            };
+            drawing.bark(l, base, &plant_frame)
+        });
+        let leaves = plant
+            .masses_on(limbs)
+            .into_iter()
+            .map(|m| drawing.leaves(m, &plant_frame));
         let transform: Matrix4<f32> = pose.to_homogeneous();
-        model
-            .parts
-            .iter()
-            .flat_map(|part| part.primitives.iter())
+        bark.chain(leaves)
+            .flat_map(|look| look.primitives.clone())
             .map(|primitive| {
-                let mesh = SceneMesh::new(primitive.vertices.clone(), primitive.indices.clone())
-                    .with_transform(transform);
+                let mesh =
+                    SceneMesh::new(primitive.vertices, primitive.indices).with_transform(transform);
                 if primitive.material == LOOK.bark {
                     mesh.with_surface(self.bark).with_texture(self.tile.clone())
                 } else {

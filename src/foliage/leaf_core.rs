@@ -114,25 +114,6 @@ impl LeafCore {
             .porous(self.solidity)
     }
 
-    /// What fluids and blasts see of the clump: every lobe whole, as the
-    /// core's pieces at full size, porous, with the clump's frame at `at` in
-    /// the body's.
-    pub fn bulk(&self, shape: &FoliageShape, at: Isometry3<f32>) -> BulkShape {
-        BulkShape::displacing(
-            shape
-                .lobes
-                .iter()
-                .flat_map(|lobe| CorePiece::filling(lobe, 1.0))
-                .map(|piece| Volume {
-                    shape: piece.shape(),
-                    offset: at * piece.offset(),
-                })
-                .collect(),
-        )
-        .dragging_as(self.drag_coefficient)
-        .porous(self.solidity)
-    }
-
     /// How the core rests on level ground: the direction, in the clump's
     /// frame, that points down when it does, and how high its origin then
     /// sits above the ground.
@@ -294,10 +275,6 @@ impl CorePiece {
                 radius: self.radius,
             }
         }
-    }
-
-    fn offset(&self) -> Isometry3<f32> {
-        Isometry3::from_parts(Translation3::from(self.centre), self.rotation)
     }
 
     fn collider(&self) -> ColliderDesc {

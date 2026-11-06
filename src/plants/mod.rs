@@ -5,13 +5,18 @@
 //!   CypressSpec ──┴─grow(seed)─▶ Plant ──┬──▶ Limbs: a trunk, branches and roots, each a capsule
 //!                                        └──▶ LeafMass × n: a FoliageShape, its pose, its limb
 //!
-//!   Joinery ──build──▶ PlantPieceBody: one compound body, every limb and
-//!                      every crown's core; the trunk welded into the ground
-//!                      (TerrainAnchored), its roots buried until it is let go
-//!   PlantDrawing ─────▶ the piece's bark and leaves, one primitive each
+//!   Joinery ──build──▶ BuiltPlant: one compound body, every limb and
+//!                      every crown's core; a part for the trunk with its
+//!                      roots and crown, one per branch with its crown,
+//!                      bonded at the fork; the trunk welded into the ground
+//!                      (a tie, and TerrainAnchored), its roots buried until
+//!                      it is let go
+//!   PlantDrawing ─────▶ PartLooks: bark on each limb's capsule, leaves on
+//!                      one core piece per crown
 //!
-//!   BranchBreakSystem: a blast on a branch's crown past its strength
-//!                      breaks it off as a piece of its own
+//!   fracture: a branch's bond broken at its fork ──▶ PieceSplit
+//!   PlantShareSystem ──▶ the piece's PlantPiece and Foliage, its bark
+//!                        snapped; the tree's Foliage rebuilt
 //! ```
 //!
 //! A plant is a frame and the leaves it holds. Each crown is foliage like
@@ -36,7 +41,7 @@ mod systems;
 mod scenarios;
 
 pub use bark::{BarkSpec, LimbBase};
-pub use bodies::{Joinery, PlantPieceBody};
+pub use bodies::{BuiltPlant, Joinery, PlantColliders};
 pub use components::{GrownPlant, PlantPiece};
 pub use cypress::CypressSpec;
 pub use drawing::{PlantDrawing, PlantLook};
@@ -44,4 +49,4 @@ pub use limbs::{Limb, LimbKind, Limbs};
 pub use lollipop::LollipopSpec;
 pub use plant::{LeafMass, Plant};
 pub use roots::RootSpec;
-pub use systems::{spawn_piece, BranchBreakSystem};
+pub use systems::PlantShareSystem;

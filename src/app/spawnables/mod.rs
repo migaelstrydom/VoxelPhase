@@ -83,6 +83,8 @@ pub use moving_platform::MovingPlatformDef;
 pub use octahedron::OctahedronDef;
 pub use pendulum::PendulumDef;
 pub use plank_bridge::PlankBridgeDef;
+#[cfg(all(test, feature = "foliage_scenarios"))]
+pub(crate) use plant::spawn_plant;
 pub use plant::{bark_material, leaf_material};
 pub use play_wheel::PlayWheelDef;
 pub use pyramid::PyramidDef;

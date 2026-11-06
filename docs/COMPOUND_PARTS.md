@@ -7,9 +7,9 @@ on its colliders. Fracture judges loads and splits the graph of parts; it
 never draws anything and never rebuilds a collider. How a part looks is
 kept by collider handle and drawn by a system of its own.
 
-Status: steps 1–4 of the migration implemented on branch `compound-parts`;
-step 5 (trees) open. Decisions made while implementing step 4 are under
-"Step 4 as built".
+Status: all five steps of the migration implemented on branch
+`compound-parts`. Decisions made while implementing steps 4 and 5 are
+under "Step 4 as built" and "Step 5 as built".
 
 ---
 
@@ -419,8 +419,9 @@ Decisions:
 
 Removed: `RigidBodyDesc::bulk`, the body's `bulk`, `bulk_mut`,
 `clear_bulk`, `BulkShape::shift`, and from the plants branch `set_bulk` and
-`Joinery::declare_bulk`. `BulkShape` stays: a collider's bulk is one, and
-`LeafCore::bulk` still builds one for `BulkShape::blast` until step 5.
+`Joinery::declare_bulk`. `BulkShape` stays: a collider's bulk is one.
+`LeafCore::bulk` and `BulkShape::blast`, which judged a branch's crowns
+alone, went in step 5.
 
 Declarations to move:
 
@@ -603,6 +604,37 @@ Each step leaves the game working and is merged on its own.
 - **Dispatcher order:** `glass_crack`, `solid_cleave` → `fracture` →
   `sheet_share`, `solid_share`, `anchor_share` → `part_draw` → render.
   `app::breakage` runs the same chain for tools and tests.
+
+### Step 5 as built
+
+- **Parts and bonds.** `Joinery::build` makes a part of the trunk with
+  its roots and the crowns it holds, and one of each branch with its
+  crown's core pieces; each branch is bonded to its parent's part at its
+  fork (`limb.base`), with a reach of the branch's length, so a blow on its
+  crown is felt at half strength at the fork. The trunk's weld is a tie on
+  the trunk's part. `PlantColliders` (shared by every piece, in
+  `GrownPlant`) maps each limb to its capsule and its part and each crown
+  to its core pieces; a piece's plant frame is read off any limb's
+  collider on it, so nothing tracks re-centring.
+- **Blast calibration.** Loading at a side branch's fork from a grenade
+  (`Explosion::physics_impulse`) beyond its crown, away from the trunk:
+  1164 N·s/m² at 0.5 m, 1029 at 1 m, 865 at 1.5 m, 682 at 2 m, 489 at
+  2.5 m, 289 at 3 m, none at 4 m. `branch_strength` is 500. Branches off
+  one fork share its anchor and break together.
+- **Contact calibration.** Largest contact load at any fork, read as
+  fracture reads it: a forked tree let go and felled onto its crowns, 133
+  N·s; dropped lying on its side from 6 m, 313; from 20 m, 663. A value
+  near 220 would separate the fall from the 6 m drop, but `BondLoads`
+  never judges contact below a bond's blast threshold (the framed window's
+  rule), so `branch_toughness` is 500 too: the fall breaks nothing, a drop
+  from about 15 m breaks a branch, and ordinary hard landings do not.
+- **Owner's share.** `PlantShareSystem` (after fracture, beside the other
+  share systems, and in `app::breakage`) gives a piece its `PlantPiece`
+  and the `Foliage` of its crowns, rebuilds the remnant's, and gives any
+  branch whose parent's capsule is not on its body its snapped bark.
+- **Looks.** `PlantDrawing` keeps its skins in the plant's frame and hands
+  out `Look`s in a collider's frame; the plant's own model building is
+  gone. Its pieces split with `PieceTraits::default()`.
 
 Step 4 is the large one. Doing every compound at once avoids two fracture
 code paths side by side; step 3 is what makes that safe, by landing the
