@@ -95,7 +95,9 @@ pub struct FramedWindowDef {
     #[serde(default = "FramedWindowDef::default_blast_threshold")]
     pub blast_threshold: f32,
 
-    /// Impulse, in N·s, that pulls a shard out of the stone it touches.
+    /// What pulls a pane out of the stone it touches: a blast loading at the
+    /// band, in N·s/m², and a contact spike there, in N·s, unless a spike
+    /// that would not crack the pane (`impact_threshold`) is larger.
     #[serde(default = "FramedWindowDef::default_frame_grip")]
     pub frame_grip: f32,
 }
@@ -125,6 +127,12 @@ impl FramedWindowDef {
     /// pane does not pull the pane out of its band.
     pub fn default_frame_grip() -> f32 {
         150.0
+    }
+
+    /// Contact spike, in N·s, that pulls a pane out of its stone: never
+    /// below what cracks the pane, so a pane cracks before it comes out.
+    fn frame_toughness(&self) -> f32 {
+        self.frame_grip.max(self.impact_threshold)
     }
 
     /// Half-extents, along the window's own `X` and `Z`, of the slab it
@@ -486,6 +494,7 @@ impl Spawnable for FramedWindowDef {
                         anchor: Point3::from(stone_frame.lift(centre, 0.0)),
                         reach: 2.0 * reach,
                         threshold: self.frame_grip,
+                        toughness: Some(self.frame_toughness()),
                     });
                 }
             }

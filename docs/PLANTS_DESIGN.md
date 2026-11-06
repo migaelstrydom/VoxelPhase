@@ -290,10 +290,11 @@ Done:
     beyond a side crown loads its fork with about 680, one 3 m beyond with
     about 290. Every branch off one fork shares its anchor, so they break
     together. Contact spikes felt at the fork, over the branch's length,
-    break it past 500 N·s (`branch_toughness`, which fracture never lets
-    fall below the blast threshold): a tree felled onto its crowns puts
-    about 130 through a fork, one dropped lying on its side from 6 m about
-    310, from 20 m about 660, so only a very hard landing breaks one. The
+    break it past 220 N·s (`branch_toughness`, the compound's default
+    toughness): a tree felled onto its crowns puts about 130 through a
+    fork and keeps its branches, one dropped lying on its side from 6 m
+    about 310, from 10 m about 320, from 20 m about 660, so a hard landing
+    breaks one. The
     branch leaves through `split_off` with its crown's colliders and their
     bulk, moving as it was plus its parts' share of the blast;
     `PlantShareSystem`, on `PieceSplit`, gives the piece its `PlantPiece`

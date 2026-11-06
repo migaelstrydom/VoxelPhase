@@ -5,14 +5,15 @@ use nalgebra::{Isometry3, Point3};
 use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::components::{ModelInstance, RigidBodyComponent, TerrainAnchored};
-use crate::fracture::PieceSplits;
+use crate::fracture::{CompoundFracture, PieceSplits};
 use crate::physics::{ConstraintHandle, PhysicsWorld, RigidBodyHandle};
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 
 /// Checks terrain solidity under each anchored body, after an update that
 /// changed the terrain around it, and releases the body when its ground is
-/// gone: its constraints are removed and it meets static geometry again.
+/// gone: its constraints are removed, a compound forgets the ties they
+/// were, and it meets static geometry again.
 pub struct TerrainAnchorSystem;
 
 impl<'a> System<'a> for TerrainAnchorSystem {
@@ -21,13 +22,14 @@ impl<'a> System<'a> for TerrainAnchorSystem {
         WriteStorage<'a, TerrainAnchored>,
         ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, ModelInstance>,
+        WriteStorage<'a, CompoundFracture>,
         Write<'a, PhysicsResource>,
         Option<Read<'a, TerrainWorld>>,
     );
 
     fn run(
         &mut self,
-        (entities, mut anchored, bodies, mut models, mut physics, terrain_opt): Self::SystemData,
+        (entities, mut anchored, bodies, mut models, mut fractures, mut physics, terrain_opt): Self::SystemData,
     ) {
         let Some(terrain) = terrain_opt else {
             return;
@@ -48,11 +50,15 @@ impl<'a> System<'a> for TerrainAnchorSystem {
                 .any(|p| {
                     terrain
                         .mesh_surface_height_at(p.x, p.z)
-                        .map_or(true, |surface_y| surface_y < p.y)
+                        .is_none_or(|surface_y| surface_y < p.y)
                 });
             if terrain_gone {
+                let mut fracture = fractures.get_mut(entity);
                 for &constraint in &anchor.constraints {
                     physics.world.remove_constraint(constraint);
+                    if let Some(fracture) = fracture.as_mut() {
+                        fracture.untie(constraint);
+                    }
                 }
                 physics.world.set_ignores_static(body.0, false);
 
@@ -278,6 +284,45 @@ mod tests {
         assert!(
             physics.world.constraint(weld).is_none(),
             "the menhir's weld survived release"
+        );
+    }
+
+    /// A compound bedded in the ground forgets its tie to the weld a blast
+    /// under it removes, so a later split does not try to move it.
+    #[test]
+    fn a_released_compound_forgets_its_tie() {
+        use crate::fracture::PartGraph;
+
+        let (mut world, menhir) = menhir_world();
+        let weld = world
+            .read_storage::<TerrainAnchored>()
+            .get(menhir)
+            .unwrap()
+            .constraints[0];
+        let collider = {
+            let body = world
+                .read_storage::<RigidBodyComponent>()
+                .get(menhir)
+                .unwrap()
+                .0;
+            let physics = world.read_resource::<PhysicsResource>();
+            physics.world.body(body).unwrap().colliders()[0]
+        };
+        let mut graph = PartGraph::default();
+        let part = graph.add_part([collider]);
+        graph.tie(weld, part);
+        world
+            .write_storage::<CompoundFracture>()
+            .insert(menhir, CompoundFracture::new(graph))
+            .unwrap();
+
+        blast(&mut world, Point3::new(MENHIR.0, 0.0, MENHIR.1));
+        TerrainAnchorSystem.run_now(&world);
+
+        let fractures = world.read_storage::<CompoundFracture>();
+        assert!(
+            fractures.get(menhir).unwrap().graph.ties().is_empty(),
+            "the compound still names the removed weld as a tie"
         );
     }
 

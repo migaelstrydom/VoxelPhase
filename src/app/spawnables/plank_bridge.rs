@@ -143,6 +143,7 @@ impl PlankBridgeDef {
                     anchor: Point3::new(beam_at.x, beam_at.y + beam_top, plank_at.z),
                     reach,
                     threshold: self.fracture_threshold,
+                    toughness: None,
                 });
             }
         }

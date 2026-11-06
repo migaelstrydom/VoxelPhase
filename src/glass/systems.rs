@@ -486,6 +486,7 @@ fn crack(
                     anchor: Point3::from(frame.lift(middle, height)),
                     reach: 2.0 * radius_of(a).min(radius_of(b)),
                     threshold: sheet.joint_threshold,
+                    toughness: None,
                 });
             }
         }

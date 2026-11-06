@@ -383,8 +383,9 @@ value must match or you get a one-frame visual pop.
   `PartGraph` if you want pieces to break apart under force: a part per set
   of colliders that never comes apart (`graph.add_part([handle])`), and a
   `Bond` between parts that touch, with where they meet (`anchor`, in the
-  body's frame), how far a contact spike there still counts (`reach`) and the
-  blast loading that breaks it (`threshold`). Parts name colliders by the
+  body's frame), how far a contact spike there still counts (`reach`), the
+  blast loading that breaks it (`threshold`) and the contact spike that
+  breaks it (`toughness`, or `None` for the compound's default). Parts name colliders by the
   `ColliderHandle`s `attach_collider` returned, never by their place in the
   body's collider list. `plank_bridge.rs` and `ice/igloo.rs` show it.
 - **Give a compound `PartLooks`, not a model of your own.** A look per drawn
@@ -439,9 +440,12 @@ Things to know when you build one:
 anchor**, in N·s/m², not against contact forces: a grenade's loading falls off
 linearly from its centre to nothing at its blast radius. So a low threshold
 means "a grenade within a few metres frees this piece", and nothing a body
-merely leans on will ever break a bond; contact is judged against the
-compound's own `breaking_on_impact_at`. Groups still bonded come off as one
-body, and the group that stays is the tied one, else the heaviest.
+merely leans on will ever break a bond. Contact is judged separately, as the
+spike felt at the anchor in N·s, against `Bond::toughness`, or for a bond that
+states none against the compound's `breaking_on_impact_at`; a bond with
+neither never breaks on contact. The two numbers are never compared. Groups
+still bonded come off as one body, and the group that stays is the tied one,
+else the heaviest.
 
 ### Realistic densities (kg/m^3)
 

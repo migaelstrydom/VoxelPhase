@@ -34,6 +34,9 @@ pub struct BrittleSolid {
     /// one wedge the blow landed on and the rest stay rigid, so it stands
     /// there visibly cracked and behaving like one solid piece.
     pub joint_threshold: f32,
+    /// Contact spike, in N·s, that breaks a bond between two wedges of the
+    /// same block: the same fraction of the blow that cracked it.
+    pub joint_toughness: f32,
     /// How many times over a block may be cleaved before a hit takes the
     /// piece out whole instead of dividing it further. One means the wedges
     /// of the first break are the pieces that fall.
@@ -95,6 +98,7 @@ impl BrittleSolid {
         Self {
             cleaving,
             joint_threshold: cleaving.threshold * WEDGE_BOND,
+            joint_toughness: cleaving.threshold * WEDGE_BOND,
             max_cleave_depth: DEFAULT_MAX_CLEAVE_DEPTH,
             blocks,
             contact_load: ContactLoadTracker::default(),
@@ -121,9 +125,11 @@ impl BrittleSolid {
         blow
     }
 
-    /// An object whose wedges hold each other at `threshold` N·s.
-    pub fn keyed_at(mut self, threshold: f32) -> Self {
+    /// An object whose wedges hold each other against a blast loading of
+    /// `threshold` N·s/m² and a contact spike of `toughness` N·s.
+    pub fn keyed_at(mut self, threshold: f32, toughness: f32) -> Self {
         self.joint_threshold = threshold;
+        self.joint_toughness = toughness;
         self
     }
 
@@ -165,6 +171,7 @@ impl BrittleSolid {
         Self {
             cleaving: self.cleaving,
             joint_threshold: self.joint_threshold,
+            joint_toughness: self.joint_toughness,
             max_cleave_depth: self.max_cleave_depth,
             blocks: self.blocks.share(children),
             contact_load: self.contact_load.share(children),

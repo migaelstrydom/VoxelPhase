@@ -109,6 +109,7 @@ fn lies_over(point: Point3<f32>, polygon: &[Point3<f32>], normal: &Vector3<f32>)
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::FRAC_PI_6;
     use std::sync::Arc;
 
     use super::*;
@@ -159,7 +160,7 @@ mod tests {
     #[test]
     fn a_tipped_box_turns_back_onto_its_base() {
         let mut world = PhysicsWorld::new(PhysicsConfig::default());
-        let tip = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.5236);
+        let tip = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), FRAC_PI_6);
         let body = body_with(
             &mut world,
             ColliderDesc::box_shape(Vector3::new(0.5, 0.5, 0.5)),
@@ -167,7 +168,7 @@ mod tests {
         );
         let turn = resting_turn(&world, body, down()).expect("tipped");
         assert!(
-            (turn.angle() - 0.5236).abs() < 1e-3,
+            (turn.angle() - FRAC_PI_6).abs() < 1e-3,
             "turned {}",
             turn.angle()
         );

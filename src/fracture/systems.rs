@@ -173,7 +173,7 @@ fn judge(
         colliders.into_iter().zip(spikes),
         blasts,
         pose,
-        fracture.contact_threshold,
+        fracture.default_toughness,
     );
     let breaks: Vec<bool> = fracture
         .graph
@@ -556,6 +556,7 @@ mod tests {
                 anchor: Point3::new(i as f32 + 0.5 - centre, 0.0, 0.0),
                 reach: 2.0,
                 threshold: 10.0,
+                toughness: Some(10.0),
             });
         }
         let look = Arc::new(Look::single(
@@ -826,6 +827,7 @@ mod tests {
                 anchor: Point3::new(-0.5, 0.0, 0.0),
                 reach: 2.0,
                 threshold: 10.0,
+                toughness: Some(10.0),
             });
             fracture.graph = graph;
             fracture.split_pending = true;

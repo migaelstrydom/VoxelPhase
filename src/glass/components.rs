@@ -32,7 +32,8 @@ pub struct BrittleSheet {
     /// children one sheet can end up carrying.
     pub max_craze_depth: u32,
     /// Blast loading, in N·s/m², that breaks a bond between two shards.
-    /// Copied onto every bond the crazing creates.
+    /// Copied onto every bond the crazing creates; contact between shards
+    /// is judged on the compound's default toughness.
     pub joint_threshold: f32,
     /// Whether standing on the sheet wears it out, and how fast.
     pub fatigue: Option<FatigueRule>,

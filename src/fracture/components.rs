@@ -56,10 +56,12 @@ impl PieceTraits {
 /// A bond breaks when the load where it holds exceeds what it can take,
 /// where the load comes from two sources:
 ///
-/// - a blast, read as its loading per area at the bond's anchor; and
+/// - a blast, read as its loading per area at the bond's anchor and judged
+///   against the bond's `threshold`; and
 /// - contact, read as the *spike* — the frame-over-frame increase in the
 ///   impulse the solver pushed through a collider of either part — felt at
-///   the anchor over the bond's reach.
+///   the anchor over the bond's reach, and judged against the bond's
+///   `toughness`, or this compound's default.
 ///
 /// Contact has to be read as a spike rather than a level because a heavy object
 /// standing still already pushes its own weight through its lowest parts
@@ -80,14 +82,14 @@ pub struct CompoundFracture {
     /// Per-collider contact load history, the baseline the impact spike is
     /// measured against.
     pub contact_load: ContactLoadTracker,
-    /// Contact spike at a bond, in N·s, above which that bond lets go.
+    /// Contact spike at a bond, in N·s, above which a bond that states no
+    /// [`toughness`](super::Bond::toughness) of its own lets go. `None`: such
+    /// a bond never breaks on contact.
     ///
-    /// Separate from the bonds' own `threshold` because the two loads are not
-    /// the same scale: a bond authored to fail under an 8 N·s/m² blast may
-    /// have to hold thousands of N·s of its own structure settling. `None`
-    /// judges contact on the bond's blast threshold, which is right only for
-    /// a compound light enough that the two are comparable.
-    pub contact_threshold: Option<f32>,
+    /// Never compared with a bond's blast `threshold`: the two loads are not
+    /// the same quantity, and a bond authored to fail under an 8 N·s/m² blast
+    /// may have to hold thousands of N·s of its own structure settling.
+    pub default_toughness: Option<f32>,
     /// Impulse, in N·s, to hand each part as it comes away this frame. No
     /// entry for a part nobody has pushed.
     ///
@@ -123,7 +125,7 @@ impl CompoundFracture {
         Self {
             graph,
             contact_load: ContactLoadTracker::default(),
-            contact_threshold: None,
+            default_toughness: None,
             kicks: FxHashMap::default(),
             untied: Vec::new(),
             split_pending: false,
@@ -139,14 +141,15 @@ impl CompoundFracture {
         self
     }
 
-    /// The contact spike, in N·s, that breaks one of this compound's bonds.
+    /// The contact spike, in N·s, that breaks one of this compound's bonds
+    /// that states no toughness of its own.
     ///
     /// Measure it: run the object through the impacts it should and should not
     /// survive and read the spikes off, as the tests beside its spawnable do.
     /// Guessing gives either a structure that shatters when leaned on or one
     /// that cannot be broken by hand.
-    pub fn breaking_on_impact_at(mut self, contact_threshold: f32) -> Self {
-        self.contact_threshold = Some(contact_threshold);
+    pub fn breaking_on_impact_at(mut self, toughness: f32) -> Self {
+        self.default_toughness = Some(toughness);
         self
     }
 
@@ -174,6 +177,12 @@ impl CompoundFracture {
         self.untied.extend(self.graph.untie_part(part));
         *self.kicks.entry(part).or_insert_with(Vector3::zeros) += kick;
         self.split_pending = true;
+    }
+
+    /// Forget the tie of `constraint`, which something other than fracture
+    /// has removed: the ground it held the compound to is gone.
+    pub fn untie(&mut self, constraint: ConstraintHandle) {
+        self.graph.untie(constraint);
     }
 
     /// Give up every tie and bond at the next split.
@@ -211,7 +220,7 @@ impl CompoundFracture {
         Self {
             graph: self.graph.share(parts),
             contact_load: self.contact_load.share(colliders),
-            contact_threshold: self.contact_threshold,
+            default_toughness: self.default_toughness,
             kicks: FxHashMap::default(),
             untied: Vec::new(),
             split_pending: false,

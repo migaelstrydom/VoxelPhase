@@ -171,6 +171,9 @@ pub struct Bond {
     pub reach: f32,
     /// Blast loading, N·s/m², past which it breaks.
     pub threshold: f32,
+    /// Contact spike at the anchor, N·s, past which it breaks; `None`
+    /// takes the compound's default (see "Step 5 as built").
+    pub toughness: Option<f32>,
 }
 
 /// A constraint holding the compound by one of its parts.
@@ -623,11 +626,22 @@ Each step leaves the game working and is merged on its own.
   one fork share its anchor and break together.
 - **Contact calibration.** Largest contact load at any fork, read as
   fracture reads it: a forked tree let go and felled onto its crowns, 133
-  N·s; dropped lying on its side from 6 m, 313; from 20 m, 663. A value
-  near 220 would separate the fall from the 6 m drop, but `BondLoads`
-  never judges contact below a bond's blast threshold (the framed window's
-  rule), so `branch_toughness` is 500 too: the fall breaks nothing, a drop
-  from about 15 m breaks a branch, and ordinary hard landings do not.
+  N·s; dropped lying on its side from 6 m, 313; 8 m, 408; 10 m, 317;
+  15 m, 578; from 20 m, 663. `branch_toughness` is 220: the fall breaks
+  nothing, a drop from 6 m or more breaks a branch.
+- **Contact toughness is the bond's own.** A bond's contact threshold is
+  `Bond::toughness`, in N·s; `None` takes the compound's
+  `breaking_on_impact_at`, and with neither the bond never breaks on
+  contact. Blast (`threshold`, N·s/m²) and contact are never compared:
+  `BondLoads` used to judge contact against `max(authored, threshold)`,
+  or `threshold` alone when nothing was authored. Each compound states
+  what that rule gave it: the table's legs 10, the igloo's blocks its
+  `fracture_threshold`, a cleaved block's wedges `joint_toughness` (the
+  same fraction of the cleaving blow as `joint_threshold`), the framed
+  window's panes in their stone `max(frame_grip, impact_threshold)`; the
+  plank bridge and glass take their compound's default.
+- **A released anchor unties.** `TerrainAnchorSystem` drops the ties
+  naming the constraints it removes (`CompoundFracture::untie`).
 - **Owner's share.** `PlantShareSystem` (after fracture, beside the other
   share systems, and in `app::breakage`) gives a piece its `PlantPiece`
   and the `Foliage` of its crowns, rebuilds the remnant's, and gives any

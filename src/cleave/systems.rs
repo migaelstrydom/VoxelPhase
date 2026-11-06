@@ -324,6 +324,7 @@ fn cleave(
                 anchor: Point3::from(offset.translation.vector + offset.rotation * middle),
                 reach: 2.0 * a.hull.bounding_radius.min(b.hull.bounding_radius),
                 threshold: solid.joint_threshold,
+                toughness: Some(solid.joint_toughness),
             });
         }
     }
@@ -533,6 +534,7 @@ mod tests {
                 anchor: Point3::new(sign * (HALF.x + 0.005), 0.0, 0.0),
                 reach: 2.0 * HALF.norm(),
                 threshold: 1.0e9,
+                toughness: Some(1.0e9),
             });
         }
         fracture.graph = graph;

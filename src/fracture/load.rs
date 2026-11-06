@@ -21,7 +21,8 @@
 //! A single threshold cannot serve both: the plank bridge is authored to come
 //! apart under an 8 N·s/m² blast, and its own weight moves 1700 N·s through a
 //! beam when it settles. So blast is tested against the bond's `threshold`
-//! and contact against the compound's `contact_threshold`.
+//! and contact against its `toughness`, or the compound's default toughness
+//! where the bond states none. A bond with neither never breaks on contact.
 //!
 //! ## Locality
 //!
@@ -47,9 +48,10 @@ pub struct BondLoads<'a> {
     blasts: &'a [PhysicsImpulse],
     /// The body's pose, which places bond anchors in the world.
     pose: Isometry3<f32>,
-    /// Contact spike, at the bond, above which a bond lets go. `None` falls
-    /// back to the bond's own blast threshold.
-    contact_threshold: Option<f32>,
+    /// Contact spike at a bond, N·s, above which a bond that states no
+    /// toughness of its own lets go. `None`: such a bond never breaks on
+    /// contact.
+    default_toughness: Option<f32>,
 }
 
 impl<'a> BondLoads<'a> {
@@ -57,13 +59,13 @@ impl<'a> BondLoads<'a> {
         spikes: impl IntoIterator<Item = (ColliderHandle, ContactSpike)>,
         blasts: &'a [PhysicsImpulse],
         pose: Isometry3<f32>,
-        contact_threshold: Option<f32>,
+        default_toughness: Option<f32>,
     ) -> Self {
         Self {
             spikes: spikes.into_iter().collect(),
             blasts,
             pose,
-            contact_threshold,
+            default_toughness,
         }
     }
 
@@ -72,14 +74,9 @@ impl<'a> BondLoads<'a> {
         if self.blast_load(bond) > bond.threshold {
             return true;
         }
-        // A bond never lets go below its own number under any load: the
-        // compound's contact threshold is authored for its brittle bonds,
-        // and a frame welded together at a million must not fall apart
-        // because the pane in it cracks at twenty-five.
-        let contact_threshold = self
-            .contact_threshold
-            .map_or(bond.threshold, |authored| authored.max(bond.threshold));
-        self.contact_load(graph, bond) > contact_threshold
+        bond.toughness
+            .or(self.default_toughness)
+            .is_some_and(|toughness| self.contact_load(graph, bond) > toughness)
     }
 
     /// The blasts' loading per area at the bond's anchor, N·s/m².
@@ -96,8 +93,8 @@ impl<'a> BondLoads<'a> {
     /// either part took, falling off with distance from where it landed to
     /// the anchor over the bond's reach.
     ///
-    /// The quantity a compound's `contact_threshold` is measured against, so
-    /// the tests that choose that number read it directly.
+    /// The quantity a bond's toughness is measured against, so the tests
+    /// that choose that number read it directly.
     pub fn contact_load(&self, graph: &PartGraph, bond: &Bond) -> f32 {
         let anchor = self.pose * bond.anchor;
         [bond.a, bond.b]
@@ -145,6 +142,7 @@ mod tests {
             anchor: Point3::new(0.0, 0.0, z),
             reach: 2.0,
             threshold: 8.0,
+            toughness: None,
         };
         let (near_bond, far_bond) = (bond(near, -3.5), bond(far, 3.5));
         graph.bond(near_bond);
@@ -200,22 +198,46 @@ mod tests {
         assert!(loads.breaks(&graph, &near));
     }
 
-    /// With no contact threshold authored, contact is judged on the bond's
-    /// own number — the behaviour of a compound that has not been measured.
+    /// A bond's own toughness overrides the compound's default, either way.
     #[test]
-    fn an_unauthored_contact_threshold_falls_back_to_the_bond() {
+    fn a_bond_s_toughness_overrides_the_compound_s() {
         let (graph, near, _) = beam_and_planks();
         let loads = BondLoads::new(
             [(ColliderHandle::for_test(1), spike(50.0, -3.5))],
             &[],
             Isometry3::identity(),
-            None,
+            Some(100.0),
         );
-        assert!(loads.breaks(&graph, &near));
-        let strong = Bond {
-            threshold: 500.0,
+        assert!(!loads.breaks(&graph, &near));
+        let brittle = Bond {
+            toughness: Some(20.0),
             ..near
         };
-        assert!(!loads.breaks(&graph, &strong));
+        assert!(loads.breaks(&graph, &brittle));
+        let tough = Bond {
+            toughness: Some(500.0),
+            ..near
+        };
+        let defaulted_low = BondLoads::new(
+            [(ColliderHandle::for_test(1), spike(50.0, -3.5))],
+            &[],
+            Isometry3::identity(),
+            Some(10.0),
+        );
+        assert!(!defaulted_low.breaks(&graph, &tough));
+    }
+
+    /// A bond with no toughness, on a compound with no default, never breaks
+    /// on contact, however hard it is hit; a blast still breaks it.
+    #[test]
+    fn a_bond_without_toughness_never_breaks_on_contact() {
+        let (graph, near, _) = beam_and_planks();
+        let loads = BondLoads::new(
+            [(ColliderHandle::for_test(1), spike(1.0e9, -3.5))],
+            &[],
+            Isometry3::identity(),
+            None,
+        );
+        assert!(!loads.breaks(&graph, &near));
     }
 }

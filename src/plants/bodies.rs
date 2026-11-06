@@ -43,11 +43,10 @@ pub struct Joinery {
     /// second does not. Every branch off one fork breaks together.
     pub branch_strength: f32,
     /// Contact spike felt at a branch's fork, N·s, past which it breaks
-    /// off. Fracture never lets a bond go under contact below its blast
-    /// threshold, so this is no lower than `branch_strength`. A tree felled
-    /// onto its crowns puts about 130 through a fork; one dropped lying on
-    /// its side from 6 m about 310, from 15 m about 580 and from 20 m about
-    /// 660.
+    /// off: a tree felled onto its crowns puts about 130 through a fork,
+    /// so it keeps its branches; one dropped lying on its side from 6 m
+    /// about 310, from 15 m about 580 and from 20 m about 660, so a hard
+    /// landing takes a branch off.
     pub branch_toughness: f32,
     /// How each crown's core is built.
     pub core: LeafCore,
@@ -58,7 +57,7 @@ impl Default for Joinery {
         Self {
             wood: substance::OAK,
             branch_strength: 500.0,
-            branch_toughness: 500.0,
+            branch_toughness: 220.0,
             core: LeafCore::default(),
         }
     }
@@ -178,6 +177,7 @@ impl Joinery {
                 // half strength at the fork.
                 reach: (limb.tip - limb.base).magnitude(),
                 threshold: self.branch_strength,
+                toughness: None,
             });
         }
         BuiltPlant {

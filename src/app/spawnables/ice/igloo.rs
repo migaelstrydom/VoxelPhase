@@ -129,7 +129,8 @@ pub struct IglooDef {
     ///
     /// A grenade delivers about 1100 N·s at its centre and falls off to
     /// nothing over its blast radius, so the default is a hole around the
-    /// point of impact rather than the whole dome at once.
+    /// point of impact rather than the whole dome at once. The same number,
+    /// as a contact spike in N·s felt at a joint, tears it too.
     #[serde(default = "IglooDef::default_fracture_threshold")]
     pub fracture_threshold: f32,
     /// Blow, in N·s, that breaks a single block into wedges rather than
@@ -486,6 +487,7 @@ impl IglooDef {
                 anchor: Point3::from(middle - centre),
                 reach: 2.0 * block_a.half_extents.norm().min(block_b.half_extents.norm()),
                 threshold: self.fracture_threshold,
+                toughness: Some(self.fracture_threshold),
             });
         }
         graph

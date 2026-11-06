@@ -5,8 +5,9 @@
 //! ```text
 //!   Part ── colliders that never come apart (a plank, a pane cell)
 //!    │
-//!   Bond ── two parts stuck together until the load at `anchor` passes
-//!    │       `threshold`; the body's rigidity is what holds them
+//!   Bond ── two parts stuck together until a blast at `anchor` passes
+//!    │       `threshold` or a contact spike there passes `toughness`;
+//!    │       the body's rigidity is what holds them
 //!   Tie ─── a constraint holding the compound by one part
 //!
 //!   groups(): parts still connected through bonds
@@ -48,6 +49,11 @@ pub struct Bond {
     pub reach: f32,
     /// Blast loading at the anchor, N·s/m², past which it breaks.
     pub threshold: f32,
+    /// Contact spike felt at the anchor, N·s, past which it breaks. `None`
+    /// takes the compound's default
+    /// ([`CompoundFracture::breaking_on_impact_at`](super::CompoundFracture::breaking_on_impact_at));
+    /// with neither, it never breaks on contact.
+    pub toughness: Option<f32>,
 }
 
 impl Bond {
@@ -367,6 +373,7 @@ mod tests {
             anchor,
             reach: 1.0,
             threshold: 1.0,
+            toughness: None,
         }
     }
 

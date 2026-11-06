@@ -171,7 +171,7 @@ impl Spawnable for TableDef {
         let centre = initial_pos + rotation * centre_of_mass;
 
         // Each leg is bonded to the top where it meets it.
-        let bond_threshold = 10.0;
+        let (bond_threshold, bond_toughness) = (10.0, 10.0);
         let mut graph = PartGraph::default();
         if let Some(top) = top {
             let top = graph.add_part([top]);
@@ -183,6 +183,7 @@ impl Spawnable for TableDef {
                     anchor: Point3::from(at + Vector3::new(0.0, leg_he.y, 0.0) - centre_of_mass),
                     reach: 2.0 * leg_he.norm(),
                     threshold: bond_threshold,
+                    toughness: Some(bond_toughness),
                 });
             }
         }

@@ -214,7 +214,7 @@ impl Grove {
         let unbreakable = {
             let mut fractures = self.world.write_storage::<CompoundFracture>();
             let fracture = fractures.get_mut(self.tree).expect("a tree");
-            fracture.contact_threshold.replace(f32::INFINITY)
+            fracture.default_toughness.replace(f32::INFINITY)
         };
         let mut tracker = ContactLoadTracker::default();
         let mut peak: f32 = 0.0;
@@ -236,14 +236,13 @@ impl Grove {
         fractures
             .get_mut(self.tree)
             .expect("a tree")
-            .contact_threshold = unbreakable;
+            .default_toughness = unbreakable;
         peak
     }
 
     /// The weakest contact load that breaks one of the tree's branches.
     fn branch_toughness(&self) -> f32 {
-        let joinery = self.plant().joinery;
-        joinery.branch_toughness.max(joinery.branch_strength)
+        self.plant().joinery.branch_toughness
     }
 }
 
@@ -350,28 +349,35 @@ fn a_felled_tree_keeps_its_branches() {
     assert_eq!(grove.pieces().len(), 1, "a branch broke off in the fall");
 }
 
-/// A tree dropped on its side from high up lands hard enough on its crowns
-/// to break a branch at its fork, and each piece keeps its leaves. A branch
-/// is tough: dropped from 6 m it holds.
+/// A tree dropped on its side from 6 m or more lands hard enough on its
+/// crowns to break a branch at its fork, and each piece keeps its leaves.
 #[test]
 fn a_hard_landing_breaks_a_branch() {
-    for height in [6.0, 20.0] {
-        let mut grove = Grove::standing_at(forked_plant(), lying(height));
-        grove.let_go();
-        let peak = grove.peak_fork_load(4.0);
+    for height in [6.0, 10.0, 20.0] {
+        let mut measured = Grove::standing_at(forked_plant(), lying(height));
+        measured.let_go();
+        let peak = measured.peak_fork_load(4.0);
         println!(
             "dropped lying from {height} m: largest load at a fork {peak:.0} N·s against {:.0}",
-            grove.branch_toughness()
+            measured.branch_toughness()
         );
-    }
-    let mut grove = Grove::standing_at(forked_plant(), lying(20.0));
-    grove.let_go();
-    grove.run(4.0);
-    let pieces = grove.pieces();
-    assert!(pieces.len() > 1, "it landed with every branch on it");
-    let foliage = grove.world.read_storage::<Foliage>();
-    for (entity, _) in &pieces {
-        assert!(foliage.contains(*entity), "a piece without its leaves");
+        assert!(
+            peak > measured.branch_toughness(),
+            "from {height} m no fork felt enough to break: {peak:.0} N·s"
+        );
+
+        let mut grove = Grove::standing_at(forked_plant(), lying(height));
+        grove.let_go();
+        grove.run(4.0);
+        let pieces = grove.pieces();
+        assert!(
+            pieces.len() > 1,
+            "from {height} m it landed with every branch on it"
+        );
+        let foliage = grove.world.read_storage::<Foliage>();
+        for (entity, _) in &pieces {
+            assert!(foliage.contains(*entity), "a piece without its leaves");
+        }
     }
 }
 
