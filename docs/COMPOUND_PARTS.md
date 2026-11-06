@@ -205,6 +205,10 @@ branch's threshold is tuned with that in mind. Today's rule (each endpoint's
 loading at its own centre) does no better: it reads the crown's loading,
 but crown or twig, the number is the same.
 
+A bond whose breaking alone frees something is now judged by what it
+tears off rather than at its anchor: see "Judging a bond by the part it
+tears off" below.
+
 The contact tracker's deadband, which keeps a body's own weight from
 reading as load, applies to a body free to move. A body held by ties to the
 world carries its weight through them, not through its colliders' contacts,
@@ -529,7 +533,9 @@ rebound constraint's handle.
   Test Arena's upright pane, which hung in mid-air by it, lies on the ground
   instead; its glass floor, which spans a drop on purpose, is welded along
   its long edges.
-- **Bonds break by the loads at their anchors,** blast and contact alike.
+- **Bonds break by the loads at their anchors,** blast and contact alike;
+  since refined to the load on what a bond tears off (see "Judging a bond
+  by the part it tears off").
 - **Capsule and sphere children are drawn and culled** like any other.
 - **Pieces look exactly as they did whole,** with no redraw from shapes.
 - **Branches break under landings** as well as blasts.
@@ -622,8 +628,9 @@ Each step leaves the game working and is merged on its own.
 - **Blast calibration.** Loading at a side branch's fork from a grenade
   (`Explosion::physics_impulse`) beyond its crown, away from the trunk:
   1164 N·s/m² at 0.5 m, 1029 at 1 m, 865 at 1.5 m, 682 at 2 m, 489 at
-  2.5 m, 289 at 3 m, none at 4 m. `branch_strength` is 500. Branches off
-  one fork share its anchor and break together.
+  2.5 m, 289 at 3 m, none at 4 m. `branch_strength` was 500. Branches off
+  one fork shared its anchor and broke together, which "Judging a bond by
+  the part it tears off" ended.
 - **Contact calibration.** Largest contact load at any fork, read as
   fracture reads it: a forked tree let go and felled onto its crowns, 133
   N·s; dropped lying on its side from 6 m, 313; 8 m, 408; 10 m, 317;
@@ -654,6 +661,103 @@ Step 4 is the large one. Doing every compound at once avoids two fracture
 code paths side by side; step 3 is what makes that safe, by landing the
 index-to-handle change with no behaviour change first. Static panes go in
 step 4, not earlier, because a held pane needs ties to stay up.
+
+---
+
+## Judging a bond by the part it tears off
+
+### The problem
+
+A blast was judged at a bond's anchor. Every branch off one fork shares
+that anchor, so every one of them felt the same loading and broke
+together, whichever crown the grenade went off beside. The same holds for
+any compound whose bonds share an anchor, or whose anchors sit far from
+what the blast actually pushes: a bond does not fail because the air
+where it holds is loaded, but because what hangs off it is pushed away
+from what holds it.
+
+### The rule
+
+**A bond that holds something on is judged by the load on what it holds
+on.** For each bond, cut the connection between its two parts (every bond
+between that pair, since a pane held by four stones is held by one
+connection) and ask what comes away, by the kept-group rule: of the two
+sides, the one without a tie, else the lighter. That side is the bond's
+**torn-off side**.
+
+- **Blast:** the loading per area at the torn-off side's centre of mass,
+  N·s/m², against `threshold`. That is where the engine itself strikes a
+  part (`impulse_on_colliders`: loading at the centre of mass times the
+  area its envelope shows), so the bond feels what pushes the side it
+  holds, in the same units as before. The anchor and `reach` no longer
+  enter the blast judgement; the blast's own fall-off from its centre to
+  the side is the attenuation, and the lever a far side makes of its bond
+  is, as before, left to the threshold.
+- **Contact:** the largest spike on any collider of the torn-off side,
+  felt at the anchor over `reach` as before. A spike on the kept side is
+  left out: the kept side is the held or the heavier one, and a blow on
+  it moves it, while what hangs off it follows at the share its own mass
+  is of the whole. A landing on a branch's crown loads its fork; one on
+  the trunk no longer loads every fork on it.
+
+**A bond in a cycle frees nothing on its own:** cutting its pair leaves
+both parts connected round the cycle (a plank held by two beams, the
+cells of a crazed pane, an igloo's blocks, a cleaved block's wedges).
+Such a bond is a seam carrying its share of a load that has other paths,
+and the place it is loaded is where it holds: it is judged at its anchor,
+by spikes on either part, exactly as before.
+
+In graph terms the torn-off sides are those of the bridges of the part
+graph with parallel bonds merged; a bond that is not a bridge has none.
+
+### What changes for each compound
+
+| Compound | Bonds | Change |
+|---|---|---|
+| tree | trunk ⟷ branch, branch ⟷ sub-branch: all bridges; the trunk is tied | Each branch is judged at its own centre of mass, sub-branches included, and by spikes on itself: a grenade beside one crown takes that branch off and leaves its fork-mates; a landing on the trunk breaks nothing. Recalibrated (below). |
+| table | top ⟷ each leg: bridges | A leg is judged at its middle rather than its top, by spikes on itself. Blast threshold 10 N·s/m² is far below any grenade's reach either way; a chair knocked into the top no longer loads every leg. |
+| framed window | stone frame ⟷ pane at each stone it touches: one connection per pane, a bridge | Every bond of a pane feels the same blast, at the pane's centre: the pane comes out of the frame whole or not at all, instead of letting go of the stones nearest the blast and hanging from the rest. Contact counts spikes on the pane only. Once crazed, its cells form cycles and are judged at their anchors. |
+| plank bridge | each plank ⟷ both beams: cycles | None while two or more planks stand. |
+| glass sheet | cells ⟷ touching cells: cycles | None, but for a cell held by a single neighbour, which is judged at its own centre. |
+| stone and ice block | wedges, every pair bonded | None for three or more wedges; two wedges are one bridge, judged at the lighter wedge's centre. |
+| igloo | adjoining blocks: cycles | None, but for a block with a single neighbour (beside the doorway), judged at its own centre. |
+
+### Cost
+
+Finding the torn-off sides is Tarjan's bridge search over the part graph
+with parallel bonds merged: one depth-first pass, O(parts + bonds). In the
+order that pass visits parts, a bridge's far side is one contiguous run,
+so each side's mass, centre of mass and whether it holds a tie come from
+prefix sums: no side is ever listed. Each part's mass and centre are read
+from its colliders, O(colliders).
+
+It is computed per compound only in a frame where some bond could break:
+any blast in the frame, or a contact spike on the body larger than the
+least toughness of its bonds (a spike is felt at most at full strength,
+so nothing smaller can break anything). In every other frame, which is
+nearly all of them, a compound's bonds are not judged at all, which is
+cheaper than before. Nothing is cached, so no change to the graph (a
+break, a cut, a share, a tie lost) can leave a stale side behind.
+
+Judging contact over a side means looking up the part of each spiked
+collider; a bond in a cycle reads its two parts' colliders as before.
+
+### Recalibrating trees
+
+The branch's numbers are re-measured as before (`plants::scenarios`), with
+the loading now read at the branch's centre of mass and the contact over
+the branch alone. Loading on a side branch from a grenade beyond its
+crown: 1771 N·s/m² at 0.5 m, 1615 at 1 m, 1420 at 1.5 m, 1212 at 2 m, 998
+at 2.5 m, 781 at 3 m. The centre of mass sits nearer the crown than the
+fork did, so every number is higher. `branch_strength` is 1100: 2 m takes
+the branch off, 2.5 m does not. The 2 m grenade loads the other branch at
+the same fork with 368, and only the near branch comes off.
+
+Contact: a felled tree puts at most 79 N·s into a branch (133 when the
+trunk's spikes counted); dropped lying on its side, 313 from 6 m, 317 from
+10 m, 663 from 20 m, unchanged, since those spikes land on the branches'
+crowns. `branch_toughness` stays 220. Values under "Step 5 as built" are
+superseded by these.
 
 ---
 

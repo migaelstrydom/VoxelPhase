@@ -5,26 +5,33 @@ use specs::{Entities, Entity, Join, Read, System, Write, WriteStorage};
 
 use super::components::CompoundFracture;
 use super::debris::Debris;
-use super::load::BondLoads;
+use super::load::{may_break, BondLoads};
 use super::parts::PartId;
 use super::piece_split::{PieceSplit, PieceSplits};
+use super::torn_side::TornSides;
 use crate::components::{Orientation, Position, Renderable, RigidBodyComponent, Velocity};
 use crate::model::PartLooks;
 use crate::physics::{ColliderHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle};
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 
-/// Breaks the bonds of compound bodies whose load at the bond exceeds what
-/// it can hold, then splits every group of parts still bonded but the one
-/// that stays off onto a body of its own.
+/// Breaks the bonds of compound bodies whose load exceeds what they can
+/// hold, then splits every group of parts still bonded but the one that
+/// stays off onto a body of its own.
 ///
-/// Two loads are judged at each bond's anchor:
+/// Each bond is judged by what it would tear off ([`TornSides`]: the side
+/// without a tie, else the lighter), or where it holds if it is in a cycle
+/// and tears nothing off on its own. Two loads:
 ///
-/// - **Blast.** `PhysicsImpulseQueue::last_impulses()`' loading per area
-///   where the bond holds, so an explosion opens a hole where it went off.
+/// - **Blast.** `PhysicsImpulseQueue::last_impulses()`' loading per area at
+///   the torn-off side's centre of mass, so a blast beside one branch takes
+///   that branch and not its neighbour at the same fork.
 /// - **Impact.** The frame-over-frame *spike* in the contact impulse the
-///   solver pushed through either part's colliders, felt at the anchor over
-///   the bond's reach.
+///   solver pushed through the torn-off side's colliders, felt at the anchor
+///   over the bond's reach.
+///
+/// A frame with no blast and no spike past the least toughness among the
+/// bonds cannot break any, and its bonds are not judged.
 ///
 /// Contact is read as a spike and not as a level on purpose. The level includes
 /// whatever the object is already carrying: a heavy compound standing still
@@ -168,11 +175,23 @@ fn judge(
     if fracture.graph.parts().len() <= 1 && !fracture.released {
         return false;
     }
+    let blasted = !blasts.is_empty();
+    if !may_break(
+        &fracture.graph,
+        &spikes,
+        blasted,
+        fracture.default_toughness,
+    ) {
+        return fracture.split_pending;
+    }
 
+    let sides = TornSides::on_body(&physics.world, body, &fracture.graph);
     let loads = BondLoads::new(
+        &fracture.graph,
         colliders.into_iter().zip(spikes),
         blasts,
         pose,
+        sides,
         fracture.default_toughness,
     );
     let breaks: Vec<bool> = fracture

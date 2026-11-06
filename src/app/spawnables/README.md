@@ -436,14 +436,18 @@ Things to know when you build one:
   cleaves into two or three wedges the size of the block, and a piece that
   large glittering out of existence in front of the player reads as a bug.
 
-`Bond::threshold` is measured against the **blast loading at the bond's
-anchor**, in N·s/m², not against contact forces: a grenade's loading falls off
-linearly from its centre to nothing at its blast radius. So a low threshold
-means "a grenade within a few metres frees this piece", and nothing a body
-merely leans on will ever break a bond. Contact is judged separately, as the
-spike felt at the anchor in N·s, against `Bond::toughness`, or for a bond that
-states none against the compound's `breaking_on_impact_at`; a bond with
-neither never breaks on contact. The two numbers are never compared. Groups
+A bond is judged by **what it would tear off**: the side without a tie,
+else the lighter. `Bond::threshold` is measured against the **blast loading
+at that side's centre of mass** (at the anchor for a bond in a cycle, which
+tears nothing off on its own), in N·s/m², not against contact forces: a
+grenade's loading falls off linearly from its centre to nothing at its blast
+radius. So a low threshold means "a grenade within a few metres frees this
+piece", and nothing a body merely leans on will ever break a bond. Contact
+is judged separately, as the largest spike on the torn-off side (either part
+for a bond in a cycle) felt at the anchor in N·s, against `Bond::toughness`,
+or for a bond that states none against the compound's
+`breaking_on_impact_at`; a bond with neither never breaks on contact. The two
+numbers are never compared. Groups
 still bonded come off as one body, and the group that stays is the tied one,
 else the heaviest.
 

@@ -5,9 +5,9 @@
 //! ```text
 //!   Part ── colliders that never come apart (a plank, a pane cell)
 //!    │
-//!   Bond ── two parts stuck together until a blast at `anchor` passes
-//!    │       `threshold` or a contact spike there passes `toughness`;
-//!    │       the body's rigidity is what holds them
+//!   Bond ── two parts stuck together until a blast on what it tears off
+//!    │       passes `threshold` or a contact spike felt at `anchor` passes
+//!    │       `toughness`; the body's rigidity is what holds them
 //!   Tie ─── a constraint holding the compound by one part
 //!
 //!   groups(): parts still connected through bonds
@@ -35,8 +35,8 @@ pub struct Part {
     pub colliders: SmallVec<[ColliderHandle; 4]>,
 }
 
-/// Two parts on one body, stuck together until the load where they meet
-/// passes what the bond can hold.
+/// Two parts on one body, stuck together until the load on what the bond
+/// would tear off passes what it can hold (`fracture::load`).
 #[derive(Debug, Clone, Copy)]
 pub struct Bond {
     pub a: PartId,
@@ -47,7 +47,8 @@ pub struct Bond {
     pub anchor: Point3<f32>,
     /// How far from the anchor a contact spike still counts fully, m.
     pub reach: f32,
-    /// Blast loading at the anchor, N·s/m², past which it breaks.
+    /// Blast loading, N·s/m², past which it breaks: at the centre of mass
+    /// of what it tears off, or at the anchor for a bond in a cycle.
     pub threshold: f32,
     /// Contact spike felt at the anchor, N·s, past which it breaks. `None`
     /// takes the compound's default

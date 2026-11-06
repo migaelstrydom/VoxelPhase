@@ -19,7 +19,7 @@ use crate::components::{RigidBodyComponent, TerrainAnchored};
 use crate::debug::DebugLines;
 use crate::explosion::Explosion;
 use crate::foliage::Foliage;
-use crate::fracture::{Bond, BondLoads, CompoundFracture, ContactLoadTracker};
+use crate::fracture::{Bond, BondLoads, CompoundFracture, ContactLoadTracker, TornSides};
 use crate::physics::bench_harness::geometry::FlatQuadGeometry;
 use crate::physics::{
     ColliderDesc, PhysicsImpulse, PhysicsImpulseQueue, PhysicsWorld, RigidBodyDesc,
@@ -190,14 +190,18 @@ impl Grove {
             .expect("a side crown's branch is bonded")
     }
 
-    /// The loading per area `blast` gives the fork of the branch holding
-    /// crown `m`, as fracture judges it.
-    fn loading_at_fork(&self, m: usize, blast: &PhysicsImpulse) -> f32 {
+    /// The loading per area `blast` gives the branch holding crown `m`, as
+    /// fracture judges its bond.
+    fn loading_on_branch(&self, m: usize, blast: &PhysicsImpulse) -> f32 {
         let bond = self.bond_of_crown(m);
+        let body = self.body(self.tree);
         let physics = self.world.read_resource::<PhysicsResource>();
-        let rigid = physics.world.body(self.body(self.tree)).expect("a tree");
+        let fractures = self.world.read_storage::<CompoundFracture>();
+        let graph = &fractures.get(self.tree).expect("a tree").graph;
+        let rigid = physics.world.body(body).expect("a tree");
         let pose = Isometry3::from_parts(rigid.position().coords.into(), rigid.rotation());
-        BondLoads::new([], std::slice::from_ref(blast), pose, None).blast_load(&bond)
+        let sides = TornSides::on_body(&physics.world, body, graph);
+        BondLoads::new(graph, [], std::slice::from_ref(blast), pose, sides, None).blast_load(&bond)
     }
 
     /// A blast `distance` out from crown `m`, away from the trunk.
@@ -227,7 +231,15 @@ impl Grove {
             let colliders = rigid.colliders().to_vec();
             let pose = Isometry3::from_parts(rigid.position().coords.into(), rigid.rotation());
             let spikes = tracker.advance(&physics.world, body, &colliders, FRAME_DT);
-            let loads = BondLoads::new(colliders.into_iter().zip(spikes), &[], pose, None);
+            let sides = TornSides::on_body(&physics.world, body, graph);
+            let loads = BondLoads::new(
+                graph,
+                colliders.into_iter().zip(spikes),
+                &[],
+                pose,
+                sides,
+                None,
+            );
             for bond in graph.bonds() {
                 peak = peak.max(loads.contact_load(graph, bond));
             }
@@ -381,17 +393,17 @@ fn a_hard_landing_breaks_a_branch() {
     }
 }
 
-/// What a blast gives a side branch's fork falls off with distance from
-/// its crown across the branch's strength: within 2 m it breaks, from 3 m
-/// it holds.
+/// What a blast gives a side branch falls off with distance from its crown
+/// across the branch's strength: within 2 m it breaks, from 3 m it holds.
 #[test]
 fn a_branch_breaks_within_two_metres_of_a_blast() {
     let grove = Grove::forked();
     let strength = grove.plant().joinery.branch_strength;
     for distance in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0] {
-        let loading = grove.loading_at_fork(1, &grove.blast_beside(1, distance));
+        let loading = grove.loading_on_branch(1, &grove.blast_beside(1, distance));
         println!(
-            "blast {distance} m off its crown: {loading:.0} N·s/m² at the fork against {strength}"
+            "blast {distance} m off its crown: {loading:.0} N·s/m² on the branch against \
+             {strength}"
         );
         if distance <= 2.0 {
             assert!(loading > strength, "{distance} m off it held");
@@ -399,6 +411,55 @@ fn a_branch_breaks_within_two_metres_of_a_blast() {
         if distance >= 3.0 {
             assert!(loading < strength, "{distance} m off it broke");
         }
+    }
+}
+
+/// A grenade beside one side crown takes that branch off and leaves the
+/// branch beside it at the same fork on the tree.
+#[test]
+fn a_blast_beside_one_branch_takes_only_that_branch() {
+    let mut grove = Grove::forked();
+    let trunk = grove.body(grove.tree);
+    let plant = grove.plant();
+    let side_crowns: Vec<usize> = (0..plant.plant.masses.len())
+        .filter(|&m| plant.colliders.parts[plant.plant.masses[m].limb] != plant.colliders.parts[0])
+        .collect();
+    assert!(side_crowns.len() >= 2, "a forked tree has two side crowns");
+    let forks: Vec<Point3<f32>> = side_crowns
+        .iter()
+        .map(|&m| grove.bond_of_crown(m).anchor)
+        .collect();
+    println!("side branches' forks, in the body's frame: {forks:?}");
+
+    let blast = grove.blast_beside(side_crowns[0], 2.0);
+    for &m in &side_crowns {
+        println!(
+            "crown {m}: {:.0} N·s/m² on its branch",
+            grove.loading_on_branch(m, &blast)
+        );
+    }
+    grove
+        .world
+        .write_resource::<PhysicsImpulseQueue>()
+        .push(blast);
+    grove.step();
+
+    let on_trunk = |grove: &Grove, m: usize| {
+        let wood = plant.colliders.wood[plant.plant.masses[m].limb];
+        grove
+            .physics_mut()
+            .world
+            .body(trunk)
+            .expect("the tree")
+            .colliders()
+            .contains(&wood)
+    };
+    assert!(!on_trunk(&grove, side_crowns[0]), "the branch blasted held");
+    for &m in &side_crowns[1..] {
+        assert!(
+            on_trunk(&grove, m),
+            "the branch beside it, crown {m}, came off too"
+        );
     }
 }
 

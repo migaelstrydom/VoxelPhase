@@ -459,7 +459,7 @@ fn nail_holes(u: f32, v: f32) -> f32 {
 mod contact_fracture {
     use super::*;
     use crate::debug::DebugLines;
-    use crate::fracture::{BondLoads, ContactLoadTracker};
+    use crate::fracture::{BondLoads, ContactLoadTracker, TornSides};
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
     use crate::physics::{ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc};
@@ -557,7 +557,15 @@ mod contact_fracture {
 
                 let rigid = world.body(body).unwrap();
                 let pose = Isometry3::from_parts(rigid.position().coords.into(), rigid.rotation());
-                let loads = BondLoads::new(colliders.iter().copied().zip(spikes), &[], pose, None);
+                let sides = TornSides::on_body(&world, body, &graph);
+                let loads = BondLoads::new(
+                    &graph,
+                    colliders.iter().copied().zip(spikes),
+                    &[],
+                    pose,
+                    sides,
+                    None,
+                );
                 for (idx, bond) in bonds.iter().enumerate() {
                     let load = loads.contact_load(&graph, bond);
                     peak_bond = peak_bond.max(load);

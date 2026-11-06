@@ -6,7 +6,7 @@
 //!   ground ══weld══ [ trunk · roots · main crown │ branch + its crown │ … ]
 //!            (a tie)  one body; one part each      bonded at the fork
 //!
-//!   fracture: a bond's load at its fork past what it holds ──▶ the branch
+//!   fracture: the load on a branch past what its bond holds ──▶ the branch
 //!   comes off as a piece of its own (PieceSplit)
 //! ```
 //!
@@ -37,16 +37,18 @@ use crate::rendering::substance::{self, ColliderSubstance, Substance};
 pub struct Joinery {
     /// What the limbs are made of.
     pub wood: Substance,
-    /// Blast loading at a branch's fork, N·s/m², past which it breaks off:
-    /// a grenade 2 m beyond a side crown loads its fork with about 680, one
-    /// 3 m beyond with about 290, so the first takes the branch off and the
-    /// second does not. Every branch off one fork breaks together.
+    /// Blast loading on a branch, at its centre of mass with whatever grows
+    /// on it, N·s/m², past which it breaks off: a grenade 2 m beyond a side
+    /// crown loads its branch with about 1210, 2.5 m beyond with about
+    /// 1000 and 3 m beyond with about 780, so the first takes the branch
+    /// off and the others do not. The 2 m grenade loads the branch beside
+    /// it at the same fork with about 370, which keeps it.
     pub branch_strength: f32,
-    /// Contact spike felt at a branch's fork, N·s, past which it breaks
-    /// off: a tree felled onto its crowns puts about 130 through a fork,
-    /// so it keeps its branches; one dropped lying on its side from 6 m
-    /// about 310, from 15 m about 580 and from 20 m about 660, so a hard
-    /// landing takes a branch off.
+    /// Contact spike on a branch, felt at its fork, N·s, past which it
+    /// breaks off: a tree felled onto its crowns puts about 80 into a
+    /// branch, so it keeps its branches; one dropped lying on its side from
+    /// 6 m or 10 m about 315 and from 20 m about 660, so a hard landing
+    /// takes a branch off.
     pub branch_toughness: f32,
     /// How each crown's core is built.
     pub core: LeafCore,
@@ -56,7 +58,7 @@ impl Default for Joinery {
     fn default() -> Self {
         Self {
             wood: substance::OAK,
-            branch_strength: 500.0,
+            branch_strength: 1100.0,
             branch_toughness: 220.0,
             core: LeafCore::default(),
         }

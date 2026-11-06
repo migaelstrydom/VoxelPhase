@@ -4,7 +4,7 @@
 //! ```text
 //!   CompoundFracture { PartGraph, loads }      on the compound's entity
 //!        │
-//!        ▼  FractureSystem: loads at each bond's anchor ──▶ broken bonds
+//!        ▼  FractureSystem: loads on what each bond tears off ──▶ broken bonds
 //!   groups ──▶ kept: the tied one, else the heaviest
 //!              every other: split_off whole, with its ties ──▶ new entity
 //!                           (its share of the compound and the looks)
@@ -27,6 +27,7 @@ mod load;
 mod parts;
 mod piece_split;
 pub mod systems;
+mod torn_side;
 
 pub use components::{CompoundFracture, PieceTraits};
 pub use contact_load::{ContactLoadTracker, ContactSpike, Deadband};
@@ -37,3 +38,4 @@ pub use load::BondLoads;
 pub use parts::{Bond, NewPart, Part, PartGraph, PartId, Tie};
 pub use piece_split::{PieceSplit, PieceSplits};
 pub use systems::FractureSystem;
+pub use torn_side::{TornSide, TornSides};
