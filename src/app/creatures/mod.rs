@@ -15,7 +15,9 @@
 //! a prefab; what the creature *does* comes from the generic systems in
 //! [`crate::creature`] that read the components it attached.
 
+mod body_paint;
 mod body_parts;
+mod body_warp;
 mod fish;
 mod heart_critter;
 mod in_water;

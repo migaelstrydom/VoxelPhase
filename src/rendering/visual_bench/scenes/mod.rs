@@ -24,6 +24,7 @@ pub mod terrain_ao;
 pub mod terrain_detail;
 pub mod terrain_finish;
 pub mod terrain_forms;
+pub mod turtle;
 pub mod voxel_terrain;
 pub mod weathered_stone;
 
@@ -49,4 +50,5 @@ pub use terrain_ao::TerrainAo;
 pub use terrain_detail::TerrainDetail;
 pub use terrain_finish::TerrainFinish;
 pub use terrain_forms::TerrainForms;
+pub use turtle::Turtle;
 pub use weathered_stone::WeatheredStone;

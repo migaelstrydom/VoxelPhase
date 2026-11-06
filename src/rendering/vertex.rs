@@ -14,8 +14,10 @@ pub struct Vertex {
     pub tex_coords: Vector2<f32>,
     pub normal: Vector3<f32>,
     /// Baked ambient occlusion: `1.0` is fully open, lower is in shade from
-    /// nearby geometry. Only terrain bakes it (`terrain::ao`); everything else
-    /// carries `1.0`, which is both the neutral value and the honest one.
+    /// nearby geometry. Terrain bakes it (`terrain::ao`), and so do creatures
+    /// built from ellipsoids, where their parts meet
+    /// (`app::creatures::body_paint`); everything else carries `1.0`, which
+    /// is both the neutral value and the honest one.
     pub ao: f32,
 }
 
