@@ -21,6 +21,9 @@ pub struct CameraRig {
     pub elevation: f32,
     /// Distance from the point watched, in metres.
     pub distance: f32,
+    /// The point watched, in the world, if not the character: for a
+    /// scenario about what the character does to something else.
+    pub target: Option<Point3<f32>>,
 }
 
 impl CameraRig {
@@ -30,6 +33,7 @@ impl CameraRig {
             azimuth: 0.0,
             elevation: 12.0,
             distance: 4.0,
+            target: None,
         }
     }
 
@@ -39,6 +43,7 @@ impl CameraRig {
             azimuth: 50.0,
             elevation: 20.0,
             distance: 4.0,
+            target: None,
         }
     }
 
@@ -57,8 +62,15 @@ impl CameraRig {
         self
     }
 
+    /// Watching `point` in the world rather than the character.
+    pub fn watching(mut self, point: Point3<f32>) -> Self {
+        self.target = Some(point);
+        self
+    }
+
     /// Camera eye and look-at point for a character whose body is at `body`,
-    /// in water whose still level is `surface` if it is in any.
+    /// in water whose still level is `surface` if it is in any: round the
+    /// character, or round the point it is set to watch.
     ///
     /// The eye is kept clear of the water: a camera that follows a plunging
     /// body under the surface films the underside of the water, not the
@@ -70,11 +82,12 @@ impl CameraRig {
             elevation.sin(),
             azimuth.cos() * elevation.cos(),
         ) * self.distance;
-        let mut eye = body + offset;
+        let watched = self.target.unwrap_or(body);
+        let mut eye = watched + offset;
         if let Some(surface) = surface {
             eye.y = eye.y.max(surface + EYE_CLEARANCE);
         }
-        (eye, body)
+        (eye, watched)
     }
 }
 

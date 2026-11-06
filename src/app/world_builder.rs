@@ -35,7 +35,7 @@ use crate::lighting::{ActiveLights, PointLight};
 use crate::objective::{GemMotion, Goal, LevelProgress};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
 use crate::physics::PhysicsImpulseQueue;
-use crate::plants::HeldCrown;
+use crate::plants::PlantPiece;
 use crate::platform::MovingPlatform;
 use crate::player::Player;
 use crate::projectile::{
@@ -117,7 +117,7 @@ impl WorldBuilder {
         world.register::<MovingPlatform>();
         world.register::<Trampoline>();
         world.register::<Foliage>();
-        world.register::<HeldCrown>();
+        world.register::<PlantPiece>();
         world.register::<Grenade>();
         world.register::<HeldGrenade>();
         world.register::<Lifetime>();

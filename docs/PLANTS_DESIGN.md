@@ -75,10 +75,8 @@ such as fruit trees or reeds.
 
 - **Shape:** limbs are capsules in a parent-child graph, grown per kind
   (a straight trunk, a fork, a gentle lean).
-- **Physics:** a rooted plant's limbs are fixed colliders, so a trunk is
-  solid.
-- **Later:** breaking a tree (a compound body with fracture joints) is its
-  own step, out of scope here.
+- **Physics:** a plant's limbs and crowns' cores are one compound body,
+  so a trunk is solid; branches break off it as bodies of their own.
 - **Shrubs** have no skeleton.
 
 ### Rooting
@@ -267,30 +265,45 @@ Done:
   cap and 477 with it, for about 0.2 ms of GPU.
 
 - **The lollipop tree** (`src/plants/`): `LollipopSpec` grows a `Plant`,
-  its `Limbs` (the skeleton: a trunk, and branches from a fork for more
-  than one crown) and a `LeafMass` per crown, held by a limb. `Joinery`
-  builds it: a body per limb, carrying its crown's core, so the tree is
-  physical throughout. The trunk is welded into the ground and let go when
-  the ground goes (`TerrainAnchored`, as a fence post is); a felled tree
-  lands on its crowns. Each branch is welded to what it grows from, and the
-  weld breaks past 80 N·s a substep: a grenade within about 2 m of a
-  branch's crown takes it off, one 3 m away does not. In levels:
-  `Tree(pos, height, crown_radius, crowns)`.
-  - A crown's core is part of its limb's body, not a body welded to it: a
-    thin limb has almost no inertia about its length, and a heavier crown
-    welded to its tip rang until the welds broke.
-  - Tree bodies are on the `WOOD` layer: limbs do not meet limbs (a branch
-    overlaps its parent at the fork). Everything else meets them, grenades
-    included: a grenade strikes a trunk, and goes through the outer fifth of
-    a crown's leaves before striking its core, as it would a loose clump's.
-  - A blast within half its knockback radius of a crown's centre breaks
-    the crown off its limb (`CrownBreakSystem`): its core's colliders come
-    off the limb's body, which re-centres (the engine now carries joint
-    anchors with a re-centre), and the crown becomes a loose clump, as a
-    shrub torn from the ground. A grenade caught in a crown, or at the foot
-    of a small tree, takes its crown off.
-  - Left for later: a trunk that snaps, crowns that sway, a crown broken
-    off by a hard landing.
+  its `Limbs` (the skeleton: a trunk, branches from a fork for more than
+  one crown, and roots) and a `LeafMass` per crown, held by a limb.
+  `Joinery` builds it as one compound body: every limb's capsule and every
+  crown's core. A body's colliders never meet each other, so the whole
+  tree's limbs do not (a branch overlaps the trunk at its fork, roots cross
+  under the foot), with no collision layer for it; a branch broken off
+  meets the tree it left like any other body, as a plank broken off the
+  bridge does. Everything meets a tree, grenades included: a grenade
+  strikes a trunk, and goes through the outer fifth of a crown's leaves
+  before striking its core, as it would a loose clump's. The trunk is
+  welded into the ground and let go when the ground goes (`TerrainAnchored`,
+  as a fence post is); a felled tree lands on its crowns. The body declares
+  its crowns' leaves as its bulk, porous, and one `Foliage` clump of them
+  all rides on it. In levels: `Tree(pos, height, crown_radius, crowns)`.
+  - **Branches break off** (`BranchBreakSystem`, after the physics step,
+    reading the blasts it applied): a blast whose kick on a branch's crowns
+    alone (`BulkShape::blast`) passes 250 N·s breaks the branch off. Its
+    colliders leave the tree's body, which re-centres (the engine carries
+    joint anchors with a re-centre) and declares what is left, and are built
+    as a piece of their own (`PlantPiece`, an entity with its own model and
+    leaves) moving as they were, plus the kick. A grenade within about 2 m
+    of a side crown takes its branch off, one 3 m away does not. Crowns stay
+    on their limbs: a crown breaking off its own limb read wrong in play,
+    above all on a cypress, and was taken out.
+  - **Snapped ends:** a branch broken off is drawn with its base snapped,
+    splinters round a broken face of fresh wood (`LimbBase::Snapped`); every
+    other limb end is rounded shut, so no piece shows an open tube. Each
+    plant's meshes are made once (`PlantDrawing`), each piece drawn from
+    them as one bark and one leaf primitive.
+  - **Roots** (`RootSpec`, shared by every kind): four or five limbs from
+    just under the ground at the trunk's foot, reaching 6 to 9 trunk radii
+    out and 2.5 to 4.5 down, tapering, sunk further where the ground falls
+    away. The trunk's flare narrows again below the ground into a tap root.
+    Buried while the tree stands, they cost nothing: the welded body passes
+    through the ground until it is let go, as a menhir's foot does. Felled,
+    they show, and meet the ground.
+  - Left for later: a trunk that snaps, crowns that sway, a branch broken
+    off by a hard landing (the welds that held branches broke under any
+    load; the compound only judges blasts), a scar where a branch left.
 
 - **The cypress** (`CypressSpec`, `Cypress(pos, height, radius)` in levels):
   one tall crown, the column shrub's shape, on a short bare trunk that runs
@@ -299,8 +312,9 @@ Done:
 
 - **Bark in the painted manner** (`BarkSpec`): limbs drawn tapered and
   gently sinuous, a trunk flared at the ground and a branch collared where
-  it joins, about 10 sides and a ring every 0.3 m (a 3 m trunk is under
-  300 triangles), over the same straight capsules. Each plant paints its
+  it joins, about 10 sides and a ring every 0.3 m (a 3 m trunk, its ends
+  rounded and its flare ringed above and below the ground, is under 500
+  triangles), over the same straight capsules. Each plant paints its
   own bark tile from its seed: pale warm grey-ochre with a pink blush,
   soft fibre streaks, fine fissures and faint ring marks, its height in
   alpha for the shader's detail normals (`Material::with_relief`).
@@ -323,4 +337,5 @@ Later:
    module above it holds the skeleton and `PlantSpec`.
 2. **Ellipsoid lobes, not a volume trait.** Revisit only when a kind needs
    a volume ellipsoids cannot approximate.
-3. **Trees breaking** (limbs with fracture joints) is a later step.
+3. **Trees breaking:** one compound body per tree, branches breaking off
+   it (2026-11-06), not a body per limb welded together.

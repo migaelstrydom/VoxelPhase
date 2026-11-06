@@ -1014,6 +1014,20 @@ impl PhysicsWorld {
         Some(collider)
     }
 
+    /// Declare `bulk` for a body in place of whatever it had, in its frame as
+    /// it is now: a compound that lost children (which clears its bulk,
+    /// `detach_collider`) declares what is left of it. Returns false for no
+    /// body.
+    pub fn set_bulk(&mut self, handle: RigidBodyHandle, bulk: BulkShape) -> bool {
+        let Some(body) = self.bodies.get_mut(handle.0) else {
+            return false;
+        };
+        body.set_bulk(bulk);
+        self.pose_epoch += 1;
+        self.recompute_mass_properties(handle);
+        true
+    }
+
     // === Simulation ===
 
     /// Generate this frame's contacts into the narrowphase work buffer, and

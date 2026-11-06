@@ -17,8 +17,9 @@ use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use super::limbs::{Limb, Limbs};
+use super::limbs::{Limb, LimbKind, Limbs};
 use super::plant::{LeafMass, Plant};
+use super::roots::RootSpec;
 use crate::foliage::{FoliageShape, ShrubSpec};
 
 /// How far the trunk reaches below the ground, m: it grows out of the soil.
@@ -48,6 +49,8 @@ pub struct LollipopSpec {
     pub trunk_radius: f32,
     /// The most the trunk leans from upright, radians.
     pub lean: f32,
+    /// How its roots spread.
+    pub roots: RootSpec,
 }
 
 impl Default for LollipopSpec {
@@ -58,6 +61,7 @@ impl Default for LollipopSpec {
             crowns: 1,
             trunk_radius: 0.07,
             lean: 0.08,
+            roots: RootSpec::default(),
         }
     }
 }
@@ -85,6 +89,7 @@ impl LollipopSpec {
             tip: main_centre,
             radius: self.trunk_radius,
             parent: None,
+            kind: LimbKind::Trunk,
         }];
         let mut masses = vec![LeafMass {
             shape: main,
@@ -114,6 +119,7 @@ impl LollipopSpec {
                     tip: centre,
                     radius: self.trunk_radius * BRANCH_RADIUS,
                     parent: Some(0),
+                    kind: LimbKind::Branch,
                 });
                 masses.push(LeafMass {
                     shape,
@@ -122,6 +128,8 @@ impl LollipopSpec {
                 });
             }
         }
+        let roots = self.roots.grow(&limbs[0], 0, &mut rng);
+        limbs.extend(roots);
         Plant {
             limbs: Limbs { limbs },
             masses,
@@ -201,9 +209,10 @@ mod tests {
         for seed in 0..8 {
             let plant = spec.grow(seed);
             assert_eq!(plant.masses.len(), 3);
-            assert_eq!(plant.limbs.limbs.len(), 3);
             let main = plant.masses[0].pose.translation.vector.y;
-            for (branch, mass) in plant.limbs.limbs[1..].iter().zip(&plant.masses[1..]) {
+            for mass in &plant.masses[1..] {
+                let branch = plant.limbs.limbs[mass.limb];
+                assert_eq!(branch.kind, LimbKind::Branch);
                 assert!(
                     holds(mass, branch.tip),
                     "seed {seed}: a branch ends in the open"

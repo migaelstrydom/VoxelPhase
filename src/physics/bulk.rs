@@ -27,6 +27,8 @@ use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 use super::collider::{Collider, ColliderShape};
 use super::fluid_drag::ShapeDrag;
 use super::handle::ColliderHandle;
+use super::impulses::PhysicsImpulse;
+use super::silhouette;
 
 /// A shape placed in a body's frame.
 #[derive(Debug, Clone)]
@@ -171,6 +173,23 @@ impl BulkShape {
         self.mass
             .as_ref()
             .map(|parts| parts.iter().map(|p| p.mass).sum())
+    }
+
+    /// The impulse `impulse` gives this bulk with its frame at `pose`, as it
+    /// gives a body declaring it: by the area its envelope shows the blast,
+    /// times its solidity, struck at its frame's origin. For a part of a body
+    /// to judge what a blast does to it alone. `None` out of reach, or with
+    /// no envelope declared.
+    pub fn blast(&self, pose: &Isometry3<f32>, impulse: &PhysicsImpulse) -> Option<Vector3<f32>> {
+        let volumes = self.envelope.as_deref()?;
+        let parts = volumes.iter().map(|volume| EnvelopePart {
+            shape: &volume.shape,
+            offset: &volume.offset,
+            drag_coefficient: self.drag_coefficient,
+        });
+        impulse.impulse_on(Point3::from(pose.translation.vector), |travel| {
+            self.solidity() * silhouette::exposed_area(parts, pose.rotation.inverse() * travel)
+        })
     }
 
     /// Move every part by `delta` in the body frame, as a body re-centring on

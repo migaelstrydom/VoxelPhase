@@ -83,6 +83,7 @@ pub use moving_platform::MovingPlatformDef;
 pub use octahedron::OctahedronDef;
 pub use pendulum::PendulumDef;
 pub use plank_bridge::PlankBridgeDef;
+pub use plant::{bark_material, leaf_material};
 pub use play_wheel::PlayWheelDef;
 pub use pyramid::PyramidDef;
 pub use rock::RockDef;

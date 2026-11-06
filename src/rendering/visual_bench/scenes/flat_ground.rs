@@ -58,5 +58,6 @@ pub fn ground() -> SceneMesh {
         })
         .collect();
 
-    SceneMesh::new(vertices, vec![0, 1, 2, 0, 2, 3])
+    // Wound to face up.
+    SceneMesh::new(vertices, vec![0, 2, 1, 0, 3, 2])
 }

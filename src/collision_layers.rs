@@ -8,18 +8,9 @@ use crate::physics::{CollisionFilter, Layers};
 
 /// The firm core of a loose clump of leaves.
 pub const FOLIAGE: Layers = Layers::layer(1);
-/// A plant's limbs: trunks and branches.
-pub const WOOD: Layers = Layers::layer(3);
 
 /// A loose clump's core: it meets whatever is willing to meet it.
 pub const FOLIAGE_CORE: CollisionFilter = CollisionFilter {
     membership: FOLIAGE,
     meets: Layers::ALL,
-};
-
-/// A plant's limb and the crown it holds up: solid to everything but other
-/// limbs, since a branch overlaps the limb it forks from at the fork.
-pub const PLANT: CollisionFilter = CollisionFilter {
-    membership: WOOD,
-    meets: Layers::ALL.without(WOOD),
 };

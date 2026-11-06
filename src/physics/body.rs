@@ -623,6 +623,11 @@ impl RigidBody {
         self.bulk.as_deref_mut()
     }
 
+    /// Declare `bulk` in place of whatever the body had.
+    pub(crate) fn set_bulk(&mut self, bulk: BulkShape) {
+        self.bulk = Some(Box::new(bulk));
+    }
+
     /// Forget the declared bulk, leaving the colliders to stand for it.
     pub(crate) fn clear_bulk(&mut self) {
         self.bulk = None;

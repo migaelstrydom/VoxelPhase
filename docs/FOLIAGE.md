@@ -52,7 +52,8 @@ carrying its crown's core.
   which everything meets, a grenade and its predicted flight included: a
   grenade passes through a rooted shrub, which has no core, slowed by the
   leaves, and strikes a loose clump's core as it would any body. A tree's
-  limbs (`collision_layers::WOOD`) do not meet each other.
+  limbs and crowns are one body, so they never meet each other until a
+  branch breaks off (`docs/PLANTS_DESIGN.md`).
 - **Leaves are a fluid.** They drag by the law the air and water drag by
   (`DragArea::exposed`), at a quarter of water's density (250 kg/m³): a
   body by the silhouette of its own parts, each by how much of it is in the

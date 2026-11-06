@@ -1,12 +1,14 @@
-//! A grown plant spawned into the world: its bodies built (`plants::Joinery`)
-//! and an entity per limb, drawing the limb and the crown it holds.
+//! A grown plant spawned into the world: built as one body
+//! (`plants::Joinery`) welded into the ground, on one entity drawing it and
+//! carrying its leaves; its branches break off as entities of their own
+//! (`plants::BranchBreakSystem`).
 //!
 //! Shared by every kind of plant's spawnable; each finds its ground, grows
 //! its `Plant` and hands it here.
 
 use std::sync::Arc;
 
-use nalgebra::{Isometry3, Point3, Translation3, Vector3};
+use nalgebra::{Isometry3, Point3, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::textures::seed_from_ground;
@@ -15,11 +17,12 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, TerrainAnchored, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::foliage::{Foliage, FoliageShape, Rooting, Skin, SkinSpec};
-use crate::model::{Model, ModelPart};
-use crate::plants::{BarkSpec, HeldCrown, Joinery, Plant};
+use crate::plants::{
+    BarkSpec, GrownPlant, Joinery, LimbKind, Plant, PlantDrawing, PlantLook, PlantPiece,
+};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId, SurfaceFinish};
+use crate::resources::textures::TextureHandle;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 
@@ -43,22 +46,30 @@ pub const PLANT_MATERIALS: usize = 2;
 /// A plant's materials, leaves then bark, for one grown from `seed`: its bark
 /// is a tile of its own, painted from that seed, with its relief in alpha.
 pub fn plant_materials(ctx: &mut MaterialCtx, seed: u32) -> EngineResult<Vec<MaterialId>> {
-    // The greens ride on the skin's vertices.
-    let leaves = Material::coloured(Colour::WHITE)
-        .with_finish(LEAF_FINISH)
-        .as_foliage();
     let spec = BarkSpec::default();
     let size = spec.texture_size;
     let tile = ctx
         .textures
         .create_from_rgba(size, size, &spec.texture(seed), true)?;
-    let bark = Material::textured(tile)
-        .with_finish(BARK_FINISH)
-        .with_relief(spec.relief_depth);
     Ok(vec![
-        ctx.materials.register(leaves),
-        ctx.materials.register(bark),
+        ctx.materials.register(leaf_material()),
+        ctx.materials.register(bark_material(tile)),
     ])
+}
+
+/// What a plant's leaves are drawn in: white, since the greens ride on the
+/// skin's vertices.
+pub fn leaf_material() -> Material {
+    Material::coloured(Colour::WHITE)
+        .with_finish(LEAF_FINISH)
+        .as_foliage()
+}
+
+/// What a plant's bark is drawn in, wearing `tile` (`BarkSpec::texture`).
+pub fn bark_material(tile: TextureHandle) -> Material {
+    Material::textured(tile)
+        .with_finish(BARK_FINISH)
+        .with_relief(BarkSpec::default().relief_depth)
 }
 
 /// The plant `grow` makes from the seed of where it stands, spawned on the
@@ -70,35 +81,47 @@ pub fn spawn_on_ground(
     materials: &[MaterialId],
     grow: impl FnOnce(u32) -> Plant,
 ) -> Vec<Entity> {
-    let ground = {
-        let terrain = world.read_resource::<TerrainWorld>();
-        terrain.mesh_surface_height_at(pos.0, pos.1)
-    };
-    let Some(ground) = ground else {
-        return Vec::new();
-    };
     let seed = seed_from_ground(pos, 1);
     let look = PlantLook {
         leaves: materials[0],
         bark: materials[1],
     };
+    let mut plant = grow(seed);
+    let ground = {
+        let terrain = world.read_resource::<TerrainWorld>();
+        let Some(ground) = terrain.mesh_surface_height_at(pos.0, pos.1) else {
+            return Vec::new();
+        };
+        sink_roots(
+            &mut plant,
+            |x, z| terrain.mesh_surface_height_at(pos.0 + x, pos.1 + z),
+            ground,
+        );
+        ground
+    };
     let root = Isometry3::translation(pos.0, ground, pos.1);
     let anchor = Point3::new(pos.0, ground - ANCHOR_PROBE, pos.1);
-    spawn_plant(world, grow(seed), root, seed, look, anchor)
+    vec![spawn_plant(world, plant, root, seed, look, anchor)]
 }
 
-/// The materials a plant is drawn in.
-#[derive(Debug, Clone, Copy)]
-pub struct PlantLook {
-    /// The leaves: greens ride on the skin's vertices.
-    pub leaves: MaterialId,
-    /// The limbs.
-    pub bark: MaterialId,
+/// Lowers each root's tip by however far the ground at it lies below the
+/// ground at the plant's foot, `foot`, so a root reaching downhill stays as
+/// deep under its own ground as one on the level. `ground_at` is the
+/// ground's height at an offset from the foot.
+fn sink_roots(plant: &mut Plant, ground_at: impl Fn(f32, f32) -> Option<f32>, foot: f32) {
+    for limb in &mut plant.limbs.limbs {
+        if limb.kind != LimbKind::Root {
+            continue;
+        }
+        if let Some(ground) = ground_at(limb.tip.x, limb.tip.z) {
+            limb.tip.y += (ground - foot).min(0.0);
+        }
+    }
 }
 
-/// `plant` built and spawned with its frame at `root`, its skins grown from
-/// `seed`. The trunk is welded into the ground, let go when the terrain at
-/// `anchor` is blown away.
+/// `plant` built as one body and spawned with its frame at `root`, its
+/// skins grown from `seed`. The trunk is welded into the ground, let go when
+/// the terrain at `anchor` is blown away.
 pub fn spawn_plant(
     world: &mut World,
     plant: Plant,
@@ -106,73 +129,43 @@ pub fn spawn_plant(
     seed: u32,
     look: PlantLook,
     anchor: Point3<f32>,
-) -> Vec<Entity> {
-    let PlantLook { leaves, bark } = look;
-    let bodies = {
+) -> Entity {
+    let joinery = Joinery::default();
+    let drawing = PlantDrawing::grow(&plant, seed, look);
+    let all: Vec<usize> = (0..plant.limbs.limbs.len()).collect();
+    let (body, rooting) = {
         let mut physics = world.write_resource::<PhysicsResource>();
-        Joinery::default().build(&mut physics.world, &plant, root)
+        let body = joinery.build(&mut physics.world, &plant, &all, root);
+        let rooting = joinery.root(&mut physics.world, &plant, &body);
+        (body, rooting)
     };
-    let holders: Vec<usize> = plant.masses.iter().map(|mass| mass.limb).collect();
-    let mut skins: Vec<Option<(Skin, Arc<FoliageShape>)>> = plant
-        .masses
-        .into_iter()
-        .enumerate()
-        .map(|(index, mass)| {
-            let skin_seed = seed.wrapping_add(index as u32 * 7919);
-            let skin = SkinSpec::default().grow(&mass.shape, skin_seed);
-            Some((skin, Arc::new(mass.shape)))
-        })
-        .collect();
-    let mut entities = Vec::new();
-    for (index, limb) in plant.limbs.limbs.iter().enumerate() {
-        let body = bodies.limbs[index];
-        let frame = bodies.limb_frames[index];
-        let pose = root * frame.inverse();
-        let (vertices, indices) = BarkSpec::default().mesh(limb, seed.wrapping_add(index as u32));
-        let tube =
-            Skin { vertices, indices }.moved(&(frame * Translation3::from(limb.midpoint().coords)));
-        let wood = tube.primitive(bark);
-        let mut primitives = vec![wood.clone()];
-        // A lollipop's limb holds at most one crown: an entity carries
-        // one clump of foliage.
-        let mut crown = None;
-        for m in (0..holders.len()).filter(|&m| holders[m] == index) {
-            let Some((skin, shape)) = skins[m].take() else {
-                continue;
-            };
-            let offset = bodies.mass_offsets[m];
-            let held = HeldCrown {
-                colliders: bodies.mass_colliders[m].clone(),
-                skin: skin.clone().model(leaves),
-                wood: wood.clone(),
-            };
-            primitives.push(skin.moved(&offset).primitive(leaves));
-            debug_assert!(crown.is_none(), "a limb holds two crowns");
-            crown = Some((Foliage::new(shape, Rooting::Loose { body, offset }), held));
-        }
-        let model = Model::flat(vec![ModelPart::new(primitives)]);
-        let mut entity = world
-            .create_entity()
-            .with(Position(pose.translation.vector))
-            .with(Orientation(pose.rotation))
-            .with(Velocity(Vector3::zeros()))
-            .with(RigidBodyComponent(body))
-            .with(ModelInstance::new(Arc::new(model)))
-            .with(Renderable);
-        if let Some((clump, held)) = crown {
-            entity = entity.with(clump).with(held);
-        }
-        if index == 0 {
-            // Let go when the ground under its foot is blown away.
-            entity = entity.with(TerrainAnchored {
-                constraints: vec![bodies.rooting],
-                anchor_points: vec![anchor],
-                released_model: None,
-            });
-        }
-        entities.push(entity.build());
+    let piece = PlantPiece {
+        plant: Arc::new(GrownPlant {
+            plant,
+            joinery,
+            drawing,
+        }),
+        body,
+    };
+    let pose = root * piece.body.frame.inverse();
+    let mut entity = world
+        .create_entity()
+        .with(Position(pose.translation.vector))
+        .with(Orientation(pose.rotation))
+        .with(Velocity(Vector3::zeros()))
+        .with(RigidBodyComponent(piece.body.body))
+        .with(ModelInstance::new(piece.model()))
+        .with(Renderable)
+        // Let go when the ground under its foot is blown away.
+        .with(TerrainAnchored {
+            constraints: vec![rooting],
+            anchor_points: vec![anchor],
+            released_model: None,
+        });
+    if let Some(clump) = piece.foliage() {
+        entity = entity.with(clump);
     }
-    entities
+    entity.with(piece).build()
 }
 
 #[cfg(test)]
@@ -182,10 +175,10 @@ mod tests {
     use super::*;
     use crate::debug::DebugLines;
     use crate::explosion::Explosion;
-    use crate::particles::ParticleEmitter;
+    use crate::foliage::Foliage;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
-    use crate::physics::{ConstraintKind, SequentialStepper, Stepper};
-    use crate::plants::{CrownBreakSystem, HeldCrown, LollipopSpec};
+    use crate::physics::{ConstraintKind, PhysicsImpulseQueue, SequentialStepper, Stepper};
+    use crate::plants::{BranchBreakSystem, LollipopSpec};
 
     fn world() -> World {
         let mut world = World::new();
@@ -197,96 +190,109 @@ mod tests {
         world.register::<Renderable>();
         world.register::<TerrainAnchored>();
         world.register::<Foliage>();
-        world.register::<HeldCrown>();
-        world.register::<Explosion>();
-        world.register::<ParticleEmitter>();
+        world.register::<PlantPiece>();
         world.insert(PhysicsResource::default());
+        world.insert(PhysicsImpulseQueue::default());
         world
     }
 
-    /// A blast beside a tree's crown breaks it off: the crown is a loose
-    /// clump on a core of its own, and the trunk, bare, still stands where
-    /// it grew, its weld into the ground on the same point of it.
-    #[test]
-    fn a_blast_breaks_a_crown_off_and_leaves_the_trunk_standing() {
-        let mut world = world();
-        let plant = LollipopSpec::default().grow(2);
-        let crown_at = plant.masses[0].pose.translation.vector;
-        let look = PlantLook {
-            leaves: MaterialId(0),
-            bark: MaterialId(1),
-        };
-        let foot = Point3::new(0.0, -0.3, 0.0);
-        let entities = spawn_plant(&mut world, plant, Isometry3::identity(), 2, look, foot);
-        let trunk = world
-            .read_storage::<RigidBodyComponent>()
-            .get(entities[0])
-            .unwrap()
-            .0;
-        let weld = world
-            .read_storage::<TerrainAnchored>()
-            .get(entities[0])
-            .unwrap()
-            .constraints[0];
-        world
-            .create_entity()
-            .with(Explosion::new(Point3::from(
-                crown_at + Vector3::new(1.0, 0.0, 0.0),
-            )))
-            .build();
-
-        CrownBreakSystem.run_now(&world);
-        world.maintain();
-
-        assert!(
-            world.read_storage::<HeldCrown>().is_empty(),
-            "the crown is still held"
-        );
-        let loose: Vec<_> = (&world.read_storage::<Foliage>())
-            .join()
-            .filter(|clump| clump.body().is_some_and(|b| b != trunk))
-            .map(|clump| clump.body().unwrap())
-            .collect();
-        assert_eq!(loose.len(), 1, "no loose clump came of it");
-        {
-            let physics = world.read_resource::<PhysicsResource>();
-            assert_eq!(physics.world.body(trunk).unwrap().colliders().len(), 1);
-            let crown = physics.world.body(loose[0]).unwrap().position();
-            assert!(
-                (crown.coords - crown_at).norm() < 0.05,
-                "the crown came loose at {crown:?}"
-            );
-        }
-
+    fn step(world: &World, frames: usize) {
         let mut physics = world.write_resource::<PhysicsResource>();
-        let trunk_at = physics.world.body(trunk).unwrap().position();
+        let mut queue = world.write_resource::<PhysicsImpulseQueue>();
+        let impulses: Vec<_> = queue.drain().collect();
         let mut stepper = SequentialStepper::new(1.0 / 240.0, 12);
         let ground = FlatQuadGeometry::new(50.0);
         let mut lines = DebugLines::default();
-        physics.world.wake_body(trunk);
-        for _ in 0..120 {
+        for frame in 0..frames {
+            let now: &[_] = if frame == 0 { &impulses } else { &[] };
             stepper.step(
                 &mut physics.world,
                 1.0 / 60.0,
                 &ground,
-                &[],
+                now,
                 &[],
                 &mut lines,
             );
             lines.clear();
         }
-        let body = physics.world.body(trunk).unwrap();
+    }
+
+    /// A blast beside a forked tree's side crown breaks that branch off: it
+    /// is a piece of its own, drawn snapped, with its crown's leaves, and the
+    /// tree it left, still welded at its foot, keeps the rest and stands.
+    #[test]
+    fn a_blast_breaks_a_branch_off_and_leaves_the_tree_standing() {
+        let mut world = world();
+        let plant = LollipopSpec {
+            crowns: 3,
+            ..LollipopSpec::default()
+        }
+        .grow(4);
+        let side = Point3::from(plant.masses[1].pose.translation.vector);
+        let branch = plant.masses[1].limb;
+        let look = PlantLook {
+            leaves: MaterialId(0),
+            bark: MaterialId(1),
+        };
+        let foot = Point3::new(0.0, -0.3, 0.0);
+        let tree = spawn_plant(&mut world, plant, Isometry3::identity(), 4, look, foot);
+        let (body, weld) = {
+            let pieces = world.read_storage::<PlantPiece>();
+            let anchors = world.read_storage::<TerrainAnchored>();
+            (
+                pieces.get(tree).unwrap().body.body,
+                anchors.get(tree).unwrap().constraints[0],
+            )
+        };
+        let outward = Vector3::new(side.x, 0.0, side.z).normalize();
+        world
+            .write_resource::<PhysicsImpulseQueue>()
+            .push(Explosion::new(side + outward * 1.2).physics_impulse());
+        step(&world, 1);
+        BranchBreakSystem.run_now(&world);
+        world.maintain();
+
+        let pieces = world.read_storage::<PlantPiece>();
+        assert_eq!(pieces.join().count(), 2, "no branch broke off");
+        let broken = pieces
+            .join()
+            .find(|p| p.body.body != body)
+            .expect("a piece of its own");
+        assert_eq!(broken.body.limbs(), vec![branch], "the wrong branch broke");
+        let trunk = pieces.get(tree).unwrap();
+        assert!(!trunk.body.holds(branch));
+        assert_eq!(world.read_storage::<Foliage>().join().count(), 2);
+        {
+            let physics = world.read_resource::<PhysicsResource>();
+            let flying = physics.world.body(broken.body.body).unwrap();
+            assert!(
+                flying.linear_velocity().dot(&-outward) > 1.0,
+                "the branch was not thrown away from the blast: {:?}",
+                flying.linear_velocity()
+            );
+        }
+        drop(pieces);
+
+        let at = world
+            .read_resource::<PhysicsResource>()
+            .world
+            .body(body)
+            .unwrap()
+            .position();
+        step(&world, 120);
+        let physics = world.read_resource::<PhysicsResource>();
+        let standing = physics.world.body(body).unwrap();
         let ConstraintKind::Fixed { local_anchor_b, .. } =
             physics.world.constraint(weld).unwrap().kind
         else {
             unreachable!("the trunk's weld")
         };
-        let held = body.position() + body.rotation() * local_anchor_b;
+        let held = standing.position() + standing.rotation() * local_anchor_b;
         assert!(
             (held - foot).norm() < 0.01,
             "the weld is at {held:?}, not the foot"
         );
-        let sagged = (body.position() - trunk_at).norm();
-        assert!(sagged < 0.01, "the bare trunk moved {sagged:.3} m");
+        let sagged = (standing.position() - at).norm();
+        assert!(sagged < 0.02, "the tree moved {sagged:.3} m");
     }
 }

@@ -17,8 +17,9 @@ use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-use super::limbs::{Limb, Limbs};
+use super::limbs::{Limb, LimbKind, Limbs};
 use super::plant::{LeafMass, Plant};
+use super::roots::RootSpec;
 use crate::foliage::ShrubSpec;
 
 /// How far the trunk reaches below the ground, m: it grows out of the soil.
@@ -37,6 +38,8 @@ pub struct CypressSpec {
     pub trunk_radius: f32,
     /// The most the tree leans from upright, radians.
     pub lean: f32,
+    /// How its roots spread.
+    pub roots: RootSpec,
 }
 
 impl Default for CypressSpec {
@@ -47,6 +50,7 @@ impl Default for CypressSpec {
             bare_trunk: 0.5,
             trunk_radius: 0.08,
             lean: 0.04,
+            roots: RootSpec::default(),
         }
     }
 }
@@ -80,15 +84,17 @@ impl CypressSpec {
             "the crown reaches into the ground"
         );
 
+        let trunk = Limb {
+            base: Point3::new(0.0, -TRUNK_ROOTING, 0.0),
+            tip: centre,
+            radius: self.trunk_radius,
+            parent: None,
+            kind: LimbKind::Trunk,
+        };
+        let mut limbs = vec![trunk];
+        limbs.extend(self.roots.grow(&trunk, 0, &mut rng));
         Plant {
-            limbs: Limbs {
-                limbs: vec![Limb {
-                    base: Point3::new(0.0, -TRUNK_ROOTING, 0.0),
-                    tip: centre,
-                    radius: self.trunk_radius,
-                    parent: None,
-                }],
-            },
+            limbs: Limbs { limbs },
             masses: vec![LeafMass {
                 shape,
                 pose: Isometry3::from_parts(Translation3::from(centre.coords), tilt * turn),
