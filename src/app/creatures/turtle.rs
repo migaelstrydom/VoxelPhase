@@ -24,10 +24,12 @@ use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::colour::Colour;
 use crate::rendering::grain::GrainSpec;
 use crate::rendering::material::{Material, MaterialId, SurfaceFinish};
+use crate::resources::textures::TextureManager;
 use crate::systems::PhysicsResource;
 
 use super::body_paint::{scatter, ContactShade, Mottle};
 use super::body_parts::{BodyPart, Ellipsoid};
+use super::body_texture::{Clouds, SkinPattern, Spots, Veins};
 use super::body_warp::Warp;
 use super::in_water::spawn_point_in_water;
 
@@ -100,6 +102,71 @@ const CONTACT_SHADE: ContactShade = ContactShade {
     floor: 0.3,
 };
 
+/// How many materials [`TurtleDef::materials`] makes.
+const MATERIAL_COUNT: usize = 4;
+
+/// The glaze's paint: soft clouds, a few rose veins, warm freckles and
+/// pale pores. Frequencies are per unit of a part's radius, so on the
+/// dome (about 0.3 m) a freckle is 1.3 to 3.3 cm across.
+const SHELL_PATTERN: SkinPattern = SkinPattern {
+    width: 1024,
+    clouds: Clouds {
+        frequency: 4.0,
+        value: 0.08,
+        seed: 21,
+    },
+    veins: Veins {
+        frequency: 1.6,
+        width: 0.025,
+        tint: Vector3::new(0.95, 0.82, 0.8),
+        seed: 22,
+    },
+    freckles: Spots {
+        frequency: 7.0,
+        presence: 0.5,
+        radius: (0.15, 0.38),
+        tint: Vector3::new(0.55, 0.4, 0.3),
+        salt: 23,
+    },
+    pores: Spots {
+        frequency: 30.0,
+        presence: 0.3,
+        radius: (0.12, 0.25),
+        tint: Vector3::new(0.85, 0.8, 0.74),
+        salt: 24,
+    },
+};
+
+/// Skin's paint: finer and busier than the shell's, mostly pores.
+const SKIN_PATTERN: SkinPattern = SkinPattern {
+    width: 1024,
+    clouds: Clouds {
+        frequency: 5.0,
+        value: 0.1,
+        seed: 31,
+    },
+    veins: Veins {
+        frequency: 2.0,
+        width: 0.03,
+        tint: Vector3::new(0.92, 0.78, 0.76),
+        seed: 32,
+    },
+    freckles: Spots {
+        frequency: 9.0,
+        presence: 0.4,
+        radius: (0.12, 0.3),
+        tint: Vector3::new(0.62, 0.48, 0.4),
+        salt: 33,
+    },
+    pores: Spots {
+        frequency: 40.0,
+        presence: 0.45,
+        radius: (0.15, 0.3),
+        tint: Vector3::new(0.88, 0.82, 0.78),
+        salt: 34,
+    },
+};
+
 /// A turtle. Position is `(x, z)`; it starts in the water over that point.
 #[derive(Deserialize)]
 pub struct TurtleDef {
@@ -121,16 +188,31 @@ impl TurtleDef {
 
 impl TurtleDef {
     /// Its materials, one per finish, in the order [`Self::model`] indexes
-    /// them: a painted glaze for the shell, a softer one for skin, glossy
-    /// eyes, and gilt for the finial.
-    pub fn materials() -> Vec<Material> {
-        let with = |finish| Material::coloured(Colour::WHITE).with_finish(finish);
-        vec![
-            with(GLAZE).with_grain(GLAZE_GRAIN),
-            with(SKIN).with_grain(SKIN_GRAIN),
-            with(BEAD),
-            with(GILT),
-        ]
+    /// them: a glaze for the shell painted with freckles and veins
+    /// ([`SHELL_PATTERN`]), a softer one for skin painted with pores
+    /// ([`SKIN_PATTERN`]), glossy eyes, and gilt for the finial. Bakes the
+    /// two patterns' textures.
+    pub fn materials(textures: &TextureManager) -> EngineResult<Vec<Material>> {
+        let painted = |pattern: &SkinPattern| -> EngineResult<Material> {
+            let texture = textures.create_from_rgba(
+                pattern.width,
+                pattern.height(),
+                &pattern.texture(),
+                true,
+            )?;
+            Ok(Material::textured(texture))
+        };
+        let plain = || Material::coloured(Colour::WHITE);
+        Ok(vec![
+            painted(&SHELL_PATTERN)?
+                .with_finish(GLAZE)
+                .with_grain(GLAZE_GRAIN),
+            painted(&SKIN_PATTERN)?
+                .with_finish(SKIN)
+                .with_grain(SKIN_GRAIN),
+            plain().with_finish(BEAD),
+            plain().with_finish(GILT),
+        ])
     }
 
     /// How it looks, drawn in `materials` (registered from
@@ -321,11 +403,11 @@ impl TurtleDef {
 
 impl Spawnable for TurtleDef {
     fn material_count(&self) -> usize {
-        Self::materials().len()
+        MATERIAL_COUNT
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        Ok(Self::materials()
+        Ok(Self::materials(ctx.textures)?
             .into_iter()
             .map(|material| ctx.materials.register(material))
             .collect())

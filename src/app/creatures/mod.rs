@@ -17,6 +17,7 @@
 
 mod body_paint;
 mod body_parts;
+mod body_texture;
 mod body_warp;
 mod fish;
 mod heart_critter;

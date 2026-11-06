@@ -11,7 +11,7 @@ use nalgebra::{Isometry3, Point3, Vector3};
 use crate::app::creatures::TurtleDef;
 use crate::core::error::EngineResult;
 use crate::rendering::colour::Colour;
-use crate::rendering::material::{MaterialId, SurfaceParams};
+use crate::rendering::material::MaterialId;
 use crate::rendering::visual_bench::pool::ScenePool;
 use crate::rendering::visual_bench::scene::{
     SceneCamera, SceneContext, SceneEnvironment, SceneMesh, SceneShot, VisualScene,
@@ -41,12 +41,9 @@ impl VisualScene for Turtle {
         "The turtle out of the water from three sides, and swimming as seen from the shore."
     }
 
-    fn shots(&self, _ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
-        let surfaces: Vec<SurfaceParams> = TurtleDef::materials()
-            .iter()
-            .map(|material| material.surface_params())
-            .collect();
-        let ids: Vec<MaterialId> = (0..surfaces.len() as u32).map(MaterialId).collect();
+    fn shots(&self, ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
+        let materials = TurtleDef::materials(ctx.textures)?;
+        let ids: Vec<MaterialId> = (0..materials.len() as u32).map(MaterialId).collect();
         let model = TurtleDef::model(&ids);
         let meshes = |pose: Isometry3<f32>| -> Vec<SceneMesh> {
             model
@@ -54,9 +51,15 @@ impl VisualScene for Turtle {
                 .iter()
                 .flat_map(|part| part.primitives.iter())
                 .map(|primitive| {
-                    SceneMesh::new(primitive.vertices.clone(), primitive.indices.clone())
-                        .with_transform(pose.to_homogeneous())
-                        .with_surface(surfaces[primitive.material.0 as usize])
+                    let material = &materials[primitive.material.0 as usize];
+                    let mesh =
+                        SceneMesh::new(primitive.vertices.clone(), primitive.indices.clone())
+                            .with_transform(pose.to_homogeneous())
+                            .with_surface(material.surface_params());
+                    match &material.diffuse_texture {
+                        Some(texture) => mesh.with_texture(texture.clone()),
+                        None => mesh,
+                    }
                 })
                 .collect()
         };
@@ -88,6 +91,18 @@ impl VisualScene for Turtle {
             on_ground("front_quarter", Point3::new(0.9, 0.6, 1.3)),
             on_ground("side", Point3::new(1.6, 0.35, 0.0)),
             on_ground("above", Point3::new(-0.6, 1.5, -0.7)),
+            // Close enough to judge the painted pattern on shell, hood and
+            // flipper.
+            SceneShot::new(
+                "close",
+                SceneCamera::looking_at(
+                    Point3::new(0.45, 0.42, 0.62),
+                    Point3::new(0.12, STANDING_HEIGHT + 0.12, 0.25),
+                )
+                .with_fov(40.0),
+            )
+            .with_environment(environment.clone())
+            .with_meshes(meshes(standing).into_iter().chain([ground()])),
             swimming("swimming_near", Point3::new(1.2, WATER_LEVEL + 0.8, 1.6)),
             swimming("from_the_shore", Point3::new(3.5, WATER_LEVEL + 1.7, 4.5)),
         ])
