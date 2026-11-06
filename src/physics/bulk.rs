@@ -369,6 +369,20 @@ impl<'a> Iterator for Envelope<'a> {
 /// collider.
 pub struct MassParts<'a>(PerCollider<'a, MassPart>);
 
+impl MassParts<'_> {
+    /// The parts' centre of mass, in the frame they are placed in; `None`
+    /// if they weigh nothing.
+    pub fn centre(self) -> Option<Vector3<f32>> {
+        let (mass, moment) = self.fold((0.0f32, Vector3::zeros()), |(mass, moment), part| {
+            (
+                mass + part.mass,
+                moment + part.offset.translation.vector * part.mass,
+            )
+        });
+        (mass > 0.0).then(|| moment / mass)
+    }
+}
+
 impl<'a> Iterator for MassParts<'a> {
     type Item = MassPartRef<'a>;
 

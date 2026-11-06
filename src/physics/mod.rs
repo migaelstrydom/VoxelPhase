@@ -64,6 +64,7 @@ mod silhouette;
 mod sleep;
 pub mod solver;
 mod sphere_cast;
+mod split;
 mod static_geometry;
 mod static_surface;
 pub mod stepping;
@@ -101,6 +102,7 @@ pub use solver::{
     PgsNgsSolver, ShockPropagationConditioner, ShockPropagationConfig,
 };
 pub use sphere_cast::{CastObstacles, SphereCast, SphereCastHit};
+pub use split::{BodyTraits, Split};
 pub use static_geometry::StaticGeometry;
 pub use static_surface::{StaticSurface, SurfaceResponse};
 pub use stepping::{FixedTimestep, SequentialStepper, Stepper};

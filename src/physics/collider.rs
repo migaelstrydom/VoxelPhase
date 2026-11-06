@@ -349,6 +349,11 @@ impl Collider {
         self.bulk.as_deref()
     }
 
+    /// Carry the filter of the body it now belongs to.
+    pub(crate) fn set_filter(&mut self, filter: CollisionFilter) {
+        self.filter = filter;
+    }
+
     /// Local transform relative to the body.
     pub fn offset(&self) -> &Isometry3<f32> {
         &self.offset

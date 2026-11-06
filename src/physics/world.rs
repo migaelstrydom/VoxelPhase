@@ -9,7 +9,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::atmosphere::Atmosphere;
 use super::body::{BodyDrive, BodyType, RigidBody, RigidBodyDesc, SupportDrive};
-use super::bulk::EnvelopePart;
+use super::bulk::{self, EnvelopePart};
 use super::ccd::{
     pair_separation, CcdContext, CcdStrategy, ContactPairKey, NarrowphaseOwnership, SweepClampCcd,
 };
@@ -49,6 +49,7 @@ use super::silhouette;
 use super::sleep::{SleepManager, SleepManagerConfig};
 use super::solver::{ConstraintSolver, ManifoldConditioner, ManifoldConditions, PgsNgsSolver};
 use super::sphere_cast::{CastObstacles, SphereCast, SphereCastHit};
+use super::split::{BodyTraits, Split};
 use super::static_geometry::StaticGeometry;
 use super::sweep::{BodySweep, SweepObstacle};
 use crate::collision::convex_hull::ConvexHull;
@@ -1013,6 +1014,107 @@ impl PhysicsWorld {
         Some(collider)
     }
 
+    /// Moves `colliders` off `body` onto a new dynamic body with `traits`,
+    /// unchanged and keeping their handles, placed and moving as they were,
+    /// and rebinds `constraints` with them. Both bodies re-centre on what
+    /// they hold, and both are woken.
+    ///
+    /// `None`, with nothing changed, if `colliders` is empty, holds every
+    /// collider of `body`, names one twice or names one not on `body`, or if
+    /// a constraint listed is named twice, is not on `body`, or is of a kind
+    /// that cannot be rebound ([`ConstraintKind::rebinds`]).
+    ///
+    /// The moved colliders' cached contacts are dropped: warm-starting a new
+    /// pair of bodies from what the old one met is wrong.
+    pub fn split_off(
+        &mut self,
+        body: RigidBodyHandle,
+        colliders: &[ColliderHandle],
+        constraints: &[ConstraintHandle],
+        traits: BodyTraits,
+    ) -> Option<Split> {
+        if !self.can_split(body, colliders, constraints) {
+            return None;
+        }
+        let source = self.bodies.get(body.0)?;
+        let centre = bulk::mass_parts(colliders, &self.colliders)
+            .centre()
+            .unwrap_or_else(Vector3::zeros);
+        let rotation = source.rotation();
+        let world_centre = source.position() + rotation * centre;
+        let desc = traits.body_desc(
+            world_centre,
+            rotation,
+            source.velocity_at(world_centre),
+            source.angular_velocity(),
+        );
+        let split = self.create_body(desc);
+
+        for handle in colliders {
+            if let Some(source) = self.bodies.get_mut(body.0) {
+                source.remove_collider(*handle);
+            }
+            if let Some(new_body) = self.bodies.get_mut(split.0) {
+                new_body.add_collider(*handle);
+            }
+            if let Some(collider) = self.colliders.get_mut(handle.0) {
+                collider.shift_offset(-centre);
+                collider.set_filter(traits.filter);
+            }
+            self.manifold_cache.remove_collider(*handle);
+        }
+        for handle in constraints {
+            if let Some(constraint) = self.constraints.get_mut(handle.0) {
+                constraint.kind.rebind(body, split, centre);
+            }
+        }
+        self.pose_epoch += 1;
+        self.recompute_mass_properties(split);
+        self.recompute_mass_properties(body);
+        let kept_moved = self.recenter_on_colliders(body);
+
+        self.sleep_manager.wake_body(body);
+        self.sleep_manager.wake_body(split);
+        Some(Split {
+            body: split,
+            kept_moved,
+            new_frame: Isometry3::translation(centre.x, centre.y, centre.z),
+        })
+    }
+
+    /// Whether any cached contact manifold involves `collider`.
+    #[cfg(test)]
+    pub(crate) fn has_cached_manifold(&self, collider: ColliderHandle) -> bool {
+        self.manifold_cache.touches(collider)
+    }
+
+    /// Whether `split_off` accepts these arguments: see there.
+    fn can_split(
+        &self,
+        body: RigidBodyHandle,
+        colliders: &[ColliderHandle],
+        constraints: &[ConstraintHandle],
+    ) -> bool {
+        let Some(source) = self.bodies.get(body.0) else {
+            return false;
+        };
+        let distinct: FxHashSet<_> = colliders.iter().collect();
+        let colliders_fit = !colliders.is_empty()
+            && distinct.len() == colliders.len()
+            && colliders.len() < source.colliders().len()
+            && colliders.iter().all(|c| source.colliders().contains(c));
+
+        let distinct: FxHashSet<_> = constraints.iter().collect();
+        let constraints_fit = distinct.len() == constraints.len()
+            && constraints.iter().all(|handle| {
+                self.constraints.get(handle.0).is_some_and(|constraint| {
+                    constraint.kind.rebinds() && constraint.kind.references_body(body)
+                })
+            });
+
+        colliders_fit && constraints_fit
+    }
+
     // === Simulation ===
 
     /// Generate this frame's contacts into the narrowphase work buffer, and
@@ -1583,17 +1685,9 @@ impl PhysicsWorld {
         }
 
         let collider_handles: Vec<_> = body.colliders().to_vec();
-        let mut total_mass = 0.0f32;
-        let mut weighted = Vector3::zeros();
-        for part in body.mass_parts(&self.colliders) {
-            total_mass += part.mass;
-            weighted += part.offset.translation.vector * part.mass;
-        }
-        if total_mass <= 0.0 {
+        let Some(local_com) = body.mass_parts(&self.colliders).centre() else {
             return Vector3::zeros();
-        }
-
-        let local_com = weighted / total_mass;
+        };
         const RECENTER_EPSILON: f32 = 1e-4;
         if local_com.norm_squared() < RECENTER_EPSILON * RECENTER_EPSILON {
             return Vector3::zeros();

@@ -322,6 +322,14 @@ impl ManifoldCache {
             .retain(|key, _| key.collider_a != Some(handle) && key.collider_b != handle);
     }
 
+    /// Whether any cached manifold involves the given collider.
+    #[cfg(test)]
+    pub fn touches(&self, handle: ColliderHandle) -> bool {
+        self.manifolds
+            .keys()
+            .any(|key| key.collider_a == Some(handle) || key.collider_b == handle)
+    }
+
     /// Returns cache activity and size counters for the most recent step.
     pub fn frame_stats(&self) -> ManifoldFrameStats {
         self.frame_stats

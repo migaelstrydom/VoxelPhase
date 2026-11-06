@@ -474,6 +474,9 @@ pub struct Split {
 - **Contact caches.** The moved colliders' cached manifolds are purged, as
   `detach_collider` does: warm-starting a new pair of bodies from contacts
   the old one made is wrong.
+- **When.** Between physics steps, as fracture runs: like
+  `detach_collider`, a split made inside a step would leave that frame's
+  solver manifolds and narrowphase ownership stale.
 - **Sleep.** Both bodies are woken.
 - **Epochs.** The pose epoch and every cache keyed on a body's colliders
   (drag areas, the broadphase) are invalidated for both.

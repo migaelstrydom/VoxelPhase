@@ -438,6 +438,66 @@ impl ConstraintKind {
         }
     }
 
+    /// Whether `rebind` can move an end of this constraint: the kinds
+    /// `shift_anchor` follows. A drive, a slider or a suspension cannot be
+    /// rebound.
+    pub fn rebinds(&self) -> bool {
+        matches!(
+            self,
+            ConstraintKind::BallJoint { .. }
+                | ConstraintKind::Fixed { .. }
+                | ConstraintKind::Hinge { .. }
+                | ConstraintKind::FollowPoint { .. }
+        )
+    }
+
+    /// Moves the end of this constraint held on `from` to `to`, a body
+    /// turned as `from` is whose origin sits at `offset` in `from`'s frame
+    /// (a body split off `from`). Each anchor on `from` is re-expressed from
+    /// `to`'s origin, so it holds the same point in the world. A weld's
+    /// reference rotation, a hinge's axes and a hold's orientation are held
+    /// in the body's frame, which turns alike in both, and are unchanged.
+    ///
+    /// Returns false, changing nothing, if this kind cannot be rebound
+    /// (`rebinds`) or the constraint is not on `from`.
+    pub fn rebind(
+        &mut self,
+        from: RigidBodyHandle,
+        to: RigidBodyHandle,
+        offset: Vector3<f32>,
+    ) -> bool {
+        if !self.rebinds() || !self.references_body(from) {
+            return false;
+        }
+        self.shift_anchor(from, offset);
+        match self {
+            ConstraintKind::BallJoint { body_a, body_b, .. }
+            | ConstraintKind::Fixed { body_a, body_b, .. }
+            | ConstraintKind::Hinge { body_a, body_b, .. } => {
+                if *body_a == Some(from) {
+                    *body_a = Some(to);
+                }
+                if *body_b == from {
+                    *body_b = to;
+                }
+            }
+            ConstraintKind::FollowPoint { body_a, body_b, .. } => {
+                if *body_a == from {
+                    *body_a = to;
+                }
+                if *body_b == from {
+                    *body_b = to;
+                }
+            }
+            ConstraintKind::KeepUpright { .. }
+            | ConstraintKind::KeepAttitude { .. }
+            | ConstraintKind::SpringSlider(_)
+            | ConstraintKind::MediumDrive { .. }
+            | ConstraintKind::Suspension(_) => unreachable!("refused above"),
+        }
+        true
+    }
+
     /// Whether this constraint references the given body.
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {
