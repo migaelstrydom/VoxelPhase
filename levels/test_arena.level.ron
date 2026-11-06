@@ -118,9 +118,9 @@ Level(
                 IceBox(pos: (5.0, 0.5, 20.0), half_extents: (2.5, 0.5, 2.5)),
 
                 // Glass. A pane lying loose on the ground to throw things on,
-                // and a floor over a drop, welded along its long edges, that
-                // cracks under a footstep and gives way under anyone who
-                // stops on it — walk across, do not stand.
+                // and a floor over a drop between two walls, welded along its
+                // long edges, that cracks under a footstep and gives way under
+                // anyone who stops on it — walk across, do not stand.
                 GlassSheet(pos: (1.0, 0.0075, 26.0), size: (2.4, 1.8), yaw: 90.0, lying: true, fixed: false, impact_threshold: 600.0),
                 FramedWindow(pos: (6.0, 0.0, 15.0), yaw: 90.0, impact_threshold: 600.0),
                 GlassSheet(
@@ -131,6 +131,11 @@ Level(
                     impact_threshold: 600.0,
                     bearing: 350.0,
                 ),
+                // The floor's long edges lie over two low walls, a few
+                // millimetres clear of them: the welds carry it, the walls
+                // show what it spans.
+                Box(pos: (-4.05, 0.4425, 24.0), half_extents: (0.15, 0.4425, 2.5), style: Stone, density: 2700.0),
+                Box(pos: (-1.95, 0.4425, 24.0), half_extents: (0.15, 0.4425, 2.5), style: Stone, density: 2700.0),
 
                 // Ice bricks in a running bond, and a dome built the same way.
                 IceWall(base: (9.0, 0.0, 24.0), columns: 5, rows: 5, yaw: 90.0),
