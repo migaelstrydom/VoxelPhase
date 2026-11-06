@@ -17,11 +17,12 @@
 //!
 //! Only a body made of one box or one convex hull has faces to rest on. A
 //! sphere rests however it is turned, and a capsule or a compound body is left
-//! as authored.
+//! as authored. A box's faces are read from the box itself rather than from a
+//! hull built over it: a box may be far thinner than a hull is allowed to be,
+//! as a pane of glass is.
 
 use nalgebra::{Isometry3, Point3, UnitQuaternion, UnitVector3, Vector3};
 
-use crate::collision::convex_hull::cube_hull;
 use crate::collision::ConvexHull;
 
 use super::collider::ColliderShape;
@@ -52,42 +53,86 @@ pub fn resting_turn(
         return None;
     };
     let collider = world.collider(*collider)?;
-    let hull = match collider.shape() {
-        ColliderShape::ConvexHull { hull } => hull.as_ref().clone(),
-        ColliderShape::Box { half_extents } => cube_hull(*half_extents),
+    let faces = match collider.shape() {
+        ColliderShape::ConvexHull { hull } => hull_faces(hull),
+        ColliderShape::Box { half_extents } => box_faces(half_extents),
         ColliderShape::Sphere { .. } | ColliderShape::Capsule { .. } => return None,
     };
     let placement = collider.world_transform(rigid.position(), rigid.rotation());
 
-    let normal = resting_face_normal(&hull, &placement, rigid.position(), down)?;
+    let normal = resting_face_normal(&faces, &placement, rigid.position(), down)?;
     if normal.dot(&down) >= ALREADY_DOWN_COS {
         return None;
     }
     UnitQuaternion::rotation_between(&normal, &down)
 }
 
+/// A flat face of a collider, in the collider's frame.
+struct Face {
+    /// Outward unit normal.
+    normal: Vector3<f32>,
+    /// Corners, wound counter-clockwise seen from the side `normal` points to.
+    corners: Vec<Vector3<f32>>,
+}
+
+/// The faces of a convex hull.
+fn hull_faces(hull: &ConvexHull) -> Vec<Face> {
+    hull.faces
+        .iter()
+        .map(|face| Face {
+            normal: face.normal,
+            corners: face
+                .vertex_indices
+                .iter()
+                .map(|&i| hull.vertices[i as usize])
+                .collect(),
+        })
+        .collect()
+}
+
+/// The six faces of a box with `half_extents`, centred on the origin.
+fn box_faces(half_extents: &Vector3<f32>) -> Vec<Face> {
+    // Taken in this order round the axes `u` and `v` of a face whose normal is
+    // `u × v`, its corners wind counter-clockwise seen from outside.
+    const QUAD: [(f32, f32); 4] = [(1.0, 1.0), (-1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)];
+    let along = |axis: usize, sign: f32| Vector3::ith(axis, sign * half_extents[axis]);
+
+    let mut faces = Vec::with_capacity(6);
+    for axis in 0..3 {
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        for sign in [1.0, -1.0] {
+            let mut corners: Vec<Vector3<f32>> = QUAD
+                .iter()
+                .map(|&(su, sv)| along(axis, sign) + along(u, su) + along(v, sv))
+                .collect();
+            if sign < 0.0 {
+                corners.reverse();
+            }
+            faces.push(Face {
+                normal: Vector3::ith(axis, sign),
+                corners,
+            });
+        }
+    }
+    faces
+}
+
 /// The outward world normal of the face, among those `centre_of_mass` lies
 /// over, that points nearest to `down`.
 fn resting_face_normal(
-    hull: &ConvexHull,
+    faces: &[Face],
     placement: &Isometry3<f32>,
     centre_of_mass: Point3<f32>,
     down: UnitVector3<f32>,
 ) -> Option<Vector3<f32>> {
-    let corners: Vec<Point3<f32>> = hull
-        .vertices
-        .iter()
-        .map(|v| placement * Point3::from(*v))
-        .collect();
-
-    hull.faces
+    faces
         .iter()
         .filter_map(|face| {
             let normal = placement.rotation * face.normal;
             let polygon: Vec<Point3<f32>> = face
-                .vertex_indices
+                .corners
                 .iter()
-                .map(|&i| corners[i as usize])
+                .map(|&corner| placement * Point3::from(corner))
                 .collect();
             lies_over(centre_of_mass, &polygon, &normal).then_some(normal)
         })
@@ -214,6 +259,36 @@ mod tests {
             UnitQuaternion::from_euler_angles(0.3, 0.2, 0.1),
         );
         assert!(lowest_face_after(&world, body, &hull) > 0.9999);
+    }
+
+    /// A box far thinner than any hull may be (a pane of glass lying flat)
+    /// still has faces to rest on.
+    #[test]
+    fn a_thin_box_lying_flat_needs_no_turn() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let yaw = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 1.2);
+        let body = body_with(
+            &mut world,
+            ColliderDesc::box_shape(Vector3::new(1.2, 0.0075, 0.9)),
+            yaw,
+        );
+        assert!(resting_turn(&world, body, down()).is_none());
+    }
+
+    /// The same pane tipped less than halfway to its edge turns back to lie
+    /// flat; tipped nearer its edge, it would stand on that.
+    #[test]
+    fn a_tipped_thin_box_turns_back_to_lie_flat() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let tip = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.5);
+        let body = body_with(
+            &mut world,
+            ColliderDesc::box_shape(Vector3::new(1.2, 0.0075, 0.9)),
+            tip,
+        );
+        let turn = resting_turn(&world, body, down()).expect("tipped");
+        let rotation = turn * tip;
+        assert!((rotation * Vector3::y()).y.abs() > 0.9999);
     }
 
     #[test]

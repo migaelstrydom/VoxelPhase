@@ -121,7 +121,7 @@ Level(
                 // and a floor over a drop between two walls, welded along its
                 // long edges, that cracks under a footstep and gives way under
                 // anyone who stops on it — walk across, do not stand.
-                GlassSheet(pos: (1.0, 0.0075, 26.0), size: (2.4, 1.8), yaw: 90.0, lying: true, fixed: false, impact_threshold: 600.0),
+                Dropped(GlassSheet(pos: (1.0, 0.5, 26.0), size: (2.4, 1.8), yaw: 90.0, lying: true, fixed: false, impact_threshold: 600.0)),
                 FramedWindow(pos: (6.0, 0.0, 15.0), yaw: 90.0, impact_threshold: 600.0),
                 GlassSheet(
                     pos: (-3.0, 0.9, 24.0),
