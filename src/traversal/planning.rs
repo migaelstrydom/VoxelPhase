@@ -16,7 +16,6 @@ use super::path_frame::PathFrame;
 use super::physics_caster::{strip_reach, PhysicsCaster};
 use super::section_cache::SectionCache;
 use super::strip_scenery::{SceneryView, StripScenery};
-use super::wall_slide::WallSlide;
 
 /// How far the heading may turn from the laid path before it is laid
 /// afresh, in degrees: the footfalls lie along the laid path, so this is how
@@ -25,9 +24,6 @@ const TURN_LIMIT_DEGREES: f32 = 2.0;
 /// How far a path laid afresh may turn from the last one and the last plan
 /// still be kept, carried onto it, in degrees; past it the plan is made anew.
 const CARRY_LIMIT_DEGREES: f32 = 10.0;
-/// The same while the path slides along a wall, in degrees: the wall, not
-/// the stick, sets its way, and it must not run into the wall.
-const SLIDE_TURN_LIMIT_DEGREES: f32 = 1.0;
 /// How far the body may be shoved off the laid path's line, the heading
 /// still along it, before the path is laid afresh, in metres: rough ground
 /// and rubble jostle the body this much and back, and each relay moves the
@@ -108,9 +104,6 @@ pub struct PlanningCost {
 /// A frame's plan, the strip it was made on, and what it cost.
 pub struct PlanFrame {
     pub frame: PathFrame,
-    /// Whether the path was laid along a wall the heading meets
-    /// ([`WallSlide`]) rather than along the heading.
-    pub slides: bool,
     pub section: Section,
     pub body: BodyState,
     pub outcome: Result<Planned, Refusal>,
@@ -141,8 +134,6 @@ pub struct TraversalPlanning {
     laid_at: f32,
     /// How far above and below there they reach ([`strip_reach`]).
     reach: (f32, f32),
-    /// Whether the path was laid along a wall ([`WallSlide`]).
-    slides: bool,
     /// How far ahead of the body the strip is sampled: short when a path is
     /// laid with no plan to carry, growing frame by frame to the layout's
     /// reach.
@@ -162,7 +153,6 @@ impl TraversalPlanning {
             scenery: None,
             laid_at: 0.0,
             reach,
-            slides: false,
             previous: None,
             sampled_ahead: 0.0,
             lead: Limb::LeftFoot,
@@ -293,7 +283,6 @@ impl TraversalPlanning {
 
         Some(PlanFrame {
             frame,
-            slides: self.slides,
             section,
             body,
             outcome,
@@ -355,62 +344,35 @@ impl TraversalPlanning {
         AABB::new(min, max)
     }
 
-    /// Lays the path the way the body will move ([`WallSlide`]) when there is
-    /// none, that way has turned, or the body has left its line or its
-    /// height; the last plan is carried onto the new path if it turned
-    /// within [`CARRY_LIMIT_DEGREES`], and dropped if more. Whether it did.
+    /// Lays the path along the heading when there is none, the heading has
+    /// turned, or the body has left its line or its height; the last plan is
+    /// carried onto the new path if it turned within [`CARRY_LIMIT_DEGREES`],
+    /// and dropped if more. Whether it did.
     fn lay_path_if_needed(&mut self, input: &PlanningInput) -> bool {
-        let line = WallSlide {
-            world: input.world,
-            scenery: input.scenery,
-            exclude: input.exclude,
-            filter: input.filter,
-            body: &self.planner.params.body,
-        }
-        .path(input.position, input.heading);
+        let line = PathFrame::along(input.position, input.heading);
         let laid = self.cache.frame().copied();
-        let fresh = laid.is_none_or(|laid| {
-            strayed(
-                &laid,
-                self.laid_at,
-                &line.frame,
-                line.slides,
-                input.position,
-            )
-        });
+        let fresh = laid.is_none_or(|laid| strayed(&laid, self.laid_at, &line, input.position));
         if fresh {
             self.previous = laid.zip(self.previous.take()).and_then(|(old, plan)| {
-                let turned = old.forward().angle(&line.frame.forward()).to_degrees();
-                (turned <= CARRY_LIMIT_DEGREES).then(|| old.carry(&plan, &line.frame))
+                let turned = old.forward().angle(&line.forward()).to_degrees();
+                (turned <= CARRY_LIMIT_DEGREES).then(|| old.carry(&plan, &line))
             });
-            self.cache.lay_path(line.frame);
+            self.cache.lay_path(line);
             self.laid_at = input.position.y;
-            self.slides = line.slides;
         }
         fresh
     }
 }
 
 /// Whether the body at `position` has left the path `laid` at height
-/// `laid_at` for the way `heading` it would be laid now, sliding along a wall
-/// if `slides`: turned past the turn limit, shoved past [`OFF_LINE_LIMIT`]
-/// off its line, drifted past [`DRIFT_LIMIT`] along a heading turned from it,
-/// or climbed or dropped past [`HEIGHT_LIMIT`].
-fn strayed(
-    laid: &PathFrame,
-    laid_at: f32,
-    heading: &PathFrame,
-    slides: bool,
-    position: Point3<f32>,
-) -> bool {
+/// `laid_at` for the way `heading` it would be laid now: turned past
+/// [`TURN_LIMIT_DEGREES`], shoved past [`OFF_LINE_LIMIT`] off its line,
+/// drifted past [`DRIFT_LIMIT`] along a heading turned from it, or climbed or
+/// dropped past [`HEIGHT_LIMIT`].
+fn strayed(laid: &PathFrame, laid_at: f32, heading: &PathFrame, position: Point3<f32>) -> bool {
     let off = laid.path_point(position).d.abs();
-    let limit = if slides {
-        SLIDE_TURN_LIMIT_DEGREES
-    } else {
-        TURN_LIMIT_DEGREES
-    };
     let turned = laid.forward().angle(&heading.forward()).to_degrees();
-    turned > limit
+    turned > TURN_LIMIT_DEGREES
         || off > OFF_LINE_LIMIT
         || (off > DRIFT_LIMIT && turned > STEERED_DEGREES)
         || (position.y - laid_at).abs() > HEIGHT_LIMIT
@@ -450,7 +412,7 @@ mod tests {
         let laid = PathFrame::new(Point3::origin(), 90.0);
         let position = laid.world_point(PathVec::new(ahead, off, 0.0));
         let heading = PathFrame::new(position, 90.0 - degrees);
-        strayed(&laid, 0.0, &heading, false, position)
+        strayed(&laid, 0.0, &heading, position)
     }
 
     #[test]

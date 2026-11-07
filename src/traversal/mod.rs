@@ -18,7 +18,6 @@ mod section_cache;
 mod strip_scenery;
 mod system;
 mod tracking;
-mod wall_slide;
 mod world_caster;
 
 pub use carriers::{carriers, Riding, StandsOn};
@@ -32,5 +31,4 @@ pub use role::PlanRole;
 pub use section_cache::SectionCache;
 pub use strip_scenery::{SceneryView, StripScenery};
 pub use system::{TraversalPlanState, TraversalPlanSystem};
-pub use wall_slide::{LaidPath, WallSlide};
 pub use world_caster::{WorldCaster, WorldHit};

@@ -76,9 +76,17 @@ impl CastKey {
 ///
 /// Kept casts are dropped around a body each time it has moved a centimetre,
 /// where the terrain changed, and all at once when the path is laid afresh.
+/// The strip's own body is held to the same centimetre: the casts nearest it
+/// start from its height, and every station after them from what those met.
 pub struct SectionCache {
     frame: Option<PathFrame>,
     hits: FxHashMap<CastKey, Option<CastHit>>,
+    /// The body's height the kept casts were sampled from, kept while the
+    /// body stays within [`MOVED`] of it. Its bob would otherwise start the
+    /// casts nearest it afresh each frame, and where they meet what the body
+    /// presses against (a cast starting touching stops where it starts),
+    /// change where every station after them starts from.
+    body_z: Option<f32>,
     /// Where each body awake in the world was when the casts around it were
     /// last dropped.
     poses: FxHashMap<RigidBodyHandle, Pose>,
@@ -89,6 +97,7 @@ impl Default for SectionCache {
         Self {
             frame: None,
             hits: FxHashMap::default(),
+            body_z: None,
             poses: FxHashMap::default(),
         }
     }
@@ -137,6 +146,7 @@ impl SectionCache {
     pub fn lay_path(&mut self, frame: PathFrame) {
         self.frame = Some(frame);
         self.hits.clear();
+        self.body_z = None;
     }
 
     /// Drops what moving bodies (other than `ignore`) and changed terrain
@@ -249,8 +259,9 @@ impl SectionCache {
     }
 
     /// The strip around `origin` along the laid path, in the layer of a body
-    /// whose bottom-sphere centre is at `body_z`, casting only what is not
-    /// kept. Returns it and how many casts it made.
+    /// whose bottom-sphere centre is at `body_z` (to within [`MOVED`] of
+    /// where the kept casts saw it), casting only what is not kept. Returns
+    /// it and how many casts it made.
     pub fn sample(
         &mut self,
         caster: &impl SphereCaster,
@@ -270,8 +281,66 @@ impl SectionCache {
             hits: &hits,
             casts: &casts,
         };
+        let body_z = *self.body_z.insert(
+            self.body_z
+                .filter(|kept| (kept - body_z).abs() <= MOVED)
+                .unwrap_or(body_z),
+        );
         let section = sample_section(&remembering, layout, params, origin, body_z);
         self.hits = hits.into_inner();
         (section, casts.get())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use traversal_planner::section::{BodyKey, Footing};
+    use traversal_planner::PathVec;
+
+    use super::*;
+
+    /// A body pressed against something everywhere along the strip: a cast
+    /// up starts touching it and stops where it starts, on level ground.
+    struct PressedAgainst;
+
+    impl PressedAgainst {
+        fn hit(z: f32, normal: PathVec) -> Option<CastHit> {
+            Some(CastHit {
+                z,
+                normal,
+                body: BodyKey(1),
+                footing: Footing::Fixed,
+            })
+        }
+    }
+
+    impl SphereCaster for PressedAgainst {
+        fn cast_down(&self, _s: f32, _d: f32, radius: f32, _from: f32) -> Option<CastHit> {
+            Self::hit(radius, PathVec::UP)
+        }
+
+        fn cast_up(&self, _s: f32, _d: f32, _radius: f32, from: f32) -> Option<CastHit> {
+            Self::hit(from, -PathVec::UP)
+        }
+    }
+
+    /// What a strip pressed against starts from carries the body's height
+    /// into every station after the body: a bob within a centimetre keeps
+    /// them all, and a climb past it casts them again.
+    #[test]
+    fn a_body_bobbing_within_a_centimetre_keeps_the_casts_against_what_it_presses() {
+        let (layout, params) = (StripLayout::default(), GaitParams::default());
+        let mut cache = SectionCache::default();
+        cache.lay_path(PathFrame::new(Point3::origin(), 0.0));
+        let body_z = params.body.radius;
+
+        let (_, first) = cache.sample(&PressedAgainst, &layout, &params, 0.0, body_z);
+        assert!(first > 0);
+        let (_, bobbed) =
+            cache.sample(&PressedAgainst, &layout, &params, 0.0, body_z + 0.4 * MOVED);
+        assert_eq!(bobbed, 0);
+        let (_, climbed) =
+            cache.sample(&PressedAgainst, &layout, &params, 0.0, body_z + 2.0 * MOVED);
+        assert!(climbed > 0);
     }
 }

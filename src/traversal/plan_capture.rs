@@ -62,7 +62,6 @@ mod tests {
         let outcome = planner.plan(&StripQuery::new(&section, &scene.params), &scene.request());
         let frame = PlanFrame {
             frame: PathFrame::new(Point3::origin(), 90.0),
-            slides: false,
             section,
             body: scene.body,
             outcome,

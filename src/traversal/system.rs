@@ -112,9 +112,8 @@ impl TraversalPlanState {
 /// With tracking on, as it is unless [`TRACK_KEY`] switches it off, the plan drives the body: it runs between
 /// the player's input and `CharacterControlSystem`, plans from the player's
 /// intent, and rewrites that intent to follow the plan ([`track`]): at the
-/// plan's speed, steered by the stick (along the path where it slides on a
-/// wall), and taking off where it hops. The stick sets a refused plan's
-/// pace. A jump the player presses still jumps.
+/// plan's speed, steered by the stick, and taking off where it hops. The
+/// stick sets a refused plan's pace. A jump the player presses still jumps.
 ///
 /// The character's locomotion state sets the planner's [`PlanRole`]: off, in
 /// a jump, a fall or the water, it does nothing at all and the intent is the
@@ -294,17 +293,12 @@ impl<'a> System<'a> for TraversalPlanSystem {
                     landing_reach(planning.params()),
                 );
                 // The plan sets the pace; the stick steers, as the path is
-                // relaid only after it turns some way, but along a wall.
-                let steer = if frame.slides {
-                    frame.frame.forward()
-                } else {
-                    heading
-                };
+                // relaid only after it turns some way.
                 let share = match tracked.pace {
                     Pace::Asked => push.norm().min(1.0),
                     Pace::Planned(speed) => (speed / gait_speed).min(1.0),
                 };
-                intent.direction = steer * share;
+                intent.direction = heading * share;
                 intent.takeoff = tracked.takeoff;
                 intent.landing = tracked.landing;
             }

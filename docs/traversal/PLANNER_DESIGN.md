@@ -72,7 +72,7 @@ The planner crate does not depend on the game. The game depends on it.
 A `SectionFrame` maps the world to path coordinates: `s` is the distance along
 the predicted path, `d` the signed offset across it (positive to the left),
 `z` the height. The path is a straight line laid from the body along the
-heading (or along a wall the heading meets), and laid afresh once the
+heading, and laid afresh once the
 heading has turned 2° from it, the body has drifted 2 cm off its line
 along a heading turned from it at all, been shoved 0.2 m off it, or
 climbed or dropped far from where it was laid. A gentle turn, the stick
@@ -900,15 +900,13 @@ until E.
 - **Path prediction:** how far to trust the stick's curvature for the section
   frame on a hard turn, and what the plan does when the player stops or
   reverses (a plan that ends in a stop, and a churn cost waived on reversal).
-  Walls are settled: a path is laid along a wall the heading meets within 30°
-  of parallel, as the capsule slides on it, its line kept 3 cm clear
-  (`WallSlide`). The walls are what the capsule's top sphere meets, so lips
-  lower than its middle stay hops; the bottom sphere keeps the line 3 cm off
-  what it stands against and follows a face it meets within 5° of parallel
-  (a bank's foot converging on the path, not a lip to hop). A wall is any
-  face steeper than the body rides. Walls are looked for 2 m ahead, about a
-  sprint's stopping distance: over the strip's 10 m, a column far off turned
-  the path along its tangent. The 30° is to tune in play.
+  Walls are settled: the path runs along the heading, into a wall if the
+  heading meets one, and the plan refuses there; a refusal leaves the body
+  to the drive, whose capsule slides along the wall as fast as a path laid
+  along it carried it (5 m/s at 5° into a wall, 4.8 at 15°). Laying the path
+  along the wall instead (`WallSlide`, removed) flipped between the wall and
+  the heading wherever the wall's face turned from cast to cast (a tree's
+  trunk and crown, scree), and each flip recast the whole strip.
 - **Lateral footing:** the strip's width and lane count (five over ±0.3 m to
   start) and how far the foot placer may move a foot from its planned
   footfall are judged on the scree and rubble lanes in D and F. If the best

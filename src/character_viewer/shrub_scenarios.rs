@@ -23,6 +23,18 @@ const LOB_NORTH: Vector3<f32> = Vector3::new(0.0, 0.8, 0.6);
 pub fn catalogue() -> Vec<Scenario> {
     vec![
         Scenario {
+            name: "tree_push",
+            summary: "Test Arena: walk into the cypress at (26.2, 0) and keep pushing",
+            level: TEST_ARENA,
+            start: (26.2, -1.5),
+            yaw: 0.0,
+            script: Script::new()
+                .then(Beat::stand(0.5))
+                .then(Beat::walk(4.0).towards(NORTH).named("push")),
+            camera: CameraRig::side().with_azimuth(90.0).with_distance(6.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
             name: "shrub_wade",
             summary: "Shrub Garden: walk north through the hedge row's shrub at x = -3.8",
             level: SHRUB_GARDEN,

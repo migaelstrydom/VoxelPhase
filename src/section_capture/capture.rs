@@ -10,7 +10,7 @@ use traversal_planner::{GaitParams, TraversalScene};
 use crate::level::load_level;
 use crate::level_check::{build_terrain, is_at_rest, RestTrial};
 use crate::physics::{CollisionFilter, PhysicsImpulse};
-use crate::traversal::{strip_reach, PathFrame, PhysicsCaster, WallSlide};
+use crate::traversal::{strip_reach, PathFrame, PhysicsCaster};
 
 /// How high above and below zero anything could stand, in metres: the search
 /// for the body's floor spans it. The terrain refuses a query longer than
@@ -120,8 +120,7 @@ impl CaptureWorld {
     /// The strip from world `(x, z)` for a body heading along
     /// `heading_degrees` (turned about `+Y` from `+Z`), as a scene with the
     /// body standing on its floor there, the first below `below` if given; and the seconds one sampling of it
-    /// took. The path is laid as the game lays it: along a wall the heading
-    /// meets nearly parallel ([`WallSlide`]).
+    /// took. The path is laid as the game lays it: along the heading.
     pub fn capture(
         &self,
         at: (f32, f32),
@@ -146,23 +145,8 @@ impl CaptureWorld {
             top: SKY,
             bottom: -SKY,
         };
-        // The ground right under the start, which a sphere the body's size
-        // might not reach beside a wall, then the body's floor where the
-        // path leaves from.
+        // The body's floor where the path leaves from.
         let from = below.unwrap_or(f32::INFINITY);
-        let ground = caster
-            .cast_down(0.0, 0.0, params.foot.radius, from)
-            .ok_or("no floor under the start")?;
-        let bottom = ground.z - params.foot.radius + params.body.radius;
-        caster.frame = WallSlide {
-            world: &physics.world,
-            scenery: &*terrain,
-            exclude: &[],
-            filter: CollisionFilter::DEFAULT,
-            body: &params.body,
-        }
-        .path(Point3::new(at.0, bottom, at.1), frame.forward())
-        .frame;
         let floor = caster
             .cast_down(0.0, 0.0, params.body.radius, from)
             .ok_or("no floor under the start")?;
