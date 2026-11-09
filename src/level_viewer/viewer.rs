@@ -216,10 +216,7 @@ impl LevelViewer {
         let projection = shot.camera.projection(aspect);
         let camera_pos = shot.camera.eye.coords;
 
-        self.renderer
-            .sky_renderer
-            .set_sun_direction(shot.environment.lighting.sun_direction);
-        *self.renderer.lighting_mut() = shot.environment.lighting;
+        self.renderer.set_lighting(shot.environment.lighting);
         self.renderer.post_process.config = shot.environment.post;
 
         // The map was allocated at the renderer's resolution and cannot be

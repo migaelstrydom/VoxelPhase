@@ -306,6 +306,17 @@ Level(
 
     // In the ROOT segment's local frame.
     player_spawn: (30.0, 3.0, 62.0),
+
+    // Optional, as is each field: the sun and the air. A level that writes
+    // none is lit as the renderer lights by default.
+    daylight: (
+        sun_bearing: 125.0,            // degrees clockwise from north (−z); 90 is east (+x)
+        sun_elevation: 26.0,           // degrees above the horizon; below about 40 the sky warms
+        sun_colour: (1.0, 0.78, 0.52), // linear
+        sun_intensity: 2.0,
+        fill_colour: (0.06, 0.06, 0.08), // linear flat fill: how dark, and what colour, shadows go
+        visibility: Some(160.0),       // m at which haze covers 63%; None for no haze
+    ),
 )
 ```
 
@@ -336,6 +347,10 @@ pub struct Level {
     pub player_spawn: (f32, f32, f32),
     #[serde(default)]
     pub water: Option<WaterConfig>,
+    /// Where the sun stands, and the colour of the light and the air
+    /// (`daylight.rs`). Every field defaults to `SceneLighting::default()`.
+    #[serde(default)]
+    pub daylight: Daylight,
     /// Derived: one world frame per segment, filled in by `load_level`.
     #[serde(skip)]
     pub frames: Vec<SegmentFrame>,

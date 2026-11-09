@@ -25,6 +25,7 @@ use crate::plants::{CypressSpec, LollipopSpec};
 use crate::terrain::SegmentFrame;
 use crate::trampoline::TrampolineShape;
 
+use super::daylight::Daylight;
 use super::footprint::{Footprint, Support};
 
 use crate::app::creatures::{FishDef, HeartCritterDef, PeeperDef, RollerDef, TurtleDef};
@@ -65,6 +66,10 @@ pub struct Level {
     /// Water configuration. If omitted, no water system is created.
     #[serde(default)]
     pub water: Option<WaterConfig>,
+
+    /// Where the sun stands, and the colour of the light and the air.
+    #[serde(default)]
+    pub daylight: Daylight,
 
     /// How many pieces of each break are kept once it has been seen.
     #[serde(default)]

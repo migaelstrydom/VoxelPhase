@@ -1,6 +1,7 @@
-//! Level files: data model, loading, segment placement, object footprints, and spawning a level into the world (dropping objects onto what is below them).
+//! Level files: data model, daylight, loading, segment placement, object footprints, and spawning a level into the world (dropping objects onto what is below them).
 
 pub mod data;
+pub mod daylight;
 pub mod drop;
 pub mod footprint;
 pub mod loader;
@@ -8,6 +9,7 @@ pub mod placement;
 pub mod spawner;
 
 pub use data::*;
+pub use daylight::Daylight;
 pub use footprint::{Footprint, Support};
 pub use loader::{load_level, LevelError};
 pub use placement::{resolve_placements, world_anchor, PlacementError};

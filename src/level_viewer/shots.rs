@@ -13,19 +13,11 @@
 use nalgebra::{Point3, Vector3};
 
 use crate::collision::AABB;
-use crate::level::Level;
+use crate::level::{Daylight, Level};
 use crate::lighting::{ActiveLight, LightId};
 use crate::rendering::colour::Colour;
 use crate::rendering::visual_bench::{SceneCamera, SceneEnvironment};
 use crate::terrain::{Segment, TerrainWorld};
-
-/// Where the sun sits for every standard shot, as a direction towards it.
-///
-/// Mid-morning and off-axis. High enough that a pit floor is not in permanent
-/// shadow, low enough that a two-metre bench casts a shadow long enough to read
-/// as a step — which is exactly the feature a level is most likely to be wrong
-/// about.
-const SUN: Vector3<f32> = Vector3::new(-0.45, 0.78, -0.44);
 
 /// How much room to leave around the subject, as a multiple of the distance
 /// that would frame it exactly.
@@ -52,11 +44,19 @@ pub struct ViewerShot {
 }
 
 impl ViewerShot {
-    pub fn new(label: impl Into<String>, camera: SceneCamera) -> Self {
+    /// A shot under the level's own `daylight`.
+    ///
+    /// Every shot of a level is lit alike, and as the game lights it: a sheet
+    /// whose tiles are lit differently invites the difference between two tiles
+    /// to be read as a difference in the level.
+    pub fn new(label: impl Into<String>, camera: SceneCamera, daylight: &Daylight) -> Self {
         Self {
             label: label.into(),
             camera,
-            environment: daylight(),
+            environment: SceneEnvironment {
+                lighting: daylight.lighting(),
+                ..SceneEnvironment::default()
+            },
         }
     }
 
@@ -64,20 +64,11 @@ impl ViewerShot {
     ///
     /// Such a camera stands hundreds of metres back, far beyond any the game
     /// uses, and the aerial perspective there would veil the level being judged.
-    fn from_outside(label: impl Into<String>, camera: SceneCamera) -> Self {
-        let mut shot = Self::new(label, camera);
+    fn from_outside(label: impl Into<String>, camera: SceneCamera, daylight: &Daylight) -> Self {
+        let mut shot = Self::new(label, camera, daylight);
         shot.environment = shot.environment.without_aerial_perspective();
         shot
     }
-}
-
-/// The lighting every standard shot uses.
-///
-/// Deliberately one environment for all of them. A viewer is for judging the
-/// *level*, and a sheet whose tiles are lit differently invites the difference
-/// between two tiles to be read as a difference in the level.
-fn daylight() -> SceneEnvironment {
-    SceneEnvironment::default().with_sun(SUN)
 }
 
 /// The default set of views for a level.
@@ -91,10 +82,12 @@ pub fn standard_shots(level: &Level, terrain: &TerrainWorld, aspect: f32) -> Vec
     shots.push(ViewerShot::from_outside(
         "overview ne",
         frame(&whole, Vector3::new(1.0, 0.85, 1.0), aspect),
+        &level.daylight,
     ));
     shots.push(ViewerShot::from_outside(
         "overview sw",
         frame(&whole, Vector3::new(-1.0, 0.85, -1.0), aspect),
+        &level.daylight,
     ));
 
     for (index, segment) in terrain.segments().iter().enumerate() {
@@ -109,6 +102,7 @@ pub fn standard_shots(level: &Level, terrain: &TerrainWorld, aspect: f32) -> Vec
         shots.push(ViewerShot::from_outside(
             name,
             frame(&bounds, Vector3::new(1.0, 0.7, 1.0), aspect),
+            &level.daylight,
         ));
     }
 
@@ -164,8 +158,12 @@ fn extent(points: impl Iterator<Item = Point3<f32>>) -> Option<AABB> {
 
 /// A single view from an explicit eye and target, for when a standard shot has
 /// shown something worth going in for a closer look at.
-pub fn custom_shot(eye: Point3<f32>, target: Point3<f32>) -> ViewerShot {
-    ViewerShot::new("custom", SceneCamera::looking_at(eye, target))
+pub fn custom_shot(level: &Level, eye: Point3<f32>, target: Point3<f32>) -> ViewerShot {
+    ViewerShot::new(
+        "custom",
+        SceneCamera::looking_at(eye, target),
+        &level.daylight,
+    )
 }
 
 /// What the player sees on the first frame.
@@ -184,8 +182,9 @@ fn spawn_view(level: &Level, whole: &AABB) -> ViewerShot {
     let mut shot = ViewerShot::new(
         "spawn eye",
         SceneCamera::looking_at(eye, target).with_fov(70.0),
+        &level.daylight,
     );
-    shot.environment = daylight().with_point_light(ActiveLight {
+    shot.environment = shot.environment.with_point_light(ActiveLight {
         id: LightId(0),
         position: eye.coords,
         range: 25.0,

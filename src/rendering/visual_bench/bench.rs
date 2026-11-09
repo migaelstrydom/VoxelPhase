@@ -82,13 +82,7 @@ impl VisualBench {
         let projection = shot.camera.projection(aspect);
         let camera_pos = shot.camera.eye.coords;
 
-        // The sun lives on the sky renderer so that the shaded geometry and the
-        // visible sun disc cannot disagree; the rest of the environment goes
-        // straight onto the renderer.
-        self.renderer
-            .sky_renderer
-            .set_sun_direction(shot.environment.lighting.sun_direction);
-        *self.renderer.lighting_mut() = shot.environment.lighting;
+        self.renderer.set_lighting(shot.environment.lighting);
         self.renderer.post_process.config = shot.environment.post;
 
         // The map was allocated at the renderer's resolution and cannot be

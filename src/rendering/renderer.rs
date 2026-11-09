@@ -755,10 +755,11 @@ impl Renderer {
         self.frame_mut().data.update_light_ubo(active)
     }
 
-    /// Mutable access to the scene lighting environment (sun colour, ambient,
-    /// intensity). The sun *direction* is owned by the sky renderer.
-    pub fn lighting_mut(&mut self) -> &mut SceneLighting {
-        &mut self.lighting
+    /// Light the scene: the sun (which the sky draws where the lighting says
+    /// it stands), the fill and the haze.
+    pub fn set_lighting(&mut self, lighting: SceneLighting) {
+        self.sky_renderer.set_sun_direction(lighting.sun_direction);
+        self.lighting = lighting;
     }
 
     /// Update sky renderer with delta time for cloud animation.

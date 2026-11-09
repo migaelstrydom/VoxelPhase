@@ -60,13 +60,11 @@ impl SkyRenderer {
     }
 
     /// Set the sun direction (should be normalized).
-    #[allow(dead_code)]
     pub fn set_sun_direction(&mut self, direction: Vector3<f32>) {
         self.sun_direction = direction.normalize();
     }
 
     /// Get the current sun direction.
-    #[allow(dead_code)]
     pub fn sun_direction(&self) -> Vector3<f32> {
         self.sun_direction
     }

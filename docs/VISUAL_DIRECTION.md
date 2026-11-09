@@ -763,8 +763,9 @@ game camera's 500 m far plane cutting off the ocean ring (it runs to 1 km).
 - **The curve is `1 - exp(-(d/V)^3)`, not exponential.** Exponential haze tuned
   to close by the far plane turned the whole sea milky from 100 m out. The cube
   leaves under 3% at 100 m and about 20% at 200 m, and is about 97% complete at
-  500 m. `V` is `SceneLighting::aerial_visibility` (330 m in the game), carried in
-  the scene UBO's and the water push constants' `camera_pos.w`.
+  500 m. `V` is `SceneLighting::aerial_visibility` (330 m unless the level's
+  `daylight` sets its own), carried in the scene UBO's and the water push
+  constants' `camera_pos.w`.
 - **`None` turns it off.** `level_viewer`'s overview and segment shots stand
   hundreds of metres back, and the haze there veiled the level being judged;
   they draw without it. The spawn view and `--eye` shots keep it.

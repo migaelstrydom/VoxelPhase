@@ -134,7 +134,7 @@ fn film(scenario: &Scenario, options: &Options) -> Result<Run, String> {
             .collect();
         let replaced = vec![0; depths.len()];
         viewer.swap_terrain(terrain);
-        let mut shot = custom_shot(eye, look);
+        let mut shot = custom_shot(&level, eye, look);
         shot.label = format!("t = {at:.1} s");
         match viewer.render_with(
             &shot,

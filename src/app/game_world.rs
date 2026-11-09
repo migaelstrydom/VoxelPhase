@@ -43,11 +43,13 @@ impl<'a, 'b> GameWorld<'a, 'b> {
     ///
     /// Spawns no camera: where the view comes from is the caller's business.
     pub fn assemble(
-        renderer: Renderer,
+        mut renderer: Renderer,
         resource_manager: ResourceManager,
         texture_manager: TextureManager,
         level: &Level,
     ) -> EngineResult<Self> {
+        renderer.set_lighting(level.daylight.lighting());
+
         // Create materials: grenade, house pool, and level-specific box materials
         let mut material_builder = MaterialManagerBuilder::new();
 

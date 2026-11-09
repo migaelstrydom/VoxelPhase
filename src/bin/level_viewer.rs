@@ -102,7 +102,7 @@ fn run(options: &Options) -> EngineResult<()> {
     }
 
     let shots = match options.view {
-        Some((eye, target)) => vec![custom_shot(eye, target)],
+        Some((eye, target)) => vec![custom_shot(&level, eye, target)],
         None => {
             let all = standard_shots(
                 &level,
