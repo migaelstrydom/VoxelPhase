@@ -1,13 +1,15 @@
 // Island Sea — the water demo: an island in the open ocean.
 //
-// A low island of beaches and grass, with a rocky massif along its north
-// side that falls sheer into the sea. A crag stands on the massif's high
+// A low island of beaches and grass, with a massif of pale limestone along
+// its north side that falls sheer into the sea. A crag stands on the massif's high
 // north side; a spring in its face fills a tarn. The tarn spills over the
 // high side's cliff, runs across the massif in a gully and goes over the
 // cliff of a notch in its east side into a lake. The lake drains south as a
 // river across the lowland to a sandy bay. On the north coast a second
 // spring falls from the cliff straight into the sea. Sea stacks stand off a
-// sandbar to the west. Foothills on the south-west are the way up.
+// sandbar to the west. Foothills on the south-west are the way up. It is a
+// garden in early morning light: round trees and clipped shrubs on the
+// lowland and the foothills, cypresses along the massif's rim.
 //
 //                          north (−z)
 //                  ░░░░ sea cliff ░░░░ ▼ spring
@@ -37,15 +39,15 @@ Level(
                 material_layers: [
                     (depth: 0.6,   material: Grass),
                     (depth: 2.5,   material: Dirt),
-                    (depth: 999.0, material: Rock),
+                    (depth: 999.0, material: Limestone),
                 ],
                 surface_bands: [
-                    // Cliffs are bare rock.
-                    (steeper_than: Some(1.5), layers: [(depth: 999.0, material: Rock)]),
+                    // Cliffs are bare stone.
+                    (steeper_than: Some(1.5), layers: [(depth: 999.0, material: Limestone)]),
                     // Beaches, river beds and the sea floor are sand.
                     (below: Some(2.6), layers: [
                         (depth: 1.5,   material: Sand),
-                        (depth: 999.0, material: Rock),
+                        (depth: 999.0, material: Limestone),
                     ]),
                 ],
 
@@ -174,7 +176,7 @@ Level(
                         region: Some((center: (34.0, 1.0, -4.0), radius: 4.0, falloff: 2.0)),
                         material_layers: [
                             (depth: 1.0,   material: Sand),
-                            (depth: 999.0, material: Rock),
+                            (depth: 999.0, material: Limestone),
                         ],
                         floor_bias: 0.3,
                         mouths: [(from: (44.0, 1.0, -4.0), half_width: 2.4, half_height: 4.6)],
@@ -202,6 +204,48 @@ Level(
                 Fish(pos: (26.5, -0.5)),
                 Fish(pos: (21.0, -1.5)),
                 Fish(pos: (24.5, 3.5)),
+                // The garden. A grove on the meadow behind the spawn beach.
+                Tree(pos: (-10.0, 18.5), height: 5.2, crown_radius: 1.2, crowns: 3),
+                Tree(pos: (-6.0, 22.0), height: 3.6, crown_radius: 0.9),
+                Tree(pos: (-14.5, 21.5), height: 4.2, crown_radius: 1.0),
+                Shrub(pos: (-8.0, 15.5), radius: 0.9),
+                Shrub(pos: (-9.6, 14.6), radius: 0.6),
+                Shrub(pos: (-12.5, 17.0), radius: 1.1),
+                Shrub(pos: (4.5, 17.5), radius: 0.7),
+                Shrub(pos: (5.8, 16.6), radius: 0.5),
+                // Topiary up the foothills, and a tree on their crown.
+                Shrub(pos: (-17.0, 8.0), radius: 1.2),
+                Shrub(pos: (-19.5, 5.5), radius: 0.8),
+                Shrub(pos: (-13.0, 6.0), radius: 0.7),
+                Shrub(pos: (-21.0, -1.0), radius: 1.0),
+                Shrub(pos: (-6.0, 3.5), radius: 0.9),
+                Shrub(pos: (-3.5, 5.0), radius: 0.6),
+                Tree(pos: (-13.0, -3.0), height: 6.0, crown_radius: 1.4, crowns: 3),
+                Tree(pos: (-2.0, -5.0), height: 4.0, crown_radius: 1.0),
+                // Along the river and round the lake's south shore.
+                Shrub(pos: (17.5, 19.5), radius: 0.8),
+                Shrub(pos: (19.0, 20.5), radius: 0.55),
+                Shrub(pos: (12.0, 12.0), radius: 0.9),
+                Shrub(pos: (28.5, 12.5), radius: 1.0),
+                Shrub(pos: (30.0, 14.0), radius: 0.7),
+                Tree(pos: (19.0, 9.0), height: 4.6, crown_radius: 1.1),
+                Tree(pos: (29.5, 16.5), height: 5.0, crown_radius: 1.2, crowns: 3),
+                Tree(pos: (16.2, 22.3), height: 3.4, crown_radius: 0.9),
+                // Cypresses on the massif: a row over the lake, a pair by the
+                // tarn, one each side of the upper falls.
+                Cypress(pos: (33.5, 3.0), height: 6.0, radius: 0.7),
+                Cypress(pos: (35.0, 6.0), height: 5.0, radius: 0.6),
+                Cypress(pos: (33.0, -1.0), height: 4.4, radius: 0.55),
+                Cypress(pos: (23.0, -13.0), height: 5.6, radius: 0.65),
+                Cypress(pos: (26.0, -15.0), height: 4.6, radius: 0.55),
+                Cypress(pos: (12.5, -23.0), height: 6.4, radius: 0.7),
+                Cypress(pos: (15.0, -20.5), height: 5.0, radius: 0.6),
+                Cypress(pos: (4.0, -4.0), height: 5.4, radius: 0.6),
+                // A lone tree on the sandbar, and a shrub on the tallest stack.
+                Tree(pos: (-37.0, -2.5), height: 4.4, crown_radius: 1.1),
+                Shrub(pos: (-33.0, 0.5), radius: 0.6),
+                Shrub(pos: (-46.8, -14.3), radius: 0.8),
+
                 // Turtles: one in the bay, one by the sandbar to the west.
                 Turtle(pos: (8.0, 33.0)),
                 Turtle(pos: (-38.0, -11.0)),
@@ -212,6 +256,18 @@ Level(
     placements: [Root(segment: "sea")],
 
     player_spawn: (-2.0, 6.0, 16.0),
+
+    // The first morning: a low sun in the east-south-east, gold on the
+    // cliffs that face it, and air thick enough that the sea is lost in it
+    // well short of the horizon.
+    daylight: (
+        sun_bearing: 125.0,
+        sun_elevation: 26.0,
+        sun_colour: (1.0, 0.78, 0.52),
+        sun_intensity: 2.0,
+        fill_colour: (0.06, 0.06, 0.08),
+        visibility: Some(160.0),
+    ),
 
     water: Some((
         ocean: Some((level: 0.0)),
