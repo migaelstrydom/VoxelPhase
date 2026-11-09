@@ -64,6 +64,33 @@ float miePhase(float cos_theta, float g) {
     return (1.0 / (4.0 * SKY_PI)) * (1.0 - g2) / (denom * sqrt(denom));
 }
 
+/// How far the sun has sunk towards the horizon: 0 for a sun above about 43
+/// degrees, which leaves the sky its noon colours, rising to 1 for a sun below
+/// about 24.
+float lowSun(float sun_height) {
+    return 1.0 - smoothstep(0.40, 0.68, sun_height);
+}
+
+/// How nearly a ray looks along the sun's compass bearing: 1 towards it, 0 at
+/// right angles and beyond. Judged on the horizontal alone, so what it shades
+/// wraps the horizon rather than tracking the sun's elevation.
+float sunBearing(vec3 ray_dir, vec3 sun_dir) {
+    vec2 ray = ray_dir.xz / max(length(ray_dir.xz), 1e-4);
+    vec2 sun = sun_dir.xz / max(length(sun_dir.xz), 1e-4);
+    return max(0.0, dot(ray, sun));
+}
+
+/// The sky under a low sun: a gold horizon on the sun's side, rose round the
+/// rest of it, and a softer blue overhead.
+const vec3 LOW_SUN_ZENITH = vec3(0.20, 0.38, 0.80);
+const vec3 LOW_SUN_HORIZON_TOWARDS = vec3(1.05, 0.74, 0.40);
+const vec3 LOW_SUN_HORIZON_AWAY = vec3(0.78, 0.64, 0.66);
+
+/// How tightly the pale band hugs the horizon, as the exponent of its falloff
+/// with height: at noon, and under a low sun, whose glow climbs the dome.
+const float HORIZON_BAND_NOON = 8.0;
+const float HORIZON_BAND_LOW_SUN = 3.5;
+
 /// Sky colour from atmospheric scattering, before the sun disc is added.
 ///
 /// Continuous over the whole sphere, including below the horizon, where it
@@ -73,10 +100,13 @@ vec3 skyScattering(vec3 ray_dir, vec3 sun_dir) {
     float sun_dot = dot(ray_dir, sun_dir);
     float sun_height = sun_dir.y;
 
+    float low_sun = lowSun(sun_height);
+
     // The exponent controls how tightly the pale band hugs the horizon. Low
     // values bleed it far up the dome and leave the whole sky milky, which also
     // washes out everything the sky lights.
-    float horizon_factor = pow(1.0 - abs(ray_dir.y), 8.0);
+    float horizon_factor = pow(1.0 - abs(ray_dir.y),
+                               mix(HORIZON_BAND_NOON, HORIZON_BAND_LOW_SUN, low_sun));
 
     vec3 zenith_colour = vec3(0.16, 0.38, 0.92);
     // Saturated rather than pale. A gameplay camera looks along the horizon
@@ -86,6 +116,11 @@ vec3 skyScattering(vec3 ray_dir, vec3 sun_dir) {
     // the ground to read as lit.
     vec3 horizon_colour = vec3(0.40, 0.66, 0.96);
     vec3 sunset_colour = vec3(1.0, 0.6, 0.3);
+
+    vec3 low_sun_horizon = mix(LOW_SUN_HORIZON_AWAY, LOW_SUN_HORIZON_TOWARDS,
+                               sunBearing(ray_dir, sun_dir));
+    zenith_colour = mix(zenith_colour, LOW_SUN_ZENITH, low_sun);
+    horizon_colour = mix(horizon_colour, low_sun_horizon, low_sun);
 
     float sun_influence = max(0.0, sun_height);
     float sunset_factor = smoothstep(0.0, 0.2, sun_height)
@@ -114,11 +149,9 @@ vec3 horizonHaze(vec3 ray_dir, vec3 sun_dir) {
 
     vec3 haze_colour = vec3(0.85, 0.9, 0.95);
 
-    // Warmer looking towards the sun, judged on the horizontal bearing alone so
-    // the warmth wraps the horizon rather than tracking the sun's elevation.
-    float bearing = max(0.0, dot(normalize(vec3(ray_dir.x, 0.0, ray_dir.z)),
-                                 normalize(vec3(sun_dir.x, 0.0, sun_dir.z))));
-    haze_colour = mix(haze_colour, vec3(1.0, 0.95, 0.85), bearing * 0.3);
+    // Warmer looking towards the sun.
+    haze_colour = mix(haze_colour, vec3(1.0, 0.95, 0.85),
+                      sunBearing(ray_dir, sun_dir) * 0.3);
 
     return haze_colour * horizon_factor * 0.05;
 }

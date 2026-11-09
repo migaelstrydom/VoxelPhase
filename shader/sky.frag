@@ -157,6 +157,7 @@ vec3 cloudRadiance(vec3 rayDir, vec3 sunDir) {
 
     float sunsetFactor = smoothstep(0.0, 0.2, sunHeight) * (1.0 - smoothstep(0.2, 0.5, sunHeight));
     colour = mix(colour, colour * vec3(1.0, 0.75, 0.5), sunsetFactor * 0.4);
+    colour = mix(colour, colour * vec3(1.0, 0.84, 0.68), lowSun(sunDir.y) * 0.6);
 
     // Scaled alongside the sky so cloud and sky brightness stay in proportion.
     return colour * SKY_RADIANCE_SCALE;
