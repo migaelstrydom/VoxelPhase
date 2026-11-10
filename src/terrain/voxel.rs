@@ -64,6 +64,7 @@ impl VoxelMaterial {
             // warm sun reads yellow long before it reads green, and a green
             // sitting on the primary is the one hue that cannot warm up: the
             // sun's tint has no red headroom left to give it.
+            // Mirrored in `shader/turf.glsl`.
             VoxelMaterial::Grass => [0.19, 0.30, 0.07, 1.0],
             VoxelMaterial::Dirt => [0.5, 0.3, 0.1, 1.0],
             VoxelMaterial::Ite => [0.55, 0.50, 0.35, 1.0],
@@ -273,6 +274,18 @@ impl Default for Voxel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The turf shader unmixes grass from the ground beside it, so it must
+    /// know grass's colour to the digit.
+    #[test]
+    fn the_turf_shader_knows_the_colour_of_grass() {
+        let glsl =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/shader/turf.glsl"))
+                .expect("shader/turf.glsl");
+        let [r, g, b, _] = VoxelMaterial::Grass.color();
+        let line = format!("const vec3 TURF_ALBEDO = vec3({r:.2}, {g:.2}, {b:.2});");
+        assert!(glsl.contains(&line), "turf.glsl lacks {line}");
+    }
 
     const DESTRUCTIBLE: [VoxelMaterial; 7] = [
         VoxelMaterial::Grass,

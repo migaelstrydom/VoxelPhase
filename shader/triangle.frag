@@ -19,6 +19,7 @@
 #include "aerial.glsl"
 #include "pile.glsl"
 #include "slope_zoning.glsl"
+#include "turf.glsl"
 #include "foliage.glsl"
 
 layout(location = 0) in vec4 inColor;
@@ -73,6 +74,9 @@ void main() {
 
     vec3 albedo_wash;
     float texture_alpha;
+    // Where the surface's own markings are read: the world, or for terrain
+    // that moves, the frame it carries with it.
+    vec3 marking_pos = inWorldPos;
 
     if (albedo_triplanar) {
         // Terrain's albedo and its detail normal come out of one packed texture
@@ -99,6 +103,7 @@ void main() {
             relief);
 
         albedo_wash = vec3(field.wash);
+        marking_pos = projected_pos;
         texture_alpha = 1.0;
         normal = anchored ? normalize(materialModelToWorld() * field.normal) : field.normal;
     } else {
@@ -172,6 +177,9 @@ void main() {
     // character this reads.
     vec3 albedo = albedo_wash * inColor.rgb;
     if (sourceHas(source, SOURCE_CHARACTER_IN_TEXCOORD)) {
+        TurfGround ground = turfGround(inColor.rgb, pile, marking_pos);
+        albedo = albedo_wash * ground.colour;
+        pile = ground.pile;
         float steepness = zoningSteepness(geometric_normal);
         float patch_value = zoningPatch(albedo_wash.r);
         albedo = zonedAlbedo(albedo, character, pile, steepness, patch_value);
