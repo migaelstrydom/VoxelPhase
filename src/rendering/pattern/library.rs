@@ -199,6 +199,51 @@ pub const MARBLE: Pattern = Pattern {
     ],
 };
 
+/// Marble honed and left out of doors: soft clouds of lighter and darker
+/// stone, and a few long veins that run one way through it. Where
+/// [`MARBLE`]'s veins close into a net, as a polished slab's do seen close,
+/// these are what a building's marble shows from across a courtyard.
+pub const HONED_MARBLE: Pattern = Pattern {
+    name: "honed_marble",
+    layers: &[
+        Layer::Wash {
+            scale: 2.0,
+            octaves: 3,
+            towards: Slot::Light,
+            amount: 0.55,
+        },
+        Layer::Wash {
+            scale: 3.0,
+            octaves: 2,
+            towards: Slot::Dark,
+            amount: 0.3,
+        },
+        // The veins: few, soft-edged, and running along the tile.
+        Layer::Streak {
+            scale: 2.0,
+            octaves: 3,
+            elongation: 3.5,
+            sharpness: 7.0,
+            amount: 0.32,
+            towards: Slot::Accent,
+        },
+        // A finer family across them, faint, so they feather.
+        Layer::Streak {
+            scale: 5.0,
+            octaves: 2,
+            elongation: 2.0,
+            sharpness: 12.0,
+            amount: 0.12,
+            towards: Slot::Dark,
+        },
+        Layer::Shade {
+            scale: 30.0,
+            octaves: 2,
+            amount: 0.04,
+        },
+    ],
+};
+
 /// Cast aggregate: broad staining over a coarse speckle, and no veins — poured
 /// concrete has no crystal structure to crack along.
 pub const CONCRETE: Pattern = Pattern {
@@ -417,6 +462,7 @@ mod tests {
         DRESSED_STONE,
         WEATHERED_STONE,
         MARBLE,
+        HONED_MARBLE,
         CONCRETE,
         SLATE,
         ICE,

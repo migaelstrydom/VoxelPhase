@@ -30,13 +30,14 @@ use crate::fracture::{
 use crate::model::{Look, MeshPrimitive, Model, ModelPart, PartLooks};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::colour::Colour;
-use crate::rendering::material::MaterialId;
+use crate::rendering::material::{MaterialId, SurfaceFinish};
 use crate::rendering::pattern;
+use crate::rendering::substance::palette::Palette;
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
 
-const TEXTURE_SIZE: u32 = 128;
+const TEXTURE_SIZE: u32 = 256;
 const PHI: f32 = 1.618034;
 
 /// Number of sides on the Doric column polygon — matches the 20 canonical
@@ -53,9 +54,9 @@ const COLUMN_SIDES: u32 = 20;
 /// joint needs; see [`MARBLE`].
 const DORIC_PEDIMENT_RATIO: f32 = 0.22;
 
-/// Marble where it has just broken: brighter and colder than its dressed
-/// face.
-const FRESH_MARBLE: Colour = Colour::new(0.9, 0.92, 0.96, 1.0);
+/// Marble where it has just broken, as a tint on its texture: whiter and
+/// colder than its weathered face.
+const FRESH_MARBLE: Colour = Colour::new(1.04, 1.1, 1.18, 1.0);
 /// How far across a break one repeat of the marble's texture reaches, m.
 const BREAK_TEXTURE_SPAN: f32 = 2.0;
 
@@ -86,22 +87,33 @@ const MATERIAL_COUNT: usize = 3;
 /// roughest thing the renderer can draw.
 const RUBBLE: Substance = substance::SANDSTONE.with_coefficients(0.05, 1.5, 2400.0);
 
-/// Dressed marble: the columns, the entablature, the pediments and the roof.
-/// Denser and slicker than the rubble it rests on, which is true of the
-/// material and is now stated twice on purpose — once in these coefficients and
-/// once in the substance's authored finish. They agree because marble is both
-/// slick and polished, not because one is computed from the other.
+/// Honed marble left out of doors: the columns, the entablature, the
+/// pediments and the roof. Warm ivory with a rose cast, veined in grey-rose,
+/// and matte: stone that has stood in the weather scatters the sky instead
+/// of mirroring it, so its shaded faces stay stone-coloured.
+///
+/// Denser and slicker than the rubble it rests on. How it grips and how it
+/// shines are authored apart: the friction is the solver's, the finish the
+/// eye's.
 ///
 /// **The roof pitch is the floor under this friction.** The panels are sloped
 /// slabs held by friction alone, so one needs `mu >= pediment_h / eave_dist` to
 /// stay on: 0.19 for a six-column temple, tending to [`DORIC_PEDIMENT_RATIO`]
 /// itself, 0.22, as it widens. 0.4 clears the widest case by more than 80%, and
 /// is a real coefficient for dressed stone on dressed stone.
-///
-/// Steepening the gable raises that floor fast. At the old `half_w / PHI` pitch
-/// the roof approached 31.7° and demanded mu >= 0.62, which forced marble to
-/// render as satin; the shallow Doric gable is what lets it be polished.
-const MARBLE: Substance = substance::MARBLE.with_coefficients(0.05, 0.4, 2700.0);
+pub const MARBLE: Substance = Substance {
+    finish: SurfaceFinish {
+        roughness: 0.68,
+        metallic: 0.0,
+    },
+    palette: Palette::from_base_const(Colour::new(0.9, 0.83, 0.74, 1.0), 0.08)
+        .with_dark(Colour::new(0.8, 0.7, 0.63, 1.0))
+        .with_accent(Colour::new(0.62, 0.52, 0.53, 1.0)),
+    ..substance::MARBLE.with_coefficients(0.05, 0.4, 2700.0)
+};
+
+/// The marble's markings.
+pub const MARBLE_PATTERN: &pattern::Pattern = &pattern::HONED_MARBLE;
 
 #[derive(Deserialize)]
 pub struct TempleDef {
@@ -248,7 +260,7 @@ impl TempleDef {
         let depth = lay.col_base_r + lay.entab_overhang;
         let beam = Vector3::new(lay.half_w + depth, lay.entab_h / 2.0, depth);
         let pieces = [
-            MarblePiece::column(&lay, fluted).0,
+            MarblePiece::column(&lay, fluted, Vector2::zeros()).0,
             MarblePiece::block(beam, marble),
             MarblePiece::gable(&lay, marble),
         ];
@@ -293,8 +305,8 @@ impl Spawnable for TempleDef {
             // same quarry's stone, and a shared seed is also what lets the
             // seven columns share one baked texture instead of seven.
             ctx.patterned(&RUBBLE, &pattern::STONE, STONE_SEED, TEXTURE_SIZE)?,
-            ctx.patterned(&MARBLE, &pattern::MARBLE, MARBLE_SEED, TEXTURE_SIZE)?,
-            ctx.patterned(&MARBLE, &pattern::MARBLE, FLUTED_SEED, TEXTURE_SIZE)?,
+            ctx.patterned(&MARBLE, MARBLE_PATTERN, MARBLE_SEED, TEXTURE_SIZE)?,
+            ctx.patterned(&MARBLE, MARBLE_PATTERN, FLUTED_SEED, TEXTURE_SIZE)?,
         ])
     }
 
@@ -391,8 +403,11 @@ impl Spawnable for TempleDef {
             col_positions.push((px + lay.half_w, z));
         }
 
-        for &(cx, cz) in &col_positions {
-            let (column, centre) = MarblePiece::column(&lay, fluted);
+        for (index, &(cx, cz)) in col_positions.iter().enumerate() {
+            // Each column a different part of the one texture: steps of the
+            // golden ratio never land two columns on the same turn.
+            let turn = Vector2::new(index as f32 * PHI, index as f32 * PHI * PHI).map(f32::fract);
+            let (column, centre) = MarblePiece::column(&lay, fluted, turn);
             let pos = Point3::new(cx, col_y_base, cz) + centre;
             entities.push(column.spawn(world, pos, UnitQuaternion::identity(), breaks));
         }
@@ -513,7 +528,10 @@ impl MarblePiece {
     /// A column of the temple laid out as `lay`, and how far above the
     /// middle of its foot its centre of mass is: the centroid of its
     /// volume, which a column narrowing upward holds below half its height.
-    fn column(lay: &TempleLayout, fluted: MaterialId) -> (Self, Vector3<f32>) {
+    ///
+    /// `turn` slides the marble's texture round the shaft and up it, in
+    /// repeats, so no two columns wear the same veins at the same height.
+    fn column(lay: &TempleLayout, fluted: MaterialId, turn: Vector2<f32>) -> (Self, Vector3<f32>) {
         let (verts, faces) =
             column_geometry(lay.col_base_r, lay.col_top_r, lay.col_height, COLUMN_SIDES);
         let centre = build_convex_hull(&verts, &faces).centroid();
@@ -528,10 +546,18 @@ impl MarblePiece {
             COLUMN_SIDES,
             fluted,
         );
+        let mut look = look_of(&model);
+        for vertex in look
+            .primitives
+            .iter_mut()
+            .flat_map(|mesh| &mut mesh.vertices)
+        {
+            vertex.tex_coords += turn;
+        }
         let column = Self {
             collider: ColliderDesc::convex_hull(hull.clone()).of(&MARBLE),
             hull: Some(hull),
-            look: Arc::new(look_of(&model)),
+            look: Arc::new(look),
         };
         (column, centre)
     }
@@ -967,7 +993,7 @@ mod tests {
         ));
 
         let lay = layout_for(TempleDef::default_front_columns());
-        MarblePiece::column(&lay, FLUTED).0.spawn(
+        MarblePiece::column(&lay, FLUTED, Vector2::zeros()).0.spawn(
             &mut world,
             Point3::new(0.0, lay.col_base_r + drop, 0.0),
             UnitQuaternion::from_axis_angle(&Vector3::z_axis(), std::f32::consts::FRAC_PI_2),

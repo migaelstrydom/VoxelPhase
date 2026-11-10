@@ -104,7 +104,7 @@ pub use spawnable::{MaterialCtx, Spawnable};
 pub use stack::{StackDef, StackItemDef};
 pub use stone::{stone_cleaving, weathered_box_mesh, weathered_hull_mesh, StoneTexture};
 pub use table::TableDef;
-pub use temple::TempleDef;
+pub use temple::{TempleDef, MARBLE as TEMPLE_MARBLE, MARBLE_PATTERN as TEMPLE_MARBLE_PATTERN};
 pub use tetrahedron::TetrahedronDef;
 pub use tower::TowerDef;
 pub use trampoline::TrampolineDef;

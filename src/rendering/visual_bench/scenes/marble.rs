@@ -8,13 +8,11 @@
 
 use nalgebra::{Point3, Vector3};
 
-use crate::app::spawnables::TempleDef;
+use crate::app::spawnables::{TempleDef, TEMPLE_MARBLE, TEMPLE_MARBLE_PATTERN};
 use crate::core::error::EngineResult;
 use crate::model::Look;
 use crate::rendering::colour::Colour;
 use crate::rendering::material::MaterialId;
-use crate::rendering::pattern;
-use crate::rendering::substance;
 use crate::rendering::visual_bench::scene::{
     SceneCamera, SceneContext, SceneEnvironment, SceneMesh, SceneShot, VisualScene,
 };
@@ -22,7 +20,7 @@ use crate::rendering::visual_bench::scenes::flat_ground::ground;
 use crate::resources::textures::TextureHandle;
 
 /// Side of the baked marble, texels, and its seed: the temple's own.
-const TEXTURE_SIZE: u32 = 128;
+const TEXTURE_SIZE: u32 = 256;
 const SEED: u32 = 202;
 /// How far a half is drawn from its piece's middle, against where it lies.
 const SPREAD: f32 = 1.5;
@@ -39,7 +37,7 @@ pub struct Marble;
 
 /// `look`'s meshes with its frame at `at`, in the temple's marble.
 fn meshes(look: &Look, texture: &TextureHandle, at: Vector3<f32>) -> Vec<SceneMesh> {
-    let surface = substance::MARBLE.material(texture.clone()).surface_params();
+    let surface = TEMPLE_MARBLE.material(texture.clone()).surface_params();
     look.primitives
         .iter()
         .map(|primitive| {
@@ -64,7 +62,7 @@ impl VisualScene for Marble {
         let texture = ctx.textures.create_from_rgba(
             TEXTURE_SIZE,
             TEXTURE_SIZE,
-            &pattern::MARBLE.bake(TEXTURE_SIZE, &substance::MARBLE.palette, SEED),
+            &TEMPLE_MARBLE_PATTERN.bake(TEXTURE_SIZE, &TEMPLE_MARBLE.palette, SEED),
             true,
         )?;
         let temple = TempleDef {
