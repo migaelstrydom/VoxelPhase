@@ -21,14 +21,19 @@
 //! angle about the cap's own centre — cheaper than chaining them end to end
 //! and, on a convex hull, the same answer.
 //!
+//! A plane that passes close by a corner leaves a face with a sliver of
+//! itself, too small to have a direction. The sliver is closed up, its
+//! shortest edge drawn to a point, which moves the piece's surface by less
+//! than a hundredth of its size and leaves it whole.
+//!
 //! [`ConvexHull::new`] panics on a hull it cannot use, so everything built
-//! here is checked first and a cut that would produce a wafer, a sliver or
-//! too many vertices is refused instead.
+//! here is checked first and a cut that would produce a wafer or too many
+//! vertices is refused instead.
 
 use nalgebra::Vector3;
 use smallvec::SmallVec;
 
-use super::convex_hull::{ConvexHull, HullFace, MAX_HULL_VERTICES};
+use super::convex_hull::{self, ConvexHull, HullFace, MAX_HULL_VERTICES};
 
 /// Distance from the plane within which a vertex counts as on it.
 ///
@@ -44,12 +49,11 @@ const COINCIDENT: f32 = 1e-5;
 /// straight line between its neighbours.
 const COLLINEAR: f32 = 1e-4;
 
-/// Smallest fan sum a face may have and still be built: the hull builder
-/// rejects a face whose corners sum to less than `1e-4` as collinear, and
-/// does it with an assertion. Ten times that, so a face that passes here is
-/// one it takes without argument — and still a thousandth of the smallest
-/// face any piece worth keeping has.
-const MIN_FACE_SPAN: f32 = 1e-3;
+/// Smallest fan sum a face may have and still be kept, as a share of the
+/// square of its piece's longest side: ten times the least the hull builder
+/// takes, so a face that passes here is one it takes without argument. A
+/// smaller face is a sliver, and is closed up.
+const MIN_FACE_SHARE: f32 = 10.0 * convex_hull::MIN_FACE_SHARE;
 
 /// The hull builder's own limit, which it asserts rather than reports: the
 /// shortest side of a hull's axis-aligned box must be at least this share of
@@ -97,8 +101,8 @@ pub struct HullHalves {
 /// Cut `hull` in two along `plane`.
 ///
 /// `None` if the plane misses the hull, or if either half would be a piece
-/// the physics engine cannot hold: too thin for its length, too few faces, or
-/// past the hull vertex limit. A refusal is the caller's cue to move the
+/// the physics engine cannot hold: too thin for its length, or past the hull
+/// vertex limit. A refusal is the caller's cue to move the
 /// plane, not an error.
 pub fn split_hull(hull: &ConvexHull, plane: Plane) -> Option<HullHalves> {
     let cut = Cut::new(&hull.vertices, plane)?;
@@ -344,80 +348,112 @@ impl HalfBuilder {
 }
 
 /// Clean up the faces of a half so the hull builder will take them: it
-/// panics on a face whose corners are in a line, and counts every vertex
+/// panics on a face too small to have a direction, and counts every vertex
 /// towards its own limits whether a face uses it or not.
 ///
-/// Two things need doing. A cut that runs near a corner leaves faces with
-/// corners strung along a straight edge, which are redundant on a polygon
-/// and fatal to a hull; and a face cut away entirely leaves its corners
-/// behind in the vertex list with nothing referring to them.
+/// Three things need doing. A cut that runs near a corner leaves slivers of
+/// faces, which are closed up; one that runs through a corner leaves corners
+/// strung along a straight edge, which are redundant; and a face cut away
+/// entirely leaves its corners behind in the vertex list with nothing
+/// referring to them.
 fn tidy(
     vertices: Vec<Vector3<f32>>,
     faces: Vec<HullFace>,
 ) -> Option<(Vec<Vector3<f32>>, Vec<HullFace>)> {
-    let kept: Vec<HullFace> = faces
-        .into_iter()
-        .filter_map(|face| {
-            let corners = straighten(&vertices, face.vertex_indices)?;
-            Some(HullFace {
-                vertex_indices: corners,
-                normal: Vector3::zeros(),
-            })
-        })
-        .collect();
+    let mut loops: Vec<Loop> = faces.into_iter().map(|face| face.vertex_indices).collect();
+    close_slivers(&vertices, &mut loops);
+    drop_idle_corners(&vertices, &mut loops);
 
     // Renumber onto the vertices some face still uses.
     let mut moved_to: Vec<Option<u16>> = vec![None; vertices.len()];
     let mut compact = Vec::with_capacity(vertices.len());
-    for face in &kept {
-        for &index in &face.vertex_indices {
-            if moved_to[index as usize].is_none() {
-                moved_to[index as usize] = Some(compact.len() as u16);
-                compact.push(vertices[index as usize]);
-            }
+    for &index in loops.iter().flatten() {
+        if moved_to[index as usize].is_none() {
+            moved_to[index as usize] = Some(compact.len() as u16);
+            compact.push(vertices[index as usize]);
         }
     }
-    let renumbered = kept
+    let renumbered = loops
         .into_iter()
-        .map(|face| HullFace {
-            vertex_indices: face
-                .vertex_indices
+        .map(|corners| HullFace {
+            vertex_indices: corners
                 .iter()
                 .map(|i| moved_to[*i as usize].expect("a face's own corner was kept"))
                 .collect(),
-            normal: face.normal,
+            normal: Vector3::zeros(),
         })
         .collect();
     Some((compact, renumbered))
 }
 
-/// Drop the corners of one face that sit on the straight line between their
-/// neighbours, and refuse the face if what is left is not a polygon.
-///
-/// Repeated to a fixed point: taking one corner out can leave the next one
-/// in line with its new neighbours.
-fn straighten(
-    vertices: &[Vector3<f32>],
-    mut loop_: SmallVec<[u16; 6]>,
-) -> Option<SmallVec<[u16; 6]>> {
-    let mut dropped = true;
-    while dropped && loop_.len() > 3 {
-        dropped = false;
-        for k in 0..loop_.len() {
-            let count = loop_.len();
-            let previous = vertices[loop_[(k + count - 1) % count] as usize];
-            let corner = vertices[loop_[k] as usize];
-            let next = vertices[loop_[(k + 1) % count] as usize];
-            let (arriving, leaving) = (corner - previous, next - corner);
-            let turn = arriving.cross(&leaving).magnitude();
-            if turn <= COLLINEAR * arriving.magnitude() * leaving.magnitude() {
-                loop_.remove(k);
-                dropped = true;
-                break;
+/// A face's corners, in order round it.
+type Loop = SmallVec<[u16; 6]>;
+
+/// Close up every face too small to keep, by drawing its shortest edge to a
+/// point: one end of the edge takes the other's place in every face, and a
+/// face left with two corners is gone. The faces round it stay joined edge to
+/// edge, and bend by no more than the sliver was wide.
+fn close_slivers(vertices: &[Vector3<f32>], loops: &mut Vec<Loop>) {
+    let (mut low, mut high) = (Vector3::repeat(f32::MAX), Vector3::repeat(f32::MIN));
+    for &index in loops.iter().flatten() {
+        low = low.inf(&vertices[index as usize]);
+        high = high.sup(&vertices[index as usize]);
+    }
+    let smallest = MIN_FACE_SHARE * (high - low).max().powi(2);
+
+    while let Some(sliver) = loops
+        .iter()
+        .find(|corners| area_of(vertices, corners) <= smallest)
+    {
+        let edge = |k: usize| (sliver[k], sliver[(k + 1) % sliver.len()]);
+        let length = |(a, b): (u16, u16)| (vertices[a as usize] - vertices[b as usize]).magnitude();
+        let (kept, gone) = (0..sliver.len())
+            .map(edge)
+            .min_by(|a, b| length(*a).total_cmp(&length(*b)))
+            .expect("a face has edges");
+        for corners in loops.iter_mut() {
+            for corner in corners.iter_mut().filter(|corner| **corner == gone) {
+                *corner = kept;
+            }
+            corners.dedup();
+            if corners.len() > 1 && corners.first() == corners.last() {
+                corners.pop();
             }
         }
+        loops.retain(|corners| corners.len() >= 3);
     }
-    (loop_.len() >= 3 && area_of(vertices, &loop_) > MIN_FACE_SPAN).then_some(loop_)
+}
+
+/// Take out every corner that sits on the straight line between its
+/// neighbours in every face it is a corner of: a point along an edge, which
+/// both of the edge's faces can do without.
+///
+/// A corner in line in one face and turning in another stays in both. Taken
+/// from the one, it would leave the other with an edge no face shares.
+fn drop_idle_corners(vertices: &[Vector3<f32>], loops: &mut Vec<Loop>) {
+    loop {
+        let mut idle: Vec<Option<bool>> = vec![None; vertices.len()];
+        for corners in loops.iter() {
+            let count = corners.len();
+            for k in 0..count {
+                let previous = vertices[corners[(k + count - 1) % count] as usize];
+                let corner = vertices[corners[k] as usize];
+                let next = vertices[corners[(k + 1) % count] as usize];
+                let (arriving, leaving) = (corner - previous, next - corner);
+                let turn = arriving.cross(&leaving).magnitude();
+                let in_line = turn <= COLLINEAR * arriving.magnitude() * leaving.magnitude();
+                let so_far = &mut idle[corners[k] as usize];
+                *so_far = Some(so_far.unwrap_or(true) && in_line);
+            }
+        }
+        let Some(gone) = idle.iter().position(|idle| *idle == Some(true)) else {
+            return;
+        };
+        for corners in loops.iter_mut() {
+            corners.retain(|corner| *corner as usize != gone);
+        }
+        loops.retain(|corners| corners.len() >= 3);
+    }
 }
 
 /// The fan sum of a face — twice its area — which is zero when its corners
@@ -437,13 +473,11 @@ fn area_of(vertices: &[Vector3<f32>], loop_: &[u16]) -> f32 {
 /// Whether the faces make a closed surface: every edge shared by exactly two
 /// of them.
 ///
-/// The hull builder demands this and asserts it. It can fail here for a
-/// reason that is nobody's mistake: a cut that passes exactly through an
-/// existing corner leaves a face with a corner in the middle of one of its
-/// edges, and dropping that corner — which must happen, or the face is
-/// degenerate — leaves the neighbouring face with an edge that no longer
-/// matches. Such a piece is refused, and the caller moves the plane and
-/// tries again. Better a cut that does not happen than a hull with a hole.
+/// The hull builder demands this and asserts it. Closing a sliver keeps a
+/// surface closed unless the faces round it already touched somewhere else,
+/// which pinches the surface; such a piece is refused, and the caller moves
+/// the plane and tries again. Better a cut that does not happen than a hull
+/// with a hole.
 fn closed(faces: &[HullFace]) -> bool {
     let mut edges: Vec<(u16, u16)> = faces
         .iter()
@@ -555,7 +589,72 @@ fn thick_enough(vertices: &[Vector3<f32>]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collision::convex_hull::cube_hull;
+    use crate::collision::convex_hull::{cube_hull, dodecahedron_hull, prism_hull};
+
+    /// How far any corner of `hull` stands proud of any of its faces, as a
+    /// share of the hull's size: nothing, on a convex hull with flat faces.
+    fn bulge(hull: &ConvexHull) -> f32 {
+        let proud = hull.faces.iter().flat_map(|face| {
+            let on = hull.vertices[face.vertex_indices[0] as usize];
+            hull.vertices
+                .iter()
+                .map(move |v| face.normal.dot(&(v - on)))
+        });
+        proud.fold(0.0, f32::max) / hull.bounding_radius
+    }
+
+    /// Cutting has to work wherever the plane falls and on pieces of pieces,
+    /// or a breakable thing breaks only from some sides. Planes thrown at
+    /// random pass close by corners all the time, which is where slivers
+    /// come from.
+    #[test]
+    fn a_plane_thrown_anywhere_cuts_and_the_pieces_cut_again() {
+        let mut seed = 12345u32;
+        let mut scatter = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            (seed as f32 / u32::MAX as f32) * 2.0 - 1.0
+        };
+        let (mut tried, mut refused) = (0, 0);
+        for whole in [
+            unit_cube(),
+            prism_hull(12, 0.5, 0.5),
+            prism_hull(24, 0.5, 0.2),
+            dodecahedron_hull(0.4),
+            dodecahedron_hull(0.008),
+        ] {
+            for _ in 0..300 {
+                let mut piece = whole.clone();
+                for _ in 0..6 {
+                    let normal = Vector3::new(scatter(), scatter(), scatter()).normalize();
+                    let off = Vector3::new(scatter(), scatter(), scatter());
+                    let through = piece.centroid() + off * piece.bounding_radius * 0.15;
+                    tried += 1;
+                    let Some(halves) = split_hull(&piece, Plane::through(through, normal)) else {
+                        refused += 1;
+                        break;
+                    };
+                    let (front, back) = (halves.front, halves.back);
+                    let (before, after) = (
+                        piece.compute_volume(),
+                        front.compute_volume() + back.compute_volume(),
+                    );
+                    assert!(
+                        (after - before).abs() < 0.005 * before,
+                        "{before} m³ cut into {after} m³"
+                    );
+                    assert!(bulge(&front) < 0.01 && bulge(&back) < 0.01);
+                    piece = if front.compute_volume() > back.compute_volume() {
+                        front
+                    } else {
+                        back
+                    };
+                }
+            }
+        }
+        assert!(refused * 500 <= tried, "{refused} of {tried} cuts refused");
+    }
 
     fn unit_cube() -> ConvexHull {
         cube_hull(Vector3::repeat(0.5))

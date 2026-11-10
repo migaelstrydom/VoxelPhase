@@ -15,7 +15,11 @@ pub const MAX_HULL_VERTICES: usize = 128;
 /// Minimum ratio of thinnest to thickest AABB dimension.
 /// Hulls thinner than this are rejected to avoid degenerate Minkowski differences.
 const MIN_THICKNESS_RATIO: f32 = 0.01;
-const FACE_NORMAL_EPS: f32 = 1e-8;
+
+/// Smallest fan sum (twice the area) a face may have, as a share of the
+/// square of its hull's longest side: below it the face's corners are as good
+/// as in a line, and it has no direction to give.
+pub(super) const MIN_FACE_SHARE: f32 = 1e-6;
 
 /// A face of a convex hull.
 #[derive(Debug, Clone)]
@@ -102,7 +106,7 @@ impl ConvexHull {
             "ConvexHull: degenerate hull — thinnest dimension {min_dim} is < 1% of thickest {max_dim}",
         );
 
-        let canonical_faces = canonicalize_faces(&vertices, faces);
+        let canonical_faces = canonicalize_faces(&vertices, faces, max_dim);
 
         let bounding_radius = vertices
             .iter()
@@ -213,10 +217,8 @@ impl ConvexHull {
     /// Rebuilt by hand rather than through [`ConvexHull::new`], because a
     /// uniform positive scale cannot make a sound hull unsound: every face
     /// keeps its winding, its plane and its normal, and every edge keeps both
-    /// of its faces. What it does change is the *size* of those faces, and the
-    /// constructor's degeneracy check is an absolute one — so scaling a
-    /// perfectly good small hull smaller asserts on geometry that never
-    /// changed shape.
+    /// of its faces, so there is nothing for the constructor to work out or
+    /// to judge again.
     pub fn scaled(&self, factor: f32) -> Self {
         assert!(
             factor > 0.0 && factor.is_finite(),
@@ -443,7 +445,13 @@ fn aabb_of(vertices: &[Vector3<f32>]) -> (Vector3<f32>, Vector3<f32>) {
     (min_v, max_v)
 }
 
-fn canonicalize_faces(vertices: &[Vector3<f32>], mut faces: Vec<HullFace>) -> Vec<HullFace> {
+/// Wind every face outward and give it its normal. `span` is the hull's
+/// longest side, which sizes the smallest face it takes.
+fn canonicalize_faces(
+    vertices: &[Vector3<f32>],
+    mut faces: Vec<HullFace>,
+    span: f32,
+) -> Vec<HullFace> {
     let hull_center =
         vertices.iter().fold(Vector3::zeros(), |acc, v| acc + *v) / (vertices.len() as f32);
 
@@ -460,8 +468,8 @@ fn canonicalize_faces(vertices: &[Vector3<f32>], mut faces: Vec<HullFace>) -> Ve
             );
         }
 
-        let computed_normal =
-            compute_face_normal(vertices, &face.vertex_indices).unwrap_or_else(|| {
+        let computed_normal = compute_face_normal(vertices, &face.vertex_indices, span)
+            .unwrap_or_else(|| {
                 panic!("ConvexHull: face {face_idx} is degenerate (collinear vertices)")
             });
         let face_center = face
@@ -483,7 +491,11 @@ fn canonicalize_faces(vertices: &[Vector3<f32>], mut faces: Vec<HullFace>) -> Ve
     faces
 }
 
-fn compute_face_normal(vertices: &[Vector3<f32>], indices: &[u16]) -> Option<Vector3<f32>> {
+fn compute_face_normal(
+    vertices: &[Vector3<f32>],
+    indices: &[u16],
+    span: f32,
+) -> Option<Vector3<f32>> {
     let v0 = vertices[*indices.first()? as usize];
     let mut normal = Vector3::zeros();
     for i in 1..indices.len() - 1 {
@@ -491,12 +503,8 @@ fn compute_face_normal(vertices: &[Vector3<f32>], indices: &[u16]) -> Option<Vec
         let v2 = vertices[indices[i + 1] as usize];
         normal += (v1 - v0).cross(&(v2 - v0));
     }
-    let len_sq = normal.magnitude_squared();
-    if len_sq <= FACE_NORMAL_EPS {
-        None
-    } else {
-        Some(normal / len_sq.sqrt())
-    }
+    let fan = normal.magnitude();
+    (fan > MIN_FACE_SHARE * span * span).then(|| normal / fan)
 }
 
 /// Build the unique edge list with adjacent face normals from a hull's face data.
@@ -1057,12 +1065,10 @@ mod tests {
 mod scale_tests {
     use super::*;
 
-    /// Scaling must not re-judge geometry it did not change. The constructor
-    /// rejects a face whose fan sum is below an absolute floor, and that sum
-    /// falls with the square of the scale — so a hull that is sound at one
-    /// size used to assert at a smaller one, on faces that kept their exact
-    /// shape. The cleave path shrinks every wedge it cuts by a hair, which
-    /// made this a crash waiting on a small enough piece.
+    /// Scaling must not re-judge geometry it did not change: a face's fan
+    /// sum falls with the square of the scale, and a hull sound at one size
+    /// is sound at any. The cleave path shrinks every wedge it cuts by a
+    /// hair, down to pieces a few millimetres across.
     #[test]
     fn a_small_hull_survives_being_made_smaller() {
         let hull = cube_hull(Vector3::new(0.02, 0.013, 0.017));

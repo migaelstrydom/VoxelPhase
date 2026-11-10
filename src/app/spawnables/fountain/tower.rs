@@ -93,11 +93,11 @@ const SPOUT_PITCH: f32 = 0.9;
 const WELL_SPEED: f32 = 0.6;
 
 /// The blow that cleaves a block: a blast loading, N·s/m², or a knock,
-/// N·s. A grenade within a metre or so of a block's surface cleaves it,
-/// where one that only breaks a neck can be half as far again; and a block
+/// N·s. A grenade within a metre or so of a block's centre cleaves it,
+/// where one that only breaks a neck can be nearly twice as far; and a block
 /// the weight of the bulb cleaves when it lands from any height, a spire
 /// only from a long fall.
-const CLEAVE_BLOW: f32 = 1300.0;
+const CLEAVE_BLOW: f32 = 1550.0;
 /// Most wedges one blow makes of a block, how far its cuts lean off the
 /// block's axes, degrees, and the least a wedge may hold, m³ at scale 1.
 const CLEAVE_PIECES: u32 = 3;

@@ -13,14 +13,12 @@ use crate::physics::ColliderDesc;
 use crate::rendering::colour::Colour;
 
 /// Sides round a turned block's hull, and rings from pole to pole of a
-/// ball's. Few: a cut that clips a sliver off any one facet is refused
-/// (`collision::hull_split`), and the finer the facets the likelier that
-/// is. At these a ball cleaves from nearly every side, and a piece's old
-/// surface, shaded round, still reads as round.
-const SIDES: usize = 8;
-const BALL_RINGS: usize = 3;
+/// ball's: enough that a wedge's outline reads as round, and few enough
+/// that a ball cut three ways stays well inside a hull's vertex limit.
+const SIDES: usize = 14;
+const BALL_RINGS: usize = 6;
 /// Rings in each rounded end of a rod's hull.
-const CAP_RINGS: usize = 2;
+const CAP_RINGS: usize = 3;
 /// How much of a disc's half-thickness its upright rim takes; the rest is
 /// bevel.
 const DISC_RIM: f32 = 0.4;
@@ -269,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stone_ball_cleaves_from_nearly_every_side() {
+    fn a_stone_ball_cleaves_from_every_side() {
         let rule = CleaveRule {
             threshold: 1.0,
             pieces: 3,
@@ -284,6 +282,6 @@ mod tests {
                 rule.cleave(&block.collider.shape, from * 1.5, k).is_some()
             })
             .count();
-        assert!(cleaved >= 180, "it cleaved from {cleaved} sides of 200");
+        assert_eq!(cleaved, 200, "sides it cleaved from");
     }
 }
