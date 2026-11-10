@@ -139,7 +139,7 @@ Three classes of object, from `LevelObject::orientability()`:
 | Class | Objects | Behaviour under a rotated segment |
 |-------|---------|-----------------------------------|
 | **Turns** | `Box`, `Plank`, `Stack`, `Tower`, `BoxWall`, `HoneycombWall`, `Trampoline`, `Table`, `Dolos`, `Trilithon`, `PlankBridge`, `Domino` | Turns with the segment. `Domino` rotates its `direction` vector instead of taking a `yaw`. |
-| **Symmetric** | `BeachBall`, `GlowingOrb`, `Crate`, `HeavyCrate`, `Capsule`, `Menhir`, `FencePost`, `PlayWheel`, the regular solids, `HexPrism`, `Jack`, `Pyramid`, `Jenga` | Nothing to do — a quarter turn changes nothing observable. |
+| **Symmetric** | `BeachBall`, `Fruit`, `GlazedOrb`, `GlowingOrb`, `Crate`, `HeavyCrate`, `Capsule`, `Menhir`, `FencePost`, `PlayWheel`, the regular solids, `HexPrism`, `Jack`, `Pyramid`, `Jenga` | Nothing to do — a quarter turn changes nothing observable. |
 | **Fixed** | `Banana`, `House`, `Pendulum`, `Seesaw`, `VoussoirArch`, `Temple` | **Keeps its world orientation while the segment turns around it.** `level_check` warns; author these in an unrotated segment. |
 
 `PlankBridge.yaw` is in **degrees**, like every other yaw in the format. It was radians
@@ -446,6 +446,18 @@ pub enum BoxStyle {
 pub enum LevelObject {
     BeachBall {
         pos: (f32, f32, f32),
+    },
+    /// A giant garden fruit (`kind`: Cherry, Peach or Blackberry): floats,
+    /// and comes to rest stalk up.
+    Fruit {
+        pos: (f32, f32, f32),
+        kind: FruitKind,
+        radius: f32,  // default 0.5
+    },
+    /// A lapis orb banded and studded in gilt: floats, finial up.
+    GlazedOrb {
+        pos: (f32, f32, f32),
+        radius: f32,  // default 0.55
     },
     /// Raw box with full control over dimensions, appearance, and physics.
     Box {

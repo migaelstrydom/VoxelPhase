@@ -12,6 +12,10 @@ use nalgebra::Vector3;
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use crate::app::sculpt::{
+    painted_model, scatter, Clouds, ContactShade, Ellipsoid, Mottle, SculptedPart, SkinPattern,
+    Spots, Veins, Warp,
+};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::character::CharacterIntent;
 use crate::components::{
@@ -19,7 +23,7 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::creature::{Brain, Perception, Swimmer};
-use crate::model::{Model, ModelPart};
+use crate::model::Model;
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::colour::Colour;
 use crate::rendering::grain::GrainSpec;
@@ -27,10 +31,6 @@ use crate::rendering::material::{Material, MaterialId, SurfaceFinish};
 use crate::resources::textures::TextureManager;
 use crate::systems::PhysicsResource;
 
-use super::body_paint::{scatter, ContactShade, Mottle};
-use super::body_parts::{BodyPart, Ellipsoid};
-use super::body_texture::{Clouds, SkinPattern, Spots, Veins};
-use super::body_warp::Warp;
 use super::in_water::spawn_point_in_water;
 
 /// As dense as the water: buoyancy carries it and its flippers only move it.
@@ -236,7 +236,7 @@ impl TurtleDef {
         let ink = (Colour::new(0.02, 0.02, 0.03, 1.0), bead);
         let gold = (Colour::new(1.0, 0.62, 0.18, 1.0), gilt);
 
-        let dome = BodyPart::new(Ellipsoid::new((0.28, 0.24, 0.35), (0.0, 0.02, 0.0)), pearl)
+        let dome = SculptedPart::new(Ellipsoid::new((0.28, 0.24, 0.35), (0.0, 0.02, 0.0)), pearl)
             .warped(Warp::Lumps {
                 frequency: 5.0,
                 amplitude: 0.012,
@@ -247,17 +247,17 @@ impl TurtleDef {
         let down = -Vector3::y();
         let mut parts = vec![
             // A frill round the rim, its edge in lobes.
-            BodyPart::new(Ellipsoid::new((0.31, 0.06, 0.38), (0.0, 0.0, 0.0)), rose).warped(
+            SculptedPart::new(Ellipsoid::new((0.31, 0.06, 0.38), (0.0, 0.0, 0.0)), rose).warped(
                 Warp::Scallop {
                     lobes: 14,
                     bulge: 0.07,
                     lift: 0.015,
                 },
             ),
-            BodyPart::new(Ellipsoid::new((0.28, 0.07, 0.34), (0.0, -0.03, 0.0)), cream),
+            SculptedPart::new(Ellipsoid::new((0.28, 0.07, 0.34), (0.0, -0.03, 0.0)), cream),
             // Neck, hood, the face set in its front, and a beak that
             // narrows to a hooked point.
-            BodyPart::new(
+            SculptedPart::new(
                 Ellipsoid::new((0.07, 0.065, 0.13), (0.0, 0.03, 0.36)).pitched(-0.25),
                 cream,
             )
@@ -266,7 +266,7 @@ impl TurtleDef {
                 tip: 0.75,
             }),
             // A cowl drawn back to a point behind the head.
-            BodyPart::new(
+            SculptedPart::new(
                 Ellipsoid::new((0.09, 0.085, 0.13), (0.0, 0.085, 0.46)),
                 hood,
             )
@@ -279,11 +279,11 @@ impl TurtleDef {
                 toward: Vector3::y(),
                 amount: 0.05,
             }),
-            BodyPart::new(
+            SculptedPart::new(
                 Ellipsoid::new((0.07, 0.065, 0.05), (0.0, 0.07, 0.54)),
                 slate,
             ),
-            BodyPart::new(
+            SculptedPart::new(
                 Ellipsoid::new((0.036, 0.034, 0.095), (0.0, 0.055, 0.6)).pitched(0.1),
                 beak,
             )
@@ -296,22 +296,22 @@ impl TurtleDef {
                 toward: down,
                 amount: 0.055,
             }),
-            BodyPart::new(Ellipsoid::ball(0.013, Vector3::new(0.05, 0.095, 0.56)), ink),
-            BodyPart::new(
+            SculptedPart::new(Ellipsoid::ball(0.013, Vector3::new(0.05, 0.095, 0.56)), ink),
+            SculptedPart::new(
                 Ellipsoid::ball(0.013, Vector3::new(-0.05, 0.095, 0.56)),
                 ink,
             ),
             // The finial: a lapis collar on the crown, a gilt stem, a ball
             // and a point.
-            BodyPart::new(
+            SculptedPart::new(
                 Ellipsoid::new((0.075, 0.03, 0.075), (0.0, 0.25, 0.0)),
                 lapis,
             ),
-            BodyPart::new(Ellipsoid::new((0.016, 0.07, 0.016), (0.0, 0.32, 0.0)), gold),
-            BodyPart::new(Ellipsoid::ball(0.04, Vector3::new(0.0, 0.39, 0.0)), gold),
-            BodyPart::new(Ellipsoid::new((0.009, 0.04, 0.009), (0.0, 0.46, 0.0)), gold),
+            SculptedPart::new(Ellipsoid::new((0.016, 0.07, 0.016), (0.0, 0.32, 0.0)), gold),
+            SculptedPart::new(Ellipsoid::ball(0.04, Vector3::new(0.0, 0.39, 0.0)), gold),
+            SculptedPart::new(Ellipsoid::new((0.009, 0.04, 0.009), (0.0, 0.46, 0.0)), gold),
             // A short tail, tapering and drooping.
-            BodyPart::new(
+            SculptedPart::new(
                 Ellipsoid::new((0.04, 0.025, 0.08), (0.0, -0.01, -0.4)).pitched(0.2),
                 cream,
             )
@@ -329,7 +329,7 @@ impl TurtleDef {
         for side in [1.0_f32, -1.0] {
             let out = Vector3::x() * side;
             parts.push(
-                BodyPart::new(
+                SculptedPart::new(
                     Ellipsoid::new((0.26, 0.026, 0.08), (0.36 * side, -0.01, 0.2))
                         .yawed(0.5 * side)
                         .rolled(-0.15 * side),
@@ -346,7 +346,7 @@ impl TurtleDef {
                 }),
             );
             parts.push(
-                BodyPart::new(
+                SculptedPart::new(
                     Ellipsoid::new((0.13, 0.022, 0.065), (0.22 * side, -0.02, -0.33))
                         .yawed(-0.7 * side),
                     cream,
@@ -378,7 +378,7 @@ impl TurtleDef {
                 let elevation = elevation + STUD_ELEVATION_SPREAD * scatter(key, 1);
                 let radius = STUD_RADIUS * (1.0 + STUD_SIZE_SPREAD * scatter(key, 2));
                 let (point, normal) = dome.surface_at(azimuth, elevation);
-                BodyPart::new(
+                SculptedPart::new(
                     Ellipsoid::ball(radius, point - normal * radius * 0.5),
                     lapis,
                 )
@@ -387,17 +387,7 @@ impl TurtleDef {
         parts.extend(studs);
         parts.push(dome);
 
-        let mut meshes: Vec<_> = parts
-            .iter()
-            .map(|part| {
-                let mut mesh = part.mesh();
-                MOTTLE.paint(&mut mesh);
-                mesh
-            })
-            .collect();
-        let shapes: Vec<Ellipsoid> = parts.iter().map(|part| part.shape).collect();
-        CONTACT_SHADE.shade(&mut meshes, &shapes);
-        Model::flat(vec![ModelPart::new(meshes)])
+        painted_model(&parts, &MOTTLE, &CONTACT_SHADE)
     }
 }
 

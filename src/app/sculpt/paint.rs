@@ -1,22 +1,16 @@
-//! Paint baked into the vertices of a body built from ellipsoids
-//! ([`Ellipsoid`]), so that it reads as a creature rather than a toy
-//! moulded in one colour per piece.
-//!
-//! ```text
-//!   BodyPart ──mesh──▶ mesh ──Mottle::paint──▶ ──ContactShade::shade──▶ model
-//!   (ellipsoid,  (warped,      (patches of        (shade where one part
-//!    warps)       body_warp)    colour)            meets another)
-//! ```
+//! Paint baked into the vertices of a form built from ellipsoids
+//! ([`Ellipsoid`]), so that it reads as a creature or a fruit rather than a
+//! toy moulded in one colour per piece.
 //!
 //! Both work in the body's frame, so a patch runs on across the seam
 //! between two parts and the paint moves with the body.
 
 use nalgebra::Vector3;
 
-use crate::model::MeshPrimitive;
+use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::utils::noise::fbm_perlin_3d;
 
-use super::body_parts::Ellipsoid;
+use super::parts::{Ellipsoid, SculptedPart};
 
 /// Salt that makes the warmth field independent of the value field.
 const WARMTH_SALT: u32 = 0x9e37;
@@ -98,6 +92,21 @@ impl ContactShade {
         let near = 1.0 - t * t * (3.0 - 2.0 * t);
         1.0 - self.depth * near
     }
+}
+
+/// `parts` as one model, mottled and shaded where they meet.
+pub fn painted_model(parts: &[SculptedPart], mottle: &Mottle, shade: &ContactShade) -> Model {
+    let mut meshes: Vec<MeshPrimitive> = parts
+        .iter()
+        .map(|part| {
+            let mut mesh = part.mesh();
+            mottle.paint(&mut mesh);
+            mesh
+        })
+        .collect();
+    let shapes: Vec<Ellipsoid> = parts.iter().map(|part| part.shape).collect();
+    shade.shade(&mut meshes, &shapes);
+    Model::flat(vec![ModelPart::new(meshes)])
 }
 
 /// A number in `-1..1` that stays the same for the same `key` and `salt`

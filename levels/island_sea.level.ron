@@ -23,7 +23,7 @@
 //
 // Things to try: blow the tarn's lip and send it all over the falls; blow
 // the lake's south shore and give the river a new course; blow the sea cliff
-// under the north spring; float the crate on the lake down the river; swim
+// under the north spring; float the peach on the lake down the river; swim
 // into the sea cave in the east cliff.
 Level(
     name: "Island Sea",
@@ -185,11 +185,13 @@ Level(
             ),
 
             objects: [
-                // Flotsam on the lake and its shore, for the river.
-                Dropped(Crate(pos: (21.0, 6.0, 7.0), size: 0.4)),
-                Dropped(BeachBall(pos: (27.0, 6.0, 6.0))),
-                Dropped(Crate(pos: (24.0, 6.0, -1.0), size: 0.5)),
-                Dropped(BeachBall(pos: (22.5, 6.0, 1.5))),
+                // Giant fruit and a glazed orb afloat on the lake, for the
+                // river, and a cherry in the bay off the spawn beach.
+                Dropped(Fruit(pos: (21.5, 6.0, 4.5), kind: Blackberry)),
+                Dropped(Fruit(pos: (25.5, 6.0, 0.0), kind: Cherry, radius: 0.4)),
+                Dropped(Fruit(pos: (24.0, 6.0, -1.5), kind: Peach, radius: 0.6)),
+                Dropped(GlazedOrb(pos: (22.5, 6.0, 1.5))),
+                Dropped(Fruit(pos: (-3.0, 3.0, 26.5), kind: Cherry, radius: 0.4)),
 
                 // A shoal in the bay, in front of the spawn beach.
                 Fish(pos: (2.0, 27.0)),

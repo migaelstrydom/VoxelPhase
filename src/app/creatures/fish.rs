@@ -27,8 +27,8 @@ use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId, SurfaceFinish};
 use crate::systems::PhysicsResource;
 
-use super::body_parts::Ellipsoid;
 use super::in_water::spawn_point_in_water;
+use crate::app::sculpt::Ellipsoid;
 
 /// As dense as the water, so it neither sinks nor floats: buoyancy holds it
 /// where it swims and its fins only have to move it.

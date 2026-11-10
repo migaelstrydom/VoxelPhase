@@ -3,3 +3,4 @@ pub mod finish;
 pub mod models;
 pub mod orientation;
 pub mod textures;
+pub mod weighted_ball;

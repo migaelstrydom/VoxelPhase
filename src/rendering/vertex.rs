@@ -16,7 +16,7 @@ pub struct Vertex {
     /// Baked ambient occlusion: `1.0` is fully open, lower is in shade from
     /// nearby geometry. Terrain bakes it (`terrain::ao`), and so do creatures
     /// built from ellipsoids, where their parts meet
-    /// (`app::creatures::body_paint`); everything else carries `1.0`, which
+    /// (`app::sculpt::paint`); everything else carries `1.0`, which
     /// is both the neutral value and the honest one.
     pub ao: f32,
 }

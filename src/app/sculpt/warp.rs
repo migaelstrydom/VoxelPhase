@@ -1,7 +1,7 @@
-//! Warps that bend a body part off the ellipsoid it starts as: a beak that
+//! Warps that bend a part off the ellipsoid it starts as: a beak that
 //! tapers and hooks, a flipper that thins and sweeps back, a frill whose
 //! edge runs in lobes, a shell that is not quite smooth. A perfect
-//! ellipsoid is what makes a creature built from them read as a toy.
+//! ellipsoid is what makes a thing built from them read as a toy.
 //!
 //! A warp works in the part's own frame (its axes, its centre, metres), so
 //! the same warp means the same thing on a part however it is turned.
@@ -50,6 +50,31 @@ pub enum Warp {
         /// How far a lobe lifts, m.
         lift: f32,
     },
+    /// A hollow pressed into one side: the dip a stalk grows out of.
+    Dimple {
+        /// Where on the part the hollow is deepest, a unit vector in the
+        /// part's frame.
+        at: Vector3<f32>,
+        /// How far round the part from `at` the hollow reaches, radians on
+        /// the part's unit sphere.
+        width: f32,
+        /// How deep it is at `at`, m.
+        depth: f32,
+    },
+    /// A groove from one pole to the other down one side: a peach's seam.
+    Cleft {
+        /// The axis whose two ends the groove runs between, a unit vector
+        /// in the part's frame.
+        pole: Vector3<f32>,
+        /// The side the groove runs down, a unit vector square to `pole`.
+        side: Vector3<f32>,
+        /// How far round the part from the groove's line it reaches,
+        /// radians.
+        width: f32,
+        /// How far in the groove's line is drawn, as a share of the way to
+        /// the part's centre.
+        depth: f32,
+    },
     /// Lumps and hollows: the surface pushed out or in along its normal.
     Lumps {
         /// Lumps per metre.
@@ -92,6 +117,30 @@ impl Warp {
                 let out = 1.0 + bulge * lobe * edge;
                 Vector3::new(local.x * out, local.y + lift * lobe * edge, local.z * out)
             }
+            Warp::Dimple { at, width, depth } => {
+                let angle = unit_direction(local, radii)
+                    .dot(&at)
+                    .clamp(-1.0, 1.0)
+                    .acos();
+                local - at * depth * bell(angle / width)
+            }
+            Warp::Cleft {
+                pole,
+                side,
+                width,
+                depth,
+            } => {
+                let unit = unit_direction(local, radii);
+                let around = unit - pole * unit.dot(&pole);
+                let Some(bearing) = around.try_normalize(1e-6) else {
+                    return local;
+                };
+                let angle = bearing.dot(&side).clamp(-1.0, 1.0).acos();
+                // Every meridian meets at the poles, so the groove fades
+                // out towards them instead of pinching the surface there.
+                let fade = around.norm().sqrt();
+                local * (1.0 - depth * fade * bell(angle / width))
+            }
             Warp::Lumps {
                 frequency,
                 amplitude,
@@ -102,6 +151,20 @@ impl Warp {
             }
         }
     }
+}
+
+/// Where `local`, a point on a part of semi-axes `radii`, sits on the
+/// part's unit sphere.
+fn unit_direction(local: Vector3<f32>, radii: Vector3<f32>) -> Vector3<f32> {
+    local
+        .component_div(&radii)
+        .try_normalize(1e-9)
+        .unwrap_or_else(Vector3::y)
+}
+
+/// A smooth bump: 1 at 0, falling to nothing a little past 2.
+fn bell(x: f32) -> f32 {
+    (-x * x).exp()
 }
 
 /// How far along `along` a point lies on a part: 0 at the far end, 1 at the
@@ -169,7 +232,7 @@ pub fn rebuild_normals(mesh: &mut MeshPrimitive) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::creatures::body_parts::Ellipsoid;
+    use crate::app::sculpt::Ellipsoid;
     use crate::rendering::colour::Colour;
     use crate::rendering::material::MaterialId;
 
@@ -208,6 +271,41 @@ mod tests {
             (at(0.0).x - 0.03125).abs() < 1e-6,
             "halfway is half narrowed"
         );
+    }
+
+    #[test]
+    fn a_dimple_sinks_its_pole_and_leaves_the_far_side() {
+        let radii = Vector3::repeat(0.5);
+        let dimple = Warp::Dimple {
+            at: Vector3::y(),
+            width: 0.4,
+            depth: 0.1,
+        };
+        let top = dimple.apply(Vector3::y() * 0.5, Vector3::y(), radii);
+        let bottom = dimple.apply(-Vector3::y() * 0.5, -Vector3::y(), radii);
+        let equator = dimple.apply(Vector3::x() * 0.5, Vector3::x(), radii);
+        assert!((top.y - 0.4).abs() < 1e-6, "the pole sinks by the depth");
+        assert!((bottom.y + 0.5).abs() < 1e-6);
+        assert!((equator - Vector3::x() * 0.5).norm() < 1e-4);
+    }
+
+    #[test]
+    fn a_cleft_draws_in_its_side_and_fades_at_the_poles() {
+        let radii = Vector3::repeat(0.5);
+        let cleft = Warp::Cleft {
+            pole: Vector3::y(),
+            side: Vector3::z(),
+            width: 0.2,
+            depth: 0.1,
+        };
+        let at = |p: Vector3<f32>| cleft.apply(p * 0.5, p, radii);
+        assert!(
+            (at(Vector3::z()).z - 0.45).abs() < 1e-6,
+            "the seam is drawn in"
+        );
+        assert!((at(-Vector3::z()) + Vector3::z() * 0.5).norm() < 1e-6);
+        assert!((at(Vector3::x()) - Vector3::x() * 0.5).norm() < 1e-6);
+        assert!((at(Vector3::y()) - Vector3::y() * 0.5).norm() < 1e-6);
     }
 
     #[test]

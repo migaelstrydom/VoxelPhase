@@ -9,6 +9,7 @@ mod event_handler;
 mod frame;
 mod game_world;
 mod placer_recording;
+pub(crate) mod sculpt;
 mod slow_motion;
 pub(crate) mod spawnables;
 pub(crate) mod spawners;

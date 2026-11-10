@@ -31,13 +31,13 @@ use super::footprint::{Footprint, Support};
 use crate::app::creatures::{FishDef, HeartCritterDef, PeeperDef, RollerDef, TurtleDef};
 use crate::app::spawnables::{
     BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, CypressDef,
-    DodecahedronDef, DolosDef, DominoDef, FencePostDef, FramedWindowDef, GemDef, GlassSheetDef,
-    GlowingOrbDef, GoalDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, HoverSledDef,
-    IceBoxDef, IceWallDef, IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef, Metal,
-    MetalCubeDef, MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef,
-    PlayWheelDef, PyramidDef, RockDef, SeesawDef, ShrubDef, Spawnable, StackDef, StackItemDef,
-    TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TreeDef, TrilithonDef,
-    VoussoirArchDef, BARREL_RADIUS, BEACH_BALL_RADIUS,
+    DodecahedronDef, DolosDef, DominoDef, FencePostDef, FramedWindowDef, FruitDef, FruitKind,
+    GemDef, GlassSheetDef, GlazedOrbDef, GlowingOrbDef, GoalDef, HeavyCrateDef, HexPrismDef,
+    HoneycombWallDef, HouseDef, HoverSledDef, IceBoxDef, IceWallDef, IcosahedronDef, IglooDef,
+    JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef, OctahedronDef,
+    PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, RockDef, SeesawDef, ShrubDef,
+    Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef,
+    TrampolineDef, TreeDef, TrilithonDef, VoussoirArchDef, BARREL_RADIUS, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -889,6 +889,21 @@ pub enum LevelObject {
     BeachBall {
         pos: (f32, f32, f32),
     },
+    /// A giant garden fruit: floats, and comes to rest stalk up.
+    Fruit {
+        pos: (f32, f32, f32),
+        kind: FruitKind,
+        /// Radius of the sphere it collides as, m.
+        #[serde(default = "FruitDef::default_radius")]
+        radius: f32,
+    },
+    /// A lapis orb banded and studded in gilt: floats, finial up.
+    GlazedOrb {
+        pos: (f32, f32, f32),
+        /// Radius of the sphere it collides as, m.
+        #[serde(default = "GlazedOrbDef::default_radius")]
+        radius: f32,
+    },
     /// Self-illuminated sphere with beach-ball physics. Subject for lighting work.
     GlowingOrb {
         pos: (f32, f32, f32),
@@ -1724,6 +1739,8 @@ impl LevelObject {
             LevelObject::Banana { pos, .. } => ("Banana", point(pos)),
             LevelObject::Barrel { pos } => ("Barrel", point(pos)),
             LevelObject::BeachBall { pos } => ("BeachBall", point(pos)),
+            LevelObject::Fruit { pos, .. } => ("Fruit", point(pos)),
+            LevelObject::GlazedOrb { pos, .. } => ("GlazedOrb", point(pos)),
             LevelObject::GlowingOrb { pos, .. } => ("GlowingOrb", point(pos)),
             LevelObject::Gem { pos, .. } => ("Gem", point(pos)),
             LevelObject::Goal { pos, .. } => ("Goal", point(pos)),
@@ -1842,6 +1859,8 @@ impl LevelObject {
                 radius: BARREL_RADIUS,
             },
             LevelObject::BeachBall { .. } => Point,
+            LevelObject::Fruit { .. } => Point,
+            LevelObject::GlazedOrb { .. } => Point,
             LevelObject::GlowingOrb { .. } => Point,
             // Hangs in the air and is never stood on; what it covers is the
             // point it was authored at.
@@ -2133,6 +2152,8 @@ impl LevelObject {
             // arbitrary anyway.
             LevelObject::Barrel { .. }
             | LevelObject::BeachBall { .. }
+            | LevelObject::Fruit { .. }
+            | LevelObject::GlazedOrb { .. }
             | LevelObject::GlowingOrb { .. }
             | LevelObject::Gem { .. }
             | LevelObject::Goal { .. }
@@ -2218,6 +2239,8 @@ impl LevelObject {
             LevelObject::Banana { pos, .. } => p3(pos),
             LevelObject::Barrel { pos } => p3(pos),
             LevelObject::BeachBall { pos } => p3(pos),
+            LevelObject::Fruit { pos, .. } => p3(pos),
+            LevelObject::GlazedOrb { pos, .. } => p3(pos),
             LevelObject::GlowingOrb { pos, .. } => p3(pos),
             LevelObject::Gem { pos, .. } => p3(pos),
             LevelObject::Goal { pos, .. } => p3(pos),
@@ -2374,6 +2397,17 @@ impl LevelObject {
             LevelObject::Barrel { pos } => Box::new(BarrelDef { pos: *pos }),
 
             LevelObject::BeachBall { pos } => Box::new(BeachBallDef { pos: *pos }),
+
+            LevelObject::Fruit { pos, kind, radius } => Box::new(FruitDef {
+                pos: *pos,
+                kind: *kind,
+                radius: *radius,
+            }),
+
+            LevelObject::GlazedOrb { pos, radius } => Box::new(GlazedOrbDef {
+                pos: *pos,
+                radius: *radius,
+            }),
 
             LevelObject::GlowingOrb { pos, colour, glow } => Box::new(GlowingOrbDef {
                 pos: *pos,

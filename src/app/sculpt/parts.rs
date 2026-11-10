@@ -1,6 +1,6 @@
-//! Body parts built from ellipsoids, for creatures modelled as a handful of
+//! Parts built from ellipsoids, for anything modelled as a handful of
 //! rounded pieces: a fish's body, fins and eyes; a turtle's shell, flippers
-//! and the studs on its shell.
+//! and the studs on its shell; a fruit, its stem and its leaf.
 
 use nalgebra::{UnitQuaternion, Vector3};
 
@@ -9,18 +9,18 @@ use crate::model::MeshPrimitive;
 use crate::rendering::colour::Colour;
 use crate::rendering::material::MaterialId;
 
-use super::body_warp::{rebuild_normals, warp_point, Warp};
+use super::warp::{rebuild_normals, warp_point, Warp};
 
 /// Segments round a part per metre of its longest semi-axis, and the
 /// fewest and most any part gets: enough for a smooth silhouette at the size
-/// these creatures are seen at, and on a big part enough vertices to carry
-/// the paint baked into them ([`super::body_paint`]).
+/// these things are seen at, and on a big part enough vertices to carry
+/// the warps and the paint baked into them ([`super::paint`]).
 const SEGMENTS_PER_METRE: f32 = 80.0;
 const MIN_SEGMENTS: u32 = 16;
-const MAX_SEGMENTS: u32 = 32;
+const MAX_SEGMENTS: u32 = 64;
 
-/// One ellipsoid of a creature's body, in the body's frame (+Z forward,
-/// +Y up).
+/// One ellipsoid of a sculpted form, in the form's frame (for a creature's
+/// body, +Z forward and +Y up).
 #[derive(Clone, Copy, Debug)]
 pub struct Ellipsoid {
     /// Semi-axes along the part's own x, y and z, m.
@@ -120,10 +120,10 @@ impl Ellipsoid {
     }
 }
 
-/// A part of a creature's body: an ellipsoid, the warps that bend it off
+/// A part of a sculpted form: an ellipsoid, the warps that bend it off
 /// that ellipsoid, and its paint.
 #[derive(Clone, Debug)]
-pub struct BodyPart {
+pub struct SculptedPart {
     /// The ellipsoid it starts as, which is also what other parts' shade
     /// is judged against.
     pub shape: Ellipsoid,
@@ -135,7 +135,7 @@ pub struct BodyPart {
     pub material: MaterialId,
 }
 
-impl BodyPart {
+impl SculptedPart {
     /// `shape` unwarped, in `look`: its colour and material.
     pub fn new(shape: Ellipsoid, look: (Colour, MaterialId)) -> Self {
         Self {

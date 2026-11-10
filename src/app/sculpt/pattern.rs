@@ -1,5 +1,5 @@
-//! Patterns painted on a creature's parts by texture: the detail too fine
-//! for the vertex colours of [`super::body_paint`] (freckles, pores, fine
+//! Patterns painted on a form's parts by texture: the detail too fine
+//! for the vertex colours of [`super::paint`] (freckles, pores, fine
 //! veins).
 //!
 //! A part's texture coordinates are its sphere's (`u` round its own up
@@ -18,7 +18,7 @@ use rayon::prelude::*;
 
 use crate::utils::noise::fbm_perlin_3d;
 
-use super::body_paint::scatter;
+use super::paint::scatter;
 
 /// A layer of round spots, scattered one or none to a cell of a 3D grid
 /// over the unit sphere.
