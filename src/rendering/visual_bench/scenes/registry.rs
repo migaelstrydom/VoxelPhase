@@ -6,8 +6,9 @@
 use crate::rendering::visual_bench::scene::VisualScene;
 use crate::rendering::visual_bench::scenes::{
     Craters, Critter, CritterWalk, Fountain, Fruit, GradeSweep, HoverSled, Ice, IceFracture,
-    MaterialGrid, Palette, Peeper, PhysicsFinish, Plants, PropGrain, Props, ShadowTuning, Shadows,
-    SunSweep, TerrainAo, TerrainDetail, TerrainFinish, TerrainForms, Turtle, WeatheredStone,
+    Marble, MaterialGrid, Palette, Peeper, PhysicsFinish, Plants, PropGrain, Props, ShadowTuning,
+    Shadows, SunSweep, TerrainAo, TerrainDetail, TerrainFinish, TerrainForms, Turtle,
+    WeatheredStone,
 };
 
 /// Every scene, in the order `--list` prints them.
@@ -18,6 +19,7 @@ pub fn all_scenes() -> Vec<Box<dyn VisualScene>> {
         Box::new(CritterWalk),
         Box::new(Fruit),
         Box::new(Fountain),
+        Box::new(Marble),
         Box::new(GradeSweep),
         Box::new(HoverSled),
         Box::new(Ice),

@@ -356,6 +356,13 @@ the whole it was cut from. What `PieceStyle`, `whole_shape` and
 `texture_anchor` do today moves there. A new look for broken stone or ice
 lives in the spawnable's file, not in `shared/models.rs`.
 
+A spawnable whose blocks have meshes of their own (sculpted, textured,
+ornamented) need not write one: `fracture::CarvedPieces` is a `FaceMesher`
+that draws a piece as its share of the whole block's mesh, sliced at each
+cut (`model::slice`) and closed with a face of fresh material. It tells a
+cut from the block's old surface by comparing the piece's hull with the
+whole block's, so a piece cut again is drawn from the whole block again.
+
 The cutter also passes the old part's bonds and ties on: each goes to the
 new part nearest its anchor (a bond's anchor is in the body frame, which
 cutting does not move), and the bonds among the new parts are the cutter's

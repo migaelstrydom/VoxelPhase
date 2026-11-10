@@ -11,13 +11,15 @@
 //!                           ──▶ PieceSplit for the owners
 //!
 //!   cutters (glass, cleave) ──▶ replace_part, through the spawnable's
-//!                               FaceMesher
+//!                               FaceMesher (CarvedPieces, for anything
+//!                               with a mesh of its own)
 //! ```
 //!
 //! Fracture never draws: how a part looks is kept by collider handle in
 //! `model::PartLooks` and drawn by `PartDrawSystem`. Design:
 //! `docs/COMPOUND_PARTS.md`.
 
+mod carved;
 mod components;
 mod contact_load;
 mod cutting;
@@ -29,6 +31,7 @@ mod piece_split;
 pub mod systems;
 mod torn_side;
 
+pub use carved::{BreakFace, CarvedBlock, CarvedPieces};
 pub use components::{CompoundFracture, PieceTraits};
 pub use contact_load::{ContactLoadTracker, ContactSpike, Deadband};
 pub use cutting::{replace_part, CutPiece, Cuttable, FaceMesher, MadePart};

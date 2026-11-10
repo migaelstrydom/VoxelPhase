@@ -474,7 +474,8 @@ pub enum LevelObject {
     /// up through a base, column and bulb. Its spire, bulb, column and arms
     /// break off at their necks, and every block but the base and the arms
     /// cleaves into wedges under a blast right beside it or a hard
-    /// landing; the water then wells out of the top of whatever whole pipe
+    /// landing, each wedge keeping its share of the carving; the water
+    /// then wells out of the top of whatever whole pipe
     /// is still joined to the base.
     Fountain {
         pos: (f32, f32),  // (x, z): stands on the bed there

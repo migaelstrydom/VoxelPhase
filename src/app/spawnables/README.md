@@ -423,6 +423,18 @@ Things to know when you build one:
   `stone/block.rs` (`StoneFaces`: weathered old faces, raw breaks) and
   `glass_sheet.rs` (`GlassFaces`) show it. A new look for broken stuff lives
   in the spawnable's file, not in `shared/models.rs`.
+- **Anything with a mesh of its own cracks through `fracture::CarvedPieces`.**
+  It is a ready-made `FaceMesher`: give it each breakable block as a
+  `CarvedBlock` (the convex hull it is cut as, its frame, and the `Look` it
+  wears whole) and a `BreakFace` (the material and colour of the inside).
+  A piece is then drawn as its share of the block's own mesh, sliced where
+  the hull was cut (`model::slice`) and closed with the break face, so it
+  keeps its carving, paint, ornaments and texture coordinates. The mesh may
+  stand proud of the hull and may be several closed surfaces; it should be
+  closed and wound outward. `fountain/tower.rs` (sculpted blocks of a
+  compound) and `temple.rs` (`MarblePiece`: textured columns, beams and
+  gables, each a body of its own) show it. A concave thing is several convex
+  blocks, bonded.
 - **Use per-metre UVs if the texture is the substance and not a decoration.**
   A fragment inherits its parent's material, and a mapping fitted to each face
   changes the pattern's size at the moment the object breaks, by a different
@@ -563,6 +575,6 @@ Optional components:
 | Custom mesh | `fence_post.rs` | Hand-built barrel + cap meshes with `MeshPrimitive` |
 | Multi-entity | `pyramid.rs` | Grid of independent bodies from one spawnable |
 | Compound body | `table.rs` | Multiple colliders on one body + fracture |
-| Welded compound with a pump | `fountain/` | Sculpted parts as `PartLooks`, bonds at the necks, a tie into the bed, `pump::Plumbing`, hull blocks that cleave (`BrittleSolid` + a `FaceMesher`) |
+| Welded compound with a pump | `fountain/` | Sculpted parts as `PartLooks`, bonds at the necks, a tie into the bed, `pump::Plumbing`, hull blocks that cleave and keep their carving (`BrittleSolid` + `fracture::CarvedPieces`) |
 | Box-based | `box_object.rs` | `cuboid_model` + `ColliderDesc::box_shape` |
 | Swept curved mesh | `banana.rs` | Parametric surface + capsule-chain compound collider |

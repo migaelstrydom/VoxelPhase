@@ -31,7 +31,6 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::blocks::Block;
-use super::broken::BrokenStone;
 use crate::app::sculpt::{painted_meshes, Ellipsoid, SculptedPart, Warp};
 use crate::app::spawnables::shared::finish::ColliderSurface;
 use crate::app::spawnables::shared::rose_stone::{self, MATERIAL_COUNT, STONE};
@@ -41,10 +40,13 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, TerrainAnchored, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::fracture::{Bond, CompoundFracture, Cuttable, FaceMesher, PartGraph};
+use crate::fracture::{
+    Bond, BreakFace, CarvedBlock, CarvedPieces, CompoundFracture, Cuttable, FaceMesher, PartGraph,
+};
 use crate::model::{assemble_by_material, Look, Model, PartLooks, PlacedMesh};
-use crate::physics::{ColliderHandle, ConstraintKind, RigidBodyDesc};
+use crate::physics::{ColliderDesc, ColliderHandle, ConstraintKind, RigidBodyDesc};
 use crate::pump::{PipeSection, Plumbing, Spout};
+use crate::rendering::colour::Colour;
 use crate::rendering::material::MaterialId;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
@@ -98,6 +100,8 @@ const WELL_SPEED: f32 = 0.6;
 /// the weight of the bulb cleaves when it lands from any height, a spire
 /// only from a long fall.
 const CLEAVE_BLOW: f32 = 1550.0;
+/// The inside of the stone, where it has just broken.
+const FRESH: Colour = Colour::new(0.68, 0.47, 0.44, 1.0);
 /// Most wedges one blow makes of a block, how far its cuts lean off the
 /// block's axes, degrees, and the least a wedge may hold, m³ at scale 1.
 const CLEAVE_PIECES: u32 = 3;
@@ -165,7 +169,7 @@ struct Design {
     /// reach, toughness).
     bonds: Vec<(usize, usize, Vector3<f32>, f32, f32)>,
     /// The carving, each piece with the block it is drawn on. A block
-    /// that shatters loses its carving for its wedges' broken stone.
+    /// that shatters shares its carving out among its wedges.
     carving: Vec<(usize, SculptedPart)>,
     /// The pipe's sections from the base up, each a block and the spouts
     /// its water leaves by, in the tower's frame.
@@ -200,10 +204,10 @@ impl FountainDef {
         let (rose, blush, lapis, gold) = (looks.rose(), looks.blush(), looks.lapis(), looks.gold());
         let mut blocks = vec![
             Block::ball(BASE_RADIUS * s, base_centre),
-            Block::stone_rod(COLUMN_RADIUS * s, at(COLUMN.0), at(COLUMN.1), blush.0),
-            Block::stone_disc(BASIN_HALF.0 * s, BASIN_HALF.1 * s, at(BASIN_HEIGHT), rose.0),
-            Block::stone_ball(BULB_RADIUS * s, bulb_centre, rose.0),
-            Block::stone_rod(SPIRE_RADIUS * s, at(SPIRE.0), at(SPIRE.1), blush.0),
+            Block::stone_rod(COLUMN_RADIUS * s, at(COLUMN.0), at(COLUMN.1)),
+            Block::stone_disc(BASIN_HALF.0 * s, BASIN_HALF.1 * s, at(BASIN_HEIGHT)),
+            Block::stone_ball(BULB_RADIUS * s, bulb_centre),
+            Block::stone_rod(SPIRE_RADIUS * s, at(SPIRE.0), at(SPIRE.1)),
         ];
         let mut parts = vec![
             vec![BASE],
@@ -422,16 +426,25 @@ impl FountainDef {
         }
     }
 
-    /// What makes and draws the wedges of `design`'s blocks, each block
-    /// read where it stands in the tower's frame.
-    fn broken_stone(&self, design: &Design, materials: &[MaterialId]) -> BrokenStone {
-        BrokenStone::new(
-            design
-                .blocks
-                .iter()
-                .filter_map(|block| Some((block.stone.clone()?, block.frame.translation.vector))),
-            materials[0],
-            self.scale,
+    /// What makes and draws the wedges of `design`'s blocks: each block
+    /// that can shatter with how it `looks` whole, cut where it breaks and
+    /// closed with fresh stone.
+    fn wedges(&self, design: &Design, looks: &[Look], materials: &[MaterialId]) -> CarvedPieces {
+        let blocks = design.blocks.iter().zip(looks).filter_map(|(block, look)| {
+            Some(CarvedBlock {
+                hull: block.stone.clone()?,
+                frame: block.frame,
+                look: Arc::new(look.clone()),
+            })
+        });
+        CarvedPieces::new(
+            blocks.collect(),
+            BreakFace {
+                material: materials[0],
+                colour: FRESH.to_vec4(),
+                texture_span: 1.0,
+            },
+            |hull| ColliderDesc::convex_hull(hull).with_physical_surface(STONE),
         )
     }
 
@@ -456,14 +469,10 @@ impl FountainDef {
 
     fn drawn(&self, materials: &[MaterialId], shattered: Option<(Point3<f32>, f32)>) -> Arc<Model> {
         let design = self.design(rose_stone::Looks::of(materials));
-        let broken = self.broken_stone(&design, materials);
+        let looks = design.looks(self.scale);
+        let broken = self.wedges(&design, &looks, materials);
         let mut placed = Vec::new();
-        for (index, (block, look)) in design
-            .blocks
-            .iter()
-            .zip(design.looks(self.scale))
-            .enumerate()
-        {
+        for (index, (block, look)) in design.blocks.iter().zip(looks).enumerate() {
             let at = block.frame.translation.vector;
             let wedges = shattered.and_then(|(from, _)| {
                 block.stone.as_ref()?;
@@ -629,7 +638,7 @@ impl FountainDef {
             .zip(&handles)
             .filter(|(block, _)| block.stone.is_some())
             .fold(
-                Cuttable::new(Arc::new(self.broken_stone(&design, materials))),
+                Cuttable::new(Arc::new(self.wedges(&design, &block_looks, materials))),
                 |cuttable, (block, &handle)| cuttable.with(handle, block.frame.translation.vector),
             );
         let brittle = BrittleSolid::new(self.cleaving(), cuttable);
@@ -775,6 +784,54 @@ mod tests {
                 .map(|spout| origin.y + spout.outlet.y)
                 .collect()
         })
+    }
+
+    /// The volume `look`'s surfaces enclose.
+    fn enclosed(look: &Look) -> f32 {
+        let volumes = look.primitives.iter().flat_map(|mesh| {
+            mesh.indices.chunks_exact(3).map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.vertices[i as usize].pos);
+                a.dot(&b.cross(&c)) / 6.0
+            })
+        });
+        volumes.sum()
+    }
+
+    /// A wedge is drawn closed, its break capped right across: then the
+    /// wedges of a block enclose between them what the block's carving did.
+    #[test]
+    fn the_wedges_of_a_block_enclose_all_its_carving() {
+        let def = FountainDef::at((0.0, 0.0));
+        let materials = [MaterialId(0), MaterialId(1)];
+        let design = def.design(rose_stone::Looks::of(&materials));
+        let looks = design.looks(def.scale);
+        let mesher = def.wedges(&design, &looks, &materials);
+        let mut shattered = 0;
+        for (index, (block, look)) in design.blocks.iter().zip(&looks).enumerate() {
+            if block.stone.is_none() {
+                continue;
+            }
+            let at = block.frame.translation.vector;
+            let wedges = def
+                .cleaving()
+                .cleave(
+                    &block.collider.shape,
+                    Vector3::new(2.0, 0.3, 0.5),
+                    index as u32,
+                )
+                .expect("a block of stone cleaves");
+            let pieces: f32 = wedges
+                .iter()
+                .map(|wedge| enclosed(&mesher.look(&wedge.hull, at + wedge.centre)))
+                .sum();
+            let whole = enclosed(look);
+            assert!(
+                (pieces - whole).abs() < 0.01 * whole,
+                "{pieces} m³ of {whole}"
+            );
+            shattered += 1;
+        }
+        assert_eq!(shattered, 4);
     }
 
     #[test]

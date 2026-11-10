@@ -4,11 +4,9 @@
 //! ```text
 //!   tower    FountainDef: the design, and the compound it is spawned as
 //!   blocks   Block: one collider of the tower, and the hull it breaks as
-//!   broken   BrokenStone: how a piece cleaved off a block is drawn
 //! ```
 
 mod blocks;
-mod broken;
 mod tower;
 
 pub use tower::FountainDef;

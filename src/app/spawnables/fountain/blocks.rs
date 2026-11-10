@@ -10,7 +10,6 @@ use nalgebra::{Isometry3, Translation3, UnitQuaternion, Vector3};
 use crate::app::spawnables::shared::models::{build_convex_hull, SolidFace};
 use crate::collision::convex_hull::ConvexHull;
 use crate::physics::ColliderDesc;
-use crate::rendering::colour::Colour;
 
 /// Sides round a turned block's hull, and rings from pole to pole of a
 /// ball's: enough that a wedge's outline reads as round, and few enough
@@ -23,22 +22,13 @@ const CAP_RINGS: usize = 3;
 /// bevel.
 const DISC_RIM: f32 = 0.4;
 
-/// What a block that can shatter is made of.
-#[derive(Clone)]
-pub(super) struct Stone {
-    /// The block's shape, in its own frame: what it cleaves as, and what a
-    /// piece of it reads its old surface from.
-    pub hull: Arc<ConvexHull>,
-    /// The colour of its carved surface.
-    pub colour: Colour,
-}
-
 /// One of the tower's colliders and where it sits in the tower's frame.
 pub(super) struct Block {
     pub collider: ColliderDesc,
     pub frame: Isometry3<f32>,
-    /// The stone it shatters as; `None` for a block that never does.
-    pub stone: Option<Stone>,
+    /// The shape it shatters as, in its own frame; `None` for a block
+    /// that never does.
+    pub stone: Option<Arc<ConvexHull>>,
 }
 
 fn placed(centre: Vector3<f32>) -> Isometry3<f32> {
@@ -68,29 +58,29 @@ impl Block {
     }
 
     /// A block of stone shaped `hull`, its frame's origin at `centre`.
-    fn of_stone(hull: ConvexHull, centre: Vector3<f32>, colour: Colour) -> Self {
+    fn of_stone(hull: ConvexHull, centre: Vector3<f32>) -> Self {
         let hull = Arc::new(hull);
         Self {
             collider: ColliderDesc::convex_hull(hull.clone()),
             frame: placed(centre),
-            stone: Some(Stone { hull, colour }),
+            stone: Some(hull),
         }
     }
 
     /// A ball of stone.
-    pub fn stone_ball(radius: f32, centre: Vector3<f32>, colour: Colour) -> Self {
+    pub fn stone_ball(radius: f32, centre: Vector3<f32>) -> Self {
         let rings: Vec<(f32, f32)> = (1..=BALL_RINGS)
             .map(|ring| {
                 let latitude = -FRAC_PI_2 + PI * ring as f32 / (BALL_RINGS + 1) as f32;
                 (radius * latitude.sin(), radius * latitude.cos())
             })
             .collect();
-        Self::of_stone(turned_hull(-radius, radius, &rings), centre, colour)
+        Self::of_stone(turned_hull(-radius, radius, &rings), centre)
     }
 
     /// An upright rod of stone of `radius`, ends rounded, from height
     /// `foot` to height `top` on the tower's axis.
-    pub fn stone_rod(radius: f32, foot: Vector3<f32>, top: Vector3<f32>, colour: Colour) -> Self {
+    pub fn stone_rod(radius: f32, foot: Vector3<f32>, top: Vector3<f32>) -> Self {
         let half = 0.5 * (top.y - foot.y);
         let shoulder = half - radius;
         // Each end's rings, from its pole towards the straight.
@@ -106,17 +96,12 @@ impl Block {
         let mut rings: Vec<(f32, f32)> = cap(-1.0).collect();
         let upper: Vec<(f32, f32)> = cap(1.0).collect();
         rings.extend(upper.into_iter().rev());
-        Self::of_stone(turned_hull(-half, half, &rings), 0.5 * (foot + top), colour)
+        Self::of_stone(turned_hull(-half, half, &rings), 0.5 * (foot + top))
     }
 
     /// A level disc of stone of `radius`, `half_thickness` thick either
     /// side of `centre`, its rim bevelled.
-    pub fn stone_disc(
-        radius: f32,
-        half_thickness: f32,
-        centre: Vector3<f32>,
-        colour: Colour,
-    ) -> Self {
+    pub fn stone_disc(radius: f32, half_thickness: f32, centre: Vector3<f32>) -> Self {
         let rim = DISC_RIM * half_thickness;
         let face = radius - (half_thickness - rim);
         Self::of_stone(
@@ -127,7 +112,6 @@ impl Block {
                 (half_thickness, face),
             ]),
             centre,
-            colour,
         )
     }
 }
@@ -212,12 +196,12 @@ mod tests {
     use crate::cleave::CleaveRule;
 
     fn hull(block: &Block) -> &ConvexHull {
-        &block.stone.as_ref().unwrap().hull
+        block.stone.as_ref().unwrap()
     }
 
     #[test]
     fn a_stone_disc_is_as_thick_and_wide_as_asked() {
-        let block = Block::stone_disc(1.2, 0.1, Vector3::zeros(), Colour::WHITE);
+        let block = Block::stone_disc(1.2, 0.1, Vector3::zeros());
         let hull = hull(&block);
         assert!((hull.box_half_extents.y - 0.1).abs() < 1.0e-5);
         assert!((hull.box_half_extents.x - 1.2).abs() < 1.0e-5);
@@ -226,7 +210,7 @@ mod tests {
 
     #[test]
     fn a_stone_ball_fills_most_of_its_sphere() {
-        let block = Block::stone_ball(1.0, Vector3::zeros(), Colour::WHITE);
+        let block = Block::stone_ball(1.0, Vector3::zeros());
         let sphere = 4.0 / 3.0 * PI;
         let volume = hull(&block).compute_volume();
         assert!(volume > 0.7 * sphere && volume < sphere, "volume {volume}");
@@ -239,7 +223,6 @@ mod tests {
             0.3,
             Vector3::new(0.0, 1.0, 0.0),
             Vector3::new(0.0, 3.0, 0.0),
-            Colour::WHITE,
         );
         assert!((block.frame.translation.vector.y - 2.0).abs() < 1.0e-6);
         let (low, high) = hull(&block)
@@ -254,9 +237,9 @@ mod tests {
     #[test]
     fn every_face_of_a_turned_hull_faces_outward() {
         for block in [
-            Block::stone_ball(0.7, Vector3::zeros(), Colour::WHITE),
-            Block::stone_rod(0.2, Vector3::zeros(), Vector3::y() * 2.0, Colour::WHITE),
-            Block::stone_disc(1.2, 0.1, Vector3::zeros(), Colour::WHITE),
+            Block::stone_ball(0.7, Vector3::zeros()),
+            Block::stone_rod(0.2, Vector3::zeros(), Vector3::y() * 2.0),
+            Block::stone_disc(1.2, 0.1, Vector3::zeros()),
         ] {
             let hull = hull(&block);
             for face in &hull.faces {
@@ -274,7 +257,7 @@ mod tests {
             tilt: 18.0,
             min_volume: 0.01,
         };
-        let block = Block::stone_ball(0.72, Vector3::zeros(), Colour::WHITE);
+        let block = Block::stone_ball(0.72, Vector3::zeros());
         let cleaved = (0..200u32)
             .filter(|&k| {
                 let (round, up) = (k as f32 * 0.7, k as f32 * 0.37);

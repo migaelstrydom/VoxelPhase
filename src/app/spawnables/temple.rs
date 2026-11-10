@@ -3,24 +3,33 @@
 //! throughout, except the pediment, which is Doric-shallow instead — see
 //! [`DORIC_PEDIMENT_RATIO`]. Every piece above the stylobate is an independent
 //! rigid body; the stylobate is static, and stands on a `Foundation` the level
-//! authors under it.
+//! authors under it. A column, beam or gable that lands hard cracks in two
+//! (`cleave::BrittleSolid`), each half keeping its dressed surface; the roof
+//! panels never crack.
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3, Vector4};
+use nalgebra::{Isometry3, Point3, UnitQuaternion, Vector2, Vector3, Vector4};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::{
     build_convex_hull, compound_cuboid_model, convex_solid_model, cuboid_model, SolidFace,
 };
+use super::stone::stone_cleaving;
 use super::{MaterialCtx, Spawnable};
+use crate::cleave::{BlowMeasure, BrittleSolid, CleaveRule};
+use crate::collision::convex_hull::{cube_hull, ConvexHull};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::model::{MeshPrimitive, Model, ModelPart};
+use crate::fracture::{
+    BreakFace, CarvedBlock, CarvedPieces, CompoundFracture, Cuttable, FaceMesher, PartGraph,
+};
+use crate::model::{Look, MeshPrimitive, Model, ModelPart, PartLooks};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
+use crate::rendering::colour::Colour;
 use crate::rendering::material::MaterialId;
 use crate::rendering::pattern;
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
@@ -43,6 +52,12 @@ const COLUMN_SIDES: u32 = 20;
 /// stone. Raising it steepens the roof and raises the friction every marble
 /// joint needs; see [`MARBLE`].
 const DORIC_PEDIMENT_RATIO: f32 = 0.22;
+
+/// Marble where it has just broken: brighter and colder than its dressed
+/// face.
+const FRESH_MARBLE: Colour = Colour::new(0.9, 0.92, 0.96, 1.0);
+/// How far across a break one repeat of the marble's texture reaches, m.
+const BREAK_TEXTURE_SPAN: f32 = 2.0;
 
 const MAT_STONE: usize = 0;
 const MAT_MARBLE: usize = 1;
@@ -199,6 +214,63 @@ impl TempleLayout {
     }
 }
 
+/// One kind of a temple's loose marble, whole and cracked: for tools that
+/// show its broken stone.
+pub struct MarbleSample {
+    /// How the piece looks whole, about its centre of mass.
+    pub whole: Arc<Look>,
+    /// Each half it cracks into, and where the half's frame sits in the
+    /// whole's.
+    pub halves: Vec<(Look, Vector3<f32>)>,
+}
+
+/// How the marble shows where it breaks: the same stone, laid flat on the
+/// break.
+fn marble_breaks(marble: MaterialId) -> BreakFace {
+    BreakFace {
+        material: marble,
+        colour: FRESH_MARBLE.to_vec4(),
+        texture_span: BREAK_TEXTURE_SPAN,
+    }
+}
+
+impl TempleDef {
+    /// A column, a beam of the entablature and a gable of this temple, each
+    /// whole and as a blow from `from` (in the piece's frame) cracks it,
+    /// drawn in `materials` as [`Spawnable::create_materials`] orders them.
+    pub fn marble_samples(
+        &self,
+        materials: &[MaterialId],
+        from: Vector3<f32>,
+    ) -> Vec<MarbleSample> {
+        let lay = TempleLayout::from_def(self);
+        let (marble, fluted) = (materials[MAT_MARBLE], materials[MAT_FLUTED]);
+        let depth = lay.col_base_r + lay.entab_overhang;
+        let beam = Vector3::new(lay.half_w + depth, lay.entab_h / 2.0, depth);
+        let pieces = [
+            MarblePiece::column(&lay, fluted).0,
+            MarblePiece::block(beam, marble),
+            MarblePiece::gable(&lay, marble),
+        ];
+        let samples = pieces.iter().enumerate().map(|(salt, piece)| {
+            let (rule, mesher) = piece
+                .cracking(marble_breaks(marble))
+                .expect("each sample is a piece that cracks");
+            let halves = rule
+                .cleave(&piece.collider.shape, from, salt as u32)
+                .unwrap_or_default();
+            MarbleSample {
+                whole: piece.look.clone(),
+                halves: halves
+                    .iter()
+                    .map(|half| (mesher.look(&half.hull, half.centre), half.centre))
+                    .collect(),
+            }
+        });
+        samples.collect()
+    }
+}
+
 impl Spawnable for TempleDef {
     fn validate(&self) -> Result<(), String> {
         if self.front_columns < 2 || self.side_columns < 2 {
@@ -238,115 +310,7 @@ impl Spawnable for TempleDef {
 
         let mut entities = Vec::new();
 
-        // -----------------------------------------------------------------
-        // Spawn helpers
-        // -----------------------------------------------------------------
-
-        let spawn_box = |world: &mut World,
-                         entities: &mut Vec<Entity>,
-                         pos: Point3<f32>,
-                         he: Vector3<f32>,
-                         mat: MaterialId,
-                         substance: &Substance| {
-            let model = cuboid_model(he, mat);
-            let body_handle = {
-                let mut physics = world.write_resource::<PhysicsResource>();
-                let bh = physics.world.create_body(
-                    RigidBodyDesc::dynamic()
-                        .position(pos)
-                        .linear_damping(0.01)
-                        .angular_damping(0.005),
-                );
-                physics
-                    .world
-                    .attach_collider(bh, ColliderDesc::box_shape(he).of(substance));
-                bh
-            };
-            entities.push(
-                world
-                    .create_entity()
-                    .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
-                    .with(Velocity(Vector3::zeros()))
-                    .with(Orientation::default())
-                    .with(RigidBodyComponent(body_handle))
-                    .with(ModelInstance::new(model))
-                    .with(Renderable)
-                    .build(),
-            );
-        };
-
-        let spawn_rotated_box = |world: &mut World,
-                                 entities: &mut Vec<Entity>,
-                                 pos: Point3<f32>,
-                                 he: Vector3<f32>,
-                                 rot: UnitQuaternion<f32>,
-                                 mat: MaterialId,
-                                 substance: &Substance| {
-            let model = cuboid_model(he, mat);
-            let body_handle = {
-                let mut physics = world.write_resource::<PhysicsResource>();
-                let bh = physics.world.create_body(
-                    RigidBodyDesc::dynamic()
-                        .position(pos)
-                        .rotation(rot)
-                        .linear_damping(0.01)
-                        .angular_damping(0.005),
-                );
-                physics
-                    .world
-                    .attach_collider(bh, ColliderDesc::box_shape(he).of(substance));
-                bh
-            };
-            entities.push(
-                world
-                    .create_entity()
-                    .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
-                    .with(Velocity(Vector3::zeros()))
-                    .with(Orientation(rot))
-                    .with(RigidBodyComponent(body_handle))
-                    .with(ModelInstance::new(model))
-                    .with(Renderable)
-                    .build(),
-            );
-        };
-
-        let spawn_hull = |world: &mut World,
-                          entities: &mut Vec<Entity>,
-                          world_verts: &[Vector3<f32>],
-                          faces: &[SolidFace],
-                          mat: MaterialId,
-                          substance: &Substance| {
-            let centroid =
-                world_verts.iter().copied().sum::<Vector3<f32>>() / world_verts.len() as f32;
-            let local: Vec<_> = world_verts.iter().map(|v| v - centroid).collect();
-            let pos = Point3::new(centroid.x, centroid.y, centroid.z);
-            let hull = Arc::new(build_convex_hull(&local, faces));
-            let model = convex_solid_model(&local, faces, mat);
-            let body_handle = {
-                let mut physics = world.write_resource::<PhysicsResource>();
-                let bh = physics.world.create_body(
-                    RigidBodyDesc::dynamic()
-                        .position(pos)
-                        .linear_damping(0.01)
-                        .angular_damping(0.005),
-                );
-                physics
-                    .world
-                    .attach_collider(bh, ColliderDesc::convex_hull(hull).of(substance));
-                bh
-            };
-            entities.push(
-                world
-                    .create_entity()
-                    .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
-                    .with(Velocity(Vector3::zeros()))
-                    .with(Orientation::default())
-                    .with(RigidBodyComponent(body_handle))
-                    .with(ModelInstance::new(model))
-                    .with(Renderable)
-                    .build(),
-            );
-        };
+        let breaks = marble_breaks(marble);
 
         // =================================================================
         // Stylobate — three stepped platforms as one static compound body.
@@ -428,53 +392,9 @@ impl Spawnable for TempleDef {
         }
 
         for &(cx, cz) in &col_positions {
-            // Physics hull.
-            let (hull_verts, hull_faces) =
-                column_geometry(lay.col_base_r, lay.col_top_r, lay.col_height, COLUMN_SIDES);
-            // The body's origin is the column's centre of mass: the centroid
-            // of its volume, which a column narrowing upward holds below
-            // half its height, not the mean of its vertices.
-            let centroid = build_convex_hull(&hull_verts, &hull_faces).centroid();
-            let local_hull: Vec<_> = hull_verts.iter().map(|v| v - centroid).collect();
-
-            let pos = Point3::new(cx, col_y_base, cz) + centroid;
-            let hull = Arc::new(build_convex_hull(&local_hull, &hull_faces));
-
-            // Rendering model with cylindrical UVs, about the same centre.
-            let model = fluted_column_model(
-                lay.col_base_r,
-                lay.col_top_r,
-                lay.col_height,
-                centroid.y,
-                COLUMN_SIDES,
-                fluted,
-            );
-
-            let body_handle = {
-                let mut physics = world.write_resource::<PhysicsResource>();
-                let bh = physics.world.create_body(
-                    RigidBodyDesc::dynamic()
-                        .position(pos)
-                        .linear_damping(0.01)
-                        .angular_damping(0.005),
-                );
-                physics
-                    .world
-                    .attach_collider(bh, ColliderDesc::convex_hull(hull).of(&MARBLE));
-                bh
-            };
-
-            entities.push(
-                world
-                    .create_entity()
-                    .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
-                    .with(Velocity(Vector3::zeros()))
-                    .with(Orientation::default())
-                    .with(RigidBodyComponent(body_handle))
-                    .with(ModelInstance::new(model))
-                    .with(Renderable)
-                    .build(),
-            );
+            let (column, centre) = MarblePiece::column(&lay, fluted);
+            let pos = Point3::new(cx, col_y_base, cz) + centre;
+            entities.push(column.spawn(world, pos, UnitQuaternion::identity(), breaks));
         }
 
         // =================================================================
@@ -487,25 +407,25 @@ impl Spawnable for TempleDef {
 
         let fb_hw = lay.half_w + beam_depth;
         for &z_sign in &[1.0_f32, -1.0] {
-            spawn_box(
-                world,
-                &mut entities,
-                Point3::new(px, entab_cy, pz + z_sign * lay.half_l),
-                Vector3::new(fb_hw, entab_hh, beam_depth),
-                marble,
-                &MARBLE,
+            entities.push(
+                MarblePiece::block(Vector3::new(fb_hw, entab_hh, beam_depth), marble).spawn(
+                    world,
+                    Point3::new(px, entab_cy, pz + z_sign * lay.half_l),
+                    UnitQuaternion::identity(),
+                    breaks,
+                ),
             );
         }
 
         let side_hl = lay.half_l - beam_depth;
         for &x_sign in &[1.0_f32, -1.0] {
-            spawn_box(
-                world,
-                &mut entities,
-                Point3::new(px + x_sign * lay.half_w, entab_cy, pz),
-                Vector3::new(beam_depth, entab_hh, side_hl),
-                marble,
-                &MARBLE,
+            entities.push(
+                MarblePiece::block(Vector3::new(beam_depth, entab_hh, side_hl), marble).spawn(
+                    world,
+                    Point3::new(px + x_sign * lay.half_w, entab_cy, pz),
+                    UnitQuaternion::identity(),
+                    breaks,
+                ),
             );
         }
 
@@ -514,14 +434,22 @@ impl Spawnable for TempleDef {
         // =================================================================
 
         let ped_base = lay.pediment_base_y;
-        let ped_peak = ped_base + lay.pediment_h;
         let ped_hw = lay.half_w + beam_depth;
 
         for &z_sign in &[1.0_f32, -1.0] {
             let z_outer = pz + z_sign * (lay.half_l + beam_depth);
             let z_inner = pz + z_sign * (lay.half_l - beam_depth);
-            let (verts, faces) = gable_geometry(px, ped_base, ped_peak, ped_hw, z_outer, z_inner);
-            spawn_hull(world, &mut entities, &verts, &faces, marble, &MARBLE);
+            let centre = Point3::new(
+                px,
+                ped_base + lay.pediment_h / 3.0,
+                0.5 * (z_outer + z_inner),
+            );
+            entities.push(MarblePiece::gable(&lay, marble).spawn(
+                world,
+                centre,
+                UnitQuaternion::identity(),
+                breaks,
+            ));
         }
 
         // =================================================================
@@ -541,18 +469,177 @@ impl Spawnable for TempleDef {
             let mid_y = ped_base + peak_h / 2.0;
             let rot = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -side * roof_angle);
 
-            spawn_rotated_box(
+            entities.push(MarblePiece::slab(roof_he, marble).spawn(
                 world,
-                &mut entities,
                 Point3::new(mid_x, mid_y, pz),
-                roof_he,
                 rot,
-                marble,
-                &MARBLE,
-            );
+                breaks,
+            ));
         }
 
         entities
+    }
+}
+
+/// A loose piece of the temple's marble, about its own centre of mass: what
+/// it collides and cracks as, and how it looks whole.
+struct MarblePiece {
+    /// Its shape, which it is cut by when it cracks. `None` for a piece
+    /// that never cracks.
+    hull: Option<Arc<ConvexHull>>,
+    collider: ColliderDesc,
+    look: Arc<Look>,
+}
+
+impl MarblePiece {
+    /// A squared block of `half_extents`.
+    fn block(half_extents: Vector3<f32>, material: MaterialId) -> Self {
+        Self {
+            hull: Some(Arc::new(cube_hull(half_extents))),
+            ..Self::slab(half_extents, material)
+        }
+    }
+
+    /// A slab of `half_extents` that never cracks: a roof panel, far too
+    /// thin for its length to be cut as one hull.
+    fn slab(half_extents: Vector3<f32>, material: MaterialId) -> Self {
+        Self {
+            hull: None,
+            collider: ColliderDesc::box_shape(half_extents).of(&MARBLE),
+            look: Arc::new(look_of(&cuboid_model(half_extents, material))),
+        }
+    }
+
+    /// A column of the temple laid out as `lay`, and how far above the
+    /// middle of its foot its centre of mass is: the centroid of its
+    /// volume, which a column narrowing upward holds below half its height.
+    fn column(lay: &TempleLayout, fluted: MaterialId) -> (Self, Vector3<f32>) {
+        let (verts, faces) =
+            column_geometry(lay.col_base_r, lay.col_top_r, lay.col_height, COLUMN_SIDES);
+        let centre = build_convex_hull(&verts, &faces).centroid();
+        let local: Vec<_> = verts.iter().map(|v| v - centre).collect();
+        let hull = Arc::new(build_convex_hull(&local, &faces));
+        // Drawn with cylindrical UVs, about the same centre.
+        let model = fluted_column_model(
+            lay.col_base_r,
+            lay.col_top_r,
+            lay.col_height,
+            centre.y,
+            COLUMN_SIDES,
+            fluted,
+        );
+        let column = Self {
+            collider: ColliderDesc::convex_hull(hull.clone()).of(&MARBLE),
+            hull: Some(hull),
+            look: Arc::new(look_of(&model)),
+        };
+        (column, centre)
+    }
+
+    /// A gable: the triangular block over an end of the temple laid out as
+    /// `lay`, about the mean of its corners.
+    fn gable(lay: &TempleLayout, material: MaterialId) -> Self {
+        let depth = lay.col_base_r + lay.entab_overhang;
+        let (verts, faces) =
+            gable_geometry(0.0, 0.0, lay.pediment_h, lay.half_w + depth, depth, -depth);
+        let centre = verts.iter().copied().sum::<Vector3<f32>>() / verts.len() as f32;
+        let local: Vec<_> = verts.iter().map(|v| v - centre).collect();
+        Self::solid(&local, &faces, material)
+    }
+
+    /// How it cracks, and what makes and draws its halves when it does,
+    /// their `breaks` drawn as given. `None` for a piece that never cracks.
+    fn cracking(&self, breaks: BreakFace) -> Option<(CleaveRule, CarvedPieces)> {
+        let hull = self.hull.clone()?;
+        let rule = stone_cleaving(MARBLE.physics.density * hull.compute_volume());
+        let halves = CarvedPieces::new(
+            vec![CarvedBlock {
+                hull,
+                frame: Isometry3::identity(),
+                look: self.look.clone(),
+            }],
+            breaks,
+            |hull| ColliderDesc::convex_hull(hull).of(&MARBLE),
+        );
+        Some((rule, halves))
+    }
+
+    /// A solid with these corners and faces.
+    fn solid(vertices: &[Vector3<f32>], faces: &[SolidFace], material: MaterialId) -> Self {
+        let hull = Arc::new(build_convex_hull(vertices, faces));
+        Self {
+            collider: ColliderDesc::convex_hull(hull.clone()).of(&MARBLE),
+            hull: Some(hull),
+            look: Arc::new(look_of(&convex_solid_model(vertices, faces, material))),
+        }
+    }
+
+    /// Stand it at `pos`, turned by `rotation`: a body of its own. One that
+    /// can crack does when it lands hard, each half keeping its share of
+    /// the piece's dressed surface and showing `breaks` where it parted.
+    fn spawn(
+        self,
+        world: &mut World,
+        pos: Point3<f32>,
+        rotation: UnitQuaternion<f32>,
+        breaks: BreakFace,
+    ) -> Entity {
+        let cracking = self.cracking(breaks);
+
+        let mut physics = world.write_resource::<PhysicsResource>();
+        let body = physics.world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(pos)
+                .rotation(rotation)
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        let collider = physics
+            .world
+            .attach_collider(body, self.collider)
+            .expect("a piece of marble attaches to its own new body");
+        let looks = PartLooks::new([(collider, self.look)]);
+        let model = looks
+            .drawn(&physics.world, body)
+            .expect("a piece of marble has something to draw");
+        drop(physics);
+
+        let entity = world
+            .create_entity()
+            .with(Position(pos.coords))
+            .with(Velocity(Vector3::zeros()))
+            .with(Orientation(rotation))
+            .with(RigidBodyComponent(body))
+            .with(ModelInstance::new(model))
+            .with(Renderable)
+            .with(looks);
+        let Some((rule, halves)) = cracking else {
+            return entity.build();
+        };
+        // A compound of one part, which is all a block needs to crack.
+        let mut graph = PartGraph::default();
+        graph.add_part([collider]);
+        entity
+            .with(CompoundFracture::new(graph))
+            .with(
+                BrittleSolid::new(
+                    rule,
+                    Cuttable::new(Arc::new(halves)).with(collider, Vector3::zeros()),
+                )
+                .measured_by(BlowMeasure::Arrest),
+            )
+            .build()
+    }
+}
+
+/// A model's meshes as one look. The model's parts must sit at its origin.
+fn look_of(model: &Model) -> Look {
+    Look {
+        primitives: model
+            .parts
+            .iter()
+            .flat_map(|part| part.primitives.iter().cloned())
+            .collect(),
     }
 }
 
@@ -794,7 +881,15 @@ fn gable_geometry(
 
 #[cfg(test)]
 mod tests {
+    use specs::Join;
+
     use super::*;
+    use crate::app::breakage;
+    use crate::debug::DebugLines;
+    use crate::physics::bench_harness::geometry::FlatQuadGeometry;
+    use crate::physics::stepping::{SequentialStepper, Stepper};
+    use crate::physics::{PhysicsConfig, PhysicsWorld};
+    use crate::time::Time;
 
     fn layout_for(front_columns: u32) -> TempleLayout {
         TempleLayout::from_def(&TempleDef {
@@ -852,5 +947,207 @@ mod tests {
             "roof pitch is {:.1} deg",
             slope.atan().to_degrees()
         );
+    }
+
+    const FRAME_DT: f32 = 1.0 / 60.0;
+    const FLUTED: MaterialId = MaterialId(2);
+    const MARBLE_MATERIAL: MaterialId = MaterialId(1);
+
+    /// A fluted column of the default temple lying on its side, its lowest
+    /// point `drop` metres above a floor.
+    fn dropped_column(drop: f32) -> World {
+        let mut world = World::new();
+        breakage::register(&mut world);
+        world.insert(Time::fixed(FRAME_DT));
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        world.insert(PhysicsResource::new(
+            PhysicsWorld::new(config),
+            Box::new(SequentialStepper::new(FRAME_DT, 4)),
+        ));
+
+        let lay = layout_for(TempleDef::default_front_columns());
+        MarblePiece::column(&lay, FLUTED).0.spawn(
+            &mut world,
+            Point3::new(0.0, lay.col_base_r + drop, 0.0),
+            UnitQuaternion::from_axis_angle(&Vector3::z_axis(), std::f32::consts::FRAC_PI_2),
+            marble_breaks(MARBLE_MATERIAL),
+        );
+        world
+    }
+
+    /// Run the game's break pipeline for `frames` frames.
+    fn settle(world: &mut World, frames: usize) {
+        let geometry = FlatQuadGeometry::new(50.0);
+        let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+        for _ in 0..frames {
+            {
+                let mut physics = world.write_resource::<PhysicsResource>();
+                let mut debug = DebugLines::default();
+                stepper.step(
+                    &mut physics.world,
+                    FRAME_DT,
+                    &geometry,
+                    &[],
+                    &[],
+                    &mut debug,
+                );
+            }
+            breakage::run(world);
+        }
+    }
+
+    /// The area drawn in `material`, over every piece in the world.
+    fn drawn(world: &World, material: MaterialId) -> f32 {
+        let looks = world.read_storage::<PartLooks>();
+        let physics = world.read_resource::<PhysicsResource>();
+        let bodies = world.read_storage::<RigidBodyComponent>();
+        let mut area = 0.0;
+        for (looks, body) in (&looks, &bodies).join() {
+            let colliders = physics.world.body(body.0).unwrap().colliders();
+            for mesh in colliders
+                .iter()
+                .filter_map(|collider| looks.get(*collider))
+                .flat_map(|look| &look.primitives)
+                .filter(|mesh| mesh.material == material)
+            {
+                for t in mesh.indices.chunks_exact(3) {
+                    let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.vertices[i as usize].pos);
+                    area += 0.5 * (b - a).cross(&(c - a)).norm();
+                }
+            }
+        }
+        area
+    }
+
+    fn colliders(world: &World) -> usize {
+        let physics = world.read_resource::<PhysicsResource>();
+        let bodies = world.read_storage::<RigidBodyComponent>();
+        (&bodies)
+            .join()
+            .map(|body| {
+                physics
+                    .world
+                    .body(body.0)
+                    .map_or(0, |b| b.colliders().len())
+            })
+            .sum()
+    }
+
+    #[test]
+    fn a_column_laid_down_gently_stays_whole() {
+        let mut world = dropped_column(0.1);
+        settle(&mut world, 120);
+        assert_eq!(colliders(&world), 1);
+        assert_eq!(drawn(&world, MARBLE_MATERIAL), 0.0, "a break is showing");
+    }
+
+    /// The halves share out the column's fluted face between them and show
+    /// its section, twice, where they parted.
+    #[test]
+    fn a_column_that_falls_far_cracks_and_its_halves_keep_their_flutes() {
+        let mut world = dropped_column(6.0);
+        let fluted = drawn(&world, FLUTED);
+        settle(&mut world, 150);
+        assert_eq!(colliders(&world), 2, "the column did not crack in two");
+
+        let lay = layout_for(TempleDef::default_front_columns());
+        let section = std::f32::consts::PI * lay.col_top_r * lay.col_top_r;
+        let broken = drawn(&world, MARBLE_MATERIAL);
+        assert!(broken > 2.0 * section, "{broken} m² of break showing");
+        let kept = drawn(&world, FLUTED);
+        assert!(
+            (kept - fluted).abs() < 0.01 * fluted,
+            "{kept} m² of {fluted}"
+        );
+    }
+}
+
+/// A whole temple brought down, which takes seconds to simulate.
+#[cfg(all(test, feature = "physics_scenarios"))]
+mod collapse_tests {
+    use specs::Join;
+
+    use super::*;
+    use crate::app::breakage;
+    use crate::debug::DebugLines;
+    use crate::physics::bench_harness::geometry::FlatQuadGeometry;
+    use crate::physics::stepping::{SequentialStepper, Stepper};
+    use crate::physics::{PhysicsConfig, PhysicsWorld};
+    use crate::time::Time;
+
+    const FRAME_DT: f32 = 1.0 / 60.0;
+
+    /// Every collider in the world, and whether each one on a piece that
+    /// keeps looks has something drawn for it.
+    fn colliders(world: &World) -> (usize, bool) {
+        let physics = world.read_resource::<PhysicsResource>();
+        let bodies = world.read_storage::<RigidBodyComponent>();
+        let looks = world.read_storage::<PartLooks>();
+        let (mut count, mut drawn) = (0, true);
+        for (entity, body) in (&world.entities(), &bodies).join() {
+            let colliders = physics.world.body(body.0).unwrap().colliders();
+            count += colliders.len();
+            if let Some(looks) = looks.get(entity) {
+                drawn &= colliders.iter().all(|collider| {
+                    looks
+                        .get(*collider)
+                        .is_some_and(|look| !look.primitives.is_empty())
+                });
+            }
+        }
+        (count, drawn)
+    }
+
+    #[test]
+    fn a_temple_shoved_over_cracks_its_marble_and_every_piece_is_drawn() {
+        let mut world = World::new();
+        breakage::register(&mut world);
+        world.insert(Time::fixed(FRAME_DT));
+        world.insert(PhysicsResource::new(
+            PhysicsWorld::new(PhysicsConfig::default()),
+            Box::new(SequentialStepper::new(FRAME_DT, 4)),
+        ));
+        let temple = TempleDef {
+            pos: (0.0, 0.0, 0.0),
+            column_height: TempleDef::default_column_height(),
+            front_columns: TempleDef::default_front_columns(),
+            side_columns: TempleDef::default_side_columns(),
+        };
+        let pieces = temple.spawn(&mut world, &[MaterialId(0), MaterialId(1), MaterialId(2)]);
+        let (standing, _) = colliders(&world);
+
+        // Every loose piece thrown sideways: columns, beams, gables and roof.
+        {
+            let bodies = world.read_storage::<RigidBodyComponent>();
+            let mut physics = world.write_resource::<PhysicsResource>();
+            for body in pieces.iter().skip(1).filter_map(|piece| bodies.get(*piece)) {
+                let mass = physics.world.body(body.0).unwrap().mass();
+                physics
+                    .world
+                    .apply_impulse(body.0, Vector3::new(6.0, 0.0, 2.0) * mass);
+            }
+        }
+        let geometry = FlatQuadGeometry::new(200.0);
+        let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+        for _ in 0..360 {
+            {
+                let mut physics = world.write_resource::<PhysicsResource>();
+                let mut debug = DebugLines::default();
+                stepper.step(
+                    &mut physics.world,
+                    FRAME_DT,
+                    &geometry,
+                    &[],
+                    &[],
+                    &mut debug,
+                );
+            }
+            breakage::run(&mut world);
+        }
+
+        let (fallen, drawn) = colliders(&world);
+        assert!(fallen > standing + 4, "{standing} pieces became {fallen}");
+        assert!(drawn, "a piece of marble is not drawn");
     }
 }
