@@ -16,7 +16,7 @@ pub mod parts;
 pub mod pattern;
 pub mod warp;
 
-pub use paint::{painted_model, scatter, ContactShade, Mottle};
+pub use paint::{painted_meshes, painted_model, scatter, ContactShade, Mottle};
 pub use parts::{Ellipsoid, SculptedPart};
 pub use pattern::{Clouds, SkinPattern, Spots, Veins};
 pub use warp::Warp;

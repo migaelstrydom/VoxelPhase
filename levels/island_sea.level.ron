@@ -139,7 +139,7 @@ Level(
                     // the south-east.
                     Basin(center: (2.5, -19.5), radius: 5.5, floor: 11.5, warp: 3.0, seed: 11),
                     // The lake under the falls, in the massif's notch.
-                    Basin(center: (24.0, 1.0), radius: 6.5, floor: 0.6, warp: 3.5, seed: 13),
+                    Basin(center: (24.0, 1.0), radius: 6.5, floor: 1.7, warp: 3.5, seed: 13),
 
                     // The stream: out of the tarn, over the high side's cliff,
                     // across the massif in a gully, and over the notch's cliff
@@ -185,12 +185,16 @@ Level(
             ),
 
             objects: [
-                // Giant fruit and a glazed orb afloat on the lake, for the
-                // river, and a cherry in the bay off the spawn beach.
+                // The fountain: a carved tower in the middle of the lake,
+                // lifting the lake's water and throwing it back.
+                Fountain(pos: (24.0, 1.0), jet_speed: 3.2),
+
+                // Giant fruit and a glazed orb afloat on the lake round it,
+                // for the river, and a cherry in the bay off the spawn beach.
                 Dropped(Fruit(pos: (21.5, 6.0, 4.5), kind: Blackberry)),
-                Dropped(Fruit(pos: (25.5, 6.0, 0.0), kind: Cherry, radius: 0.4)),
-                Dropped(Fruit(pos: (24.0, 6.0, -1.5), kind: Peach, radius: 0.6)),
-                Dropped(GlazedOrb(pos: (22.5, 6.0, 1.5))),
+                Dropped(Fruit(pos: (21.0, 6.0, 0.4), kind: Cherry, radius: 0.4)),
+                Dropped(Fruit(pos: (26.2, 6.0, 3.3), kind: Peach, radius: 0.6)),
+                Dropped(GlazedOrb(pos: (26.3, 6.0, 0.6))),
                 Dropped(Fruit(pos: (-3.0, 3.0, 26.5), kind: Cherry, radius: 0.4)),
 
                 // A shoal in the bay, in front of the spawn beach.

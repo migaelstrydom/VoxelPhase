@@ -563,5 +563,6 @@ Optional components:
 | Custom mesh | `fence_post.rs` | Hand-built barrel + cap meshes with `MeshPrimitive` |
 | Multi-entity | `pyramid.rs` | Grid of independent bodies from one spawnable |
 | Compound body | `table.rs` | Multiple colliders on one body + fracture |
+| Welded compound with a pump | `fountain.rs` | Sculpted parts as `PartLooks`, bonds at the necks, a tie into the bed, `pump::Plumbing` |
 | Box-based | `box_object.rs` | `cuboid_model` + `ColliderDesc::box_shape` |
 | Swept curved mesh | `banana.rs` | Parametric surface + capsule-chain compound collider |

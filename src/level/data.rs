@@ -31,12 +31,12 @@ use super::footprint::{Footprint, Support};
 use crate::app::creatures::{FishDef, HeartCritterDef, PeeperDef, RollerDef, TurtleDef};
 use crate::app::spawnables::{
     BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, CypressDef,
-    DodecahedronDef, DolosDef, DominoDef, FencePostDef, FramedWindowDef, FruitDef, FruitKind,
-    GemDef, GlassSheetDef, GlazedOrbDef, GlowingOrbDef, GoalDef, HeavyCrateDef, HexPrismDef,
-    HoneycombWallDef, HouseDef, HoverSledDef, IceBoxDef, IceWallDef, IcosahedronDef, IglooDef,
-    JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef, OctahedronDef,
-    PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, RockDef, SeesawDef, ShrubDef,
-    Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef,
+    DodecahedronDef, DolosDef, DominoDef, FencePostDef, FountainDef, FramedWindowDef, FruitDef,
+    FruitKind, GemDef, GlassSheetDef, GlazedOrbDef, GlowingOrbDef, GoalDef, HeavyCrateDef,
+    HexPrismDef, HoneycombWallDef, HouseDef, HoverSledDef, IceBoxDef, IceWallDef, IcosahedronDef,
+    IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef, OctahedronDef,
+    PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PumpDef, PyramidDef, RockDef, SeesawDef,
+    ShrubDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef,
     TrampolineDef, TreeDef, TrilithonDef, VoussoirArchDef, BARREL_RADIUS, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
@@ -1154,6 +1154,39 @@ pub enum LevelObject {
         friction: f32,
     },
     /// Standing stone anchored to terrain. Released when terrain is destroyed.
+    /// A carved fountain tower standing in a lake, which lifts the lake's
+    /// water and throws it from spouts round its upper bulb. Its spire,
+    /// bulb, column and arms break off at their necks.
+    Fountain {
+        /// Position (x, z). It stands on the bed there.
+        pos: (f32, f32),
+        /// Its size against the 6.4 m tower of scale 1.
+        #[serde(default = "FountainDef::default_scale")]
+        scale: f32,
+        /// The most water it moves, m³/s.
+        #[serde(default = "FountainDef::default_rate")]
+        rate: f32,
+        /// How fast its water leaves a spout, m/s.
+        #[serde(default = "FountainDef::default_jet_speed")]
+        jet_speed: f32,
+    },
+    /// A stone bulb with a standpipe, welded into the bed of a pond, that
+    /// lifts the pond's water and throws it from spouts round the pipe's head.
+    Pump {
+        /// Position (x, z). It stands on the bed there.
+        pos: (f32, f32),
+        #[serde(default = "PumpDef::default_radius")]
+        radius: f32,
+        /// Height of the pipe's head above the bed, m.
+        #[serde(default = "PumpDef::default_height")]
+        height: f32,
+        /// The most water it moves, m³/s.
+        #[serde(default = "PumpDef::default_rate")]
+        rate: f32,
+        /// How fast its water leaves a spout, m/s.
+        #[serde(default = "PumpDef::default_jet_speed")]
+        jet_speed: f32,
+    },
     Menhir {
         /// Position (x, z). Y is determined by terrain surface height.
         pos: (f32, f32),
@@ -1760,6 +1793,8 @@ impl LevelObject {
             LevelObject::House { pos, .. } => ("House", point(pos)),
             LevelObject::Capsule { pos, .. } => ("Capsule", point(pos)),
             LevelObject::Menhir { pos, .. } => ("Menhir", anchored(pos)),
+            LevelObject::Pump { pos, .. } => ("Pump", anchored(pos)),
+            LevelObject::Fountain { pos, .. } => ("Fountain", anchored(pos)),
             LevelObject::Rock { pos, .. } => ("Rock", anchored(pos)),
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
             LevelObject::Shrub { pos, .. } => ("Shrub", anchored(pos)),
@@ -2051,6 +2086,11 @@ impl LevelObject {
             LevelObject::Menhir { bottom_radius, .. } => Disc {
                 radius: *bottom_radius,
             },
+            LevelObject::Pump { radius, .. } => Disc { radius: *radius },
+            // Its base is what stands on the bed.
+            LevelObject::Fountain { scale, .. } => Disc {
+                radius: 1.2 * scale,
+            },
             LevelObject::FencePost { radius, .. } => Disc { radius: *radius },
             // Its core is what touches the ground; the leaves round it give.
             LevelObject::Shrub { radius, .. } => Disc {
@@ -2161,6 +2201,8 @@ impl LevelObject {
             | LevelObject::HeavyCrate { .. }
             | LevelObject::Capsule { .. }
             | LevelObject::Menhir { .. }
+            | LevelObject::Pump { .. }
+            | LevelObject::Fountain { .. }
             // Its pose is drawn from its seed; there is no authored one to turn.
             | LevelObject::Rock { .. }
             | LevelObject::FencePost { .. }
@@ -2293,6 +2335,8 @@ impl LevelObject {
             LevelObject::House { pos, .. } => p3(pos),
             LevelObject::Capsule { pos, .. } => p3(pos),
             LevelObject::Menhir { pos, .. } => p2(pos),
+            LevelObject::Pump { pos, .. } => p2(pos),
+            LevelObject::Fountain { pos, .. } => p2(pos),
             LevelObject::Rock { pos, .. } => p2(pos),
             LevelObject::FencePost { pos, .. } => p2(pos),
             LevelObject::Shrub { pos, .. } => p2(pos),
@@ -2652,6 +2696,30 @@ impl LevelObject {
                 friction: *friction,
             }),
 
+            LevelObject::Fountain {
+                pos,
+                scale,
+                rate,
+                jet_speed,
+            } => Box::new(FountainDef {
+                pos: *pos,
+                scale: *scale,
+                rate: *rate,
+                jet_speed: *jet_speed,
+            }),
+            LevelObject::Pump {
+                pos,
+                radius,
+                height,
+                rate,
+                jet_speed,
+            } => Box::new(PumpDef {
+                pos: *pos,
+                radius: *radius,
+                height: *height,
+                rate: *rate,
+                jet_speed: *jet_speed,
+            }),
             LevelObject::Menhir {
                 pos,
                 half_height,

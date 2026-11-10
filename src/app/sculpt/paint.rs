@@ -96,6 +96,17 @@ impl ContactShade {
 
 /// `parts` as one model, mottled and shaded where they meet.
 pub fn painted_model(parts: &[SculptedPart], mottle: &Mottle, shade: &ContactShade) -> Model {
+    Model::flat(vec![ModelPart::new(painted_meshes(parts, mottle, shade))])
+}
+
+/// Each of `parts` as its own mesh, in their order, mottled and shaded
+/// where they meet: for a form whose parts are drawn apart (a compound that
+/// can break).
+pub fn painted_meshes(
+    parts: &[SculptedPart],
+    mottle: &Mottle,
+    shade: &ContactShade,
+) -> Vec<MeshPrimitive> {
     let mut meshes: Vec<MeshPrimitive> = parts
         .iter()
         .map(|part| {
@@ -106,7 +117,7 @@ pub fn painted_model(parts: &[SculptedPart], mottle: &Mottle, shade: &ContactSha
         .collect();
     let shapes: Vec<Ellipsoid> = parts.iter().map(|part| part.shape).collect();
     shade.shade(&mut meshes, &shapes);
-    Model::flat(vec![ModelPart::new(meshes)])
+    meshes
 }
 
 /// A number in `-1..1` that stays the same for the same `key` and `salt`

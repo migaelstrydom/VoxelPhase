@@ -139,7 +139,7 @@ Three classes of object, from `LevelObject::orientability()`:
 | Class | Objects | Behaviour under a rotated segment |
 |-------|---------|-----------------------------------|
 | **Turns** | `Box`, `Plank`, `Stack`, `Tower`, `BoxWall`, `HoneycombWall`, `Trampoline`, `Table`, `Dolos`, `Trilithon`, `PlankBridge`, `Domino` | Turns with the segment. `Domino` rotates its `direction` vector instead of taking a `yaw`. |
-| **Symmetric** | `BeachBall`, `Fruit`, `GlazedOrb`, `GlowingOrb`, `Crate`, `HeavyCrate`, `Capsule`, `Menhir`, `FencePost`, `PlayWheel`, the regular solids, `HexPrism`, `Jack`, `Pyramid`, `Jenga` | Nothing to do — a quarter turn changes nothing observable. |
+| **Symmetric** | `BeachBall`, `Fruit`, `GlazedOrb`, `GlowingOrb`, `Crate`, `HeavyCrate`, `Capsule`, `Menhir`, `Pump`, `Fountain`, `FencePost`, `PlayWheel`, the regular solids, `HexPrism`, `Jack`, `Pyramid`, `Jenga` | Nothing to do — a quarter turn changes nothing observable. |
 | **Fixed** | `Banana`, `House`, `Pendulum`, `Seesaw`, `VoussoirArch`, `Temple` | **Keeps its world orientation while the segment turns around it.** `level_check` warns; author these in an unrotated segment. |
 
 `PlankBridge.yaw` is in **degrees**, like every other yaw in the format. It was radians
@@ -154,7 +154,7 @@ low sits in the ground. An object gets its height in one of three ways:
 | Placement | Written as | Height |
 |-----------|------------|--------|
 | **Authored** | `Crate(pos: (x, y, z), ..)` | Exactly as written. Right for what is meant to hang (a gem, a lamp) or to start somewhere particular. |
-| **Anchored** | `Rock(pos: (x, z))`, `Menhir`, `FencePost`, creatures, mechanisms | The spawnable reads the terrain surface itself. |
+| **Anchored** | `Rock(pos: (x, z))`, `Menhir`, `Pump`, `Fountain`, `FencePost`, creatures, mechanisms | The spawnable reads the terrain surface itself. |
 | **Dropped** | `Dropped(Crate(pos: (x, y, z), ..))` | Falls straight down from `(x, y, z)` until it touches something. |
 
 `Dropped` wraps any authored object; the loader rejects it around an anchored one or around
@@ -458,6 +458,27 @@ pub enum LevelObject {
     GlazedOrb {
         pos: (f32, f32, f32),
         radius: f32,  // default 0.55
+    },
+    /// A stone bulb with a standpipe, welded into the bed of a pond. It
+    /// lifts the water standing over its intake and throws it from four
+    /// spouts: it makes no water, and stops when its intake is dry. Loose
+    /// (its bed blasted), it pumps whichever way it lies.
+    Pump {
+        pos: (f32, f32),  // (x, z): stands on the bed there
+        radius: f32,      // default 0.45, of its bulb
+        height: f32,      // default 1.8, of its head above the bed
+        rate: f32,        // default 0.4 m³/s
+        jet_speed: f32,   // default 3.5 m/s
+    },
+    /// A carved fountain tower, 6.4 m at scale 1: a pump as above, piped
+    /// up through a base, column and bulb. Its spire, bulb, column and arms
+    /// break off at their necks; the water then wells out of the top of
+    /// whatever is still joined to the base.
+    Fountain {
+        pos: (f32, f32),  // (x, z): stands on the bed there
+        scale: f32,       // default 1.0
+        rate: f32,        // default 0.6 m³/s
+        jet_speed: f32,   // default 4.5 m/s
     },
     /// Raw box with full control over dimensions, appearance, and physics.
     Box {
