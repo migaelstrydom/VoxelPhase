@@ -142,45 +142,132 @@ fn bears(cell: (i32, i32), config: &MeadowConfig) -> Option<(SprigKind, u32)> {
     }
 }
 
-/// Everything that grows on the terrain mesh `vertices`, `indices` (world
-/// space, pile in each vertex's second texture coordinate), by tile, each
-/// tile's sprigs in the order of their cells.
-pub fn sow(
+/// A level rectangle of ground, by its corners in x and z.
+#[derive(Clone, Copy, Debug)]
+pub struct Plot {
+    pub min: Vector2<f32>,
+    pub max: Vector2<f32>,
+}
+
+impl Plot {
+    fn holds(&self, at: Vector2<f32>) -> bool {
+        at.x >= self.min.x && at.x <= self.max.x && at.y >= self.min.y && at.y <= self.max.y
+    }
+
+    /// Whether `other` reaches into it.
+    pub fn meets(&self, other: &Plot) -> bool {
+        other.max.x >= self.min.x
+            && other.min.x <= self.max.x
+            && other.max.y >= self.min.y
+            && other.min.y <= self.max.y
+    }
+}
+
+/// Sprigs by tile, each tile's in the order of their cells.
+pub type Tiles = FxHashMap<TileCoord, Vec<Sprig>>;
+
+/// The middle of a cell, on the ground.
+fn middle_of(cell: (i32, i32)) -> Vector2<f32> {
+    Vector2::new(cell.0 as f32 + 0.5, cell.1 as f32 + 0.5) * CELL
+}
+
+/// The tile a cell lies in.
+fn tile_of(cell: (i32, i32)) -> TileCoord {
+    let middle = middle_of(cell);
+    (
+        (middle.x / TILE).floor() as i32,
+        (middle.y / TILE).floor() as i32,
+    )
+}
+
+/// The sprigs on the mesh's triangles, in the cells `plots` hold if any are
+/// given and in every cell if not: in no order, a cell on an edge two
+/// triangles share perhaps twice.
+fn sprigs_on(
     vertices: &[Vertex],
     indices: &[u32],
     config: &MeadowConfig,
-) -> FxHashMap<TileCoord, Vec<Sprig>> {
+    plots: Option<&[Plot]>,
+) -> Vec<Sprig> {
     // A level's mesh is hundreds of thousands of triangles, and this runs
     // in the frame a blast lands: every core takes a share of them.
-    let sprigs: Vec<Sprig> = indices
+    indices
         .par_chunks(3 * TRIANGLES_A_SHARE)
-        .flat_map_iter(|share| sow_triangles(vertices, share, config))
-        .collect();
+        .flat_map_iter(|share| sow_triangles(vertices, share, config, plots))
+        .collect()
+}
 
-    let mut tiles: FxHashMap<TileCoord, Vec<Sprig>> = FxHashMap::default();
+/// Put `sprigs` into the tiles they lie in, and those tiles back in order.
+fn plant(tiles: &mut Tiles, sprigs: Vec<Sprig>) -> Vec<TileCoord> {
+    let mut planted = Vec::new();
     for sprig in sprigs {
-        let middle = Vector2::new(sprig.cell.0 as f32 + 0.5, sprig.cell.1 as f32 + 0.5) * CELL;
-        let tile = (
-            (middle.x / TILE).floor() as i32,
-            (middle.y / TILE).floor() as i32,
-        );
+        let tile = tile_of(sprig.cell);
         tiles.entry(tile).or_default().push(sprig);
+        planted.push(tile);
     }
-    for sprigs in tiles.values_mut() {
-        // A cell whose middle lies on the edge two triangles share is found
-        // by both.
+    planted.sort_unstable();
+    planted.dedup();
+    for tile in &planted {
+        let sprigs = tiles.get_mut(tile).expect("a tile just planted");
         sprigs.sort_unstable_by_key(|sprig| sprig.cell);
         sprigs.dedup_by_key(|sprig| sprig.cell);
     }
+    planted
+}
+
+/// Everything that grows on the terrain mesh `vertices`, `indices` (world
+/// space, pile in each vertex's second texture coordinate).
+pub fn sow(vertices: &[Vertex], indices: &[u32], config: &MeadowConfig) -> Tiles {
+    let mut tiles = Tiles::default();
+    plant(&mut tiles, sprigs_on(vertices, indices, config, None));
     tiles
+}
+
+/// A piece of the terrain's mesh: its vertices, and the triangles among
+/// them.
+pub type MeshPiece<'a> = (&'a [Vertex], &'a [u32]);
+
+/// Sow `plots` again, on the ground as it is now: whatever `tiles` held in
+/// them goes, and what `meshes` bear there takes its place. `meshes` must
+/// between them hold all the ground over the plots, at every height; the
+/// rest of the terrain is not looked at. Returns the tiles that lost or
+/// gained a sprig.
+pub fn resow(
+    tiles: &mut Tiles,
+    meshes: &[MeshPiece],
+    config: &MeadowConfig,
+    plots: &[Plot],
+) -> Vec<TileCoord> {
+    let within = |sprig: &Sprig| plots.iter().any(|plot| plot.holds(middle_of(sprig.cell)));
+    let mut touched = Vec::new();
+    for (tile, sprigs) in tiles.iter_mut() {
+        let before = sprigs.len();
+        sprigs.retain(|sprig| !within(sprig));
+        if sprigs.len() != before {
+            touched.push(*tile);
+        }
+    }
+    let fresh = meshes
+        .iter()
+        .flat_map(|(vertices, indices)| sprigs_on(vertices, indices, config, Some(plots)))
+        .collect();
+    touched.extend(plant(tiles, fresh));
+    tiles.retain(|_, sprigs| !sprigs.is_empty());
+    touched.sort_unstable();
+    touched.dedup();
+    touched
 }
 
 /// Triangles sown by one core at a time.
 const TRIANGLES_A_SHARE: usize = 4096;
 
-/// The sprigs on the triangles `indices` of the mesh, in no order, a cell
-/// on a shared edge perhaps twice.
-fn sow_triangles(vertices: &[Vertex], indices: &[u32], config: &MeadowConfig) -> Vec<Sprig> {
+/// [`sprigs_on`], for one core's share of the triangles.
+fn sow_triangles(
+    vertices: &[Vertex],
+    indices: &[u32],
+    config: &MeadowConfig,
+    plots: Option<&[Plot]>,
+) -> Vec<Sprig> {
     let mut sprigs = Vec::new();
     for triangle in indices.chunks_exact(3) {
         let [a, b, c] = [triangle[0], triangle[1], triangle[2]].map(|i| &vertices[i as usize]);
@@ -200,14 +287,24 @@ fn sow_triangles(vertices: &[Vertex], indices: &[u32], config: &MeadowConfig) ->
         if across == 0.0 {
             continue;
         }
-        let low = pa.inf(&pb).inf(&pc) / CELL;
-        let high = pa.sup(&pb).sup(&pc) / CELL;
+        let (low, high) = (pa.inf(&pb).inf(&pc), pa.sup(&pb).sup(&pc));
+        let reach = Plot {
+            min: low,
+            max: high,
+        };
+        if plots.is_some_and(|plots| !plots.iter().any(|plot| plot.meets(&reach))) {
+            continue;
+        }
+        let (low, high) = (low / CELL, high / CELL);
         for x in low.x.floor() as i32..=high.x.floor() as i32 {
             for z in low.y.floor() as i32..=high.y.floor() as i32 {
                 let Some((kind, chance)) = bears((x, z), config) else {
                     continue;
                 };
-                let middle = Vector2::new(x as f32 + 0.5, z as f32 + 0.5) * CELL;
+                let middle = middle_of((x, z));
+                if plots.is_some_and(|plots| !plots.iter().any(|plot| plot.holds(middle))) {
+                    continue;
+                }
                 let wb = (middle - pa).perp(&(pc - pa)) / across;
                 let wc = (pb - pa).perp(&(middle - pa)) / across;
                 if wb < 0.0 || wc < 0.0 || wb + wc > 1.0 {
@@ -257,6 +354,49 @@ mod tests {
             ],
             vec![0, 2, 1, 0, 3, 2],
         )
+    }
+
+    /// A blast is told to the meadow as the plot it changed. Sown again
+    /// there alone, the meadow must come out as if sown whole.
+    #[test]
+    fn a_plot_sown_again_leaves_the_meadow_as_if_sown_whole() {
+        let config = MeadowConfig::default();
+        // Four squares of lawn in a row, 8 m each.
+        let lawn = |bare: Option<usize>| {
+            let (mut vertices, mut indices) = (Vec::new(), Vec::new());
+            for k in 0..4 {
+                let pile = if bare == Some(k) { 0.0 } else { 1.0 };
+                let (square_vertices, square_indices) = square(8.0, 1.0, pile);
+                let first = vertices.len() as u32;
+                vertices.extend(square_vertices.into_iter().map(|mut vertex| {
+                    vertex.pos.x += 8.0 * k as f32 + 4.0;
+                    vertex
+                }));
+                indices.extend(square_indices.iter().map(|i| i + first));
+            }
+            (vertices, indices)
+        };
+        let (vertices, indices) = lawn(None);
+        let mut tiles = sow(&vertices, &indices, &config);
+        let before: usize = tiles.values().map(Vec::len).sum();
+
+        // The third square is blasted bare: it straddles two tiles.
+        let (vertices, indices) = lawn(Some(2));
+        let plot = Plot {
+            min: Vector2::new(19.5, -0.5),
+            max: Vector2::new(28.5, 8.5),
+        };
+        let touched = resow(&mut tiles, &[(&vertices, &indices)], &config, &[plot]);
+        let whole = sow(&vertices, &indices, &config);
+
+        let cells = |tiles: &Tiles| {
+            let mut cells: Vec<_> = tiles.values().flatten().map(|s| (s.cell, s.kind)).collect();
+            cells.sort_unstable_by_key(|(cell, _)| *cell);
+            cells
+        };
+        assert_eq!(cells(&tiles), cells(&whole));
+        assert!(cells(&tiles).len() < before, "the blast cleared nothing");
+        assert_eq!(touched, vec![(1, 0)], "tiles the blast touched");
     }
 
     fn count(tiles: &FxHashMap<TileCoord, Vec<Sprig>>, kind: SprigKind) -> usize {

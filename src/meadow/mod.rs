@@ -6,13 +6,17 @@
 //!                                    ▼  drawn mesh has changed
 //!   TerrainWorld render mesh ──sow──▶ Sprigs by tile ──mesh──▶ a model per tile
 //!   (triangles of level turf)        (what grows where)       (an entity each)
+//!
+//!   after a blast: changed_regions ──▶ plots ──resow──▶ the chunks over them
+//!                                                       alone are read again
 //! ```
 //!
 //! What grows where is decided by the ground alone: a grid of cells over the
 //! world, each sown or not by a hash of where it is, wherever a cell's middle
-//! lies on level turf. Ground a blast leaves alone keeps every sprig it had,
-//! ground it carves loses its own, and only the tiles that changed are drawn
-//! afresh. Nothing here collides or is simulated.
+//! lies on level turf. So the whole level is sown once, when it opens, and a
+//! blast has only the ground it changed sown again: what stood over the
+//! crater goes, the rest keeps every sprig it had, and only the tiles that
+//! changed are drawn afresh. Nothing here collides or is simulated.
 
 mod config;
 mod meadow;

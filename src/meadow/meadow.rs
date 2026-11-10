@@ -3,12 +3,14 @@
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use nalgebra::Vector2;
 use rustc_hash::{FxHashMap, FxHasher};
 use specs::Entity;
 
 use super::config::MeadowConfig;
-use super::sow::{sow, Sprig, TileCoord};
+use super::sow::{resow, sow, MeshPiece, Plot, Sprig, TileCoord, Tiles};
 use super::sprig;
+use crate::collision::AABB;
 use crate::model::{Model, ModelPart};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId, SurfaceFinish};
@@ -52,6 +54,9 @@ pub enum TileChange {
 pub struct Meadow {
     config: MeadowConfig,
     material: MaterialId,
+    /// Everything growing, by tile.
+    sown: Tiles,
+    /// The tiles being drawn.
     tiles: FxHashMap<TileCoord, Tile>,
     /// A tile grown and not yet given its entity, with its mark.
     pending: FxHashMap<TileCoord, u64>,
@@ -66,6 +71,7 @@ impl Meadow {
         Self {
             config,
             material,
+            sown: Tiles::default(),
             tiles: FxHashMap::default(),
             pending: FxHashMap::default(),
             grown_from: None,
@@ -75,43 +81,79 @@ impl Meadow {
     /// Grow the meadow over `terrain` as it is drawn now, and say which
     /// tiles changed. Nothing, if the terrain has not changed since the
     /// meadow last grew.
+    ///
+    /// The first time, the whole terrain is sown. After that only the
+    /// ground the terrain's last update changed is, so this must be called
+    /// after every update: one missed leaves that update's ground as it was.
     pub fn regrow(&mut self, terrain: &TerrainWorld) -> Vec<TileChange> {
         let version = terrain.render_version();
         if self.grown_from == Some(version) {
             return Vec::new();
         }
+        let (vertices, indices) = (terrain.render_vertices(), terrain.render_indices());
+        let flat = |region: &AABB| Plot {
+            min: Vector2::new(region.min.x, region.min.z),
+            max: Vector2::new(region.max.x, region.max.z),
+        };
+        let plots: Vec<Plot> = terrain.changed_regions().iter().map(flat).collect();
+        let touched: Vec<TileCoord> = if self.grown_from.is_none() || plots.is_empty() {
+            let before: Vec<TileCoord> = self.sown.keys().copied().collect();
+            self.sown = sow(vertices, indices, &self.config);
+            before
+                .into_iter()
+                .chain(self.sown.keys().copied())
+                .collect()
+        } else {
+            // Every chunk over the changed ground, whichever of them the
+            // update remeshed: ground at another height over the same plot
+            // is sown again with it.
+            let chunks: Vec<_> = terrain
+                .chunk_ids()
+                .into_iter()
+                .filter(|id| {
+                    terrain
+                        .chunk_world_bounds(*id)
+                        .is_some_and(|bounds| plots.iter().any(|plot| plot.meets(&flat(&bounds))))
+                })
+                .filter_map(|id| terrain.chunk_geometry(id))
+                .collect();
+            let meshes: Vec<MeshPiece> = chunks
+                .iter()
+                .map(|chunk| (chunk.vertices.as_slice(), chunk.indices.as_slice()))
+                .collect();
+            resow(&mut self.sown, &meshes, &self.config, &plots)
+        };
         self.grown_from = Some(version);
-        let mut sown = sow(
-            terrain.render_vertices(),
-            terrain.render_indices(),
-            &self.config,
-        );
 
-        let material = self.material;
         let mut changes = Vec::new();
-        self.tiles.retain(|coord, tile| {
-            let Some(sprigs) = sown.remove(coord) else {
-                changes.push(TileChange::Bare {
-                    entity: tile.entity,
-                });
-                return false;
-            };
-            let mark = mark_of(&sprigs);
-            if mark != tile.mark {
-                tile.mark = mark;
-                changes.push(TileChange::Regrown {
-                    entity: tile.entity,
-                    model: model_of(&sprigs, material),
-                });
+        for tile in touched {
+            let sprigs = self.sown.get(&tile);
+            let mark = sprigs.map(|sprigs| mark_of(sprigs));
+            let drawn = self
+                .tiles
+                .get(&tile)
+                .map(|drawn| (drawn.entity, drawn.mark));
+            match (drawn, sprigs.zip(mark)) {
+                (Some((entity, _)), None) => {
+                    self.tiles.remove(&tile);
+                    changes.push(TileChange::Bare { entity });
+                }
+                (Some((entity, old)), Some((sprigs, mark))) if old != mark => {
+                    self.tiles.insert(tile, Tile { entity, mark });
+                    changes.push(TileChange::Regrown {
+                        entity,
+                        model: model_of(sprigs, self.material),
+                    });
+                }
+                (None, Some((sprigs, mark))) if !self.pending.contains_key(&tile) => {
+                    self.pending.insert(tile, mark);
+                    changes.push(TileChange::Grown {
+                        tile,
+                        model: model_of(sprigs, self.material),
+                    });
+                }
+                _ => {}
             }
-            true
-        });
-        for (tile, sprigs) in sown {
-            self.pending.insert(tile, mark_of(&sprigs));
-            changes.push(TileChange::Grown {
-                tile,
-                model: model_of(&sprigs, material),
-            });
         }
         changes
     }
