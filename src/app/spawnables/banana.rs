@@ -1,4 +1,7 @@
-//! Banana spawnable — swept curved mesh with a three-capsule compound collider.
+//! A giant garden banana, as long as a person: a swept curved mesh with a
+//! three-capsule compound collider, its peel painted matte in ochre.
+//!
+//! `visual_bench fruit` shows it beside the other fruit.
 
 use std::f32::consts::TAU;
 use std::sync::Arc;
@@ -7,10 +10,11 @@ use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::finish::{ColliderSurface, MaterialSurface};
+use super::shared::finish::ColliderSurface;
 use super::shared::textures::seed_from_position;
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
+use crate::app::sculpt::Mottle;
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -18,13 +22,34 @@ use crate::core::error::EngineResult;
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::colour::Colour;
-use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::grain::GrainSpec;
+use crate::rendering::material::{Material, MaterialId, SurfaceFinish};
 use crate::rendering::physical_finish::PhysicalSurface;
 use crate::rendering::vertex::Vertex;
+use crate::resources::textures::TextureManager;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
-const TEXTURE_SIZE: u32 = 256;
+const TEXTURE_SIZE: u32 = 512;
+
+/// The peel's finish: matte, like paint on a panel. It is set here and not
+/// derived from the peel's low friction, which would make it shine.
+const PEEL: SurfaceFinish = SurfaceFinish {
+    roughness: 0.85,
+    metallic: 0.0,
+};
+
+/// The peel's microstructure: fine and soft.
+const PEEL_GRAIN: GrainSpec = GrainSpec::STONE.with_scale(1.4).with_strength(0.2);
+
+/// Patches of the peel's paint along the fruit, per length of it, and how
+/// far they lighten or darken and warm or cool it.
+const MOTTLE_PATCHES: f32 = 3.5;
+const MOTTLE_VALUE: f32 = 0.2;
+const MOTTLE_WARMTH: f32 = 0.12;
+
+/// How much light the valleys between the ridges lose, as a share.
+const VALLEY_SHADE: f32 = 0.3;
 
 /// Cross-sections along the centreline.
 const LENGTH_RINGS: u32 = 32;
@@ -96,10 +121,10 @@ pub struct BananaDef {
 
 impl BananaDef {
     pub fn default_length() -> f32 {
-        0.95
+        2.2
     }
     pub fn default_thickness() -> f32 {
-        0.11
+        0.26
     }
     pub fn default_curvature() -> f32 {
         1.5
@@ -127,9 +152,53 @@ impl BananaDef {
         }
     }
 
-    /// The one declaration of this object's physics. The collider takes the
-    /// coefficients and the material takes the finish they imply, so the two
-    /// cannot drift apart.
+    /// A banana at `pos`, everything else its default.
+    pub fn at(pos: (f32, f32, f32)) -> Self {
+        Self {
+            pos,
+            length: Self::default_length(),
+            thickness: Self::default_thickness(),
+            curvature: Self::default_curvature(),
+            ripeness: Self::default_ripeness(),
+            density: Self::default_density(),
+            restitution: Self::default_restitution(),
+            friction: Self::default_friction(),
+        }
+    }
+
+    /// Its peel: the painted texture under a matte finish.
+    pub fn material(&self, textures: &TextureManager) -> EngineResult<Material> {
+        let pixels = generate_peel_texture(
+            self.ripeness.clamp(0.0, 1.0),
+            seed_from_position(self.pos, 0),
+        );
+        let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
+        Ok(Material::textured(texture)
+            .with_finish(PEEL)
+            .with_grain(PEEL_GRAIN))
+    }
+
+    /// How it looks, drawn in `material` (registered from
+    /// [`Self::material`]), lying on its belly round the body's origin.
+    pub fn model(&self, material: MaterialId) -> Model {
+        let shape = self.shape();
+        let (vertices, indices) = shape.build_mesh();
+        let mut peel = MeshPrimitive {
+            vertices,
+            indices,
+            material,
+        };
+        Mottle {
+            frequency: MOTTLE_PATCHES / shape.length,
+            value: MOTTLE_VALUE,
+            warmth: MOTTLE_WARMTH,
+            seed: seed_from_position(self.pos, 1),
+        }
+        .paint(&mut peel);
+        Model::flat(vec![ModelPart::new(vec![peel])])
+    }
+
+    /// What its colliders are made of.
     fn surface(&self) -> PhysicalSurface {
         PhysicalSurface {
             restitution: self.restitution,
@@ -145,29 +214,14 @@ impl Spawnable for BananaDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let pixels = generate_peel_texture(
-            self.ripeness.clamp(0.0, 1.0),
-            seed_from_position(self.pos, 0),
-        );
-        let texture = ctx
-            .textures
-            .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        Ok(vec![ctx.materials.register(
-            Material::textured(texture).with_derived_finish(self.surface()),
-        )])
+        Ok(vec![ctx.materials.register(self.material(ctx.textures)?)])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
         let initial_pos = Point3::new(self.pos.0, self.pos.1, self.pos.2);
         let shape = self.shape();
 
-        let (vertices, indices) = shape.build_mesh();
-        let parts = vec![ModelPart::new(vec![MeshPrimitive {
-            vertices,
-            indices,
-            material: materials[0],
-        }])];
-        let model = Arc::new(Model::flat(parts));
+        let model = Arc::new(self.model(materials[0]));
 
         let body_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
@@ -295,6 +349,13 @@ impl BananaShape {
         RIDGE_AMPLITUDE * (t / RIDGE_FADE).clamp(0.0, 1.0)
     }
 
+    /// How open to the sky the surface is at `t` and `theta`: 1 on a ridge,
+    /// less in the valley between two, as deep as the ridges stand there.
+    fn valley_openness(&self, t: f32, theta: f32) -> f32 {
+        let valley = 0.5 - 0.5 * (3.0 * theta).cos();
+        1.0 - VALLEY_SHADE * valley * self.ridge_amplitude(t) / RIDGE_AMPLITUDE
+    }
+
     /// Texture `v` coordinate for a point at normalised length `t`, mapping the
     /// stem and body together onto 0..1.
     fn texture_v(t: f32) -> f32 {
@@ -370,7 +431,7 @@ impl BananaShape {
                     color: Colour::WHITE.to_vec4(),
                     tex_coords: Vector2::new(u, Self::texture_v(t)),
                     normal: self.normal(t, theta),
-                    ao: 1.0,
+                    ao: self.valley_openness(t, theta),
                 });
             }
         }
@@ -511,39 +572,62 @@ fn distance_to_segment(point: &Vector3<f32>, start: &Vector3<f32>, end: &Vector3
 // Procedural peel texture
 // ---------------------------------------------------------------------------
 
-/// Peel colouring: yellow body, green when unripe, brown speckles and dark
-/// tips as it ripens. `u` wraps around the circumference, `v` runs stem to tip.
+/// The peel as painted: ochre, olive when unripe, umber patches and dark
+/// ends as it ripens, with the unevenness of pigment laid by hand. `u` wraps
+/// round the circumference, `v` runs stem to tip. Colours are sRGB.
 fn generate_peel_texture(ripeness: f32, seed: u32) -> Vec<u8> {
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let green = Rgb::new(0.55, 0.71, 0.20);
-    let yellow = Rgb::new(0.97, 0.82, 0.18);
-    let brown = Rgb::new(0.36, 0.21, 0.08);
-    let stem = Rgb::new(0.34, 0.29, 0.12);
-    let tip = Rgb::new(0.24, 0.15, 0.07);
+    let green = Rgb::new(0.46, 0.50, 0.19);
+    let ochre = Rgb::new(0.86, 0.65, 0.19);
+    // The warmer ground the ochre is laid over, showing through in patches.
+    let ground = Rgb::new(0.78, 0.47, 0.17);
+    let umber = Rgb::new(0.33, 0.20, 0.09);
+    let stem = Rgb::new(0.34, 0.30, 0.14);
+    let tip = Rgb::new(0.20, 0.13, 0.07);
 
     // Where the stem band ends, and how far the woody colour bleeds into the
     // peel across the neck.
     let stem_v = BananaShape::texture_v(0.0);
     const NECK_FADE: f32 = 0.12;
+    // How far the ground shows through the ochre at most, and how much a
+    // ridge's edge darkens.
+    const GROUND_SHOW: f32 = 0.55;
+    const RIDGE_LINE: f32 = 0.16;
 
-    // Spots start appearing part-way through ripening, then spread quickly.
-    let spot_threshold = 0.72 - 0.45 * (ripeness - 0.35).max(0.0) / 0.65;
+    // Patches start appearing part-way through ripening, then spread quickly.
+    let patch_threshold = 0.72 - 0.45 * (ripeness - 0.35).max(0.0) / 0.65;
 
     for y in 0..size {
         for x in 0..size {
             let u = x as f32 / size as f32;
             let v = y as f32 / size as f32;
 
-            let mut colour = green.lerp(yellow, ripeness.clamp(0.0, 1.0).powf(0.6));
+            let mut colour = green.lerp(ochre, ripeness.clamp(0.0, 1.0).powf(0.6));
+
+            // Broad soft patches of the ground under the ochre.
+            let under = fbm_2d_periodic(
+                u * 3.0,
+                v * 4.0,
+                3,
+                0.5,
+                2.0,
+                seed.wrapping_add(31),
+                Some(3),
+            );
+            colour = colour.lerp(ground, GROUND_SHOW * ripeness * smoothstep(0.5 + under));
 
             // Longitudinal fibre streaks running stem to tip.
             let streak = fbm_2d_periodic(u * 8.0, v * 2.0, 3, 0.5, 2.0, seed, Some(8));
             colour = colour.scale(0.92 + 0.14 * streak);
 
-            // Blotchy ripening spots.
-            let spots = fbm_2d_periodic(
+            // A darker line along each ridge's edge, as a painter draws one.
+            let ridge = (0.5 + 0.5 * (3.0 * TAU * u).cos()).powi(12);
+            colour = colour.scale(1.0 - RIDGE_LINE * ridge);
+
+            // Blotchy ripening patches.
+            let patches = fbm_2d_periodic(
                 u * 10.0,
                 v * 10.0,
                 4,
@@ -552,9 +636,10 @@ fn generate_peel_texture(ripeness: f32, seed: u32) -> Vec<u8> {
                 seed.wrapping_add(17),
                 Some(10),
             );
-            if spots > spot_threshold {
-                let strength = ((spots - spot_threshold) / (1.0 - spot_threshold)).clamp(0.0, 1.0);
-                colour = colour.lerp(brown, strength.powf(0.7) * 0.9);
+            if patches > patch_threshold {
+                let strength =
+                    ((patches - patch_threshold) / (1.0 - patch_threshold)).clamp(0.0, 1.0);
+                colour = colour.lerp(umber, smoothstep(strength * 1.5) * 0.85);
             }
 
             // The stem band is woody, fading into the peel across the neck.
@@ -581,17 +666,7 @@ mod tests {
     use super::*;
 
     fn test_shape() -> BananaShape {
-        BananaDef {
-            pos: (0.0, 0.0, 0.0),
-            length: BananaDef::default_length(),
-            thickness: BananaDef::default_thickness(),
-            curvature: BananaDef::default_curvature(),
-            ripeness: BananaDef::default_ripeness(),
-            density: BananaDef::default_density(),
-            restitution: BananaDef::default_restitution(),
-            friction: BananaDef::default_friction(),
-        }
-        .shape()
+        BananaDef::at((0.0, 0.0, 0.0)).shape()
     }
 
     /// Every triangle must wind so its geometric normal agrees with the
