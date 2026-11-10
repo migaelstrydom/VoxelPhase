@@ -2,14 +2,15 @@ use specs::Dispatcher;
 
 use crate::aim::AimPredictionSystem;
 use crate::animation::critter::{CritterAnimationSystem, CritterProbeConfigSystem};
-use crate::animation::peeper::{PeeperAnimationSystem, PeeperProbeConfigSystem};
+use crate::animation::stilts::{StiltAnimationSystem, StiltProbeConfigSystem};
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
 use crate::character::ledge::LedgeSensorSystem;
 use crate::character::{ContactGroundingSystem, ImmersionSystem};
 use crate::cleave::{SolidCleaveSystem, SolidShareSystem};
 use crate::creature::{
-    AlertTelegraphSystem, BrainSystem, CollectionSystem, MeleeAttackSystem, PerceptionSystem,
-    RollerLocomotionSystem, SwimmerLocomotionSystem,
+    AlertTelegraphSystem, BrainSystem, CollectionSystem, FlyerLocomotionSystem, LobberSystem,
+    MeleeAttackSystem, PerceptionSystem, RollerLocomotionSystem, SnapTrapSystem,
+    SwimmerLocomotionSystem,
 };
 use crate::damage::{
     BlastDamageSystem, BurnDamageSystem, DamageApplySystem, DeathSystem, ImpactDamageSystem,
@@ -70,6 +71,12 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(RollerLocomotionSystem, "roller_locomotion", &["brain"])
         // Swimming creatures likewise, as thrust through the water.
         .with(SwimmerLocomotionSystem, "swimmer_locomotion", &["brain"])
+        // Flying creatures, as impulses on a body gravity does not pull.
+        .with(FlyerLocomotionSystem, "flyer_locomotion", &["brain"])
+        // Lobbers throw at what perception found this frame, and traps bite
+        // it, in time for `damage_apply`.
+        .with(LobberSystem, "lobber", &["perception"])
+        .with(SnapTrapSystem, "snap_trap", &["perception"])
         // The player's way across the ground ahead, planned on the world as
         // last stepped and from the player's intent; drawn on F6, captured on
         // F7, and rewriting that intent to follow it unless F8 turns tracking
@@ -97,6 +104,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &[
                 "character_control",
                 "roller_locomotion",
+                "flyer_locomotion",
                 "alert_telegraph",
                 "moving_platform",
                 "hover_sled",
@@ -154,8 +162,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["physics_sync"],
         )
         .with(
-            PeeperProbeConfigSystem,
-            "peeper_probe_config",
+            StiltProbeConfigSystem,
+            "stilt_probe_config",
             &["physics_sync"],
         )
         .with(
@@ -164,7 +172,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &[
                 "animation_probe_config",
                 "critter_probe_config",
-                "peeper_probe_config",
+                "stilt_probe_config",
             ],
         )
         // The one writer of `Grounding`, for every character. Runs after
@@ -187,8 +195,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // A peeper's eye and neck are posed from what the brain and the
         // swing decided earlier in the frame, so this also runs after both.
         .with(
-            PeeperAnimationSystem,
-            "peeper_animation",
+            StiltAnimationSystem,
+            "stilt_animation",
             &["sensor_probe", "contact_grounding", "melee_attack"],
         )
         // Catching happens on this frame's synced positions, so a critter
@@ -292,6 +300,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
                 "burn_damage",
                 "impact_damage",
                 "melee_attack",
+                "snap_trap",
             ],
         )
         .with(DeathSystem, "death", &["damage_apply"])

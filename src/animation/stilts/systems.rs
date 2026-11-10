@@ -1,6 +1,6 @@
 //! ECS systems for peeper animation.
 //!
-//! Two thin wrappers around [`PeeperAnimator`], mirroring the pair the
+//! Two thin wrappers around [`StiltAnimator`], mirroring the pair the
 //! humanoid and the heart critter use: one to aim the probes before
 //! sensing, one to animate after.
 //!
@@ -18,17 +18,17 @@ use crate::debug::DebugLines;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::time::Time;
 
-use super::animator::{Mood, PeeperAnimator};
+use super::animator::{Mood, StiltAnimator};
 
 /// Aims each peeper's foot probes. Runs BEFORE `SensorProbeSystem`.
-pub struct PeeperProbeConfigSystem;
+pub struct StiltProbeConfigSystem;
 
-impl<'a> System<'a> for PeeperProbeConfigSystem {
+impl<'a> System<'a> for StiltProbeConfigSystem {
     type SystemData = (
         Entities<'a>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
-        ReadStorage<'a, PeeperAnimator>,
+        ReadStorage<'a, StiltAnimator>,
         WriteStorage<'a, SensorSet>,
     );
 
@@ -44,9 +44,9 @@ impl<'a> System<'a> for PeeperProbeConfigSystem {
 
 /// Animates each peeper from this frame's probe results. Runs AFTER
 /// `SensorProbeSystem`.
-pub struct PeeperAnimationSystem;
+pub struct StiltAnimationSystem;
 
-impl<'a> System<'a> for PeeperAnimationSystem {
+impl<'a> System<'a> for StiltAnimationSystem {
     type SystemData = (
         Read<'a, Time>,
         Entities<'a>,
@@ -58,7 +58,7 @@ impl<'a> System<'a> for PeeperAnimationSystem {
         ReadStorage<'a, ContactCandidates>,
         ReadStorage<'a, Brain>,
         ReadStorage<'a, MeleeAttack>,
-        WriteStorage<'a, PeeperAnimator>,
+        WriteStorage<'a, StiltAnimator>,
         Write<'a, DebugLines>,
     );
 

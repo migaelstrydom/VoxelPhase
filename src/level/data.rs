@@ -29,7 +29,10 @@ use crate::trampoline::TrampolineShape;
 use super::daylight::Daylight;
 use super::footprint::{Footprint, Support};
 
-use crate::app::creatures::{FishDef, HeartCritterDef, PeeperDef, RollerDef, TurtleDef};
+use crate::app::creatures::{
+    BellCarrierDef, EggWalkerDef, FishDef, FishWalkerDef, FlyingFishDef, HeartCritterDef,
+    MusselDef, PeeperDef, PiperDef, RollerDef, StalkerDef, TurtleDef,
+};
 use crate::app::spawnables::{
     BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, CypressDef,
     DodecahedronDef, DolosDef, DominoDef, FencePostDef, FountainDef, FramedWindowDef, FruitDef,
@@ -1334,6 +1337,53 @@ pub enum LevelObject {
         #[serde(default = "PeeperDef::default_health")]
         health: f32,
     },
+    /// Stalker — a tall bird-headed figure on stilts that chases at a walk and
+    /// pecks from a long way off.
+    /// See `src/app/creatures/`.
+    Stalker {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+    },
+    /// EggWalker — a cracked eggshell on two legs: quick, weak, and meant to come
+    /// several at a time.
+    /// See `src/app/creatures/`.
+    EggWalker {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+    },
+    /// FishWalker — a fish on a man's legs that follows its quarry into water.
+    /// See `src/app/creatures/`.
+    FishWalker {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+    },
+    /// BellCarrier — a small thing under a bronze bell that nothing can hurt; it is
+    /// dealt with by where it is made to walk.
+    /// See `src/app/creatures/`.
+    BellCarrier {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+    },
+    /// Piper — a bagpipe that squats where it is put and lobs bombs at whoever
+    /// it can see.
+    /// See `src/app/creatures/`.
+    Piper {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+    },
+    /// FlyingFish — a winged fish that holds a height over the ground and stoops on
+    /// whoever is in the open.
+    /// See `src/app/creatures/`.
+    FlyingFish {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+    },
+    /// Mussel — a great shell lying open that snaps shut on whoever steps into it.
+    /// See `src/app/creatures/`.
+    Mussel {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+    },
     /// Pendulum — terrain-anchored frame with a swinging ball.
     Pendulum {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -1810,6 +1860,13 @@ impl LevelObject {
             LevelObject::Fish { pos, .. } => ("Fish", anchored(pos)),
             LevelObject::Turtle { pos, .. } => ("Turtle", anchored(pos)),
             LevelObject::Peeper { pos, .. } => ("Peeper", anchored(pos)),
+            LevelObject::Stalker { pos } => ("Stalker", anchored(pos)),
+            LevelObject::EggWalker { pos } => ("EggWalker", anchored(pos)),
+            LevelObject::FishWalker { pos } => ("FishWalker", anchored(pos)),
+            LevelObject::BellCarrier { pos } => ("BellCarrier", anchored(pos)),
+            LevelObject::Piper { pos } => ("Piper", anchored(pos)),
+            LevelObject::FlyingFish { pos } => ("FlyingFish", anchored(pos)),
+            LevelObject::Mussel { pos } => ("Mussel", anchored(pos)),
             LevelObject::Pendulum { pos, .. } => ("Pendulum", anchored(pos)),
             LevelObject::MovingPlatform { waypoints, .. } => (
                 "MovingPlatform",
@@ -2118,6 +2175,13 @@ impl LevelObject {
             // All legs: what it stands on is a stance barely wider than
             // its own haunch, whatever the eye on top of it measures.
             LevelObject::Peeper { .. } => Disc { radius: 0.25 },
+            LevelObject::Stalker { .. } => Disc { radius: 0.3 },
+            LevelObject::EggWalker { .. } => Disc { radius: 0.3 },
+            LevelObject::FishWalker { .. } => Disc { radius: 0.3 },
+            LevelObject::BellCarrier { .. } => Disc { radius: 0.45 },
+            LevelObject::Piper { .. } => Disc { radius: 0.5 },
+            LevelObject::FlyingFish { .. } => Disc { radius: 0.5 },
+            LevelObject::Mussel { .. } => Disc { radius: 0.75 },
             LevelObject::PlayWheel { radius, .. } => Disc { radius: *radius },
             // The deck at its spawn point. A platform spends most of its life
             // away from there, but the footprint is about what it is placed
@@ -2219,6 +2283,13 @@ impl LevelObject {
             | LevelObject::Fish { .. }
             | LevelObject::Turtle { .. }
             | LevelObject::Peeper { .. }
+            | LevelObject::Stalker { .. }
+            | LevelObject::EggWalker { .. }
+            | LevelObject::FishWalker { .. }
+            | LevelObject::BellCarrier { .. }
+            | LevelObject::Piper { .. }
+            | LevelObject::FlyingFish { .. }
+            | LevelObject::Mussel { .. }
             | LevelObject::PlayWheel { .. }
             | LevelObject::Tetrahedron { .. }
             | LevelObject::Octahedron { .. }
@@ -2352,6 +2423,13 @@ impl LevelObject {
             LevelObject::Fish { pos, .. } => p2(pos),
             LevelObject::Turtle { pos, .. } => p2(pos),
             LevelObject::Peeper { pos, .. } => p2(pos),
+            LevelObject::Stalker { pos } => p2(pos),
+            LevelObject::EggWalker { pos } => p2(pos),
+            LevelObject::FishWalker { pos } => p2(pos),
+            LevelObject::BellCarrier { pos } => p2(pos),
+            LevelObject::Piper { pos } => p2(pos),
+            LevelObject::FlyingFish { pos } => p2(pos),
+            LevelObject::Mussel { pos } => p2(pos),
             LevelObject::Pendulum { pos, .. } => p2(pos),
             LevelObject::MovingPlatform { waypoints, .. } => {
                 for waypoint in waypoints.iter_mut() {
@@ -2835,6 +2913,13 @@ impl LevelObject {
                 reward: *reward,
             }),
 
+            LevelObject::Stalker { pos } => Box::new(StalkerDef { pos: *pos }),
+            LevelObject::EggWalker { pos } => Box::new(EggWalkerDef { pos: *pos }),
+            LevelObject::FishWalker { pos } => Box::new(FishWalkerDef { pos: *pos }),
+            LevelObject::BellCarrier { pos } => Box::new(BellCarrierDef { pos: *pos }),
+            LevelObject::Piper { pos } => Box::new(PiperDef { pos: *pos }),
+            LevelObject::FlyingFish { pos } => Box::new(FlyingFishDef { pos: *pos }),
+            LevelObject::Mussel { pos } => Box::new(MusselDef { pos: *pos }),
             LevelObject::Peeper {
                 pos,
                 speed,

@@ -1,0 +1,62 @@
+// Bestiary — every creature on one lawn, for looking at them and for
+// meeting each on open ground.
+//
+// The walkers stand in a row across the north of the lawn, the ones that do
+// not walk across the middle, and the player starts to the south facing
+// them. Everything here is awake: the piper will lob at whoever it sees.
+Level(
+    name: "Bestiary",
+
+    segments: [
+        (
+            name: "lawn",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+                base_height: 0.0,
+                material_layers: [
+                    (depth: 0.6,   material: Grass),
+                    (depth: 2.5,   material: Dirt),
+                    (depth: 999.0, material: Limestone),
+                ],
+                features: [
+                    // A low swell, so the lawn is not a table.
+                    TerrainRoughness(frequency: 0.05, amplitude: 0.5, octaves: 2, seed: 3),
+                ],
+            ),
+
+            objects: [
+                // The walkers, west to east.
+                Peeper(pos: (-10.0, -8.0)),
+                Stalker(pos: (-6.0, -8.0)),
+                EggWalker(pos: (-2.5, -8.0)),
+                EggWalker(pos: (-1.5, -9.2)),
+                EggWalker(pos: (-0.5, -8.0)),
+                FishWalker(pos: (3.0, -8.0)),
+                BellCarrier(pos: (7.0, -8.0)),
+
+                // The ones that do not walk.
+                Roller(pos: (-9.0, -1.0)),
+                Piper(pos: (-4.0, -1.0)),
+                FlyingFish(pos: (1.0, -1.0)),
+                Mussel(pos: (6.0, -1.0)),
+            ],
+        ),
+    ],
+
+    placements: [Root(segment: "lawn")],
+
+    player_spawn: (0.0, 2.0, 14.0),
+
+    meadow: Some(()),
+
+    daylight: (
+        sun_bearing: 125.0,
+        sun_elevation: 26.0,
+        sun_colour: (1.0, 0.78, 0.52),
+        sun_intensity: 2.0,
+        fill_colour: (0.06, 0.06, 0.08),
+        visibility: Some(160.0),
+    ),
+)

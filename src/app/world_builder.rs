@@ -2,7 +2,7 @@ use specs::{World, WorldExt};
 
 use crate::aim::AimState;
 use crate::animation::critter::CritterAnimator;
-use crate::animation::peeper::PeeperAnimator;
+use crate::animation::stilts::StiltAnimator;
 use crate::animation::{AnimationDebugConfig, CharacterAnimator};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::character::grab::GrabConfig;
@@ -18,7 +18,8 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::creature::{
-    AlertTelegraph, Brain, Collectable, MeleeAttack, Perception, Roller, Swimmer,
+    AlertTelegraph, Brain, Collectable, Flyer, Lobber, MeleeAttack, Perception, Roller, SnapTrap,
+    Swimmer,
 };
 use crate::damage::{DamageConfig, DamageQueue, Dead, Health, LastVelocity, Ragdoll};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
@@ -98,6 +99,9 @@ impl WorldBuilder {
         world.register::<Perception>();
         world.register::<Roller>();
         world.register::<Swimmer>();
+        world.register::<Flyer>();
+        world.register::<Lobber>();
+        world.register::<SnapTrap>();
         world.register::<MeleeAttack>();
         // Only ever registered by `AlertTelegraphSystem`'s setup before now,
         // which meant a world built without a dispatcher panicked the moment a
@@ -105,7 +109,7 @@ impl WorldBuilder {
         world.register::<AlertTelegraph>();
         world.register::<CharacterAnimator>();
         world.register::<CritterAnimator>();
-        world.register::<PeeperAnimator>();
+        world.register::<StiltAnimator>();
         world.register::<Collectable>();
         world.register::<GemMotion>();
         world.register::<Goal>();

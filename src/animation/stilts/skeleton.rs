@@ -15,7 +15,7 @@ use nalgebra::{Point3, Vector3};
 use crate::animation::rig::{right_vector, DroopPair, Frame, Leg};
 use crate::animation::FootSide;
 
-use super::config::PeeperRigConfig;
+use super::config::StiltRigConfig;
 
 /// How much of the eye's radius the feelers are kept clear of, so they can
 /// rest against it without being shoved off.
@@ -32,7 +32,7 @@ pub struct FootPose {
 }
 
 /// The peeper's joints.
-pub struct PeeperSkeleton {
+pub struct StiltSkeleton {
     /// Where the legs meet, at the bottom of the haunch.
     pub pelvis: Point3<f32>,
     /// Top of the haunch, where the neck leaves the body.
@@ -49,8 +49,8 @@ pub struct PeeperSkeleton {
     pub feelers: DroopPair,
 }
 
-impl PeeperSkeleton {
-    pub fn new(config: &PeeperRigConfig, pelvis: Point3<f32>, facing: Vector3<f32>) -> Self {
+impl StiltSkeleton {
+    pub fn new(config: &StiltRigConfig, pelvis: Point3<f32>, facing: Vector3<f32>) -> Self {
         let facing = facing.try_normalize(1e-4).unwrap_or_else(Vector3::z);
         let right = right_vector(facing);
         let bend = knee_bend(config, facing);
@@ -85,7 +85,7 @@ impl PeeperSkeleton {
     pub fn update(
         &mut self,
         dt: f32,
-        config: &PeeperRigConfig,
+        config: &StiltRigConfig,
         pelvis: Point3<f32>,
         facing: Vector3<f32>,
         neck_pitch: f32,
@@ -133,7 +133,7 @@ impl PeeperSkeleton {
 /// creature standing upright looks at the horizon and one mid-peck looks
 /// down its own strike.
 fn head_at(
-    config: &PeeperRigConfig,
+    config: &StiltRigConfig,
     shoulder: Point3<f32>,
     facing: Vector3<f32>,
     pitch: f32,
@@ -145,7 +145,7 @@ fn head_at(
 }
 
 /// Where the feelers root, in the head's local frame.
-fn feeler_anchors(config: &PeeperRigConfig) -> [Vector3<f32>; 2] {
+fn feeler_anchors(config: &StiltRigConfig) -> [Vector3<f32>; 2] {
     let (x, y, z) = config.feeler_anchor;
     let (x, y, z) = (
         x * config.eye_radius,
@@ -156,7 +156,7 @@ fn feeler_anchors(config: &PeeperRigConfig) -> [Vector3<f32>; 2] {
 }
 
 /// Which way the knees break. Backward, like a bird's hock.
-fn knee_bend(config: &PeeperRigConfig, facing: Vector3<f32>) -> Vector3<f32> {
+fn knee_bend(config: &StiltRigConfig, facing: Vector3<f32>) -> Vector3<f32> {
     (facing * config.knee_bend)
         .try_normalize(1e-4)
         .unwrap_or(facing)

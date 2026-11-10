@@ -40,9 +40,9 @@ impl RigDims {
     }
 
     /// A peeper: twice the leg, half the hip separation. Kept in step
-    /// with `PeeperRigConfig::default` rather than guessed.
+    /// with `StiltRigConfig::default` rather than guessed.
     pub fn peeper() -> Self {
-        let config = crate::animation::peeper::PeeperRigConfig::default();
+        let config = crate::animation::stilts::StiltRigConfig::default();
         let dims = config.leg_dims();
         Self {
             hip_width: dims.hip_width,
@@ -74,10 +74,10 @@ impl GaitParams {
     }
 
     /// A peeper's: a longer stride and a higher-lifted foot than the
-    /// player's walk. Sourced from `PeeperRigConfig::default` rather than
+    /// player's walk. Sourced from `StiltRigConfig::default` rather than
     /// written out again.
     pub fn peeper() -> Self {
-        let config = crate::animation::peeper::PeeperRigConfig::default();
+        let config = crate::animation::stilts::StiltRigConfig::default();
         Self {
             stride_gain: config.stride_gain,
             step_height: config.step_height,

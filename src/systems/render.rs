@@ -1,6 +1,6 @@
 use crate::aim::AimState;
 use crate::animation::critter::CritterAnimator;
-use crate::animation::peeper::PeeperAnimator;
+use crate::animation::stilts::StiltAnimator;
 use crate::animation::CharacterAnimator;
 use crate::components::{
     CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, ProceduralMesh,
@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 pub struct RebuiltMeshes<'a> {
     humanoid: WriteStorage<'a, CharacterAnimator>,
     critter: WriteStorage<'a, CritterAnimator>,
-    peeper: WriteStorage<'a, PeeperAnimator>,
+    stilts: WriteStorage<'a, StiltAnimator>,
     procedural: ReadStorage<'a, ProceduralMesh>,
 }
 
@@ -502,7 +502,7 @@ impl<'a> System<'a> for RenderSystem {
                         rig_meshes.push(animator.mesh());
                     }
                     for (animator, _pos, _rot, _renderable) in
-                        (&mut rebuilt.peeper, &positions, &rotations, &renderables).join()
+                        (&mut rebuilt.stilts, &positions, &rotations, &renderables).join()
                     {
                         rig_meshes.push(animator.mesh());
                     }

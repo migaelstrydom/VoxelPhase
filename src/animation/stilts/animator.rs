@@ -3,7 +3,7 @@
 //! ```text
 //!   Grounding ─┐
 //!   intent ────┼─► LeggedLocomotion ─► feet ─┐
-//!   velocity ──┘        (shared)             ├─► PeeperSkeleton ─► mesh
+//!   velocity ──┘        (shared)             ├─► StiltSkeleton ─► mesh
 //!   pelvis, yaw ─────────────────────────────┤
 //!   Mood ────────► neck pitch, eyelid ───────┘
 //! ```
@@ -12,6 +12,8 @@
 //! component the player and the heart critter use. What is peeper-specific
 //! is above the waist: a neck that rears back and spears forward, and a
 //! lid that says how awake the thing is.
+
+use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
 use specs::{Component, VecStorage};
@@ -22,9 +24,10 @@ use crate::character::{CharacterIntent, Grounding};
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
 
-use super::config::PeeperRigConfig;
-use super::mesh::generate_peeper_mesh;
-use super::skeleton::{FootPose, PeeperSkeleton};
+use super::config::StiltRigConfig;
+use super::costume::Costume;
+use super::mesh::generate_stilt_mesh;
+use super::skeleton::{FootPose, StiltSkeleton};
 
 /// Exponential rate (per second) at which the legs tuck when the ground
 /// leaves and untuck when it comes back.
@@ -53,12 +56,12 @@ pub struct Mood {
 /// A peeper's animation state.
 #[derive(Component)]
 #[storage(VecStorage)]
-pub struct PeeperAnimator {
-    pub config: PeeperRigConfig,
+pub struct StiltAnimator {
+    pub config: StiltRigConfig,
     /// Feet, probes and the support frame. The same component the player
     /// walks on.
     pub locomotion: LeggedLocomotion,
-    pub skeleton: PeeperSkeleton,
+    pub skeleton: StiltSkeleton,
 
     /// How tucked the legs are, in `[0, 1]`.
     tuck: f32,
@@ -66,15 +69,18 @@ pub struct PeeperAnimator {
     /// snapping to it, so the lid reads as a blink.
     lid_close: f32,
 
+    /// What it wears in place of the peeper's eye, if anything.
+    costume: Option<Arc<Costume>>,
+
     cached_vertices: Vec<Vertex>,
     cached_indices: Vec<u32>,
 }
 
-impl PeeperAnimator {
+impl StiltAnimator {
     /// A peeper whose physics body sits at `body_position`, riding
     /// `ground_clearance` above the surface it rests on.
     pub fn new(
-        config: PeeperRigConfig,
+        config: StiltRigConfig,
         body_position: Point3<f32>,
         ground_clearance: f32,
         yaw: f32,
@@ -87,7 +93,7 @@ impl PeeperAnimator {
             yaw,
         );
         let pelvis = locomotion.pelvis_for(body_position);
-        let skeleton = PeeperSkeleton::new(&config, pelvis, facing_from(yaw));
+        let skeleton = StiltSkeleton::new(&config, pelvis, facing_from(yaw));
 
         Self {
             config,
@@ -95,9 +101,16 @@ impl PeeperAnimator {
             skeleton,
             tuck: 0.0,
             lid_close: 1.0,
+            costume: None,
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
         }
+    }
+
+    /// Wearing `costume` in place of the peeper's eye.
+    pub fn wearing(mut self, costume: Arc<Costume>) -> Self {
+        self.costume = Some(costume);
+        self
     }
 
     /// Where the rig's pelvis belongs, given where the physics body is.
@@ -209,8 +222,12 @@ impl PeeperAnimator {
     /// Mesh vertices and indices for rendering, regenerated from the
     /// current pose.
     pub fn mesh(&mut self) -> (&[Vertex], &[u32]) {
-        let (vertices, indices) =
-            generate_peeper_mesh(&self.skeleton, &self.config, self.lid_close);
+        let (vertices, indices) = generate_stilt_mesh(
+            &self.skeleton,
+            &self.config,
+            self.lid_close,
+            self.costume.as_deref(),
+        );
         self.cached_vertices = vertices;
         self.cached_indices = indices;
         (&self.cached_vertices, &self.cached_indices)

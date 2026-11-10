@@ -1,5 +1,6 @@
 //! The scene library, and the registry the CLI looks names up in.
 
+pub mod bestiary;
 pub mod craters;
 pub mod critter;
 pub mod critter_walk;
@@ -31,6 +32,7 @@ pub mod turtle;
 pub mod voxel_terrain;
 pub mod weathered_stone;
 
+pub use bestiary::Bestiary;
 pub use craters::Craters;
 pub use critter::Critter;
 pub use critter_walk::CritterWalk;

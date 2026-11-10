@@ -20,7 +20,7 @@ use crate::rendering::colour::Colour;
 /// all leg and eye, so a player can tell at a glance that it is nothing
 /// like the boulder that also wants them dead.
 #[derive(Clone, Copy, Debug)]
-pub struct PeeperRigConfig {
+pub struct StiltRigConfig {
     /// Hip to knee.
     pub upper_leg_length: f32,
     /// Knee to foot.
@@ -89,16 +89,22 @@ pub struct PeeperRigConfig {
 
     pub hide_colour: Colour,
     pub sclera_colour: Colour,
+    /// The blood vessels that run forward over the white from behind.
+    pub vein_colour: Colour,
     pub iris_colour: Colour,
     pub pupil_colour: Colour,
     pub lid_colour: Colour,
     pub foot_colour: Colour,
 
+    /// Lashes along the rim of the lid, and how long each is.
+    pub lashes: u32,
+    pub lash_length: f32,
+
     /// Tessellation of every primitive in the rig.
     pub mesh_segments: u32,
 }
 
-impl PeeperRigConfig {
+impl StiltRigConfig {
     /// Total leg length (upper + lower).
     #[inline]
     pub fn leg_length(&self) -> f32 {
@@ -147,7 +153,7 @@ impl PeeperRigConfig {
     }
 }
 
-impl Default for PeeperRigConfig {
+impl Default for StiltRigConfig {
     fn default() -> Self {
         // Long, light feelers rather than ears: the same chain stretched
         // and made springier, so they trail behind the head instead of
@@ -163,15 +169,15 @@ impl Default for PeeperRigConfig {
             damping: 0.05,
             shape_stiffness: 120.0,
             sweep_back: 0.8,
-            colour: Colour::new(0.38, 0.30, 0.52, 1.0),
+            colour: Colour::new(0.5, 0.3, 0.3, 1.0),
         };
 
         Self {
             upper_leg_length: 0.52,
             lower_leg_length: 0.5,
             hip_width: 0.07,
-            leg_radius: 0.032,
-            knee_radius: 0.046,
+            leg_radius: 0.026,
+            knee_radius: 0.052,
 
             haunch_height: 0.16,
             haunch_radius: 0.085,
@@ -180,8 +186,8 @@ impl Default for PeeperRigConfig {
             neck_radius: 0.035,
 
             eye_radius: 0.22,
-            iris_fraction: 0.5,
-            pupil_fraction: 0.5,
+            iris_fraction: 0.46,
+            pupil_fraction: 0.62,
 
             lid_open_angle: 0.62,
             lid_shut_angle: 2.3,
@@ -208,14 +214,20 @@ impl Default for PeeperRigConfig {
             },
             foot_placer: FootPlacerConfig::default(),
 
-            hide_colour: Colour::new(0.32, 0.26, 0.46, 1.0),
-            sclera_colour: Colour::new(0.94, 0.97, 0.90, 1.0),
-            iris_colour: Colour::new(0.98, 0.58, 0.12, 1.0),
-            pupil_colour: Colour::new(0.06, 0.05, 0.09, 1.0),
-            lid_colour: Colour::new(0.26, 0.2, 0.38, 1.0),
-            foot_colour: Colour::new(0.2, 0.16, 0.3, 1.0),
+            // Flesh, and an eye that has not slept: the hide of something
+            // that should have skin over it, a yellowed white run through
+            // with red, a pale iris and a pupil too wide for daylight.
+            hide_colour: Colour::new(0.72, 0.52, 0.47, 1.0),
+            sclera_colour: Colour::new(0.9, 0.86, 0.72, 1.0),
+            vein_colour: Colour::new(0.6, 0.08, 0.06, 1.0),
+            iris_colour: Colour::new(0.62, 0.7, 0.5, 1.0),
+            pupil_colour: Colour::new(0.03, 0.02, 0.03, 1.0),
+            lid_colour: Colour::new(0.62, 0.4, 0.38, 1.0),
+            foot_colour: Colour::new(0.56, 0.36, 0.33, 1.0),
+            lashes: 11,
+            lash_length: 0.09,
 
-            mesh_segments: 14,
+            mesh_segments: 20,
         }
     }
 }

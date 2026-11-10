@@ -21,10 +21,10 @@ mod debug_config;
 mod foot_placer;
 pub mod humanoid;
 mod legged;
-pub mod peeper;
 mod pose;
 pub mod rig;
 mod state;
+pub mod stilts;
 mod systems;
 
 pub use animator::{BodyReading, CharacterAnimator};

@@ -16,22 +16,33 @@
 //! it", and steering answers "which way is that". Keeping the three apart is
 //! what lets a new creature reuse two of them and rewrite only the third.
 //!
+//! Not every creature walks. A roller, a swimmer and a flyer each turn the
+//! same intent into their own way of moving, and two creatures do not move
+//! at all: a lobber throws bombs at what it perceives, and a snap trap bites
+//! what steps into it.
+//!
 //! The definitions of individual creatures — geometry, materials, physics —
 //! live in `crate::app::creatures`, mirroring the spawnables library.
 
 mod alert_telegraph;
 mod brain;
 mod collectable;
+mod flyer;
+mod lobber;
 mod melee;
 mod perception;
 mod roller;
+mod snap_trap;
 pub mod steering;
 mod swimmer;
 
 pub use alert_telegraph::{AlertTelegraph, AlertTelegraphSystem};
 pub use brain::{Behaviour, Brain, BrainSystem, Temperament};
 pub use collectable::{Collectable, CollectionSystem, Reward};
+pub use flyer::{Flyer, FlyerLocomotionSystem};
+pub use lobber::{Lobber, LobberSystem};
 pub use melee::{MeleeAttack, MeleeAttackSystem, StrikePhase};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
 pub use roller::{Roller, RollerLocomotionSystem};
+pub use snap_trap::{SnapTrap, SnapTrapSystem};
 pub use swimmer::{Swimmer, SwimmerLocomotionSystem};

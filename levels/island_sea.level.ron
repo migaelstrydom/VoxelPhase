@@ -263,12 +263,12 @@ Level(
 
     player_spawn: (-2.0, 6.0, 16.0),
 
-    // The first morning: a low sun in the east-south-east, gold on the
-    // cliffs that face it, and air thick enough that the sea is lost in it
-    // well short of the horizon.
     // Tufts of long grass, daisies and strawberries on the lawns.
     meadow: Some(()),
 
+    // The first morning: a low sun in the east-south-east, gold on the
+    // cliffs that face it, and air thick enough that the sea is lost in it
+    // well short of the horizon.
     daylight: (
         sun_bearing: 125.0,
         sun_elevation: 26.0,

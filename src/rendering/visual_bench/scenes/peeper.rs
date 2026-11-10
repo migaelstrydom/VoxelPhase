@@ -9,9 +9,11 @@
 //! The expressions are driven by the same [`Mood`] the ECS system builds,
 //! so a shot here is what the game draws — not an approximation of it.
 
+use std::sync::Arc;
+
 use nalgebra::{Point3, Vector3};
 
-use crate::animation::peeper::{Mood, PeeperAnimator, PeeperRigConfig};
+use crate::animation::stilts::{Costume, Mood, StiltAnimator, StiltRigConfig};
 use crate::character::{CharacterIntent, Grounding};
 use crate::core::error::EngineResult;
 use crate::rendering::colour::Colour;
@@ -43,7 +45,7 @@ impl VisualScene for Peeper {
             .with_sun(Vector3::new(-0.4, 0.72, 0.57))
             .with_ambient(Colour::new(0.34, 0.36, 0.42, 1.0));
 
-        let config = PeeperRigConfig::default();
+        let config = StiltRigConfig::default();
 
         // Framed on the head, since that is where every one of these shots
         // differs, but far enough out that the legs stay in frame — a peck
@@ -123,7 +125,7 @@ impl VisualScene for Peeper {
 /// One settled peeper and the ground under it, plus how far it walked to
 /// get there.
 fn rig_meshes(
-    config: PeeperRigConfig,
+    config: StiltRigConfig,
     walk_seconds: f32,
     speed: f32,
     mood: Mood,
@@ -138,13 +140,13 @@ fn rig_meshes(
     )
 }
 
-/// Drives a peeper across flat ground, the way the ECS systems do.
+/// Drives a stilt walker across flat ground, the way the ECS systems do.
 ///
 /// The probes are answered by intersecting them with the ground plane,
 /// which is the one thing the bench has to stand in for. Everything else —
 /// the gait, the legs, the neck, the eye — is the shipping code.
 pub struct Walker {
-    animator: PeeperAnimator,
+    animator: StiltAnimator,
     /// How far the peeper has travelled, along +Z. Held so the body keeps
     /// moving across successive `run` calls rather than snapping back.
     pub travelled: f32,
@@ -152,13 +154,22 @@ pub struct Walker {
 }
 
 impl Walker {
-    pub fn new(config: PeeperRigConfig) -> Self {
+    /// A peeper of these proportions.
+    pub fn new(config: StiltRigConfig) -> Self {
+        Self::dressed(config, None)
+    }
+
+    /// A walker of these proportions, wearing `costume` if it has one.
+    pub fn dressed(config: StiltRigConfig, costume: Option<Arc<Costume>>) -> Self {
         // The rig is drawn around a body whose origin rides one standing
         // height above the floor, which is where a capsule for it would
         // sit.
         let clearance = config.standing_height();
-        let animator =
-            PeeperAnimator::new(config, Point3::new(0.0, clearance, 0.0), clearance, 0.0);
+        let animator = StiltAnimator::new(config, Point3::new(0.0, clearance, 0.0), clearance, 0.0);
+        let animator = match costume {
+            Some(costume) => animator.wearing(costume),
+            None => animator,
+        };
         Self {
             animator,
             travelled: 0.0,

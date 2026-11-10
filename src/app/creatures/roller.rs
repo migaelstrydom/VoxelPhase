@@ -1,4 +1,4 @@
-//! Roller — a living boulder that hunts by rolling.
+//! Roller — a great thorned seed pod that hunts by rolling.
 //!
 //! The first creature, chosen because it needs no skeleton. It reuses the
 //! brain, perception and steering layers wholesale and adds only a rolling
@@ -20,12 +20,16 @@
 //! The consequence to keep in mind is that rollers are permanent. Nothing
 //! despawns them, so a level's population only ever grows.
 
+use std::f32::consts::PI;
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use crate::app::sculpt::{
+    painted_model, scatter, ContactShade, Ellipsoid, Mottle, SculptedPart, Warp,
+};
 use crate::app::spawnables::shared::textures::{hash_pair, seed_from_ground, Rgb};
 use crate::app::spawnables::MaterialCtx;
 use crate::app::spawnables::Spawnable;
@@ -35,8 +39,7 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::creature::{AlertTelegraph, Brain, Perception, Roller};
-use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
-use crate::model::{MeshPrimitive, Model, ModelPart};
+use crate::model::Model;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId};
@@ -44,8 +47,32 @@ use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 use crate::utils::noise::fbm_2d_periodic;
 
-const SEGMENTS: u32 = 24;
-const RINGS: u32 = 18;
+/// How much of the roller's radius is pod; the rest is thorn.
+const POD_SHARE: f32 = 0.74;
+/// Ribs round the pod.
+const POD_RIBS: u32 = 9;
+/// Thorns on it, how thick each is at its root as a share of the roller's
+/// radius, and how far its tip may stand proud of that radius or short of
+/// it, as a share.
+const THORNS: usize = 38;
+const THORN_GIRTH: f32 = 0.085;
+const THORN_PROUD: f32 = 0.08;
+/// The turn between one thorn and the next that never lines two up.
+const GOLDEN_ANGLE: f32 = 2.399_963;
+
+const MOTTLE: Mottle = Mottle {
+    frequency: 5.0,
+    value: 0.25,
+    warmth: 0.2,
+    seed: 53,
+};
+
+/// The shade round the root of each thorn.
+const THORN_SHADE: ContactShade = ContactShade {
+    reach: 0.06,
+    depth: 0.7,
+    floor: 0.25,
+};
 const TEXTURE_SIZE: u32 = 256;
 
 /// Stone, so a roller is heavy enough to be a threat and to shrug off a
@@ -98,6 +125,49 @@ impl RollerDef {
     }
 
     /// Mass of the sphere, used to size the drive torque.
+    /// How a roller of `radius` looks, drawn in `material`: a ribbed seed
+    /// pod bristling with thorns, whose tips reach the sphere it rolls as.
+    pub fn model(radius: f32, material: MaterialId) -> Model {
+        let husk = (Colour::new(0.62, 0.74, 0.5, 1.0), material);
+        let thorn = (Colour::new(1.0, 0.9, 0.7, 1.0), material);
+        let core = radius * POD_SHARE;
+        let mut parts = vec![
+            SculptedPart::new(Ellipsoid::ball(core, Vector3::zeros()), husk).warped(
+                Warp::Scallop {
+                    lobes: POD_RIBS,
+                    bulge: 0.1,
+                    lift: 0.0,
+                },
+            ),
+        ];
+        // Thorns set out evenly over the pod by the golden angle, each
+        // standing square off it and narrowing to a point.
+        for index in 0..THORNS {
+            let height = 1.0 - 2.0 * (index as f32 + 0.5) / THORNS as f32;
+            let round = index as f32 * GOLDEN_ANGLE;
+            let ring = (1.0 - height * height).sqrt();
+            let out = Vector3::new(ring * round.cos(), height, ring * round.sin());
+            let reach = radius * (1.0 + THORN_PROUD * scatter(index as u32, 5)) - core;
+            parts.push(
+                SculptedPart::new(
+                    Ellipsoid {
+                        radii: Vector3::new(THORN_GIRTH * radius, THORN_GIRTH * radius, reach),
+                        centre: out * core,
+                        turn: UnitQuaternion::rotation_between(&Vector3::z(), &out).unwrap_or_else(
+                            || UnitQuaternion::from_axis_angle(&Vector3::x_axis(), PI),
+                        ),
+                    },
+                    thorn,
+                )
+                .warped(Warp::Taper {
+                    along: Vector3::z(),
+                    tip: 0.08,
+                }),
+            );
+        }
+        painted_model(&parts, &MOTTLE, &THORN_SHADE)
+    }
+
     fn mass(&self) -> f32 {
         (4.0 / 3.0) * std::f32::consts::PI * self.radius.powi(3) * DENSITY
     }
@@ -130,12 +200,7 @@ impl Spawnable for RollerDef {
 
         let initial_pos = Point3::new(self.pos.0, surface_y + self.radius, self.pos.1);
 
-        let parts = vec![ModelPart::new(vec![MeshPrimitive {
-            vertices: generate_sphere_vertices(self.radius, SEGMENTS, RINGS, Colour::WHITE),
-            indices: generate_sphere_indices(SEGMENTS, RINGS),
-            material: materials[0],
-        }])];
-        let model = Arc::new(Model::flat(parts));
+        let model = Arc::new(Self::model(self.radius, materials[0]));
 
         let body_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
@@ -194,14 +259,14 @@ impl Spawnable for RollerDef {
     }
 }
 
-/// Mottled stone hide with darker veins, so the creature reads as rock but not
-/// as terrain — a little warmer than the ground it rolls over.
+/// A dry husk: mottled brown with darker cracks. The pod's greens and the
+/// thorns' bone ride on the vertices over it.
 fn generate_hide_texture(seed: u32) -> Vec<u8> {
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let stone = Rgb::new(0.36, 0.32, 0.30);
-    let vein = Rgb::new(0.14, 0.12, 0.13);
+    let stone = Rgb::new(0.36, 0.3, 0.2);
+    let vein = Rgb::new(0.12, 0.09, 0.05);
 
     for y in 0..size {
         for x in 0..size {

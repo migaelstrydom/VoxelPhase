@@ -7,7 +7,7 @@
 //! ```text
 //!   F4 ──▶ toggle_nearest_recording
 //!            │  nearest peeper to the player?
-//!            ├── yes ──▶ PeeperAnimator::locomotion.toggle_recording()
+//!            ├── yes ──▶ StiltAnimator::locomotion.toggle_recording()
 //!            └── no  ──▶ CharacterAnimator::toggle_recording()
 //! ```
 //!
@@ -19,7 +19,7 @@
 
 use specs::{Join, World, WorldExt};
 
-use crate::animation::peeper::PeeperAnimator;
+use crate::animation::stilts::StiltAnimator;
 use crate::animation::CharacterAnimator;
 use crate::components::Position;
 use crate::player::Player;
@@ -32,7 +32,7 @@ use crate::player::Player;
 pub fn toggle_nearest_recording(world: &World) {
     match nearest_peeper(world) {
         Some(entity) => {
-            let mut animators = world.write_storage::<PeeperAnimator>();
+            let mut animators = world.write_storage::<StiltAnimator>();
             if let Some(animator) = animators.get_mut(entity) {
                 animator.locomotion.toggle_recording();
             }
@@ -52,7 +52,7 @@ fn nearest_peeper(world: &World) -> Option<specs::Entity> {
     let entities = world.entities();
     let positions = world.read_storage::<Position>();
     let players = world.read_storage::<Player>();
-    let animators = world.read_storage::<PeeperAnimator>();
+    let animators = world.read_storage::<StiltAnimator>();
 
     let player_pos = (&players, &positions).join().next()?.1 .0;
 
