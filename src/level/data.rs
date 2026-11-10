@@ -21,6 +21,7 @@ use serde::Deserialize;
 
 use crate::collision::AABB;
 use crate::fracture::DebrisBudget;
+use crate::meadow::MeadowConfig;
 use crate::plants::{CypressSpec, LollipopSpec};
 use crate::terrain::SegmentFrame;
 use crate::trampoline::TrampolineShape;
@@ -74,6 +75,10 @@ pub struct Level {
     /// How many pieces of each break are kept once it has been seen.
     #[serde(default)]
     pub debris: DebrisBudget,
+
+    /// What grows on the level's lawns. If omitted, they are bare turf.
+    #[serde(default)]
+    pub meadow: Option<MeadowConfig>,
 
     /// World frame of each segment, parallel to `segments`.
     ///

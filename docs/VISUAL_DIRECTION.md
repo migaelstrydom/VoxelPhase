@@ -641,6 +641,13 @@ of normal detail or roughness tuning will produce.
 
 #### Landed
 
+`shader/turf.glsl` paints the lawn before it is lit: broad drift between
+dry and lush green, light and dark at the scale of a tuft (faded out before
+a pixel is wider than one), and the turf's edge as a ragged line through the
+vertex blend, with the turf in its own shade just inside it and the bare
+ground unmixed beside it. What stands up out of a lawn (tufts, flowers,
+berries) is geometry, sown per level by `src/meadow/`.
+
 `shader/pile.glsl`, for any surface whose material has a pile
 (`VoxelMaterial::pile`, 1 for grass), carried per vertex in terrain's spare
 `tex_coords.y`. Three terms:

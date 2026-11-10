@@ -25,6 +25,7 @@ use crate::fracture::{DebrisCullSystem, FractureSystem};
 use crate::glass::{GlassCrackSystem, SheetShareSystem};
 use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
+use crate::meadow::MeadowSystem;
 use crate::objective::{GemMotionSystem, GoalSystem, ObjectiveHudSystem, ProgressSystem};
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::plants::PlantShareSystem;
@@ -303,6 +304,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["rubble_spawn"],
         )
         .with(TerrainAnchorSystem, "terrain_anchor", &["terrain_update"])
+        // The meadow regrows over the terrain as remeshed this frame.
+        .with(MeadowSystem, "meadow", &["terrain_update"])
         // Pumps stand where their bodies are before the water steps.
         .with(PumpSystem, "pump", &["terrain_update"])
         // Water simulation (after terrain update so dirty_regions are visible)

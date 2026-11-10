@@ -48,6 +48,7 @@ use crate::core::vulkan_context::VulkanContext;
 use crate::level::{
     create_level_materials, create_level_terrain, create_level_water, spawn_objects, Level,
 };
+use crate::meadow::MeadowSystem;
 use crate::pump::PumpSystem;
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{MaterialManager, MaterialManagerBuilder, SurfaceModulation};
@@ -164,13 +165,19 @@ impl LevelViewer {
     ) {
         // The level's pumps stand in the water as the game would have them.
         PumpSystem.run_now(&self.world);
-        let mut terrain = self.world.write_resource::<TerrainWorld>();
-        for &at in blasts {
-            terrain.detonate(at, &BlastConfig::default());
-        }
         if !blasts.is_empty() {
-            terrain.update();
+            {
+                let mut terrain = self.world.write_resource::<TerrainWorld>();
+                for &at in blasts {
+                    terrain.detonate(at, &BlastConfig::default());
+                }
+                terrain.update();
+            }
+            // The meadow grows over the ground the blasts left.
+            MeadowSystem.run_now(&self.world);
+            self.world.maintain();
         }
+        let terrain = self.world.read_resource::<TerrainWorld>();
         let Some(mut water) = self.world.try_fetch_mut::<WaterWorld>() else {
             return;
         };

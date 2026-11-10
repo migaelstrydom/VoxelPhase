@@ -317,6 +317,15 @@ Level(
         fill_colour: (0.06, 0.06, 0.08), // linear flat fill: how dark, and what colour, shadows go
         visibility: Some(160.0),       // m at which haze covers 63%; None for no haze
     ),
+
+    // Optional: what grows on the lawns (`src/meadow/`). Omitted, they are
+    // bare turf. Sown on level grass only, clear of its edges, and regrown
+    // over whatever a blast leaves. Nothing in it collides.
+    meadow: Some((
+        tufts: 4.0,   // tufts of long grass per m², about; they gather where the lawn is lush
+        blooms: 2.0,  // flowers and berries per m², about; they grow in drifts
+        seed: 0,      // which meadow of all those the ground could bear
+    )),
 )
 ```
 
@@ -351,6 +360,9 @@ pub struct Level {
     /// (`daylight.rs`). Every field defaults to `SceneLighting::default()`.
     #[serde(default)]
     pub daylight: Daylight,
+    /// What grows on the level's lawns (`meadow::MeadowConfig`).
+    #[serde(default)]
+    pub meadow: Option<MeadowConfig>,
     /// Derived: one world frame per segment, filled in by `load_level`.
     #[serde(skip)]
     pub frames: Vec<SegmentFrame>,

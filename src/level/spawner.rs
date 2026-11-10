@@ -1,13 +1,14 @@
 //! Spawns a level's terrain and objects into the ECS world.
 
 use nalgebra::Point3;
-use specs::{World, WorldExt};
+use specs::{RunNow, World, WorldExt};
 
 use crate::app::spawnables::MaterialCtx;
 use crate::core::error::EngineResult;
 use crate::level::data::{Level, LevelObject};
 use crate::level::drop::{body_handles, drop_onto_below, DropOutcome};
 use crate::level::placement::{local_frame, PlacementError};
+use crate::meadow::{meadow_material, Meadow, MeadowSystem};
 use crate::physics::RigidBodyHandle;
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
 use crate::rendering::pattern::TextureCache;
@@ -22,6 +23,8 @@ use crate::water::WaterWorld;
 pub struct LevelMaterials {
     /// One material set per object, indexed by object position in the level.
     pub per_object: Vec<Vec<MaterialId>>,
+    /// What the level's meadow is drawn in, if it has one.
+    pub meadow: Option<MaterialId>,
 }
 
 /// Pre-scan the level and create all needed materials during init.
@@ -49,10 +52,14 @@ pub fn create_level_materials(
         per_object.push(mats);
     }
 
+    let meadow = level
+        .meadow
+        .map(|_| ctx.materials.register(meadow_material()));
+
     let (baked, shared) = textures_cache.stats();
     log::info!("level textures: {baked} baked, {shared} shared from the cache");
 
-    Ok(LevelMaterials { per_object })
+    Ok(LevelMaterials { per_object, meadow })
 }
 
 /// Generate every segment's terrain and place it at its resolved frame.
@@ -140,6 +147,13 @@ pub fn spawn_level_objects(
 /// Terrain-anchored objects read `TerrainWorld` out of the world as they spawn,
 /// so it has to be in place before this is called.
 pub fn spawn_objects(world: &mut World, level: &Level, materials: &LevelMaterials) {
+    if let (Some(config), Some(material)) = (level.meadow, materials.meadow) {
+        // Grown at once, over the terrain as generated, so that a level
+        // looked at without being run has its meadow.
+        world.insert(Meadow::new(config, material));
+        MeadowSystem.run_now(world);
+        world.maintain();
+    }
     for entry in spawn_order(level) {
         let mats = &materials.per_object[entry.ordinal];
         let spawned = spawn_object(world, entry.object, mats);

@@ -27,6 +27,7 @@ pub mod level;
 pub mod level_check;
 pub mod level_viewer;
 pub mod lighting;
+pub mod meadow;
 pub mod model;
 pub mod objective;
 pub mod particles;
