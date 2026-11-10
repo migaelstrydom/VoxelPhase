@@ -12,8 +12,8 @@
 use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::character::{CharacterIntent, Grounding};
-use crate::components::{Position, Rotation, Velocity};
-use crate::creature::{Behaviour, Brain, MeleeAttack};
+use crate::components::{PosedModel, Position, Rotation, Velocity};
+use crate::creature::{Behaviour, Brain, MeleeAttack, Perception};
 use crate::debug::DebugLines;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::time::Time;
@@ -21,6 +21,9 @@ use crate::time::Time;
 use super::animator::{Mood, StiltAnimator};
 
 /// Aims each peeper's foot probes. Runs BEFORE `SensorProbeSystem`.
+/// Seconds a walker's eyes stay on where it last saw what it was watching.
+const WATCH_MEMORY: f32 = 1.0;
+
 pub struct StiltProbeConfigSystem;
 
 impl<'a> System<'a> for StiltProbeConfigSystem {
@@ -58,7 +61,9 @@ impl<'a> System<'a> for StiltAnimationSystem {
         ReadStorage<'a, ContactCandidates>,
         ReadStorage<'a, Brain>,
         ReadStorage<'a, MeleeAttack>,
+        ReadStorage<'a, Perception>,
         WriteStorage<'a, StiltAnimator>,
+        WriteStorage<'a, PosedModel>,
         Write<'a, DebugLines>,
     );
 
@@ -74,7 +79,9 @@ impl<'a> System<'a> for StiltAnimationSystem {
             candidates,
             brains,
             attacks,
+            perceptions,
             mut animators,
+            mut posed,
             mut debug_lines,
         ) = data;
 
@@ -103,6 +110,12 @@ impl<'a> System<'a> for StiltAnimationSystem {
                     .get(entity)
                     .map_or(1.0, |brain| alertness_of(brain.behaviour)),
                 thrust: attacks.get(entity).map_or(0.0, |attack| attack.thrust()),
+                // Its eyes follow what it can see, and for a moment after.
+                watching: perceptions
+                    .get(entity)
+                    .and_then(|perception| perception.target)
+                    .filter(|target| target.since_seen < WATCH_MEMORY)
+                    .map(|target| target.position),
             };
 
             animator.update(
@@ -116,12 +129,16 @@ impl<'a> System<'a> for StiltAnimationSystem {
                 mood,
             );
 
-            // Every peeper owns a recorder but only one can be armed, so
+            if let Some(posed) = posed.get_mut(entity) {
+                posed.poses = animator.poses();
+            }
+
+            // Every walker owns a recorder but only one can be armed, so
             // the idle ones stay off the screen rather than taking turns
             // overwriting the line.
             if animator.locomotion.is_recording() {
                 if let Some(status) = animator.locomotion.recording_status() {
-                    debug_lines.add("Peeper rec", status);
+                    debug_lines.add("Stilt rec", status);
                 }
             }
         }

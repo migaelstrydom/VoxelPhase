@@ -12,7 +12,8 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::sculpted::{all_round, ground_under, sculpt_material};
+use super::palette::Paint;
+use super::sculpted::{all_round, ground_under, sculpt_material, Exhibit};
 use crate::app::sculpt::{painted_model, ContactShade, Ellipsoid, Mottle, SculptedPart, Warp};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::character::CharacterIntent;
@@ -139,6 +140,18 @@ impl FlyingFishDef {
             ));
         }
         painted_model(&parts, &MOTTLE, &SHADE)
+    }
+}
+
+impl FlyingFishDef {
+    /// The states it is shown in by tools.
+    pub fn exhibits() -> Vec<Exhibit> {
+        vec![Exhibit::at_rest(
+            "portrait",
+            Arc::new(Self::model(Paint::Skin.id())),
+            1.2,
+            1.2,
+        )]
     }
 }
 

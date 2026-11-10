@@ -1,15 +1,13 @@
-//! Stilt walkers: two long legs under a haunch and a neck, with a peeper's eye on top or a costume in its place.
+//! Stilt walkers: two long legs under a haunch and a neck, dressed in a model whose parts ride the rig's joints.
 
 mod animator;
 mod config;
-mod costume;
-mod mesh;
+mod dress;
 mod skeleton;
 mod systems;
 
 pub use animator::{Mood, StiltAnimator};
 pub use config::StiltRigConfig;
-pub use costume::{Costume, Garment};
-pub use mesh::generate_stilt_mesh;
+pub use dress::{Dress, Drive, Joint, Worn};
 pub use skeleton::{FootPose, StiltSkeleton};
 pub use systems::{StiltAnimationSystem, StiltProbeConfigSystem};

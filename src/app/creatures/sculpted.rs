@@ -1,12 +1,44 @@
 //! What the creatures that are one sculpted model share: the material they
 //! are painted on, how they perceive, and the ground they are stood on.
 
+use std::sync::Arc;
+
 use specs::{World, WorldExt};
+
+use crate::model::{Model, Transform};
 
 use crate::creature::Perception;
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, SurfaceFinish};
 use crate::terrain::TerrainWorld;
+
+/// A creature that is one model, set out in one of its states for a tool
+/// to draw.
+pub struct Exhibit {
+    /// What the state is called.
+    pub name: &'static str,
+    /// The model, against the palette's slots.
+    pub model: Arc<Model>,
+    /// Each part's pose in this state, in part order.
+    pub poses: Vec<Transform>,
+    /// How high its origin is held off the ground, m.
+    pub lift: f32,
+    /// How big it is across, m: what a camera frames.
+    pub reach: f32,
+}
+
+impl Exhibit {
+    /// `model` at rest.
+    pub fn at_rest(name: &'static str, model: Arc<Model>, lift: f32, reach: f32) -> Self {
+        Self {
+            name,
+            poses: vec![Transform::default(); model.parts.len()],
+            model,
+            lift,
+            reach,
+        }
+    }
+}
 
 /// Paint: matte, with a breath of sheen.
 const PAINT: SurfaceFinish = SurfaceFinish {

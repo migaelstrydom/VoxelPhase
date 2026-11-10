@@ -2,36 +2,38 @@
 //! walks on the stilt rig shares.
 //!
 //! ```text
-//!   StiltWalker { rig, costume, speed, sight, peck, health, brain }
+//!   StiltWalker { rig, dress, speed, sight, peck, health, brain }
 //!        │ spawn
 //!        ▼
-//!   capsule body kept upright ── StiltAnimator (legs, and the eye or costume)
+//!   capsule body kept upright ── StiltAnimator ──poses──▶ PosedModel (the dress)
 //!   CharacterIntent ◀── Brain ◀── Perception        MeleeAttack, Health
 //! ```
 //!
-//! A def says what its creature is (its proportions, what it wears, how fast
+//! A def says what its creature is (its proportions, its dress, how fast
 //! and how hardy it is) and this builds it, so that a new walker is a new
-//! costume and a handful of numbers.
+//! sculpture and a handful of numbers.
 
 use std::sync::Arc;
 
 use nalgebra::{Point3, UnitVector3, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
-use crate::animation::stilts::{Costume, Garment, StiltAnimator, StiltRigConfig};
-use crate::app::sculpt::{painted_meshes, ContactShade, Mottle, SculptedPart};
+use super::anatomy::{self, LIMB_GRAIN};
+use crate::animation::stilts::{Dress, Joint, StiltAnimator, StiltRigConfig, Worn};
+use crate::animation::FootSide;
+use crate::app::sculpt::{Clay, Lump};
 use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
 use crate::components::{
-    Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
+    Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Rotation,
+    Velocity,
 };
 use crate::creature::{Brain, MeleeAttack, Perception};
 use crate::damage::{Health, Ragdoll};
 use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
+use crate::model::MeshPrimitive;
 use crate::physics::{
     BulkShape, ColliderDesc, ColliderShape, ConstraintKind, FrictionModel, RigidBodyDesc, Volume,
 };
-use crate::rendering::colour::Colour;
-use crate::rendering::material::MaterialId;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
@@ -52,34 +54,30 @@ const STANDOFF_BETWEEN_CONTACT_AND_REACH: f32 = 0.5;
 /// Seconds a walker's body lies where it fell before it is cleared away.
 const CORPSE_SECONDS: f32 = 6.0;
 
-/// The material a costume's parts name. A rig's mesh is drawn in its
-/// vertices' colours alone, so this is never looked up.
-const PAINT: MaterialId = MaterialId(0);
-
-/// A costume's colour, as a sculpted part's look.
-pub fn paint(r: f32, g: f32, b: f32) -> (Colour, MaterialId) {
-    (Colour::new(r, g, b, 1.0), PAINT)
-}
-
-/// `parts` as one garment, mottled and shaded where they meet.
-pub fn garment(parts: &[SculptedPart], mottle: &Mottle, shade: &ContactShade) -> Garment {
-    let mut garment = Garment::default();
-    for mesh in painted_meshes(parts, mottle, shade) {
-        let first = garment.vertices.len() as u32;
-        garment.vertices.extend(mesh.vertices);
-        garment
-            .indices
-            .extend(mesh.indices.iter().map(|i| i + first));
+/// A pair of bare human legs for a walker of proportions `rig`, each
+/// thigh `girth` thick at the hip and each foot `foot` long: thighs, shins
+/// and feet, each worn on its own bone.
+pub fn bare_legs(rig: &StiltRigConfig, girth: f32, foot: f32) -> Vec<(Worn, Vec<MeshPrimitive>)> {
+    let thigh = anatomy::flesh(&anatomy::thigh(rig.upper_leg_length, girth), LIMB_GRAIN);
+    let shin = anatomy::flesh(&anatomy::shin(rig.lower_leg_length, girth), LIMB_GRAIN);
+    let mut legs = Vec::new();
+    for side in [FootSide::Left, FootSide::Right] {
+        legs.push((Worn::on(Joint::Thigh(side)), vec![thigh.clone()]));
+        legs.push((Worn::on(Joint::Shin(side)), vec![shin.clone()]));
+        legs.push((Worn::on(Joint::Foot(side)), vec![anatomy::foot(foot, side)]));
     }
-    garment
+    legs
 }
 
-/// The shade where one part of a costume meets another.
-pub const COSTUME_SHADE: ContactShade = ContactShade {
-    reach: 0.04,
-    depth: 0.6,
-    floor: 0.3,
-};
+/// A stand-in dress for a walker of proportions `rig`: bare legs, and a
+/// plain ball of `colour` for a head. For a creature whose own look is not
+/// sculpted yet.
+pub fn blockout(rig: &StiltRigConfig, colour: (f32, f32, f32)) -> Dress {
+    let head = Clay::new(0.0).add(Lump::ball(rig.head_radius, (0.0, 0.0, 0.0)), colour);
+    let mut pieces = vec![(Worn::on(Joint::Head), vec![anatomy::flesh(&head, 0.02)])];
+    pieces.extend(bare_legs(rig, 1.6 * rig.leg_radius, 0.2));
+    Dress::of(pieces)
+}
 
 /// A walker's strike with its head.
 #[derive(Clone, Copy, Debug)]
@@ -98,8 +96,8 @@ pub struct StiltWalker {
     pub at: (f32, f32),
     /// Its proportions.
     pub rig: StiltRigConfig,
-    /// What it wears in place of the peeper's eye, if anything.
-    pub costume: Option<Arc<Costume>>,
+    /// What it is seen as, in the level's materials.
+    pub dress: Arc<Dress>,
     /// Top speed on the flat, m/s.
     pub speed: f32,
     /// How far it sees, m.
@@ -128,7 +126,7 @@ fn stilts_and_head(rig: &StiltRigConfig, clearance: f32) -> BulkShape {
     // capsule's centre.
     let hip = rig.standing_height();
     let shoulder = hip + rig.haunch_height;
-    let eye = shoulder + rig.neck_length;
+    let crown = shoulder + rig.neck_length;
     let at = |height: f32, across: f32| Vector3::new(across, height - clearance, 0.0);
     let capsule = |length: f32, radius: f32| ColliderShape::Capsule {
         half_height: 0.5 * length + radius,
@@ -148,9 +146,9 @@ fn stilts_and_head(rig: &StiltRigConfig, clearance: f32) -> BulkShape {
         ),
         Volume::at(
             ColliderShape::Sphere {
-                radius: rig.eye_radius,
+                radius: rig.head_radius,
             },
-            at(eye, 0.0),
+            at(crown, 0.0),
         ),
     ])
 }
@@ -164,7 +162,7 @@ impl StiltWalker {
         // The capsule covers the whole creature, so its centre — and with
         // it the character's ground clearance — sits at half its height.
         let clearance = rig.body_height() * 0.5;
-        let radius = rig.eye_radius;
+        let radius = rig.head_radius;
         let locomotion = LocomotionConfig::creature(self.speed, radius, clearance);
         let (air_steer_speed, jump_speed) = (locomotion.air_steer_speed, locomotion.jump_speed);
 
@@ -177,10 +175,15 @@ impl StiltWalker {
         };
 
         let initial_pos = Point3::new(self.at.0, surface_y + clearance, self.at.1);
-        let mut animator = StiltAnimator::new(rig, initial_pos, clearance, 0.0);
-        if let Some(costume) = self.costume {
-            animator = animator.wearing(costume);
-        }
+        let animator =
+            StiltAnimator::new(rig, initial_pos, clearance, 0.0).wearing(self.dress.clone());
+        // Posed as it stands, so that a level looked at without being run
+        // shows it.
+        let posed = PosedModel {
+            model: self.dress.model.clone(),
+            poses: animator.poses(),
+            frame: PoseFrame::World,
+        };
 
         // Reach is the rig's own geometry plus the target's girth, so
         // lengthening the neck lengthens the attack by itself. The standoff
@@ -232,6 +235,7 @@ impl StiltWalker {
             .with(locomotion)
             .with(Grounding::default())
             .with(animator)
+            .with(posed)
             .with(Position(initial_pos.coords))
             .with(Velocity(Vector3::zeros()))
             .with(Rotation(0.0))
@@ -273,35 +277,6 @@ mod tests {
 
     use super::*;
 
-    /// A costume that panics while it is sculpted, or comes out empty or
-    /// with a part flung off to nowhere, would only show when its creature
-    /// was first met in a level.
-    #[test]
-    fn every_walkers_costume_is_whole_and_sits_on_its_head() {
-        use crate::app::creatures::{BellCarrierDef, EggWalkerDef, FishWalkerDef, StalkerDef};
-        let costumes = [
-            ("stalker", StalkerDef::costume(), StalkerDef::rig()),
-            ("egg", EggWalkerDef::costume(), EggWalkerDef::rig()),
-            ("fish", FishWalkerDef::costume(), FishWalkerDef::rig()),
-            ("bell", BellCarrierDef::costume(), BellCarrierDef::rig()),
-        ];
-        for (name, costume, rig) in costumes {
-            assert!(!costume.head.indices.is_empty(), "the {name} has no head");
-            for garment in [&costume.head, &costume.body] {
-                let count = garment.vertices.len() as u32;
-                assert!(garment.indices.iter().all(|index| *index < count));
-                for vertex in &garment.vertices {
-                    assert!(vertex.pos.iter().all(|x| x.is_finite()));
-                    assert!(
-                        vertex.pos.norm() < rig.body_height(),
-                        "part of the {name}'s costume is {} m from where it is worn",
-                        vertex.pos.norm()
-                    );
-                }
-            }
-        }
-    }
-
     /// The lightest walker's density, kg/m³: the peeper's.
     const PEEPER_DENSITY: f32 = 300.0;
     use crate::physics::{PhysicsWorld, RigidBodyHandle};
@@ -315,7 +290,7 @@ mod tests {
             world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, clearance, 0.0)));
         world.attach_collider(
             body,
-            ColliderDesc::capsule(clearance, rig.eye_radius)
+            ColliderDesc::capsule(clearance, rig.head_radius)
                 .density(PEEPER_DENSITY)
                 .bulk(stilts_and_head(&rig, clearance)),
         );

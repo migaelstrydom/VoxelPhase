@@ -3,7 +3,7 @@ use std::sync::Arc;
 use nalgebra::{UnitQuaternion, Vector3};
 use specs::{Component, DenseVecStorage, VecStorage};
 
-use crate::model::{MeshPrimitive, Model};
+use crate::model::{MeshPrimitive, Model, Transform};
 use crate::physics::constraint::ConstraintHandle;
 use crate::physics::RigidBodyHandle;
 use crate::rendering::camera::Camera;
@@ -49,6 +49,47 @@ pub struct ModelInstance {
 impl ModelInstance {
     pub fn new(model: Arc<Model>) -> Self {
         Self { model }
+    }
+}
+
+/// What a [`PosedModel`]'s poses are measured in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoseFrame {
+    /// The world: for a rig, which works out where its joints are there.
+    World,
+    /// The entity's own frame, at its position and turned as it is: for
+    /// parts that move on a body the physics carries.
+    Entity,
+}
+
+/// A model drawn part by part, each part at its own pose: a creature made
+/// of rigid pieces that turn and slide against one another (an eye in its
+/// socket, a lid over it, a shin on a knee, a shell on its hinge).
+///
+/// The model is uploaded once and only the poses change, so the pieces may
+/// be as finely modelled as they like. The system that owns the motion
+/// writes the poses.
+#[derive(Component)]
+#[storage(VecStorage)]
+pub struct PosedModel {
+    /// The model, each part modelled about its own joint.
+    pub model: Arc<Model>,
+    /// Each part's pose, in part order. A part past the end is drawn at
+    /// rest.
+    pub poses: Vec<Transform>,
+    /// What the poses are measured in.
+    pub frame: PoseFrame,
+}
+
+impl PosedModel {
+    /// `model` with every part at rest in `frame`.
+    pub fn at_rest(model: Arc<Model>, frame: PoseFrame) -> Self {
+        let poses = vec![Transform::default(); model.parts.len()];
+        Self {
+            model,
+            poses,
+            frame,
+        }
     }
 }
 

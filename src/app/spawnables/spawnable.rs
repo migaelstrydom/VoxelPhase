@@ -1,10 +1,11 @@
 //! Core trait and context types for the spawnable object library.
 
+use rustc_hash::FxHashMap;
 use specs::{Entity, World};
 
 use crate::core::error::EngineResult;
 use crate::rendering::engraving::Engraving;
-use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
+use crate::rendering::material::{Material, MaterialId, MaterialManagerBuilder};
 use crate::rendering::pattern::{Pattern, Spread, TextureCache};
 use crate::rendering::substance::Substance;
 use crate::resources::textures::TextureManager;
@@ -23,9 +24,35 @@ pub struct MaterialCtx<'a> {
     /// *between* objects: a level's twenty menhirs asked for the same stone
     /// twenty times, and nothing was in a position to notice.
     pub textures_cache: &'a mut TextureCache,
+
+    /// Sets of materials shared by every object in the level load that asks
+    /// for them by the same name.
+    ///
+    /// A model's primitives name their materials, so two objects can share
+    /// one model, uploaded once, only if they share its materials too: a
+    /// clutch of creatures of one kind is one model drawn several times.
+    pub palettes: &'a mut FxHashMap<&'static str, Vec<MaterialId>>,
 }
 
 impl MaterialCtx<'_> {
+    /// The materials registered under `name`, registering `make`'s the
+    /// first time the level asks for them.
+    pub fn palette(
+        &mut self,
+        name: &'static str,
+        make: impl FnOnce() -> Vec<Material>,
+    ) -> Vec<MaterialId> {
+        if let Some(ids) = self.palettes.get(name) {
+            return ids.clone();
+        }
+        let ids: Vec<MaterialId> = make()
+            .into_iter()
+            .map(|material| self.materials.register(material))
+            .collect();
+        self.palettes.insert(name, ids.clone());
+        ids
+    }
+
     /// Register a material whose texture is a pattern baked over a substance's
     /// palette, reusing an identical texture if one has already been made.
     ///

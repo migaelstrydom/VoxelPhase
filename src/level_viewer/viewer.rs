@@ -38,10 +38,10 @@ use nalgebra::{Matrix4, Point3, Vector3};
 use specs::{Join, RunNow, World, WorldExt};
 
 use crate::animation::critter::CritterAnimator;
-use crate::animation::stilts::StiltAnimator;
 use crate::app::world_builder::WorldBuilder;
 use crate::components::{
-    ModelInstance, Orientation, Position, ProceduralMesh, Renderable, Rotation,
+    ModelInstance, Orientation, PoseFrame, PosedModel, Position, ProceduralMesh, Renderable,
+    Rotation,
 };
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
@@ -343,6 +343,28 @@ impl LevelViewer {
                 )?;
             }
 
+            let posed = self.world.read_storage::<PosedModel>();
+            for (entity, posed, position, _) in (&entities, &posed, &positions, &renderables).join()
+            {
+                let frame = match posed.frame {
+                    PoseFrame::World => Matrix4::identity(),
+                    PoseFrame::Entity => {
+                        Matrix4::new_translation(&position.0)
+                            * entity_rotation(entity, &orientations, &rotations)
+                    }
+                };
+                self.renderer.draw_model(
+                    cb,
+                    &posed.model,
+                    &frame,
+                    &posed.poses,
+                    &self.material_manager,
+                    &self.texture_manager,
+                    SurfaceModulation::IDENTITY,
+                    Some(probe_owner(entity)),
+                )?;
+            }
+
             let procedural = self.world.read_storage::<ProceduralMesh>();
             for (entity, mesh, position, _) in
                 (&entities, &procedural, &positions, &renderables).join()
@@ -376,13 +398,8 @@ impl LevelViewer {
             let entities = self.world.entities();
             let renderables = self.world.read_storage::<Renderable>();
             let mut critters = self.world.write_storage::<CritterAnimator>();
-            let mut peepers = self.world.write_storage::<StiltAnimator>();
 
             for (_, animator, _) in (&entities, &mut critters, &renderables).join() {
-                let (vertices, indices) = animator.mesh();
-                meshes.push((vertices.to_vec(), indices.to_vec()));
-            }
-            for (_, animator, _) in (&entities, &mut peepers, &renderables).join() {
                 let (vertices, indices) = animator.mesh();
                 meshes.push((vertices.to_vec(), indices.to_vec()));
             }

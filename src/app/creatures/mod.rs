@@ -39,6 +39,7 @@
 //! bestiary` draws every creature, and `levels/bestiary.level.ron` stands
 //! them all on one lawn.
 
+mod anatomy;
 mod bell_carrier;
 mod egg_walker;
 mod fish;
@@ -46,7 +47,9 @@ mod fish_walker;
 mod flying_fish;
 mod heart_critter;
 mod in_water;
+mod likeness;
 mod mussel;
+mod palette;
 mod peeper;
 mod piper;
 mod roller;
@@ -62,9 +65,10 @@ pub use fish_walker::FishWalkerDef;
 pub use flying_fish::FlyingFishDef;
 pub use heart_critter::HeartCritterDef;
 pub use mussel::MusselDef;
+pub use palette::materials as creature_materials;
 pub use peeper::PeeperDef;
 pub use piper::PiperDef;
 pub use roller::RollerDef;
-pub use sculpted::sculpt_material;
+pub use sculpted::Exhibit;
 pub use stalker::StalkerDef;
 pub use turtle::TurtleDef;

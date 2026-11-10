@@ -39,7 +39,7 @@ pub struct Spots {
 impl Spots {
     /// How much of a spot covers `point`: 1 at a spot's heart, 0 clear of
     /// every spot.
-    fn cover(&self, point: Vector3<f32>) -> f32 {
+    pub fn cover(&self, point: Vector3<f32>) -> f32 {
         let at = point * self.frequency;
         let cell = at.map(f32::floor);
         let mut cover: f32 = 0.0;
@@ -83,7 +83,7 @@ pub struct Veins {
 
 impl Veins {
     /// How much of a vein covers `point`, 0 to 1.
-    fn cover(&self, point: Vector3<f32>) -> f32 {
+    pub fn cover(&self, point: Vector3<f32>) -> f32 {
         let at = point * self.frequency;
         let field = fbm_perlin_3d(at.x, at.y, at.z, 3, 0.5, self.seed);
         let ridge = 1.0 - field.abs();

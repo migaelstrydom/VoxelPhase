@@ -1,26 +1,41 @@
-//! Egg-walker — a cracked eggshell on two bare legs, with something looking
-//! out of the crack.
+//! Egg-walker — a broken eggshell on a man's bare legs. Something inside
+//! holds the break open with its fingers and looks out.
 //!
-//! The swarm. One is no trouble: it is quick, but a single blow breaks it and
-//! its butt only bruises. They come several at a time. `visual_bench
-//! bestiary` shows it.
+//! The swarm. One is no trouble: it is quick, but a single blow breaks it
+//! and its butt only bruises. They come several at a time. `visual_bench
+//! egg_walker` shows it.
+//!
+//! ```text
+//!   shell    a hollow egg, broken open at the front and cracked from the
+//!            break; two holes in its underside for the legs      (Head)
+//!   within   wet dark flesh, an eye that follows you and its lids,
+//!            eight fingers hooked over the broken edge           (Head, Eye, Hinge)
+//!   legs     bare thighs, shins and feet                         (the bones)
+//! ```
 
-use std::f32::consts::{FRAC_PI_2, PI};
+use std::f32::consts::FRAC_PI_2;
+
+use nalgebra::{UnitQuaternion, Vector3};
 use std::sync::Arc;
 
-use nalgebra::Vector3;
 use serde::Deserialize;
 use specs::{Entity, World};
 
-use super::stilt_walker::{garment, paint, Peck, StiltWalker, COSTUME_SHADE};
-use crate::animation::rig::FootShape;
-use crate::animation::stilts::{Costume, StiltRigConfig};
-use crate::app::sculpt::{Ellipsoid, Mottle, SculptedPart, Warp};
+use super::anatomy::{self, EyeLook, DIGIT_GRAIN};
+use super::likeness;
+use super::palette::{self, Paint, BESTIARY};
+use super::stilt_walker::{bare_legs, Peck, StiltWalker};
+use crate::animation::stilts::{Dress, Drive, Joint, StiltRigConfig, Worn};
+use crate::animation::{FootPlacerConfig, FootSide};
+use crate::app::sculpt::{Clay, Grime, Lump, Mottle, Relief, Spots, VertexPaint};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::core::error::EngineResult;
 use crate::creature::Brain;
-use crate::rendering::colour::Colour;
+use crate::model::MeshPrimitive;
 use crate::rendering::material::MaterialId;
+
+/// The name its look is kept under.
+const KIND: &str = "egg_walker";
 
 /// Light as a shell: a blast scatters a clutch of them.
 const DENSITY: f32 = 220.0;
@@ -30,12 +45,23 @@ const TURN_AUTHORITY: f32 = 520.0;
 const BUTT_WINDUP: f32 = 0.3;
 const BUTT_RECOVERY: f32 = 0.6;
 
-const MOTTLE: Mottle = Mottle {
-    frequency: 12.0,
-    value: 0.1,
-    warmth: 0.1,
-    seed: 37,
-};
+/// The shell (linear), and how thick it is, m.
+const SHELL: (f32, f32, f32) = (0.8, 0.74, 0.6);
+const SHELL_THICKNESS: f32 = 0.016;
+/// Side of the grid the shell is skinned from, m.
+const SHELL_GRAIN: f32 = 0.009;
+/// Where the break is on the shell: how far up from its equator, radians.
+const BREAK_ELEVATION: f32 = 0.28;
+/// Radius of the eye that looks out of it, m, and how far behind the
+/// shell's wall its middle sits.
+const EYE_RADIUS: f32 = 0.046;
+const EYE_SET_BACK: f32 = 0.085;
+/// What is inside (linear).
+const INNARDS: (f32, f32, f32) = (0.13, 0.03, 0.03);
+/// The lids of its eye: skin that has not seen light (linear).
+const LID: (f32, f32, f32) = (0.3, 0.17, 0.15);
+/// What runs from the break (linear).
+const ICHOR: (f32, f32, f32) = (0.2, 0.035, 0.02);
 
 /// An egg-walker.
 #[derive(Deserialize)]
@@ -44,123 +70,290 @@ pub struct EggWalkerDef {
     pub pos: (f32, f32),
 }
 
+/// A mesh turned by `turn` and then moved by `shift`.
+fn placed(
+    mut mesh: MeshPrimitive,
+    turn: UnitQuaternion<f32>,
+    shift: Vector3<f32>,
+) -> MeshPrimitive {
+    for vertex in &mut mesh.vertices {
+        vertex.pos = turn * vertex.pos + shift;
+        vertex.normal = turn * vertex.normal;
+    }
+    mesh
+}
+
 impl EggWalkerDef {
-    /// Its proportions: an egg the size of a barrel on short bare legs.
+    /// Its proportions: an egg the size of a barrel on a man's legs, cut
+    /// off short.
     pub fn rig() -> StiltRigConfig {
         StiltRigConfig {
-            upper_leg_length: 0.27,
-            lower_leg_length: 0.26,
-            hip_width: 0.1,
-            leg_radius: 0.03,
-            knee_radius: 0.04,
-            haunch_height: 0.03,
-            haunch_radius: 0.05,
-            neck_length: 0.27,
-            neck_radius: 0.03,
-            eye_radius: 0.27,
-            rest_pitch: 0.06,
-            rear_pitch: -0.35,
-            strike_pitch: 0.6,
+            upper_leg_length: 0.3,
+            lower_leg_length: 0.3,
+            hip_width: 0.085,
+            leg_radius: 0.05,
+            haunch_height: 0.02,
+            haunch_radius: 0.08,
+            neck_length: 0.3,
+            neck_radius: 0.1,
+            head_radius: 0.27,
+            rest_pitch: 0.05,
+            rear_pitch: -0.3,
+            strike_pitch: 0.55,
+            lid_rate: 14.0,
+            standing_height_ratio: 0.9,
             step_height: 0.12,
+            probe_length_factor: 1.3,
+            stride_gain: 0.6,
             // Knees that bend the way a man's do.
             knee_bend: 1.0,
-            foot: FootShape {
-                radius: 0.04,
-                half_length: 0.09,
-                ankle_forward_offset: 0.04,
-            },
-            hide_colour: Colour::new(0.8, 0.62, 0.52, 1.0),
-            foot_colour: Colour::new(0.74, 0.54, 0.46, 1.0),
-            ..StiltRigConfig::default()
+            foot_placer: FootPlacerConfig::default(),
         }
     }
 
-    /// What it wears: the shell, broken open at the front, and an eye in the
-    /// dark inside it.
-    pub fn costume() -> Costume {
-        let shell = paint(0.9, 0.86, 0.74);
-        let dark = paint(0.05, 0.03, 0.03);
-        let white = paint(0.92, 0.9, 0.8);
-        let iris = paint(0.5, 0.1, 0.08);
+    /// The egg before it broke: solid, about the head's middle.
+    fn egg() -> Clay {
+        Clay::new(0.2)
+            .add(Lump::mass((0.27, 0.3, 0.27), (0.0, -0.05, 0.0)), SHELL)
+            .add(Lump::mass((0.2, 0.24, 0.2), (0.0, 0.13, 0.0)), SHELL)
+    }
 
-        let egg = SculptedPart::new(Ellipsoid::new((0.27, 0.35, 0.27), (0.0, 0.0, 0.0)), shell)
-            .warped(Warp::Taper {
-                along: Vector3::y(),
-                tip: 0.72,
-            });
-        let mut head = vec![egg.clone()];
-        // The break: a dark hole high on the front, its edge a ring of
-        // jagged teeth of shell.
-        let (hole, facing) = egg.surface_at(0.0, 0.45);
-        head.push(SculptedPart::new(
-            Ellipsoid {
-                radii: Vector3::new(0.11, 0.09, 0.02),
-                centre: hole + facing * 0.004,
-                turn: nalgebra::UnitQuaternion::rotation_between(&Vector3::z(), &facing)
-                    .unwrap_or_else(nalgebra::UnitQuaternion::identity),
-            },
-            dark,
-        ));
-        for tooth in 0..9 {
-            let angle = tooth as f32 / 9.0 * 2.0 * PI;
-            let (at, out) = egg.surface_at(0.44 * angle.cos(), 0.45 + 0.36 * angle.sin());
-            head.push(
-                SculptedPart::new(
-                    Ellipsoid {
-                        radii: Vector3::new(0.035, 0.05, 0.012),
-                        centre: at + out * 0.006,
-                        turn: nalgebra::UnitQuaternion::rotation_between(&Vector3::z(), &out)
-                            .unwrap_or_else(nalgebra::UnitQuaternion::identity)
-                            * nalgebra::UnitQuaternion::from_axis_angle(
-                                &Vector3::z_axis(),
-                                angle + FRAC_PI_2,
-                            ),
+    /// The point on the whole egg's surface `azimuth` radians round from
+    /// straight ahead and `elevation` radians up, and the way out there.
+    fn on_shell(azimuth: f32, elevation: f32) -> (Vector3<f32>, Vector3<f32>) {
+        let out = Vector3::new(
+            elevation.cos() * azimuth.sin(),
+            elevation.sin(),
+            elevation.cos() * azimuth.cos(),
+        );
+        let egg = Self::egg();
+        // Walk out from the middle to where the egg ends.
+        let (mut inside, mut outside) = (0.0, 0.6);
+        for _ in 0..24 {
+            let middle = 0.5 * (inside + outside);
+            if egg.distance(out * middle) < 0.0 {
+                inside = middle;
+            } else {
+                outside = middle;
+            }
+        }
+        (out * inside, out)
+    }
+
+    /// The shell: hollow, broken open, cracked, and holed for the legs.
+    fn shell(rig: &StiltRigConfig) -> MeshPrimitive {
+        let at = |azimuth: f32, elevation: f32| {
+            let (point, _) = Self::on_shell(azimuth, elevation);
+            (point.x, point.y, point.z)
+        };
+        let mut shell = Self::egg().hollow(SHELL_THICKNESS);
+        // The break: bites out of the wall that overlap, so the edge
+        // between two is a tooth of shell.
+        for (azimuth, up, bite) in [
+            (0.0, 0.0, 0.105),
+            (0.34, 0.2, 0.07),
+            (-0.36, -0.08, 0.062),
+            (-0.2, 0.3, 0.055),
+            (0.24, -0.2, 0.05),
+            (0.02, 0.4, 0.04),
+        ] {
+            shell = shell.cut(Lump::ball(bite, at(azimuth, BREAK_ELEVATION + up)), 0.003);
+        }
+        // Cracks running from the break: each a chain of slits through the
+        // wall, narrowing as it goes.
+        let cracks: [&[(f32, f32)]; 4] = [
+            &[(0.3, -0.02), (0.42, -0.3), (0.3, -0.52), (0.44, -0.8)],
+            &[(-0.46, 0.2), (-0.8, 0.12), (-1.0, 0.3), (-1.3, 0.22)],
+            &[(0.5, 0.42), (0.86, 0.62), (0.8, 0.9)],
+            &[(-0.12, -0.14), (-0.2, -0.46), (-0.08, -0.7)],
+        ];
+        for crack in cracks {
+            for (step, pair) in crack.windows(2).enumerate() {
+                let wide = 0.0075 - 0.0015 * step as f32;
+                shell = shell.cut(
+                    Lump::limb(
+                        at(pair[0].0, pair[0].1 + BREAK_ELEVATION * 0.3),
+                        at(pair[1].0, pair[1].1 + BREAK_ELEVATION * 0.3),
+                        (wide, 0.8 * wide),
+                    ),
+                    0.0,
+                );
+            }
+        }
+        // Where the legs come through.
+        let hips = -(rig.neck_length + rig.haunch_height) - 0.02;
+        for side in [-1.0, 1.0] {
+            shell = shell.cut(Lump::ball(0.088, (side * rig.hip_width, hips, 0.0)), 0.012);
+        }
+
+        let mut mesh = shell.skin(SHELL_GRAIN, Paint::Shell.id());
+        Mottle {
+            frequency: 4.0,
+            value: 0.12,
+            warmth: 0.1,
+            seed: 37,
+        }
+        .paint(&mut mesh);
+        Spots {
+            frequency: 34.0,
+            presence: 0.3,
+            radius: (0.12, 0.34),
+            tint: Vector3::new(0.62, 0.48, 0.34),
+            salt: 38,
+        }
+        .paint(&mut mesh);
+        // It has been dragged about: stained toward its underside.
+        Grime {
+            below: -0.24,
+            fade: 0.34,
+            tint: Vector3::new(0.5, 0.42, 0.32),
+        }
+        .paint(&mut mesh);
+        // Inside it is dark, and not with shadow.
+        for vertex in &mut mesh.vertices {
+            let inward = -vertex.normal.dot(&vertex.pos.normalize());
+            if inward > 0.2 {
+                vertex.color.x *= 0.2;
+                vertex.color.y *= 0.09;
+                vertex.color.z *= 0.07;
+            }
+        }
+        mesh
+    }
+
+    /// Its dress, against the palette's slots.
+    pub fn sculpt() -> Dress {
+        let rig = Self::rig();
+        let (hole, out) = Self::on_shell(0.0, BREAK_ELEVATION);
+        let socket = hole - out * EYE_SET_BACK;
+
+        // What lives in the shell: a wet mass in the bottom of it, and the
+        // eye held up on a stalk in the dark.
+        let innards = Clay::new(0.1)
+            .add(Lump::mass((0.21, 0.15, 0.21), (0.0, -0.16, 0.0)), INNARDS)
+            // A stalk up out of it to the back of the eye.
+            .add(
+                Lump::limb(
+                    (0.0, -0.1, -0.02),
+                    (socket.x, socket.y - 0.01, socket.z - 0.04),
+                    (0.06, 0.03),
+                ),
+                INNARDS,
+            )
+            .relief(Relief::Lumps {
+                frequency: 9.0,
+                depth: 0.012,
+                seed: 39,
+            })
+            .skin(0.012, Paint::Wet.id());
+
+        // Eight fingers hooked over the lower edge of the break, from
+        // inside: each hand turned so its fingers come up and over.
+        let over = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -1.1);
+        let grip = |side: FootSide, azimuth: f32, drop: f32| {
+            // The rim it grips, and the hand laid so the middle of its
+            // fingers rides over that.
+            let (rim, out) = Self::on_shell(azimuth, BREAK_ELEVATION - drop);
+            let size = 0.22;
+            let mut hand = anatomy::flesh(&anatomy::hand(size, 1.0, side), DIGIT_GRAIN);
+            // Fingers that have scrabbled at the inside of a shell.
+            for vertex in &mut hand.vertices {
+                let along = (vertex.pos.z / size - 0.55).clamp(0.0, 1.0);
+                let dirt = 1.0 - 0.45 * along;
+                vertex.color.x *= dirt;
+                vertex.color.y *= dirt * 0.96;
+                vertex.color.z *= dirt * 0.9;
+            }
+            let reach = over * Vector3::new(0.0, 0.0, 0.7 * size);
+            placed(hand, over, rim + out * 0.012 + Vector3::y() * 0.012 - reach)
+        };
+
+        // What has run from the break and down the shell, and dried there
+        // still shining.
+        let mut leak = Clay::new(0.006);
+        for (azimuth, length) in [(-0.34f32, 0.55f32), (0.05, 0.3), (0.3, 0.42)] {
+            let top = BREAK_ELEVATION - 0.36;
+            let mut from = Self::on_shell(azimuth, top).0;
+            let runs = 6;
+            for run in 1..=runs {
+                let down = top - length * run as f32 / runs as f32;
+                let wander = 0.03 * (run as f32 * 1.7 + azimuth * 9.0).sin();
+                let (to, out) = Self::on_shell(azimuth + wander, down);
+                let to = to + out * 0.002;
+                let thick = 0.006 - 0.0005 * run as f32;
+                leak = leak.add(
+                    Lump::limb(
+                        (from.x, from.y, from.z),
+                        (to.x, to.y, to.z),
+                        (thick, 0.9 * thick),
+                    ),
+                    ICHOR,
+                );
+                from = to;
+            }
+            // A bead hanging at the end of it.
+            leak = leak.add(Lump::ball(0.008, (from.x, from.y - 0.003, from.z)), ICHOR);
+        }
+        let leak = leak.skin(0.0028, Paint::Wet.id());
+
+        let eye = Joint::Eye {
+            socket,
+            swivel: 0.55,
+        };
+        let lid = |shut: f32| Joint::Hinge {
+            pivot: socket,
+            axis: Vector3::x(),
+            drive: Drive::Lid { shut },
+        };
+        let mut pieces = vec![
+            (Worn::on(Joint::Head), vec![Self::shell(&rig)]),
+            (Worn::on(Joint::Head).breathing(0.035), vec![innards]),
+            (
+                Worn::on(Joint::Head),
+                vec![
+                    grip(FootSide::Left, 0.17, 0.4),
+                    grip(FootSide::Right, -0.2, 0.36),
+                    leak,
+                ],
+            ),
+            (
+                Worn::on(eye),
+                vec![anatomy::eyeball(
+                    EYE_RADIUS,
+                    EyeLook {
+                        iris: (0.42, 0.3, 0.1),
+                        iris_angle: 0.42,
+                        pupil_share: 0.34,
+                        bloodshot: 0.85,
                     },
-                    shell,
-                )
-                .warped(Warp::Taper {
-                    along: Vector3::y(),
-                    tip: 0.1,
-                }),
-            );
-        }
-        // The eye, looking out.
-        head.push(SculptedPart::new(
-            Ellipsoid::ball(0.06, hole + facing * 0.0),
-            white,
-        ));
-        head.push(SculptedPart::new(
-            Ellipsoid::ball(0.028, hole + facing * 0.03),
-            iris,
-        ));
-        head.push(SculptedPart::new(
-            Ellipsoid::ball(0.015, hole + facing * 0.048),
-            dark,
-        ));
-        // A hairline crack running down from the break.
-        for step in 0..5 {
-            let (at, out) =
-                egg.surface_at(0.07 * (step as f32 * 2.1).sin(), 0.08 - 0.13 * step as f32);
-            head.push(SculptedPart::new(
-                Ellipsoid::new((0.005, 0.045, 0.005), (0.0, 0.0, 0.0)),
-                dark,
-            ));
-            let crack = head.last_mut().expect("just pushed");
-            crack.shape.centre = at + out * 0.002;
-            crack.shape = crack.shape.rolled(0.7 * (step as f32 * 2.1).cos());
-        }
-
-        Costume {
-            head: garment(&head, &MOTTLE, &COSTUME_SHADE),
-            ..Costume::default()
-        }
+                )],
+            ),
+            // A heavy upper lid that never quite clears the iris, and a
+            // lower one swollen under it.
+            (
+                Worn::on(lid(FRAC_PI_2 - 0.75)),
+                vec![anatomy::eyelid(EYE_RADIUS, 1.42, false, LID)],
+            ),
+            (
+                Worn::on(lid(-0.3)),
+                vec![anatomy::eyelid(EYE_RADIUS, 1.1, true, LID)],
+            ),
+        ];
+        pieces.extend(bare_legs(&rig, 0.066, 0.21));
+        Dress::of(pieces)
     }
 
-    fn walker(&self) -> StiltWalker {
+    /// Its dress against the palette's slots, sculpted once: for tools
+    /// that draw it in the palette's own materials.
+    pub fn dress() -> Arc<Dress> {
+        likeness::dress_sculpted(KIND, Self::sculpt)
+    }
+
+    fn walker(&self, materials: &[MaterialId]) -> StiltWalker {
         StiltWalker {
             at: self.pos,
             rig: Self::rig(),
-            costume: Some(Arc::new(Self::costume())),
+            dress: likeness::dress(KIND, materials, Self::sculpt),
             speed: 4.4,
             sight_range: 18.0,
             density: DENSITY,
@@ -178,15 +371,31 @@ impl EggWalkerDef {
 
 impl Spawnable for EggWalkerDef {
     fn material_count(&self) -> usize {
-        0
+        Paint::ALL.len()
     }
 
-    fn create_materials(&self, _ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        // Drawn in its vertices' colours, like every rig.
-        Ok(Vec::new())
+    fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
+        Ok(ctx.palette(BESTIARY, palette::materials))
     }
 
-    fn spawn(&self, world: &mut World, _materials: &[MaterialId]) -> Vec<Entity> {
-        self.walker().spawn(world)
+    fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
+        self.walker(materials).spawn(world)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn its_dress_is_tens_of_thousands_of_triangles_and_every_part_is_worn() {
+        let dress = EggWalkerDef::sculpt();
+        assert_eq!(dress.worn.len(), dress.model.parts.len());
+        let triangles = dress.triangles();
+        println!("an egg-walker is {triangles} triangles");
+        assert!(
+            (30_000..400_000).contains(&triangles),
+            "{triangles} triangles"
+        );
     }
 }

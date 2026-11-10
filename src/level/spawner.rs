@@ -1,6 +1,7 @@
 //! Spawns a level's terrain and objects into the ECS world.
 
 use nalgebra::Point3;
+use rustc_hash::FxHashMap;
 use specs::{RunNow, World, WorldExt};
 
 use crate::app::spawnables::MaterialCtx;
@@ -39,10 +40,12 @@ pub fn create_level_materials(
     // One cache for the whole level, so objects that ask for the same surface
     // get the same texture rather than each baking their own.
     let mut textures_cache = TextureCache::new();
+    let mut palettes = FxHashMap::default();
     let mut ctx = MaterialCtx {
         textures: texture_manager,
         materials: material_builder,
         textures_cache: &mut textures_cache,
+        palettes: &mut palettes,
     };
 
     let mut per_object = Vec::with_capacity(level.object_count());

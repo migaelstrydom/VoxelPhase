@@ -9,14 +9,22 @@
 //!    Warps)         warp.rs)      colour)            meets another)
 //!
 //!   SkinPattern ──texture──▶ the material's texture: freckles, veins, pores
+//!
+//!   Clay ──skin──▶ mesh: lumps and limbs smoothed into one another, hollowed
+//!   (clay.rs)      and carved; for flesh, cloth, shell and cast metal, where
+//!                  a crease between parts would give the modelling away
 //! ```
 
+pub mod clay;
 pub mod paint;
 pub mod parts;
 pub mod pattern;
 pub mod warp;
 
-pub use paint::{painted_meshes, painted_model, scatter, ContactShade, Mottle};
+pub use clay::{Clay, Lump, Relief};
+pub use paint::{
+    painted_meshes, painted_model, scatter, Blush, ContactShade, Grime, Mottle, VertexPaint,
+};
 pub use parts::{Ellipsoid, SculptedPart};
 pub use pattern::{Clouds, SkinPattern, Spots, Veins};
 pub use warp::Warp;

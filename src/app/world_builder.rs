@@ -13,8 +13,8 @@ use crate::character::{
 };
 use crate::cleave::BrittleSolid;
 use crate::components::{
-    CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, ProceduralMesh,
-    Renderable, RigidBodyComponent, Rotation, TerrainAnchored, Velocity,
+    CameraComponent, MaterialModulation, ModelInstance, Orientation, PosedModel, Position,
+    ProceduralMesh, Renderable, RigidBodyComponent, Rotation, TerrainAnchored, Velocity,
 };
 use crate::core::error::EngineResult;
 use crate::creature::{
@@ -79,6 +79,7 @@ impl WorldBuilder {
         world.register::<Orientation>();
         world.register::<ModelInstance>();
         world.register::<ProceduralMesh>();
+        world.register::<PosedModel>();
         world.register::<Renderable>();
         world.register::<CameraComponent>();
         world.register::<Player>();

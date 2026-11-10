@@ -20,15 +20,23 @@
 //! and the heart critter, through the same character control chain, driven
 //! by the same [`Brain`] as the roller.
 
+use std::sync::Arc;
+
 use serde::Deserialize;
 use specs::{Entity, World};
 
-use super::stilt_walker::{Peck, StiltWalker};
-use crate::animation::stilts::StiltRigConfig;
+use super::likeness;
+use super::palette::{self, Paint, BESTIARY};
+use super::stilt_walker::{blockout, Peck, StiltWalker};
+use crate::animation::stilts::{Dress, StiltRigConfig};
+use crate::animation::FootPlacerConfig;
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::core::error::EngineResult;
 use crate::creature::Brain;
 use crate::rendering::material::MaterialId;
+
+/// The name its look is kept under.
+const KIND: &str = "peeper";
 
 /// Spindly. A peeper is legs and air, and a blast should send it
 /// cartwheeling — being thrown about is most of what makes it fun to
@@ -82,25 +90,49 @@ impl PeeperDef {
     pub fn default_health() -> f32 {
         55.0
     }
-}
 
-impl Spawnable for PeeperDef {
-    fn material_count(&self) -> usize {
-        0
+    /// Its proportions: almost all leg, with an eye the size of a melon.
+    pub fn rig() -> StiltRigConfig {
+        StiltRigConfig {
+            upper_leg_length: 0.52,
+            lower_leg_length: 0.5,
+            hip_width: 0.07,
+            leg_radius: 0.026,
+            haunch_height: 0.16,
+            haunch_radius: 0.085,
+            neck_length: 0.42,
+            neck_radius: 0.035,
+            head_radius: 0.22,
+            rest_pitch: 0.2,
+            rear_pitch: -0.55,
+            strike_pitch: 1.35,
+            lid_rate: 11.0,
+            standing_height_ratio: 0.86,
+            step_height: 0.22,
+            probe_length_factor: 1.3,
+            stride_gain: 0.6,
+            knee_bend: -1.0,
+            foot_placer: FootPlacerConfig::default(),
+        }
     }
 
-    fn create_materials(&self, _ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        // The rig is vertex-coloured — the hide, the eye and the feelers
-        // are all in the mesh the animator regenerates each frame, which no
-        // material can be attached to anyway.
-        Ok(Vec::new())
+    /// Its dress, against the palette's slots: a blockout, until it is
+    /// sculpted.
+    pub fn sculpt() -> Dress {
+        blockout(&Self::rig(), (0.8, 0.76, 0.66))
     }
 
-    fn spawn(&self, world: &mut World, _materials: &[MaterialId]) -> Vec<Entity> {
+    /// Its dress against the palette's slots, sculpted once: for tools
+    /// that draw it in the palette's own materials.
+    pub fn dress() -> Arc<Dress> {
+        likeness::dress_sculpted(KIND, Self::sculpt)
+    }
+
+    fn walker(&self, materials: &[MaterialId]) -> StiltWalker {
         StiltWalker {
             at: self.pos,
-            rig: StiltRigConfig::default(),
-            costume: None,
+            rig: Self::rig(),
+            dress: likeness::dress(KIND, materials, Self::sculpt),
             speed: self.speed,
             sight_range: self.sight_range,
             density: DENSITY,
@@ -113,6 +145,19 @@ impl Spawnable for PeeperDef {
             health: Some(self.health),
             brain: Brain::hunter,
         }
-        .spawn(world)
+    }
+}
+
+impl Spawnable for PeeperDef {
+    fn material_count(&self) -> usize {
+        Paint::ALL.len()
+    }
+
+    fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
+        Ok(ctx.palette(BESTIARY, palette::materials))
+    }
+
+    fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
+        self.walker(materials).spawn(world)
     }
 }

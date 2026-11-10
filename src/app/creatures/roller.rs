@@ -27,6 +27,8 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::palette::Paint;
+use super::sculpted::Exhibit;
 use crate::app::sculpt::{
     painted_model, scatter, ContactShade, Ellipsoid, Mottle, SculptedPart, Warp,
 };
@@ -170,6 +172,18 @@ impl RollerDef {
 
     fn mass(&self) -> f32 {
         (4.0 / 3.0) * std::f32::consts::PI * self.radius.powi(3) * DENSITY
+    }
+}
+
+impl RollerDef {
+    /// The states it is shown in by tools.
+    pub fn exhibits() -> Vec<Exhibit> {
+        vec![Exhibit::at_rest(
+            "portrait",
+            Arc::new(Self::model(0.6, Paint::Husk.id())),
+            0.6,
+            1.3,
+        )]
     }
 }
 

@@ -1,10 +1,9 @@
 use crate::aim::AimState;
 use crate::animation::critter::CritterAnimator;
-use crate::animation::stilts::StiltAnimator;
 use crate::animation::CharacterAnimator;
 use crate::components::{
-    CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, ProceduralMesh,
-    Renderable, RigidBodyComponent, Rotation, TerrainMeshInstance,
+    CameraComponent, MaterialModulation, ModelInstance, Orientation, PoseFrame, PosedModel,
+    Position, ProceduralMesh, Renderable, RigidBodyComponent, Rotation, TerrainMeshInstance,
 };
 use crate::core::error::{EngineError, EngineResult};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
@@ -43,8 +42,8 @@ use std::time::{Duration, Instant};
 pub struct RebuiltMeshes<'a> {
     humanoid: WriteStorage<'a, CharacterAnimator>,
     critter: WriteStorage<'a, CritterAnimator>,
-    stilts: WriteStorage<'a, StiltAnimator>,
     procedural: ReadStorage<'a, ProceduralMesh>,
+    posed: ReadStorage<'a, PosedModel>,
 }
 
 /// An entity's rotation as a matrix: its 3D orientation if it has one, else
@@ -433,6 +432,30 @@ impl<'a> System<'a> for RenderSystem {
                             log::error!("RenderSystem: Failed to draw model: {}", e);
                         }
                     }
+                    // Models drawn part by part, each where its owner posed it.
+                    for (entity, posed, pos, _renderable) in
+                        (&entities, &rebuilt.posed, &positions, &renderables).join()
+                    {
+                        let frame = match posed.frame {
+                            PoseFrame::World => Matrix4::identity(),
+                            PoseFrame::Entity => {
+                                Matrix4::new_translation(&pos.0)
+                                    * entity_rotation(entity, &orientations, &rotations)
+                            }
+                        };
+                        if let Err(e) = renderer.draw_model(
+                            draw_cb,
+                            &posed.model,
+                            &frame,
+                            &posed.poses,
+                            &material_manager,
+                            &texture_manager,
+                            SurfaceModulation::IDENTITY,
+                            Some(probe_owner(entity)),
+                        ) {
+                            log::error!("RenderSystem: Failed to draw a posed model: {}", e);
+                        }
+                    }
                     for (entity, procedural, pos, _renderable) in
                         (&entities, &rebuilt.procedural, &positions, &renderables).join()
                     {
@@ -498,11 +521,6 @@ impl<'a> System<'a> for RenderSystem {
                     }
                     for (animator, _pos, _rot, _renderable) in
                         (&mut rebuilt.critter, &positions, &rotations, &renderables).join()
-                    {
-                        rig_meshes.push(animator.mesh());
-                    }
-                    for (animator, _pos, _rot, _renderable) in
-                        (&mut rebuilt.stilts, &positions, &rotations, &renderables).join()
                     {
                         rig_meshes.push(animator.mesh());
                     }

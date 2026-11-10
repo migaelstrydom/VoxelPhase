@@ -1,25 +1,23 @@
-//! Where every part of a peeper is this frame.
+//! Where every joint of a stilt walker is this frame.
 //!
 //! ```text
-//!   pelvis ──haunch──► haunch top ──neck(pitch)──► eye ──► feeler anchors
-//!     │                                             │
-//!     ├── hip L ──► Leg L ──► foot L                └──► gaze
-//!     └── hip R ──► Leg R ──► foot R
+//!   pelvis ──haunch──► shoulder ──neck(pitch)──► head ──► gaze
+//!     │
+//!     ├── hip L ──► knee L ──► foot L
+//!     └── hip R ──► knee R ──► foot R
 //! ```
 //!
 //! Pure placement. What drives the feet is the gait, what drives the neck
-//! pitch is the creature's swing, and what draws the result is `mesh`.
+//! pitch is the creature's strike, and what is drawn on the joints is the
+//! walker's [`Dress`](super::Dress).
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 
-use crate::animation::rig::{right_vector, DroopPair, Frame, Leg};
+use crate::animation::rig::{right_vector, Leg};
 use crate::animation::FootSide;
+use crate::model::Transform;
 
 use super::config::StiltRigConfig;
-
-/// How much of the eye's radius the feelers are kept clear of, so they can
-/// rest against it without being shoved off.
-const EYE_CLEARANCE_FRACTION: f32 = 0.96;
 
 /// What a foot is doing, as the gait decided it.
 #[derive(Clone, Copy, Debug)]
@@ -31,22 +29,65 @@ pub struct FootPose {
     pub up: Vector3<f32>,
 }
 
-/// The peeper's joints.
+/// The walker's joints.
 pub struct StiltSkeleton {
     /// Where the legs meet, at the bottom of the haunch.
     pub pelvis: Point3<f32>,
     /// Top of the haunch, where the neck leaves the body.
     pub shoulder: Point3<f32>,
-    /// Centre of the eye.
-    pub eye: Point3<f32>,
-    /// Which way the eye is looking — square out of the front of the head,
-    /// so it swings down with the neck when the creature pecks.
+    /// Middle of the head.
+    pub head: Point3<f32>,
+    /// Which way the head looks: square out of its front, so it swings
+    /// down with the neck when the creature strikes.
     pub gaze: Vector3<f32>,
     /// Horizontal direction the creature faces.
     pub facing: Vector3<f32>,
     /// Left leg, then right.
     pub legs: [Leg; 2],
-    pub feelers: DroopPair,
+}
+
+/// A pose at `origin` with +Y along `up` and +Z as near `forward` as that
+/// allows.
+pub fn pose(origin: Point3<f32>, up: Vector3<f32>, forward: Vector3<f32>) -> Transform {
+    let up = up.try_normalize(1e-6).unwrap_or_else(Vector3::y);
+    let forward = (forward - up * forward.dot(&up))
+        .try_normalize(1e-6)
+        .unwrap_or_else(|| {
+            // `forward` ran along `up`: any direction square to it will do.
+            let spare = if up.x.abs() < 0.9 {
+                Vector3::x()
+            } else {
+                Vector3::z()
+            };
+            (spare - up * spare.dot(&up)).normalize()
+        });
+    let right = up.cross(&forward);
+    Transform {
+        translation: origin.coords,
+        rotation: UnitQuaternion::from_basis_unchecked(&[right, up, forward]),
+        scale: Vector3::repeat(1.0),
+    }
+}
+
+/// A pose at `origin` with +Z exactly along `forward` and +Y as near `up`
+/// as that allows: for something that points, as an eye does.
+pub fn aim(origin: Point3<f32>, forward: Vector3<f32>, up: Vector3<f32>) -> Transform {
+    let forward = forward.try_normalize(1e-6).unwrap_or_else(Vector3::z);
+    let right = up.cross(&forward).try_normalize(1e-6).unwrap_or_else(|| {
+        // `up` ran along `forward`: any direction square to it will do.
+        let spare = if forward.y.abs() < 0.9 {
+            Vector3::y()
+        } else {
+            Vector3::x()
+        };
+        spare.cross(&forward).normalize()
+    });
+    let up = forward.cross(&right);
+    Transform {
+        translation: origin.coords,
+        rotation: UnitQuaternion::from_basis_unchecked(&[right, up, forward]),
+        scale: Vector3::repeat(1.0),
+    }
 }
 
 impl StiltSkeleton {
@@ -66,25 +107,21 @@ impl StiltSkeleton {
         });
 
         let shoulder = pelvis + Vector3::y() * config.haunch_height;
-        let (eye, gaze) = head_at(config, shoulder, facing, config.rest_pitch);
-        let frame = Frame::upright(eye, facing);
-        let feelers = DroopPair::new(config.feeler, feeler_anchors(config), &frame);
+        let (head, gaze) = head_at(config, shoulder, facing, config.rest_pitch);
 
         Self {
             pelvis,
             shoulder,
-            eye,
+            head,
             gaze,
             facing,
             legs,
-            feelers,
         }
     }
 
     /// Place the body, pitch the neck, and solve the legs under it.
     pub fn update(
         &mut self,
-        dt: f32,
         config: &StiltRigConfig,
         pelvis: Point3<f32>,
         facing: Vector3<f32>,
@@ -95,8 +132,8 @@ impl StiltSkeleton {
         self.pelvis = pelvis;
         self.shoulder = pelvis + Vector3::y() * config.haunch_height;
 
-        let (eye, gaze) = head_at(config, self.shoulder, self.facing, neck_pitch);
-        self.eye = eye;
+        let (head, gaze) = head_at(config, self.shoulder, self.facing, neck_pitch);
+        self.head = head;
         self.gaze = gaze;
 
         let right = right_vector(self.facing);
@@ -109,19 +146,49 @@ impl StiltSkeleton {
             self.legs[index].foot_forward = foot.forward;
             self.legs[index].foot_up = foot.up;
         }
-
-        let frame = Frame::upright(self.eye, self.facing);
-        self.feelers.update(
-            dt,
-            feeler_anchors(config),
-            &frame,
-            (self.eye, config.eye_radius * EYE_CLEARANCE_FRACTION),
-        );
     }
 
-    /// The head's frame, for placing parts authored in its local space.
-    pub fn head_frame(&self) -> Frame {
-        Frame::upright(self.eye, self.facing)
+    fn leg(&self, side: FootSide) -> &Leg {
+        match side {
+            FootSide::Left => &self.legs[0],
+            FootSide::Right => &self.legs[1],
+        }
+    }
+
+    /// Level over the hips, facing as the walker faces.
+    pub fn hips(&self) -> Transform {
+        pose(self.pelvis, Vector3::y(), self.facing)
+    }
+
+    /// At the shoulder, +Y to the head.
+    pub fn neck(&self) -> Transform {
+        pose(self.shoulder, self.head - self.shoulder, self.gaze)
+    }
+
+    /// At the head's middle, looking along its gaze: it tips with the
+    /// neck, so what the head wears rears and spears with it.
+    pub fn head(&self) -> Transform {
+        let side = self.gaze.cross(&Vector3::y());
+        let crown = side.cross(&self.gaze);
+        pose(self.head, crown, self.gaze)
+    }
+
+    /// At the hip, +Y from the knee to the hip.
+    pub fn thigh(&self, side: FootSide) -> Transform {
+        let leg = self.leg(side);
+        pose(leg.hip, leg.hip - leg.knee, self.facing)
+    }
+
+    /// At the knee, +Y from the foot to the knee.
+    pub fn shin(&self, side: FootSide) -> Transform {
+        let leg = self.leg(side);
+        pose(leg.knee, leg.knee - leg.foot, self.facing)
+    }
+
+    /// At the foot, +Z to its toes and +Y off its sole.
+    pub fn foot(&self, side: FootSide) -> Transform {
+        let leg = self.leg(side);
+        pose(leg.foot, leg.foot_up, leg.foot_forward)
     }
 }
 
@@ -129,9 +196,9 @@ impl StiltSkeleton {
 /// `pitch` radians forward of vertical.
 ///
 /// The gaze is the neck direction turned a quarter of a turn forward, not
-/// the neck direction itself: the eye is on the *front* of the head, so a
-/// creature standing upright looks at the horizon and one mid-peck looks
-/// down its own strike.
+/// the neck direction itself: the face is on the *front* of the head, so a
+/// creature standing upright looks at the horizon and one mid-strike looks
+/// down its own blow.
 fn head_at(
     config: &StiltRigConfig,
     shoulder: Point3<f32>,
@@ -144,20 +211,56 @@ fn head_at(
     (shoulder + neck * config.neck_length, gaze)
 }
 
-/// Where the feelers root, in the head's local frame.
-fn feeler_anchors(config: &StiltRigConfig) -> [Vector3<f32>; 2] {
-    let (x, y, z) = config.feeler_anchor;
-    let (x, y, z) = (
-        x * config.eye_radius,
-        y * config.eye_radius,
-        z * config.eye_radius,
-    );
-    [Vector3::new(-x, y, z), Vector3::new(x, y, z)]
-}
-
-/// Which way the knees break. Backward, like a bird's hock.
+/// Which way the knees break.
 fn knee_bend(config: &StiltRigConfig, facing: Vector3<f32>) -> Vector3<f32> {
     (facing * config.knee_bend)
         .try_normalize(1e-4)
         .unwrap_or(facing)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pose_is_a_rotation_with_y_up_and_z_forward() {
+        let made = pose(
+            Point3::new(1.0, 2.0, 3.0),
+            Vector3::new(0.2, 1.0, 0.1),
+            Vector3::new(0.3, 0.2, 1.0),
+        );
+        let up = made.rotation * Vector3::y();
+        let forward = made.rotation * Vector3::z();
+        assert!((up - Vector3::new(0.2, 1.0, 0.1).normalize()).norm() < 1e-5);
+        assert!(forward.dot(&Vector3::new(0.3, 0.2, 1.0)) > 0.9);
+        assert!(up.dot(&forward).abs() < 1e-5);
+        // A rotation, not a mirror: +X is +Y × +Z.
+        assert!((made.rotation * Vector3::x() - up.cross(&forward)).norm() < 1e-5);
+    }
+
+    #[test]
+    fn a_pose_asked_to_face_along_its_own_up_still_holds_together() {
+        let made = pose(Point3::origin(), Vector3::y(), Vector3::y());
+        let up = made.rotation * Vector3::y();
+        assert!((up - Vector3::y()).norm() < 1e-5);
+        assert!((made.rotation * Vector3::z()).norm() > 0.99);
+    }
+
+    #[test]
+    fn a_standing_walkers_bones_hang_from_their_joints() {
+        let config = StiltRigConfig::default();
+        let skeleton = StiltSkeleton::new(&config, Point3::new(0.0, 1.0, 0.0), Vector3::z());
+        let thigh = skeleton.thigh(FootSide::Left);
+        let leg = &skeleton.legs[0];
+        // A point one thigh's length down the bone is the knee.
+        let knee =
+            thigh
+                .to_matrix()
+                .transform_point(&Point3::new(0.0, -config.upper_leg_length, 0.0));
+        // A leg at rest is set only roughly; solved, it is exact.
+        assert!((knee - leg.knee).norm() < 0.01, "{knee} vs {}", leg.knee);
+        // The head looks the way the walker faces.
+        let look = skeleton.head().rotation * Vector3::z();
+        assert!(look.dot(&Vector3::z()) > 0.9);
+    }
 }

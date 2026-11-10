@@ -11,6 +11,7 @@ use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::utils::noise::fbm_perlin_3d;
 
 use super::parts::{Ellipsoid, SculptedPart};
+use super::pattern::{Spots, Veins};
 
 /// Salt that makes the warmth field independent of the value field.
 const WARMTH_SALT: u32 = 0x9e37;
@@ -51,6 +52,77 @@ impl Mottle {
             vertex.color.y *= tint.y;
             vertex.color.z *= tint.z;
         }
+    }
+}
+
+/// Marks painted on a mesh's vertices where they sit: for a form with no
+/// texture coordinates to carry a texture ([`super::clay`]). `frequency`
+/// and the like are then per metre, and a mark shows only where the mesh
+/// is finer than it is.
+pub trait VertexPaint {
+    /// The colour the mark multiplies the paint by at its heart (linear),
+    /// and how much of it covers `point`, 0 to 1.
+    fn mark(&self, point: Vector3<f32>) -> (Vector3<f32>, f32);
+
+    /// Paint `mesh`'s vertex colours with the marks where its vertices sit.
+    fn paint(&self, mesh: &mut MeshPrimitive) {
+        for vertex in &mut mesh.vertices {
+            let (tint, cover) = self.mark(vertex.pos);
+            let wash = Vector3::repeat(1.0).lerp(&tint, cover.clamp(0.0, 1.0));
+            vertex.color.x *= wash.x;
+            vertex.color.y *= wash.y;
+            vertex.color.z *= wash.z;
+        }
+    }
+}
+
+impl VertexPaint for Spots {
+    fn mark(&self, point: Vector3<f32>) -> (Vector3<f32>, f32) {
+        (self.tint, self.cover(point))
+    }
+}
+
+impl VertexPaint for Veins {
+    fn mark(&self, point: Vector3<f32>) -> (Vector3<f32>, f32) {
+        (self.tint, self.cover(point))
+    }
+}
+
+/// A stain round one spot, fading out from it: the flush of a knee or a
+/// knuckle, a bruise, the rim of an eye.
+#[derive(Clone, Copy, Debug)]
+pub struct Blush {
+    /// Where its heart is.
+    pub at: Vector3<f32>,
+    /// How far out it reaches, m.
+    pub radius: f32,
+    /// The colour it multiplies the paint by at its heart (linear).
+    pub tint: Vector3<f32>,
+}
+
+impl VertexPaint for Blush {
+    fn mark(&self, point: Vector3<f32>) -> (Vector3<f32>, f32) {
+        let t = ((point - self.at).norm() / self.radius).min(1.0);
+        (self.tint, 1.0 - t * t * (3.0 - 2.0 * t))
+    }
+}
+
+/// Dirt taken up from the ground: everything below a height stained, the
+/// stain fading out above it.
+#[derive(Clone, Copy, Debug)]
+pub struct Grime {
+    /// Height below which the stain is whole, and how far above that it
+    /// fades out over, m.
+    pub below: f32,
+    pub fade: f32,
+    /// The colour it multiplies the paint by (linear).
+    pub tint: Vector3<f32>,
+}
+
+impl VertexPaint for Grime {
+    fn mark(&self, point: Vector3<f32>) -> (Vector3<f32>, f32) {
+        let t = ((point.y - self.below) / self.fade).clamp(0.0, 1.0);
+        (self.tint, 1.0 - t * t * (3.0 - 2.0 * t))
     }
 }
 

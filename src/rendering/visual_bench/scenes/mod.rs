@@ -1,7 +1,7 @@
 //! The scene library, and the registry the CLI looks names up in.
 
-pub mod bestiary;
 pub mod craters;
+pub mod creatures;
 pub mod critter;
 pub mod critter_walk;
 pub mod flat_ground;
@@ -15,7 +15,6 @@ pub mod level_props;
 pub mod marble;
 pub mod material_grid;
 pub mod palette;
-pub mod peeper;
 pub mod physics_finish;
 pub mod plants;
 pub mod prop_grain;
@@ -32,8 +31,8 @@ pub mod turtle;
 pub mod voxel_terrain;
 pub mod weathered_stone;
 
-pub use bestiary::Bestiary;
 pub use craters::Craters;
+pub use creatures::Creature;
 pub use critter::Critter;
 pub use critter_walk::CritterWalk;
 pub use fountain::Fountain;
@@ -45,7 +44,6 @@ pub use ice_fracture::IceFracture;
 pub use marble::Marble;
 pub use material_grid::MaterialGrid;
 pub use palette::Palette;
-pub use peeper::Peeper;
 pub use physics_finish::PhysicsFinish;
 pub use plants::Plants;
 pub use prop_grain::PropGrain;

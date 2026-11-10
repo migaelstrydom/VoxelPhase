@@ -5,8 +5,8 @@
 
 use crate::rendering::visual_bench::scene::VisualScene;
 use crate::rendering::visual_bench::scenes::{
-    Bestiary, Craters, Critter, CritterWalk, Fountain, Fruit, GradeSweep, HoverSled, Ice,
-    IceFracture, Marble, MaterialGrid, Palette, Peeper, PhysicsFinish, Plants, PropGrain, Props,
+    Craters, Creature, Critter, CritterWalk, Fountain, Fruit, GradeSweep, HoverSled, Ice,
+    IceFracture, Marble, MaterialGrid, Palette, PhysicsFinish, Plants, PropGrain, Props,
     ShadowTuning, Shadows, SunSweep, TerrainAo, TerrainDetail, TerrainFinish, TerrainForms, Turtle,
     WeatheredStone,
 };
@@ -18,8 +18,17 @@ pub fn all_scenes() -> Vec<Box<dyn VisualScene>> {
         Box::new(Critter),
         Box::new(CritterWalk),
         Box::new(Fruit),
-        Box::new(Bestiary),
         Box::new(Fountain),
+        Box::new(Creature::Bestiary),
+        Box::new(Creature::Peeper),
+        Box::new(Creature::Stalker),
+        Box::new(Creature::EggWalker),
+        Box::new(Creature::FishWalker),
+        Box::new(Creature::BellCarrier),
+        Box::new(Creature::Roller),
+        Box::new(Creature::Piper),
+        Box::new(Creature::FlyingFish),
+        Box::new(Creature::Mussel),
         Box::new(Marble),
         Box::new(GradeSweep),
         Box::new(HoverSled),
@@ -27,7 +36,6 @@ pub fn all_scenes() -> Vec<Box<dyn VisualScene>> {
         Box::new(IceFracture),
         Box::new(MaterialGrid),
         Box::new(Palette),
-        Box::new(Peeper),
         Box::new(PhysicsFinish),
         Box::new(Plants),
         Box::new(Props),
