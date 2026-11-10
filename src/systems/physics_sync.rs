@@ -6,7 +6,7 @@
 //! 2. Syncs physics state back to ECS components
 
 use nalgebra::Vector3;
-use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
+use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
@@ -16,6 +16,7 @@ use crate::physics::{
     FrameProfile, PhysicsImpulseQueue, PhysicsWorld, SequentialStepper, Stepper,
     SubstepForceProvider,
 };
+use crate::pump::{PumpRecoil, WaterPump};
 use crate::terrain::TerrainWorld;
 use crate::time::{Time, MAX_FRAME_DELTA};
 use crate::water::buoyancy::BuoyancyForceProvider;
@@ -257,6 +258,8 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         Write<'a, PhysicsImpulseQueue>,
         Option<Read<'a, WaterWorld>>,
         ReadStorage<'a, Foliage>,
+        Entities<'a>,
+        ReadStorage<'a, WaterPump>,
     );
 
     fn run(
@@ -278,6 +281,8 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             mut impulse_queue,
             water_opt,
             foliage,
+            entities,
+            pumps,
         ): Self::SystemData,
     ) {
         let frame_dt = time.delta_seconds();
@@ -331,8 +336,20 @@ impl<'a> System<'a> for PhysicsSyncSystem {
                 )
             })
         };
+        // Each running pump pushed back by the water it throws.
+        let pump_recoil = water_opt.as_deref().map(|water| {
+            PumpRecoil::of(
+                (&entities, &pumps, &bodies)
+                    .join()
+                    .map(|(entity, pump, body)| (entity, pump, body.0)),
+                water,
+            )
+        });
         let mut providers: Vec<&dyn SubstepForceProvider> = Vec::new();
         if let Some(p) = buoyancy_provider.as_ref() {
+            providers.push(p);
+        }
+        if let Some(p) = pump_recoil.as_ref().filter(|p| !p.is_idle()) {
             providers.push(p);
         }
         if let Some(p) = foliage_drag.as_ref().filter(|p| !p.is_idle()) {

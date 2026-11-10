@@ -4,6 +4,9 @@
 //!   WaterPump (on a body) ──PumpSystem, each frame──▶ WaterWorld::set_pump
 //!     intake, spouts in the body's frame               a field pump per spout,
 //!                                                      where the body stands now
+//!                         ◀── PumpRecoil ── each spout's discharge: the body
+//!                             pushed back, in the physics step, by the
+//!                             water it throws
 //! ```
 //!
 //! The field does the pumping (`water::field::pumps`); this module only
@@ -15,9 +18,11 @@
 mod component;
 mod plumbing;
 mod plumbing_system;
+mod recoil;
 mod system;
 
 pub use component::{Spout, WaterPump};
 pub use plumbing::{PipeSection, Plumbing};
 pub use plumbing_system::PlumbingShareSystem;
+pub use recoil::PumpRecoil;
 pub use system::PumpSystem;

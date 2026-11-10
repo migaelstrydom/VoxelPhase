@@ -452,6 +452,25 @@ mod tests {
     }
 
     #[test]
+    fn a_standing_pump_sleeps_through_its_own_recoil() {
+        let mut pond = Pond::new();
+        let x = pond.where_deep(1.0);
+        let pump = pond.spawn_pump(x);
+        let stood = pond.height(pump);
+        pond.run(4.0);
+        assert!(pond.pumped() > 0.0);
+        let body = pond
+            .world
+            .read_storage::<RigidBodyComponent>()
+            .get(pump)
+            .unwrap()
+            .0;
+        let physics = pond.world.read_resource::<PhysicsResource>();
+        assert!(physics.world.is_sleeping(body), "its jets keep it awake");
+        assert!((pond.height(pump) - stood).abs() < 1.0e-3);
+    }
+
+    #[test]
     fn a_pump_on_the_dry_bank_is_still() {
         let mut pond = Pond::new();
         pond.spawn_pump(25.0);

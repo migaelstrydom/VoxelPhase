@@ -1,6 +1,6 @@
-//! A fountain tower: a carved rose-stone spire standing in a lake, which
-//! lifts the lake's water up through itself and throws it from spouts
-//! round its upper bulb.
+//! The tower: a carved rose-stone spire standing in a lake, which lifts
+//! the lake's water up through itself and throws it from spouts round its
+//! upper bulb.
 //!
 //! ```text
 //!         ╿        spire        ┐
@@ -17,25 +17,33 @@
 //! The pipe runs base, column, bulb (`pump::Plumbing`): with the bulb gone
 //! the water wells out of the column's top, with the column gone out of the
 //! base's, and a base lying loose pumps while its intake is under water.
+//!
+//! Everything but the base and the arms is brittle stone
+//! (`cleave::BrittleSolid`): a blast right beside a block, or a hard
+//! landing, cleaves it into wedges. A cleaved length of pipe is a broken
+//! one, so the water wells out below it.
 
 use std::f32::consts::{FRAC_PI_4, TAU};
 use std::sync::Arc;
 
-use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::finish::ColliderSurface;
-use super::shared::rose_stone::{self, MATERIAL_COUNT, STONE};
-use super::{MaterialCtx, Spawnable};
+use super::blocks::Block;
+use super::broken::BrokenStone;
 use crate::app::sculpt::{painted_meshes, Ellipsoid, SculptedPart, Warp};
+use crate::app::spawnables::shared::finish::ColliderSurface;
+use crate::app::spawnables::shared::rose_stone::{self, MATERIAL_COUNT, STONE};
+use crate::app::spawnables::{MaterialCtx, Spawnable};
+use crate::cleave::{BrittleSolid, CleaveRule};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, TerrainAnchored, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::fracture::{Bond, CompoundFracture, PartGraph};
-use crate::model::{Look, PartLooks};
-use crate::physics::{ColliderDesc, ColliderHandle, ConstraintKind, RigidBodyDesc};
+use crate::fracture::{Bond, CompoundFracture, Cuttable, FaceMesher, PartGraph};
+use crate::model::{assemble_by_material, Look, Model, PartLooks, PlacedMesh};
+use crate::physics::{ColliderHandle, ConstraintKind, RigidBodyDesc};
 use crate::pump::{PipeSection, Plumbing, Spout};
 use crate::rendering::material::MaterialId;
 use crate::systems::PhysicsResource;
@@ -52,10 +60,10 @@ const INTAKE_DROP: f32 = 0.25;
 /// The column: its radius, and the heights of its foot and top.
 const COLUMN_RADIUS: f32 = 0.3;
 const COLUMN: (f32, f32) = (1.5, 3.3);
-/// The basin round the column: its height, and half its width and
+/// The basin round the column: its height, and its radius and half its
 /// thickness.
 const BASIN_HEIGHT: f32 = 2.75;
-const BASIN_HALF: (f32, f32) = (1.15, 0.07);
+const BASIN_HALF: (f32, f32) = (1.25, 0.09);
 
 /// The upper bulb, which the spouts open from.
 const BULB_RADIUS: f32 = 0.72;
@@ -83,6 +91,18 @@ const SPOUT_PITCH: f32 = 0.9;
 /// How fast water wells out of a broken pipe, as a share of the spouts'
 /// speed.
 const WELL_SPEED: f32 = 0.6;
+
+/// The blow that cleaves a block: a blast loading, N·s/m², or a knock,
+/// N·s. A grenade within a metre or so of a block's surface cleaves it,
+/// where one that only breaks a neck can be half as far again; and a block
+/// the weight of the bulb cleaves when it lands from any height, a spire
+/// only from a long fall.
+const CLEAVE_BLOW: f32 = 1300.0;
+/// Most wedges one blow makes of a block, how far its cuts lean off the
+/// block's axes, degrees, and the least a wedge may hold, m³ at scale 1.
+const CLEAVE_PIECES: u32 = 3;
+const CLEAVE_TILT: f32 = 18.0;
+const MIN_WEDGE_VOLUME: f32 = 0.01;
 
 /// How far under the bed the ground must still be there for the weld to
 /// hold, m.
@@ -122,37 +142,14 @@ impl FountainDef {
     pub fn default_jet_speed() -> f32 {
         4.5
     }
-}
 
-/// One of the tower's colliders: its shape and where it sits in the
-/// tower's frame.
-struct Block {
-    collider: ColliderDesc,
-    frame: Isometry3<f32>,
-}
-
-impl Block {
-    fn ball(radius: f32, centre: Vector3<f32>) -> Self {
+    /// A fountain at `pos`, everything else its default.
+    pub fn at(pos: (f32, f32)) -> Self {
         Self {
-            collider: ColliderDesc::sphere(radius),
-            frame: Isometry3::from_parts(Translation3::from(centre), UnitQuaternion::identity()),
-        }
-    }
-
-    /// A rod of `radius` from `foot` to `top`, ends rounded.
-    fn rod(radius: f32, foot: Vector3<f32>, top: Vector3<f32>) -> Self {
-        let turn = UnitQuaternion::rotation_between(&Vector3::y(), &(top - foot))
-            .unwrap_or_else(UnitQuaternion::identity);
-        Self {
-            collider: ColliderDesc::capsule(0.5 * (top - foot).norm(), radius),
-            frame: Isometry3::from_parts(Translation3::from(0.5 * (foot + top)), turn),
-        }
-    }
-
-    fn slab(half: Vector3<f32>, centre: Vector3<f32>) -> Self {
-        Self {
-            collider: ColliderDesc::box_shape(half),
-            frame: Isometry3::from_parts(Translation3::from(centre), UnitQuaternion::identity()),
+            pos,
+            scale: Self::default_scale(),
+            rate: Self::default_rate(),
+            jet_speed: Self::default_jet_speed(),
         }
     }
 }
@@ -167,7 +164,8 @@ struct Design {
     /// Bonds between parts, as (part, part, where in the tower's frame,
     /// reach, toughness).
     bonds: Vec<(usize, usize, Vector3<f32>, f32, f32)>,
-    /// The carving, each piece with the block it is drawn on.
+    /// The carving, each piece with the block it is drawn on. A block
+    /// that shatters loses its carving for its wedges' broken stone.
     carving: Vec<(usize, SculptedPart)>,
     /// The pipe's sections from the base up, each a block and the spouts
     /// its water leaves by, in the tower's frame.
@@ -199,15 +197,13 @@ impl FountainDef {
         let base_centre = at(BASE_HEIGHT);
         let bulb_centre = at(BULB_HEIGHT);
 
+        let (rose, blush, lapis, gold) = (looks.rose(), looks.blush(), looks.lapis(), looks.gold());
         let mut blocks = vec![
             Block::ball(BASE_RADIUS * s, base_centre),
-            Block::rod(COLUMN_RADIUS * s, at(COLUMN.0), at(COLUMN.1)),
-            Block::slab(
-                Vector3::new(BASIN_HALF.0, BASIN_HALF.1, BASIN_HALF.0) * s,
-                at(BASIN_HEIGHT),
-            ),
-            Block::ball(BULB_RADIUS * s, bulb_centre),
-            Block::rod(SPIRE_RADIUS * s, at(SPIRE.0), at(SPIRE.1)),
+            Block::stone_rod(COLUMN_RADIUS * s, at(COLUMN.0), at(COLUMN.1), blush.0),
+            Block::stone_disc(BASIN_HALF.0 * s, BASIN_HALF.1 * s, at(BASIN_HEIGHT), rose.0),
+            Block::stone_ball(BULB_RADIUS * s, bulb_centre, rose.0),
+            Block::stone_rod(SPIRE_RADIUS * s, at(SPIRE.0), at(SPIRE.1), blush.0),
         ];
         let mut parts = vec![
             vec![BASE],
@@ -222,7 +218,6 @@ impl FountainDef {
             (2, 3, at(SPIRE.0), neck, NECK_TOUGHNESS),
         ];
 
-        let (rose, blush, lapis, gold) = (looks.rose(), looks.blush(), looks.lapis(), looks.gold());
         let ellipsoid = |radii: (f32, f32, f32), centre: Vector3<f32>| {
             Ellipsoid::new(
                 (radii.0 * s, radii.1 * s, radii.2 * s),
@@ -416,6 +411,92 @@ impl FountainDef {
     }
 }
 
+impl FountainDef {
+    /// How one of its blocks cleaves.
+    fn cleaving(&self) -> CleaveRule {
+        CleaveRule {
+            threshold: CLEAVE_BLOW,
+            pieces: CLEAVE_PIECES,
+            tilt: CLEAVE_TILT,
+            min_volume: MIN_WEDGE_VOLUME * self.scale.powi(3),
+        }
+    }
+
+    /// What makes and draws the wedges of `design`'s blocks, each block
+    /// read where it stands in the tower's frame.
+    fn broken_stone(&self, design: &Design, materials: &[MaterialId]) -> BrokenStone {
+        BrokenStone::new(
+            design
+                .blocks
+                .iter()
+                .filter_map(|block| Some((block.stone.clone()?, block.frame.translation.vector))),
+            materials[0],
+            self.scale,
+        )
+    }
+
+    /// How it looks standing whole on its foot, drawn in `materials`
+    /// ([`rose_stone::materials`]): for tools that show it.
+    pub fn model(&self, materials: &[MaterialId]) -> Arc<Model> {
+        self.drawn(materials, None)
+    }
+
+    /// How it looks with every block that can shatter cleaved by a blow
+    /// from `from` (in its own frame) and its wedges drawn `spread` times
+    /// as far from their block's middle as they lie: for tools that show
+    /// its broken stone.
+    pub fn shattered_model(
+        &self,
+        materials: &[MaterialId],
+        from: Point3<f32>,
+        spread: f32,
+    ) -> Arc<Model> {
+        self.drawn(materials, Some((from, spread)))
+    }
+
+    fn drawn(&self, materials: &[MaterialId], shattered: Option<(Point3<f32>, f32)>) -> Arc<Model> {
+        let design = self.design(rose_stone::Looks::of(materials));
+        let broken = self.broken_stone(&design, materials);
+        let mut placed = Vec::new();
+        for (index, (block, look)) in design
+            .blocks
+            .iter()
+            .zip(design.looks(self.scale))
+            .enumerate()
+        {
+            let at = block.frame.translation.vector;
+            let wedges = shattered.and_then(|(from, _)| {
+                block.stone.as_ref()?;
+                let hit = block.frame.inverse() * from;
+                self.cleaving()
+                    .cleave(&block.collider.shape, hit.coords, index as u32)
+            });
+            let looks: Vec<(Look, Vector3<f32>)> = match (wedges, shattered) {
+                (Some(wedges), Some((_, spread))) => wedges
+                    .iter()
+                    .map(|wedge| {
+                        (
+                            broken.look(&wedge.hull, at + wedge.centre),
+                            at + wedge.centre * spread,
+                        )
+                    })
+                    .collect(),
+                _ => vec![(look, at)],
+            };
+            for (look, offset) in looks {
+                placed.extend(look.primitives.into_iter().map(|mesh| PlacedMesh {
+                    vertices: mesh.vertices,
+                    indices: mesh.indices,
+                    offset,
+                    rotation: block.frame.rotation,
+                    material: mesh.material,
+                }));
+            }
+        }
+        assemble_by_material(placed)
+    }
+}
+
 impl Design {
     /// How each block looks: its share of the carving, painted and shaded
     /// as one tower, in the block's own frame.
@@ -542,6 +623,17 @@ impl FountainDef {
         }
         graph.tie(weld, parts[0]);
 
+        let cuttable = design
+            .blocks
+            .iter()
+            .zip(&handles)
+            .filter(|(block, _)| block.stone.is_some())
+            .fold(
+                Cuttable::new(Arc::new(self.broken_stone(&design, materials))),
+                |cuttable, (block, &handle)| cuttable.with(handle, block.frame.translation.vector),
+            );
+        let brittle = BrittleSolid::new(self.cleaving(), cuttable);
+
         let looks = PartLooks::new(
             handles
                 .iter()
@@ -592,6 +684,7 @@ impl FountainDef {
             .with(Renderable)
             .with(looks)
             .with(CompoundFracture::new(graph))
+            .with(brittle)
             .with(plumbing)
             .with(pump)
             .with(TerrainAnchored {
@@ -650,13 +743,11 @@ mod tests {
 
     /// A tower of scale 1 standing at the origin.
     fn tower(world: &mut World) -> Entity {
-        let def = FountainDef {
-            pos: (0.0, 0.0),
-            scale: FountainDef::default_scale(),
-            rate: FountainDef::default_rate(),
-            jet_speed: FountainDef::default_jet_speed(),
-        };
-        def.spawn_on(world, Point3::origin(), &[MaterialId(0); MATERIAL_COUNT])
+        FountainDef::at((0.0, 0.0)).spawn_on(
+            world,
+            Point3::origin(),
+            &[MaterialId(0); MATERIAL_COUNT],
+        )
     }
 
     fn blast(world: &mut World, at: Point3<f32>) {
@@ -729,6 +820,42 @@ mod tests {
         let outlets = outlets(&world, tower);
         assert_eq!(outlets.len(), 1, "the tower still throws from its bulb");
         assert!((outlets[0] - COLUMN.1).abs() < 0.02);
+    }
+
+    /// Whether pipe section `section` of the tower still exists whole.
+    fn section_stands(world: &World, tower: Entity, section: usize) -> bool {
+        let plumbed = world.read_storage::<Plumbing>();
+        let collider = plumbed.get(tower).unwrap().sections[section].collider;
+        world
+            .read_resource::<PhysicsResource>()
+            .world
+            .collider(collider)
+            .is_some()
+    }
+
+    #[test]
+    fn a_blast_against_the_bulb_shatters_it_and_the_column_wells() {
+        let mut world = world();
+        let tower = tower(&mut world);
+        blast(&mut world, Point3::new(BULB_RADIUS + 0.2, BULB_HEIGHT, 0.0));
+        assert!(!section_stands(&world, tower, 2), "the bulb is whole");
+        assert!(section_stands(&world, tower, 1), "the column went too");
+        let outlets = outlets(&world, tower);
+        assert_eq!(outlets.len(), 1);
+        assert!((outlets[0] - COLUMN.1).abs() < 0.02);
+    }
+
+    #[test]
+    fn a_blast_that_breaks_a_neck_from_further_off_shatters_nothing() {
+        let mut world = world();
+        let tower = tower(&mut world);
+        blast(&mut world, Point3::new(1.6, BULB_HEIGHT, 0.0));
+        assert!(pieces(&world) > 1, "the bulb held");
+        let physics = world.read_resource::<PhysicsResource>();
+        let plumbed = world.read_storage::<Plumbing>();
+        for section in &plumbed.get(tower).unwrap().sections {
+            assert!(physics.world.collider(section.collider).is_some());
+        }
     }
 
     #[test]

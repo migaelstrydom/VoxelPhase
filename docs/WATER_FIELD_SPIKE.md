@@ -53,7 +53,8 @@ below its old height.
   makes no water and stops when its intake is dry. Its owner names it and moves
   it (`WaterWorld::set_pump`): `src/pump/` keeps one on each body that carries a
   `WaterPump`, wherever the body lies. A pump's jet is drawn and strikes bodies
-  as a spring's does (`WaterField::jets`).
+  as a spring's does (`WaterField::jets`), and pushes the pump's own body back
+  in the physics step (`pump::PumpRecoil`).
 
 - **Flow law** (`water/field/solver.rs`). The local inertial scheme (Bates et al.
   2010) with de Almeida et al.'s θ (2012). Momentum lives on faces, volume in

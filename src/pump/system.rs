@@ -14,7 +14,7 @@ pub struct PumpSystem;
 
 /// The field's name for spout `spout` of `entity`'s pump: unlike any other
 /// living or dead entity's.
-fn pump_id(entity: Entity, spout: usize) -> PumpId {
+pub(super) fn pump_id(entity: Entity, spout: usize) -> PumpId {
     PumpId {
         owner: ((entity.gen().id() as u64) << 32) | entity.id() as u64,
         spout: spout as u32,

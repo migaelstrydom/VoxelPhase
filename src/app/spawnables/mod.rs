@@ -98,6 +98,7 @@ pub use pump::PumpDef;
 pub use pyramid::PyramidDef;
 pub use rock::RockDef;
 pub use seesaw::SeesawDef;
+pub use shared::rose_stone::materials as rose_stone_materials;
 pub use shrub::ShrubDef;
 pub use spawnable::{MaterialCtx, Spawnable};
 pub use stack::{StackDef, StackItemDef};
