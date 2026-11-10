@@ -2,6 +2,8 @@
 //! chunk's version moves when its water has moved by more than can be seen
 //! since it last moved, and so do those of the neighbours whose drawn edges
 //! meet a border cell that has drifted as far since they last moved for it.
+//! A jet landing in a chunk is drawn with its surface, so the chunk's version
+//! moves when the jet does ([`SurfaceVersions::touch`]).
 
 use super::cells::FieldCells;
 use crate::water::geometry::{SpanChunkCoord, CHUNK_COLUMNS};
@@ -103,6 +105,12 @@ impl SurfaceVersions {
                 }
             }
         }
+    }
+
+    /// Move chunk `slot`'s version for something drawn with its surface
+    /// that is not its depths: a jet landing in it.
+    pub fn touch(&mut self, slot: usize) {
+        self.versions[slot] = self.versions[slot].wrapping_add(1);
     }
 
     /// Each chunk's depths as its surface is drawn from them.

@@ -27,6 +27,7 @@ pub use coupling::{
     BodySnapshot, Disturbance, Disturbances, RippleField, SplashEvent, StillSurface, WakeEvent,
     WaveBodyCoupler, WaveCouplingConfig,
 };
+pub use field::{PumpId, PumpPlacement};
 pub use query::{WaterQuery, WaterSample as WaterPointSample, FIELD_BODY};
 pub use sleep_tracker::WaterSleepTracker;
 pub use world::WaterWorld;

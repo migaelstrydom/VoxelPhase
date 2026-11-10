@@ -7,7 +7,8 @@
 //!   SolidCleaveSystem ┴▶ FractureSystem ──▶ SheetShareSystem ─┐
 //!                                           SolidShareSystem  │
 //!                                           AnchorShareSystem ├▶ PartDrawSystem
-//!                                           PlantShareSystem ─┘
+//!                                           PlantShareSystem  │
+//!                                           PlumbingShareSystem ┘
 //! ```
 
 use specs::{RunNow, World, WorldExt};
@@ -23,6 +24,7 @@ use crate::glass::{BrittleSheet, GlassCrackSystem, SheetShareSystem};
 use crate::model::PartLooks;
 use crate::physics::PhysicsImpulseQueue;
 use crate::plants::{PlantPiece, PlantShareSystem};
+use crate::pump::{Plumbing, PlumbingShareSystem, WaterPump};
 use crate::systems::{AnchorShareSystem, PartDrawSystem};
 
 /// Register what the break pipeline reads and writes, for a world built by
@@ -42,6 +44,8 @@ pub fn register(world: &mut World) {
     world.register::<TerrainAnchored>();
     world.register::<PlantPiece>();
     world.register::<Foliage>();
+    world.register::<Plumbing>();
+    world.register::<WaterPump>();
     world.insert(PieceSplits::default());
     world.insert(PhysicsImpulseQueue::default());
     world.insert(DebugLog::default());
@@ -56,6 +60,7 @@ pub fn run(world: &mut World) {
     SolidShareSystem.run_now(world);
     AnchorShareSystem.run_now(world);
     PlantShareSystem.run_now(world);
+    PlumbingShareSystem.run_now(world);
     PartDrawSystem.run_now(world);
     world.maintain();
 }

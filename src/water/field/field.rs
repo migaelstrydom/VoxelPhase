@@ -28,6 +28,7 @@ use super::currents;
 use super::faces::{lay_faces, link_faces, SeaBoundary};
 use super::fill::{fill_fed, fill_pool, fill_sea, pool_seed, SpillLevels};
 use super::fronts::{self, Front};
+use super::pumps::{Jet, PumpId, PumpPlacement, Pumps};
 use super::remap::carry;
 use super::solver::{FieldSolver, FlowParams, StepStats};
 use super::sources::{Sink, Source};
@@ -97,6 +98,7 @@ pub struct WaterField {
     solver: FieldSolver,
     sources: Vec<Source>,
     sinks: Vec<Sink>,
+    pumps: Pumps,
     sea: Option<SeaBoundary>,
     ledger: FieldLedger,
     frame: FieldFrame,
@@ -198,6 +200,7 @@ impl WaterField {
             solver: FieldSolver::new(params),
             sources,
             sinks,
+            pumps: Pumps::default(),
             sea,
             ledger,
             frame: FieldFrame::default(),
@@ -280,6 +283,7 @@ impl WaterField {
                 self.cells.wake(at.slot as usize);
             }
         }
+        self.ledger.sunk += self.pumps.run(&mut self.cells, dt);
         // Chunks whose faces may carry water this step, before and after it:
         // their cells' velocities, and those of the cells their faces reach
         // into to the +x and +z, are read again after it.
@@ -334,6 +338,7 @@ impl WaterField {
         for sink in &mut self.sinks {
             sink.relay(&self.graph, &self.cells);
         }
+        self.pumps.retrace(&self.graph, &self.cells);
         self.edit_time = Some(started.elapsed());
     }
 
@@ -420,6 +425,36 @@ impl WaterField {
     /// Every source, as its water lands now.
     pub fn sources(&self) -> &[Source] {
         &self.sources
+    }
+
+    /// Stand pump `id` at `placement`: a new pump if the field holds none
+    /// by that name, the same one moved or working differently if it does.
+    pub fn set_pump(&mut self, id: PumpId, placement: PumpPlacement) {
+        self.pumps.set(id, placement, &self.graph, &self.cells);
+    }
+
+    /// Take out every pump `keep` does not want.
+    pub fn retain_pumps(&mut self, keep: impl FnMut(PumpId) -> bool) {
+        self.pumps.retain(keep);
+    }
+
+    /// What pump `id` moved over the last step, m³/s.
+    pub fn pump_discharge(&self, id: PumpId) -> Option<f32> {
+        self.pumps.discharge(id)
+    }
+
+    /// Every stream thrown into the air from a point: each spring's whose
+    /// water lands in the field, and each running pump's.
+    pub fn jets(&self) -> impl Iterator<Item = Jet> + '_ {
+        let springs = self.sources.iter().filter_map(|source| {
+            Some(Jet {
+                origin: source.origin,
+                velocity: source.velocity,
+                discharge: source.discharge,
+                landing: *source.landing.first()?,
+            })
+        });
+        springs.chain(self.pumps.jets())
     }
 
     /// Columns whose spans needed a parity repair: an open edge in the

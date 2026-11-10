@@ -38,6 +38,7 @@ pub mod plants;
 pub mod platform;
 pub mod player;
 pub mod projectile;
+pub mod pump;
 pub mod render_perf;
 pub mod rendering;
 pub mod resources;

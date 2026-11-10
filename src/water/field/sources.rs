@@ -1,6 +1,7 @@
 //! Where water enters and leaves the field other than across its faces:
 //! springs and sky sources pour into the cells their water lands in, and sink
-//! boxes swallow whatever stands in the cells they hold.
+//! boxes swallow whatever stands in the cells they hold. Pumps, which only
+//! move water within the field, are [`super::pumps`].
 
 use nalgebra::{Point3, Vector3};
 
@@ -62,25 +63,36 @@ impl Source {
     /// Find where the water lands now: the first span whose floor the arc
     /// reaches, and its neighbours on much the same floor or below it.
     pub fn retrace(&mut self, graph: &SpanGraph, cells: &FieldCells) {
-        self.landing.clear();
-        let Some((column, ordinal)) = trace(graph, self.origin, self.velocity) else {
-            return;
-        };
-        let hit = SpanRef::key(column, ordinal);
-        let floor = graph.span(hit).bed;
-        let around = graph
-            .neighbours(hit)
-            .into_iter()
-            .map(|n| SpanRef::key(n.span.column, n.span.ordinal))
-            .filter(|s| {
-                let rise = graph.span(*s).bed - floor;
-                rise < FOOTPRINT_RISE && -rise < FOOTPRINT_DROP
-            });
-        self.landing = std::iter::once(hit)
-            .chain(around)
-            .filter_map(|s| cells.index(graph, s.column, s.ordinal))
-            .collect();
+        self.landing = landing_cells(graph, cells, self.origin, self.velocity);
     }
+}
+
+/// The cells water thrown from `origin` at `velocity` lands in, as the
+/// ground stands: the cell the arc meets and those around it on much the
+/// same floor. Empty when it falls out of the world.
+pub fn landing_cells(
+    graph: &SpanGraph,
+    cells: &FieldCells,
+    origin: Point3<f32>,
+    velocity: Vector3<f32>,
+) -> Vec<SpanIndex> {
+    let Some((column, ordinal)) = trace(graph, origin, velocity) else {
+        return Vec::new();
+    };
+    let hit = SpanRef::key(column, ordinal);
+    let floor = graph.span(hit).bed;
+    let around = graph
+        .neighbours(hit)
+        .into_iter()
+        .map(|n| SpanRef::key(n.span.column, n.span.ordinal))
+        .filter(|s| {
+            let rise = graph.span(*s).bed - floor;
+            rise < FOOTPRINT_RISE && -rise < FOOTPRINT_DROP
+        });
+    std::iter::once(hit)
+        .chain(around)
+        .filter_map(|s| cells.index(graph, s.column, s.ordinal))
+        .collect()
 }
 
 /// Follow a ballistic arc until it meets a floor.

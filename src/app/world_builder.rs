@@ -43,6 +43,7 @@ use crate::projectile::{
     Grenade, GrenadeConfig, GrenadeCooldown, GrenadeModelResource, HeldGrenade, Lifetime,
     Projectile,
 };
+use crate::pump::{Plumbing, WaterPump};
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::manager::ResourceManager;
@@ -137,6 +138,8 @@ impl WorldBuilder {
         world.register::<MaterialModulation>();
         world.register::<FireLight>();
         world.register::<HoverSled>();
+        world.register::<WaterPump>();
+        world.register::<Plumbing>();
         world.register::<ForceFieldVisual>();
     }
 

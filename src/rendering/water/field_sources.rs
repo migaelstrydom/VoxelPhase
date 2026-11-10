@@ -18,7 +18,7 @@ use nalgebra::Vector2;
 use smallvec::SmallVec;
 
 use crate::water::falling::{falls, off_map, thrown};
-use crate::water::field::{DrawnDepths, FieldCells, WaterField};
+use crate::water::field::{DrawnDepths, FieldCells, Jet as FieldJet, WaterField};
 use crate::water::geometry::{SpanGraph, SpanIndex, SpanRef, ORTHOGONAL};
 
 use super::field_mesher::skirt_vertex;
@@ -299,9 +299,9 @@ pub(super) enum VertexSource {
         own: SpanIndex,
         outside: Option<f64>,
     },
-    /// Vertex `around` of row `row` of the jet of the field's source
-    /// `source`, along its arc down to the water in the cell `landing`. The
-    /// jet stands while its water still lands there.
+    /// Vertex `around` of row `row` of jet `source` of those landing in the
+    /// surface's chunk (`SurfaceSources::jets`), along its arc down to the
+    /// water in the cell `landing`. The jet stands while it flies that arc.
     Jet {
         source: u32,
         landing: SpanIndex,
@@ -317,9 +317,9 @@ pub(super) enum VertexSource {
         row: u32,
         face: Face,
     },
-    /// Corner `corner` of the foam where the jet of the field's source
-    /// `source` lands in the cell `landing` (`Jet::plunge`). It stands while
-    /// the jet's water still lands there.
+    /// Corner `corner` of the foam where jet `source` of those landing in
+    /// the surface's chunk lands in the cell `landing` (`Jet::plunge`). It
+    /// stands while the jet flies that arc.
     JetPlunge {
         source: u32,
         landing: SpanIndex,
@@ -346,6 +346,17 @@ pub struct SurfaceSources {
     pub(super) passes: Vec<(SpanIndex, SpanIndex)>,
     /// The update whose drawn depths the surface was last read from.
     pub(super) read: u64,
+    /// The jets landing in its chunk when it was built, in the field's
+    /// order: a jet vertex's `source` counts into these.
+    pub(super) jets: Vec<FieldJet>,
+}
+
+/// The field's jets landing in chunk `slot`, in the field's order.
+pub(super) fn landing_jets(field: &WaterField, slot: u32) -> Vec<FieldJet> {
+    field
+        .jets()
+        .filter(|jet| jet.landing.slot == slot)
+        .collect()
 }
 
 impl SurfaceSources {
@@ -406,6 +417,11 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 cells.surface(lower),
             )
     });
+    // The jets landing in its chunk must be the ones it was built with,
+    // flying the arcs they flew, for its jet vertices to be theirs.
+    let jets = landing_jets(field, slot);
+    held &= jets.len() == sources.jets.len()
+        && jets.iter().zip(&sources.jets).all(|(a, b)| a.same_arc(b));
     for (v, source) in sources.vertices.iter().enumerate() {
         match source {
             VertexSource::Corner { cells: at, shape } => {
@@ -478,9 +494,10 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 row,
                 around,
             } => {
-                let source = &field.sources()[source as usize];
-                held &= source.landing.first() == Some(&landing);
-                match Jet::new(source, cells.surface(landing) as f32) {
+                match jets
+                    .get(source as usize)
+                    .and_then(|jet| Jet::new(jet, cells.surface(landing) as f32))
+                {
                     Some(jet) => mesh.vertices[v] = jet.vertex(row, around),
                     None => held = false,
                 }
@@ -511,9 +528,10 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 landing,
                 corner,
             } => {
-                let source = &field.sources()[source as usize];
-                held &= source.landing.first() == Some(&landing);
-                match Jet::new(source, cells.surface(landing) as f32) {
+                match jets
+                    .get(source as usize)
+                    .and_then(|jet| Jet::new(jet, cells.surface(landing) as f32))
+                {
                     Some(jet) => mesh.vertices[v] = jet.plunge(corner),
                     None => held = false,
                 }

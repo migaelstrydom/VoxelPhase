@@ -44,9 +44,16 @@ below its old height.
        └────────────────┘                 └── carry ─────┤
   Sources ── pour ──▶                                    ▼
   Sinks   ◀─ drain ──                         FieldSolver (awake chunks)
-                                                         │
+  Pumps   ── draw, pour ──▶                              │
                                        FieldScene ──▶ river pipeline
 ```
+
+- **Pumps** (`water/field/pumps.rs`). A pump draws the water standing over its
+  intake, up to its rate, and pours the same volume where its jet lands, so it
+  makes no water and stops when its intake is dry. Its owner names it and moves
+  it (`WaterWorld::set_pump`): `src/pump/` keeps one on each body that carries a
+  `WaterPump`, wherever the body lies. A pump's jet is drawn and strikes bodies
+  as a spring's does (`WaterField::jets`).
 
 - **Flow law** (`water/field/solver.rs`). The local inertial scheme (Bates et al.
   2010) with de Almeida et al.'s θ (2012). Momentum lives on faces, volume in

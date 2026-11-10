@@ -7,6 +7,7 @@
 //!     waves     SurfaceWaves     ripples and the sea's swell, over the field
 //!     versions  SurfaceVersions  per chunk: moves when its surface visibly does
 //!     falling   FallingWater     the streams in the air this frame
+//!     jets      Vec<Jet>         the jets the versions last took, to move them when a jet does
 //!     clock     f64              seconds simulated: the shaders' and swell's clock
 //! ```
 //!
@@ -23,7 +24,7 @@ use crate::terrain::TerrainWorld;
 
 use super::coupling::Disturbances;
 use super::falling::FallingWater;
-use super::field::{DrawnDepths, SurfaceVersions, WaterField};
+use super::field::{DrawnDepths, Jet, PumpId, PumpPlacement, SurfaceVersions, WaterField};
 use super::query::WaterQuery;
 use super::waves::SurfaceWaves;
 
@@ -48,6 +49,8 @@ pub struct WaterWorld {
     versions: SurfaceVersions,
     /// The field's falling water, as it stood after the last step or edit.
     falling: FallingWater,
+    /// The field's jets as the versions last took them.
+    jets: Vec<Jet>,
     /// Seconds simulated: the clock the drawn currents run on.
     clock: f64,
     /// Simulated seconds the level's opening settle ran, and what it cost.
@@ -67,6 +70,7 @@ impl WaterWorld {
         Self {
             versions: SurfaceVersions::new(field.cells()),
             falling: FallingWater::build(&field),
+            jets: field.jets().collect(),
             waves: SurfaceWaves::new(config, &field),
             field,
             clock: 0.0,
@@ -99,9 +103,47 @@ impl WaterWorld {
         moving.sort_unstable();
         moving.dedup();
         self.versions.update(self.field.cells(), moving);
+        self.note_jets();
         self.falling = FallingWater::build(&self.field);
         self.waves.step(&self.field, dt);
         self.clock += dt as f64;
+    }
+
+    /// Stand pump `id` at `placement`: a new pump if the water holds none
+    /// by that name, the same one moved or working differently if it does.
+    pub fn set_pump(&mut self, id: PumpId, placement: PumpPlacement) {
+        self.field.set_pump(id, placement);
+    }
+
+    /// Take out every pump `keep` does not want.
+    pub fn retain_pumps(&mut self, keep: impl FnMut(PumpId) -> bool) {
+        self.field.retain_pumps(keep);
+    }
+
+    /// Move the version of every chunk a jet has started or stopped landing
+    /// in, or lands in differently: a pump moved, run dry or working harder.
+    fn note_jets(&mut self) {
+        let now: Vec<Jet> = self.field.jets().collect();
+        if now == self.jets {
+            return;
+        }
+        let mut slots: Vec<u32> = (self.jets.iter().chain(&now))
+            .map(|jet| jet.landing.slot)
+            .collect();
+        slots.sort_unstable();
+        slots.dedup();
+        for slot in slots {
+            let landing = |jets: &[Jet]| -> Vec<Jet> {
+                jets.iter()
+                    .filter(|jet| jet.landing.slot == slot)
+                    .copied()
+                    .collect()
+            };
+            if landing(&self.jets) != landing(&now) {
+                self.versions.touch(slot as usize);
+            }
+        }
+        self.jets = now;
     }
 
     /// Stir the ripples with every disturbance the coupler collected.

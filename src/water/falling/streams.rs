@@ -3,7 +3,7 @@
 //! ```text
 //!   faces of awake chunks ──┐  a face pouring from water that `falls` to
 //!   boundary faces ─────────┼─▶ the water past it, or off the map: a sheet
-//!   sources ────────────────┘   a lip long; a spring: its jet
+//!   springs and pumps ──────┘   a lip long; a spring or pump: its jet
 //!                                  │
 //!   strikes(centre, radius) ◀──────┘ each stream crossing the sphere: its
 //!                                    velocity there and the area it strikes
@@ -192,15 +192,10 @@ impl FallingWater {
                 streams.push(Stream::new(path, Some(upper), None));
             }
         }
-        for source in field.sources() {
-            let Some(&landing) = source.landing.first() else {
-                continue;
-            };
-            let level = cells.surface(landing) as f32;
-            if let Some(path) =
-                FallPath::jet(source.origin, source.velocity, source.discharge, level)
-            {
-                streams.push(Stream::new(path, None, Some(landing)));
+        for jet in field.jets() {
+            let level = cells.surface(jet.landing) as f32;
+            if let Some(path) = FallPath::jet(jet.origin, jet.velocity, jet.discharge, level) {
+                streams.push(Stream::new(path, None, Some(jet.landing)));
             }
         }
         let falling_from: FxHashSet<SpanIndex> = streams.iter().filter_map(|s| s.from).collect();

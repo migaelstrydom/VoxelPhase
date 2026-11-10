@@ -33,6 +33,7 @@ use crate::projectile::{
     GrenadeSpawnSystem, GrenadeVisualSystem, HeldGrenadeSystem, LifetimeSystem,
     ProjectileDetonationSystem,
 };
+use crate::pump::{PlumbingShareSystem, PumpSystem};
 use crate::rubble::{BoulderCullSystem, RubbleSpawnSystem, ScreeSystem};
 use crate::sensing::SensorProbeSystem;
 use crate::sled::HoverSledSystem;
@@ -117,6 +118,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(SolidShareSystem, "solid_share", &["fracture"])
         .with(AnchorShareSystem, "anchor_share", &["fracture"])
         .with(PlantShareSystem, "plant_share", &["fracture"])
+        .with(PlumbingShareSystem, "plumbing_share", &["fracture"])
         // Pieces the fracture freed and the level's budget will not keep.
         .with(DebrisCullSystem, "debris_cull", &["fracture"])
         // Breakable bodies drawn as their parts now stand, after everything
@@ -130,6 +132,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
                 "solid_share",
                 "anchor_share",
                 "plant_share",
+                "plumbing_share",
             ],
         )
         // Animation and sensing. Probes are configured from last-frame
@@ -300,8 +303,10 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["rubble_spawn"],
         )
         .with(TerrainAnchorSystem, "terrain_anchor", &["terrain_update"])
+        // Pumps stand where their bodies are before the water steps.
+        .with(PumpSystem, "pump", &["terrain_update"])
         // Water simulation (after terrain update so dirty_regions are visible)
-        .with(WaterSystem::default(), "water", &["terrain_update"])
+        .with(WaterSystem::default(), "water", &["terrain_update", "pump"])
         // Particles
         .with(
             ParticleSpawnSystem,

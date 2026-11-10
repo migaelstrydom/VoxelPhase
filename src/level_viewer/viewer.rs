@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use image::RgbaImage;
 use nalgebra::{Matrix4, Point3, Vector3};
-use specs::{Join, World, WorldExt};
+use specs::{Join, RunNow, World, WorldExt};
 
 use crate::animation::critter::CritterAnimator;
 use crate::animation::peeper::PeeperAnimator;
@@ -48,6 +48,7 @@ use crate::core::vulkan_context::VulkanContext;
 use crate::level::{
     create_level_materials, create_level_terrain, create_level_water, spawn_objects, Level,
 };
+use crate::pump::PumpSystem;
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{MaterialManager, MaterialManagerBuilder, SurfaceModulation};
 use crate::rendering::renderer::Renderer;
@@ -151,7 +152,7 @@ impl LevelViewer {
     }
 
     /// Set off each blast, drop each splash on the water, then run the water
-    /// on for `seconds` of 60 Hz frames. The blasts' frame lasts `blast_dt`:
+    /// (its pumps pumping) on for `seconds` of 60 Hz frames. The blasts' frame lasts `blast_dt`:
     /// a blast frame in the game is a long one. A level without water is only
     /// blasted.
     pub fn stir_water(
@@ -161,6 +162,8 @@ impl LevelViewer {
         blast_dt: f32,
         seconds: f32,
     ) {
+        // The level's pumps stand in the water as the game would have them.
+        PumpSystem.run_now(&self.world);
         let mut terrain = self.world.write_resource::<TerrainWorld>();
         for &at in blasts {
             terrain.detonate(at, &BlastConfig::default());

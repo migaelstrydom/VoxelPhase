@@ -40,7 +40,7 @@ use nalgebra::{Vector2, Vector3, Vector4};
 use smallvec::SmallVec;
 
 use crate::water::falling::{falls, ledge_reach, off_map};
-use crate::water::field::{past_edge, DrawnDepths, Source, WaterField};
+use crate::water::field::{past_edge, DrawnDepths, WaterField};
 use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::SurfaceId;
 use crate::water::surface::{Swell, WindExposure};
@@ -48,7 +48,9 @@ use crate::water::waves::{still_level, Sea, SurfaceWaves};
 use crate::water::{WaterWorld, FIELD_BODY};
 
 use super::divide::WaterPatch;
-use super::field_sources::{self, corner_flow, gather, Corner, DrawnCells, Meeting, VertexSource};
+use super::field_sources::{
+    self, corner_flow, gather, landing_jets, Corner, DrawnCells, Meeting, VertexSource,
+};
 use super::jet::{Jet, JET_RING, JET_ROWS, PLUNGE_CORNERS};
 use super::nappe::{fan, plunge, strip, Face, Nappe, NAPPE_ROWS};
 use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
@@ -701,10 +703,12 @@ impl FieldScene<'_> {
 }
 
 impl FieldScene<'_> {
-    /// Source `index`'s jet, down to the water in the cell it lands in.
-    fn jet(&self, mesh: &mut RiverMesh, index: usize, source: &Source) {
-        let landing = source.landing[0];
-        let Some(jet) = Jet::new(source, self.drawn_cells().surface(landing) as f32) else {
+    /// The jet `index` of those landing in the mesh's chunk, down to the
+    /// water in the cell it lands in.
+    fn jet(&self, mesh: &mut RiverMesh, index: usize) {
+        let source = mesh.sources.jets[index];
+        let landing = source.landing;
+        let Some(jet) = Jet::new(&source, self.drawn_cells().surface(landing) as f32) else {
             return;
         };
         let mut rows = Vec::with_capacity(JET_ROWS as usize + 1);
@@ -975,14 +979,9 @@ impl WaterScene for FieldScene<'_> {
             let span = SpanRef::key(chunk.coord.column(local), ordinal);
             self.cell_surface(&mut mesh, span, at(flat), drawn.surface(at(flat)));
         }
-        for (index, source) in self.field.sources().iter().enumerate() {
-            if source
-                .landing
-                .first()
-                .is_some_and(|c| c.slot == slot as u32)
-            {
-                self.jet(&mut mesh, index, source);
-            }
+        mesh.sources.jets = landing_jets(self.field, slot as u32);
+        for index in 0..mesh.sources.jets.len() {
+            self.jet(&mut mesh, index);
         }
         if !mesh.indices.is_empty() || !mesh.sheet_indices.is_empty() {
             mesh.draws.push(RiverDraw {
