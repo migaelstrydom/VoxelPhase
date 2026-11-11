@@ -44,6 +44,10 @@ const COLOUR_CARRY: f32 = 0.6;
 const OCCLUSION_REACH: [f32; 4] = [1.5, 3.0, 6.0, 12.0];
 const OCCLUSION_FLOOR: f32 = 0.25;
 
+/// Radius of the ball that stands for a half-space, m: its side bows less
+/// than a millimetre across half a metre.
+const HALF_SPACE_RADIUS: f32 = 50.0;
+
 /// One lump of clay.
 #[derive(Clone, Copy, Debug)]
 pub enum Lump {
@@ -79,6 +83,15 @@ impl Lump {
             to: Vector3::new(to.0, to.1, to.2),
             radii,
         }
+    }
+
+    /// Everything behind the plane through `point` that faces along
+    /// `facing`, for cutting a form off flat: a ball so large that its side
+    /// is a plane across anything a creature is made of. Only for
+    /// [`Clay::cut`]; pressed on, it would be the whole form.
+    pub fn half_space(point: Vector3<f32>, facing: Vector3<f32>) -> Self {
+        let behind = point - facing.normalize() * HALF_SPACE_RADIUS;
+        Lump::Ball(Ellipsoid::ball(HALF_SPACE_RADIUS, behind))
     }
 
     /// How far outside the lump `p` is; negative inside.

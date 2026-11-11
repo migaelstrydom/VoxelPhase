@@ -41,6 +41,7 @@
 
 mod anatomy;
 mod bell_carrier;
+mod bird_anatomy;
 mod egg_walker;
 mod fish;
 mod fish_walker;
