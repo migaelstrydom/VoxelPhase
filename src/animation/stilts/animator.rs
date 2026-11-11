@@ -360,7 +360,12 @@ impl StiltAnimator {
                     Joint::Hips => self.skeleton.hips(),
                     Joint::Neck => self.skeleton.neck(),
                     Joint::Head => head.clone(),
-                    Joint::Eye { socket, swivel } => self.eye(&head, socket, swivel),
+                    Joint::Eye { socket, swivel } => self.eye(&head, socket, Vector3::z(), swivel),
+                    Joint::SideEye {
+                        socket,
+                        out,
+                        swivel,
+                    } => self.eye(&head, socket, out, swivel),
                     Joint::Hinge { pivot, axis, drive } => {
                         let turn =
                             UnitQuaternion::from_scaled_axis(axis.normalize() * self.drive(drive));
@@ -382,13 +387,25 @@ impl StiltAnimator {
             .collect()
     }
 
-    /// An eye at `socket` in the head: turned to what the walker watches,
-    /// or to wherever it is idly glancing, and never further than `swivel`
-    /// off the way the head faces.
-    fn eye(&self, head: &Transform, socket: Vector3<f32>, swivel: f32) -> Transform {
+    /// An eye at `socket` in the head, which at rest looks out along `out`
+    /// in the head's frame: turned to what the walker watches, or to
+    /// wherever it is idly glancing, and never further than `swivel` off
+    /// its rest.
+    fn eye(
+        &self,
+        head: &Transform,
+        socket: Vector3<f32>,
+        out: Vector3<f32>,
+        swivel: f32,
+    ) -> Transform {
         let at = Point3::from(head.translation + head.rotation * socket);
-        let ahead = head.rotation * Vector3::z();
-        let (side, up) = (head.rotation * Vector3::x(), head.rotation * Vector3::y());
+        let ahead = head.rotation * out.try_normalize(1e-6).unwrap_or_else(Vector3::z);
+        let up = head.rotation * Vector3::y();
+        // Square to both: the head's own side, for an eye that looks ahead.
+        let side = up
+            .cross(&ahead)
+            .try_normalize(1e-5)
+            .unwrap_or_else(|| head.rotation * Vector3::x());
         let wanted = match self.watching {
             Some(target) => (target - at).try_normalize(1e-4).unwrap_or(ahead),
             None => {
@@ -560,6 +577,66 @@ mod tests {
             open > (BLINK_EVERY.1 * 60.0) as usize,
             "its eyes were shut too long"
         );
+    }
+
+    #[test]
+    fn a_side_eye_looks_out_of_the_heads_side_and_turns_no_further_than_its_swivel() {
+        let dress = Dress {
+            model: Arc::new(Model::flat(vec![
+                ModelPart::new(Vec::new()),
+                ModelPart::new(Vec::new()),
+            ])),
+            worn: vec![
+                Worn::on(Joint::Head),
+                Worn::on(Joint::SideEye {
+                    socket: Vector3::new(0.1, 0.0, 0.0),
+                    out: Vector3::x(),
+                    swivel: 0.3,
+                }),
+            ],
+        };
+        let mut walker = StiltAnimator::new(
+            StiltRigConfig::default(),
+            Point3::new(0.0, 1.0, 0.0),
+            1.0,
+            0.0,
+        )
+        .wearing(Arc::new(dress));
+        let mood = |watching: Vector3<f32>| Mood {
+            alertness: 1.0,
+            thrust: 0.0,
+            watching: Some(Point3::from(watching)),
+        };
+        // The head's own side and front, and where the eye is.
+        let frame = |walker: &StiltAnimator| {
+            let (head, eye) = (walker.poses()[0].clone(), walker.poses()[1].clone());
+            (
+                head.rotation * Vector3::x(),
+                head.rotation * Vector3::z(),
+                eye,
+            )
+        };
+
+        // Something a little ahead of square to its side: it looks straight
+        // at it.
+        let (side, ahead, eye) = frame(&walker);
+        let beside = eye.translation + side * 3.0 + ahead * 0.5;
+        stand(&mut walker, 0.5, mood(beside));
+        let (_, _, eye) = frame(&walker);
+        let look = eye.rotation * Vector3::z();
+        assert!(look.dot(&(beside - eye.translation).normalize()) > 0.999);
+
+        // Something dead ahead of the head: as far round as its swivel
+        // lets it, and still out of the head's side.
+        let (side, ahead, eye) = frame(&walker);
+        stand(&mut walker, 0.5, mood(eye.translation + ahead * 5.0));
+        let (side_now, ahead_now, eye) = frame(&walker);
+        let look = eye.rotation * Vector3::z();
+        let off = look.dot(&side_now).clamp(-1.0, 1.0).acos();
+        assert!((off - 0.3).abs() < 0.01, "turned {off} rad");
+        assert!(look.dot(&ahead_now) > 0.0, "it turned the wrong way round");
+        // The head has not turned to help: it only sways as it stands.
+        assert!((side - side_now).norm() < 2.0 * IDLE_SWAY);
     }
 
     #[test]

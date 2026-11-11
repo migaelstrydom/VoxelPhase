@@ -18,6 +18,8 @@
 //! painted on it is painted on its vertices ([`super::paint`]) and its fine
 //! grain comes from its material.
 
+use std::f32::consts::TAU;
+
 use nalgebra::{Vector2, Vector3, Vector4};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
@@ -188,6 +190,22 @@ pub enum Relief {
         depth: f32,
         seed: u32,
     },
+    /// Scales that overlap like the tiles of a roof, laid in rows round an
+    /// axis with each one's free edge toward the tail: a fish's flank.
+    Shingles {
+        /// A point on the axis the rows run round.
+        origin: Vector3<f32>,
+        /// The way the axis runs, toward the tail: the way the free edges
+        /// face.
+        toward: Vector3<f32>,
+        /// Scales in a row, all the way round the axis. They are as wide
+        /// as that makes them, so narrower where the form is.
+        around: u32,
+        /// From one row to the next, m: as much of a scale as shows.
+        row: f32,
+        /// How far a scale's free edge stands off the scale it lies on, m.
+        depth: f32,
+    },
 }
 
 /// Of a ring of [`Relief::Rings`]: the share of its width over which it
@@ -196,6 +214,15 @@ pub enum Relief {
 const RING_FALL: f32 = 0.3;
 const RING_WANDER: f32 = 0.8;
 const RING_WANDER_LENGTH: f32 = 3.0;
+
+/// How far a shingle reaches from its middle, along the axis in rows and
+/// round it in scales: enough that the rows before it always cover its
+/// head.
+const SHINGLE_REACH: (f32, f32) = (1.3, 0.62);
+
+/// The narrowest a shingle is laid, in rows: narrower than this (near the
+/// axis, where the rows pinch) and the scales fade out.
+const SHINGLE_NARROWEST: (f32, f32) = (0.4, 1.0);
 
 impl Relief {
     /// How far the surface is raised at `p`, m.
@@ -260,6 +287,53 @@ impl Relief {
                 let proud = 0.4 + 0.6 * hash(Vector3::new(ring.floor(), 0.0, 0.0), seed);
                 depth * proud * rise * fall * fall * (3.0 - 2.0 * fall)
             }
+            Relief::Shingles {
+                origin,
+                toward,
+                around,
+                row,
+                depth,
+            } => {
+                let axis = toward.normalize();
+                let from_origin = p - origin;
+                let along = from_origin.dot(&axis);
+                let out = from_origin - axis * along;
+                // Any two directions square to the axis and each other
+                // serve to measure the way round it.
+                let spare = if axis.y.abs() < 0.9 {
+                    Vector3::y()
+                } else {
+                    Vector3::x()
+                };
+                let side = axis.cross(&spare).normalize();
+                let up = side.cross(&axis);
+                let round = out.dot(&side).atan2(out.dot(&up)) / TAU * around as f32;
+                let rows = along / row;
+
+                // The scale on top is the one nearest the head that reaches
+                // here: every other row is laid half a scale round.
+                let first = (rows - SHINGLE_REACH.0).ceil() as i32;
+                let last = (rows + SHINGLE_REACH.0).floor() as i32;
+                let top = (first..=last).find_map(|at| {
+                    let shift = 0.5 * at.rem_euclid(2) as f32;
+                    let column = (round - shift).round();
+                    let across = (round - shift - column) / SHINGLE_REACH.1;
+                    let down = (rows - at as f32) / SHINGLE_REACH.0;
+                    (across * across + down * down < 1.0).then_some((at, column, across, down))
+                });
+                let Some((at, column, across, down)) = top else {
+                    return -0.5 * depth;
+                };
+                // A tile tipped up toward its free edge, a little domed
+                // across, and no two quite alike.
+                let tipped = (0.5 + 0.5 * down) * (0.8 + 0.2 * (1.0 - across * across));
+                let own = 0.75 + 0.5 * hash(Vector3::new(at as f32, column, 0.0), 4);
+                // Where the rows pinch toward the axis the scales give out.
+                let width = TAU * out.norm() / around as f32 / row;
+                let (none, whole) = SHINGLE_NARROWEST;
+                let shown = ((width - none) / (whole - none)).clamp(0.0, 1.0);
+                depth * shown * (tipped * own - 0.5)
+            }
         }
     }
 
@@ -279,6 +353,9 @@ impl Relief {
             Relief::Rings { spacing, depth, .. } => {
                 depth.abs() / spacing * (1.5 / RING_FALL) * (1.0 + RING_WANDER)
             }
+            // A free edge is a step, which no slope bounds; what it can
+            // move the surface by is already allowed for by its reach.
+            Relief::Shingles { row, depth, .. } => depth.abs() / row * 2.0,
         }
     }
 
@@ -288,7 +365,8 @@ impl Relief {
             Relief::Lumps { depth, .. }
             | Relief::Folds { depth, .. }
             | Relief::Scales { depth, .. }
-            | Relief::Rings { depth, .. } => depth.abs(),
+            | Relief::Rings { depth, .. }
+            | Relief::Shingles { depth, .. } => depth.abs(),
         }
     }
 }
@@ -841,5 +919,34 @@ mod tests {
             .fold((f32::MAX, f32::MIN), |(lo, hi), r| (lo.min(*r), hi.max(*r)));
         assert!(low > 0.395, "a ring sinks to {low}");
         assert!((0.406..0.416).contains(&high), "the proudest stands {high}");
+    }
+
+    #[test]
+    fn shingles_climb_toward_the_tail_and_drop_at_each_free_edge() {
+        let (row, depth) = (0.02, 0.004);
+        let shingles = Relief::Shingles {
+            origin: Vector3::zeros(),
+            toward: -Vector3::z(),
+            around: 24,
+            row,
+            depth,
+        };
+        // Down a flank a tenth of a metre off the axis, in half-millimetre
+        // steps: the surface climbs, and drops back about once a row.
+        let at = |step: usize| shingles.raise(Vector3::new(0.1, 0.0, -0.0005 * step as f32));
+        let (mut climbs, mut drops) = (0, 0);
+        for step in 0..400 {
+            let change = at(step + 1) - at(step);
+            assert!(at(step).abs() <= depth);
+            if change < -0.2 * depth {
+                drops += 1;
+            } else if change > 0.0 {
+                climbs += 1;
+            }
+        }
+        assert!((5..=12).contains(&drops), "{drops} free edges in ten rows");
+        assert!(climbs > 300, "it climbed for only {climbs} steps of 400");
+        // Hard by the axis, where a scale would be a sliver, there is none.
+        assert_eq!(shingles.raise(Vector3::new(0.001, 0.0, -0.05)), 0.0);
     }
 }

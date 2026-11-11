@@ -21,7 +21,6 @@ use specs::{Builder, Entity, World, WorldExt};
 use super::anatomy::{self, LIMB_GRAIN};
 use crate::animation::stilts::{Dress, Joint, StiltAnimator, StiltRigConfig, Worn};
 use crate::animation::FootSide;
-use crate::app::sculpt::{Clay, Lump};
 use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
 use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Rotation,
@@ -67,16 +66,6 @@ pub fn bare_legs(rig: &StiltRigConfig, girth: f32, foot: f32) -> Vec<(Worn, Vec<
         legs.push((Worn::on(Joint::Foot(side)), vec![anatomy::foot(foot, side)]));
     }
     legs
-}
-
-/// A stand-in dress for a walker of proportions `rig`: bare legs, and a
-/// plain ball of `colour` for a head. For a creature whose own look is not
-/// sculpted yet.
-pub fn blockout(rig: &StiltRigConfig, colour: (f32, f32, f32)) -> Dress {
-    let head = Clay::new(0.0).add(Lump::ball(rig.head_radius, (0.0, 0.0, 0.0)), colour);
-    let mut pieces = vec![(Worn::on(Joint::Head), vec![anatomy::flesh(&head, 0.02)])];
-    pieces.extend(bare_legs(rig, 1.6 * rig.leg_radius, 0.2));
-    Dress::of(pieces)
 }
 
 /// A walker's strike with its head.

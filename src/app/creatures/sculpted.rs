@@ -1,5 +1,5 @@
-//! What the creatures that are one sculpted model share: the material they
-//! are painted on, how they perceive, and the ground they are stood on.
+//! What the creatures that are one sculpted model share: how a tool is
+//! shown one, how they perceive, and the ground they are stood on.
 
 use std::sync::Arc;
 
@@ -8,8 +8,6 @@ use specs::{World, WorldExt};
 use crate::model::{Model, Transform};
 
 use crate::creature::Perception;
-use crate::rendering::colour::Colour;
-use crate::rendering::material::{Material, SurfaceFinish};
 use crate::terrain::TerrainWorld;
 
 /// A creature that is one model, set out in one of its states for a tool
@@ -25,31 +23,6 @@ pub struct Exhibit {
     pub lift: f32,
     /// How big it is across, m: what a camera frames.
     pub reach: f32,
-}
-
-impl Exhibit {
-    /// `model` at rest.
-    pub fn at_rest(name: &'static str, model: Arc<Model>, lift: f32, reach: f32) -> Self {
-        Self {
-            name,
-            poses: vec![Transform::default(); model.parts.len()],
-            model,
-            lift,
-            reach,
-        }
-    }
-}
-
-/// Paint: matte, with a breath of sheen.
-const PAINT: SurfaceFinish = SurfaceFinish {
-    roughness: 0.7,
-    metallic: 0.0,
-};
-
-/// What a sculpted creature is drawn in: white, its colours riding on its
-/// vertices.
-pub fn sculpt_material() -> Material {
-    Material::coloured(Colour::WHITE).with_finish(PAINT)
 }
 
 /// Perception for a creature with no front: it notices anything within
@@ -75,17 +48,15 @@ pub fn ground_under(world: &World, at: (f32, f32)) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use crate::app::creatures::{FlyingFishDef, PiperDef};
-    use crate::rendering::material::MaterialId;
 
     /// A model that panics while it is sculpted, or comes out empty or with
     /// a part flung off to nowhere, would only show when its creature was
     /// first met in a level.
     #[test]
     fn every_sculpted_creature_is_whole_and_no_bigger_than_it_should_be() {
-        let paint = MaterialId(0);
         let models = [
             ("piper", PiperDef::sculpt(), 1.6),
-            ("flying fish", FlyingFishDef::model(paint), 1.2),
+            ("flying fish", FlyingFishDef::sculpt(), 1.2),
         ];
         for (name, model, reach) in models {
             let meshes: Vec<_> = model

@@ -7,6 +7,7 @@
 //!   Neck     the shoulder                                       to the head
 //!   Head     the head's middle, +Z the way it looks             its crown
 //!   Eye      its own middle, +Z out through its pupil           its top
+//!   SideEye  as Eye, for one that looks out of the head's side
 //!   Hinge    its pivot, on the head                             the head's
 //!   Thigh    the hip, +Z the way the walker faces               to the hip,
 //!   Shin     the knee                                           from below
@@ -48,6 +49,15 @@ pub enum Joint {
     /// `swivel` radians off the way the head faces.
     Eye {
         socket: Vector3<f32>,
+        swivel: f32,
+    },
+    /// An eye set in the side of the head, as a fish's is: its middle at
+    /// `socket` and, at rest, looking out along `out` (both in the head's
+    /// frame). It turns to what the walker watches as far as `swivel`
+    /// radians off `out`.
+    SideEye {
+        socket: Vector3<f32>,
+        out: Vector3<f32>,
         swivel: f32,
     },
     /// A part hinged on the head at `pivot`, turning about `axis` (both in

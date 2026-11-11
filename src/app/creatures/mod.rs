@@ -20,11 +20,11 @@
 //!   ─────────────  ────────────────────  ─────────────────────────────────────
 //!   Roller         rolling               a thorned pod nothing can kill: outrun
 //!                                        it or strand it in a crater
-//!   Peeper         stilts, eye           sees far, pecks, dies easily
-//!   Stalker        stilts, costume       slow, tall, hard to kill, long beak
-//!   EggWalker      stilts, costume       quick and weak; comes in clutches
-//!   FishWalker     stilts, costume       walks on into water after its quarry
-//!   BellCarrier    stilts, costume       cannot be hurt; heavy, so it is walked
+//!   Peeper         stilts                sees far, pecks, dies easily
+//!   Stalker        stilts                slow, tall, hard to kill, long beak
+//!   EggWalker      stilts                quick and weak; comes in clutches
+//!   FishWalker     stilts                walks on into water after its quarry
+//!   BellCarrier    stilts                cannot be hurt; heavy, so it is walked
 //!                                        off ledges and into deep water
 //!   Piper          does not move         lobs real bombs at whoever it sees
 //!   FlyingFish     flying                holds a height, stoops on the open
@@ -33,9 +33,12 @@
 //!   HeartCritter   hopping               a collectable that runs away
 //! ```
 //!
-//! The four in costume share one rig, body and spawn with the peeper
-//! (`stilt_walker`, `animation::stilts`): each is a set of proportions and a
-//! sculpted costume worn in place of the peeper's eye. `visual_bench
+//! The five on stilts share one rig, body and spawn (`stilt_walker`,
+//! `animation::stilts`): each is a set of proportions and a dress, the
+//! sculpted pieces the rig's joints carry. Every creature is sculpted in
+//! clay (`app::sculpt`) and painted in the level's one bestiary palette
+//! (`palette`), its likeness made once a run (`likeness`); the ones that are
+//! not on stilts are a `PosedModel` their behaviour poses. `visual_bench
 //! bestiary` draws every creature, and `levels/bestiary.level.ron` stands
 //! them all on one lawn.
 
@@ -44,6 +47,7 @@ mod bell_carrier;
 mod bird_anatomy;
 mod egg_walker;
 mod fish;
+mod fish_anatomy;
 mod fish_walker;
 mod flying_fish;
 mod heart_critter;
