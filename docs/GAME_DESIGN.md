@@ -182,7 +182,7 @@ each hard one:
 |---|---|---|
 | 1 | B1 | Move, alone, nothing to fail |
 | 2 | E1 | The grenade, alone |
-| 3 | E2 | What it cannot cut |
+| 3 | E2 | What a grenade costs |
 | 4 | E3 | First real thought: blast to gain height |
 | 5 | B2 | Rest |
 | 6 | W1 | Blast moves water |
