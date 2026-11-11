@@ -169,6 +169,73 @@ a few rooms of its own early on to teach the moves.
 | B3 | Swim under a low arch and come up the far side. | T | Water | |
 | B4 | Any earlier room again with the footing narrowed, the water rising, or a creature loose. | X | any | Safety |
 
+### Finding out
+
+An island has an underside and a room may be stacked, so the player cannot
+always see what a hole leads to. Finding out is part of the puzzle, and it is
+done with the same physics as everything else. The habit it teaches is the
+one the whole game wants: test with something cheap before committing
+something that cannot be got back.
+
+| # | Idea | Kind | Also | Spends |
+|---|---|---|---|---|
+| F1 | A hole in the floor and a ball beside it. Drop the ball: it bounces back up, so there is ground close below. A second hole swallows its ball. | T | | |
+| F2 | How long the ball takes says how far down; where it comes back says whether the ground below is level. Choose between three holes. | X | | |
+| F3 | Send a hopping creature down instead. It lands and wanders, and where it goes shows how far the lower island reaches. | X | Creatures | |
+| F4 | Breach a little water into the hole. If it pools below there is a basin; if it keeps falling there is not. | X | Water | Water |
+| F5 | With the sun low, the island's shadow lies on the one beneath. Look over the edge to see where the lower ground is, and is not. | T | | |
+| F6 | A carried mirror shows what is under a ledge or round a corner **(build)**. | T | Objects | |
+| F7 | One grenade on the floor shows how thick the island is there: a shallow crater, or daylight. | X | Earth | Blast |
+
+## Second batch
+
+More ideas, not yet filed into the tables above or the opening. **(check)**
+marks one that depends on behaviour not yet confirmed in the engine.
+
+### Earth and rubble
+
+| Idea | Pattern | Also |
+|---|---|---|
+| Blasting a cliff drops boulders. Dropped in the right place they dam the stream below: height is spent to buy a dam. | One thing, two jobs | Water |
+| A boulder is wanted as a step, but the blast that frees it also sends it rolling off the island. Dig it a hollow to land in first. | Too much | Objects |
+| An earth bridge will bear the player and not the bell-carrier. Cross first, and let it follow. | Shared support | Creatures |
+| The exit ledge is held up by the same bank that blocks the way to it. Take only as much as leaves it standing. | Shared support | |
+
+### Water
+
+| Idea | Pattern | Also |
+|---|---|---|
+| Falling water pushes what it lands on. Turn a fall so it drives a float across a still pool. | Borrowed force | Objects |
+| A spring's jet holds a ball up. Something light set on the jet rides at its top: a lifter made from water. | One thing, two jobs | Objects |
+| A sealed barrel wants to rise. Wedged under a sunk platform, it lifts the platform when the basin floods. | Borrowed force | Objects |
+| Glass holds a pool back and shows what is behind it. Breaking it is a breach that no earth can mend. | Too much | Objects |
+| Two basins joined by a channel find one level. Raising one by dropping rubble into it raises the other. | Borrowed force | Earth |
+| A blast in still water shoves a float away from it. With no current, that is the only oar. | Borrowed force | Earth |
+
+### Objects
+
+| Idea | Pattern | Also |
+|---|---|---|
+| A tower of blocks is the only stair, and its blocks are the only weights. Take what can be spared without felling it. | Shared support | |
+| A plank carried to a gap is a bridge; the same plank is the lever under the boulder. | One thing, two jobs | |
+| An ice block pushed on level ground slides until something stops it. Arrange the stop before the push. | Too much | |
+| A pendulum's bob will carry the player across, or, cut loose at the top of its swing, fly where a weight is wanted. | Which way it falls | Earth |
+| A grenade thrown onto a trampoline goes where the player cannot throw. | Borrowed force | Earth |
+| A grenade set rolling down a channel reaches a bank at the far end of it **(check)**. | Borrowed force | Earth |
+| A branch blasted off a tree at its fork is a plank; the tree left standing is still the ladder. | Shared support | Earth |
+
+### Creatures
+
+| Idea | Pattern | Also |
+|---|---|---|
+| A peeper sees a long way and nothing through earth. Drop a bank between it and the path. | Borrowed force | Earth |
+| A stalker's beak reaches over a wall. Stand so that its strike knocks the crate off the far ledge **(check)**. | Borrowed force | Objects |
+| A fish-walker follows into water. Lead it onto the float the player needs sunk, or off the one they need to rise. | Borrowed force | Water |
+| A flying fish stoops on anything in the open. Cross under cover, or dig cover where there is none. | Nothing underneath | Earth |
+| A mussel holds whatever it shuts on. Shut on a float's tether or a rolling ball, it is an anchor **(check)**. | Borrowed force | Objects |
+| A piper throws at what it sees. Seen from behind the dam, its bombs breach it; seen from behind the only ledge, they take that instead. | Shared support | Earth |
+| A roller in a crater is stranded until the crater floods. Then it floats out **(check)**. | Unwanted passenger | Water |
+
 ## Order
 
 Clusters are taught in the order their rules depend on each other. Each
