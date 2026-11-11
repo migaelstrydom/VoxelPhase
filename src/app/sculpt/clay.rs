@@ -177,7 +177,25 @@ pub enum Relief {
         /// How deep the creases between them are, m.
         depth: f32,
     },
+    /// Ridges in rings about a point, each rising gently outward and
+    /// falling away at its outer edge: the growth lines of a shell.
+    Rings {
+        /// The point the rings are about.
+        about: Vector3<f32>,
+        /// From one ridge to the next, m.
+        spacing: f32,
+        /// How far the proudest ridge stands out, m.
+        depth: f32,
+        seed: u32,
+    },
 }
+
+/// Of a ring of [`Relief::Rings`]: the share of its width over which it
+/// falls away, how far the rings wander from round in ring widths, and how
+/// many ring widths a wander is long.
+const RING_FALL: f32 = 0.3;
+const RING_WANDER: f32 = 0.8;
+const RING_WANDER_LENGTH: f32 = 3.0;
 
 impl Relief {
     /// How far the surface is raised at `p`, m.
@@ -225,6 +243,23 @@ impl Relief {
                 }
                 -depth * (nearest * 1.6).clamp(0.0, 1.0).powi(2)
             }
+            Relief::Rings {
+                about,
+                spacing,
+                depth,
+                seed,
+            } => {
+                let at = p / (spacing * RING_WANDER_LENGTH);
+                let wander = fbm_perlin_3d(at.x, at.y, at.z, 2, 0.5, seed);
+                let ring = (p - about).norm() / spacing + RING_WANDER * wander;
+                let within = ring - ring.floor();
+                // Level with the form at both its edges, so a ring may stand
+                // prouder than its neighbour without a step between them.
+                let rise = (within / (1.0 - RING_FALL)).min(1.0);
+                let fall = ((1.0 - within) / RING_FALL).min(1.0);
+                let proud = 0.4 + 0.6 * hash(Vector3::new(ring.floor(), 0.0, 0.0), seed);
+                depth * proud * rise * fall * fall * (3.0 - 2.0 * fall)
+            }
         }
     }
 
@@ -239,6 +274,11 @@ impl Relief {
                 frequency, depth, ..
             } => depth.abs() * frequency * 12.5,
             Relief::Scales { size, depth } => depth.abs() / size * 3.2,
+            // A ring falls away over a share of its width, and the wander
+            // crowds the rings as much again.
+            Relief::Rings { spacing, depth, .. } => {
+                depth.abs() / spacing * (1.5 / RING_FALL) * (1.0 + RING_WANDER)
+            }
         }
     }
 
@@ -247,7 +287,8 @@ impl Relief {
         match *self {
             Relief::Lumps { depth, .. }
             | Relief::Folds { depth, .. }
-            | Relief::Scales { depth, .. } => depth.abs(),
+            | Relief::Scales { depth, .. }
+            | Relief::Rings { depth, .. } => depth.abs(),
         }
     }
 }
@@ -780,5 +821,25 @@ mod tests {
             .fold((f32::MAX, f32::MIN), |(lo, hi), r| (lo.min(*r), hi.max(*r)));
         assert!(high - low > 0.02, "folds only {} m deep", high - low);
         assert!(high < 0.43 && low > 0.37);
+    }
+
+    #[test]
+    fn rings_only_raise_the_surface_and_no_further_than_their_depth() {
+        let ringed = Clay::new(0.0)
+            .add(Lump::ball(0.4, (0.0, 0.0, 0.0)), WHITE)
+            .relief(Relief::Rings {
+                about: Vector3::new(0.0, 0.4, 0.0),
+                spacing: 0.06,
+                depth: 0.012,
+                seed: 5,
+            });
+        let mesh = ringed.skin(0.008, MaterialId(0));
+        assert!(watertight(&mesh));
+        let radii: Vec<f32> = mesh.vertices.iter().map(|v| v.pos.norm()).collect();
+        let (low, high) = radii
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), r| (lo.min(*r), hi.max(*r)));
+        assert!(low > 0.395, "a ring sinks to {low}");
+        assert!((0.406..0.416).contains(&high), "the proudest stands {high}");
     }
 }

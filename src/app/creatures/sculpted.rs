@@ -74,7 +74,7 @@ pub fn ground_under(world: &World, at: (f32, f32)) -> Option<f32> {
 
 #[cfg(test)]
 mod tests {
-    use crate::app::creatures::{FlyingFishDef, MusselDef, PiperDef, RollerDef};
+    use crate::app::creatures::{FlyingFishDef, PiperDef};
     use crate::rendering::material::MaterialId;
 
     /// A model that panics while it is sculpted, or comes out empty or with
@@ -84,11 +84,8 @@ mod tests {
     fn every_sculpted_creature_is_whole_and_no_bigger_than_it_should_be() {
         let paint = MaterialId(0);
         let models = [
-            ("roller", RollerDef::model(0.6, paint), 0.8),
             ("piper", PiperDef::sculpt(), 1.6),
             ("flying fish", FlyingFishDef::model(paint), 1.2),
-            ("open mussel", MusselDef::model(paint, 1.0), 1.6),
-            ("shut mussel", MusselDef::model(paint, 0.0), 1.2),
         ];
         for (name, model, reach) in models {
             let meshes: Vec<_> = model

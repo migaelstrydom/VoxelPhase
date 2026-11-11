@@ -44,5 +44,5 @@ pub use lobber::{Gaze, Lobber, LobberBody, LobberSystem, Swell};
 pub use melee::{MeleeAttack, MeleeAttackSystem, StrikePhase};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
 pub use roller::{Roller, RollerLocomotionSystem};
-pub use snap_trap::{SnapTrap, SnapTrapSystem};
+pub use snap_trap::{Caught, Cycle, Hinge, Moment, SnapTrap, SnapTrapSystem, TrapPart, TrapRig};
 pub use swimmer::{Swimmer, SwimmerLocomotionSystem};
