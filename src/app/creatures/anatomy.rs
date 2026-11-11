@@ -185,12 +185,22 @@ pub fn foot(length: f32, side: FootSide) -> MeshPrimitive {
     let mut clay = Clay::new(0.07 * l)
         // Heel, the column of the ankle over it, and the instep running
         // down to the ball of the foot.
-        .add(Lump::ball(0.17 * l, (0.0, 0.17 * l, -0.2 * l)), SOLE)
+        .add(Lump::ball(0.14 * l, (0.0, 0.14 * l, -0.2 * l)), SOLE)
+        // The ankle, narrow over the heel, and the tendon up the back of
+        // it.
         .add(
             Lump::limb(
-                (0.0, 0.2 * l, -0.12 * l),
-                (0.0, 0.55 * l, -0.06 * l),
-                (0.17 * l, 0.15 * l),
+                (0.0, 0.2 * l, -0.1 * l),
+                (0.0, 0.5 * l, -0.04 * l),
+                (0.12 * l, 0.1 * l),
+            ),
+            FLESH,
+        )
+        .add(
+            Lump::limb(
+                (0.0, 0.16 * l, -0.26 * l),
+                (0.0, 0.52 * l, -0.12 * l),
+                (0.05 * l, 0.04 * l),
             ),
             FLESH,
         )

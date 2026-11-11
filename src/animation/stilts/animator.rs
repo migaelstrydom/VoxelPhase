@@ -49,6 +49,13 @@ const GLANCE_EVERY: (f32, f32) = (0.4, 2.2);
 const GLANCE_REACH: f32 = 0.7;
 const EYE_RATE: f32 = 18.0;
 
+/// How far the body leans over its planted foot when the other is at the
+/// top of its swing, radians, how fast it leans, 1/s, and how far it idles
+/// from side to side when it is going nowhere.
+const SWAY: f32 = 0.085;
+const SWAY_RATE: f32 = 9.0;
+const IDLE_SWAY: f32 = 0.012;
+
 /// Breaths a second at rest.
 const BREATH_RATE: f32 = 0.35;
 
@@ -88,6 +95,9 @@ pub struct StiltAnimator {
     /// How shut the eyes are held, in `[0, 1]`. Chases the mood rather
     /// than snapping to it.
     lid_close: f32,
+    /// How far the body leans to its right, radians: over whichever foot
+    /// is planted while the other swings.
+    sway: f32,
     /// Where a strike is, as the mood last gave it.
     thrust: f32,
     /// What the eyes are turned to, as the mood last gave it.
@@ -137,6 +147,7 @@ impl StiltAnimator {
             dress: None,
             tuck: 0.0,
             lid_close: 1.0,
+            sway: 0.0,
             thrust: 0.0,
             watching: None,
             clock: 0.0,
@@ -218,11 +229,17 @@ impl StiltAnimator {
 
         let facing = facing_from(yaw);
         let feet = self.foot_poses(pelvis, facing);
+        // It leans away from whichever foot is in the air, as anything on
+        // two legs must, and shifts its weight a little even standing.
+        let lifted = (feet[0].position.y - feet[1].position.y) / self.config.step_height.max(1e-3);
+        let wanted = SWAY * lifted.clamp(-1.0, 1.0) + IDLE_SWAY * (self.clock * 0.7).sin();
+        self.sway += (wanted - self.sway) * approach(SWAY_RATE, dt);
         self.skeleton.update(
             &self.config,
             pelvis,
             facing,
             self.neck_pitch(self.thrust),
+            self.sway,
             feet,
         );
     }
