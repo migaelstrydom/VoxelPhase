@@ -85,7 +85,7 @@ mod tests {
         let paint = MaterialId(0);
         let models = [
             ("roller", RollerDef::model(0.6, paint), 0.8),
-            ("piper", PiperDef::model(paint), 1.6),
+            ("piper", PiperDef::sculpt(), 1.6),
             ("flying fish", FlyingFishDef::model(paint), 1.2),
             ("open mussel", MusselDef::model(paint, 1.0), 1.6),
             ("shut mussel", MusselDef::model(paint, 0.0), 1.2),

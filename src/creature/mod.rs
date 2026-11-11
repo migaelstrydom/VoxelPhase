@@ -40,7 +40,7 @@ pub use alert_telegraph::{AlertTelegraph, AlertTelegraphSystem};
 pub use brain::{Behaviour, Brain, BrainSystem, Temperament};
 pub use collectable::{Collectable, CollectionSystem, Reward};
 pub use flyer::{Flyer, FlyerLocomotionSystem};
-pub use lobber::{Lobber, LobberSystem};
+pub use lobber::{Gaze, Lobber, LobberBody, LobberSystem, Swell};
 pub use melee::{MeleeAttack, MeleeAttackSystem, StrikePhase};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
 pub use roller::{Roller, RollerLocomotionSystem};
