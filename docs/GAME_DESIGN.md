@@ -48,8 +48,10 @@ What the world does back:
 6. **Creatures follow their nature, always.** A roller rolls at whoever it
    sees; a piper throws at them; a bell-carrier walks at them and cannot be
    hurt; a mussel shuts on whatever steps in.
-7. **Deep ground is wet.** A tunnel dug below the water table floods, so
-   digging under a room is not a way round it **(build)**.
+7. **The ground is an island, and has an underside.** Rooms are floating
+   islands. Dig deep enough and the hole comes out underneath: the player,
+   the water and anything loose fall through it. Digging under a problem
+   is a way down, never a way round.
 
 What is scarce, and so what a puzzle spends:
 
@@ -77,6 +79,7 @@ The patterns found so far:
 | **Too much** | The right act at the wrong strength fails | A fountain's tower cleaves into blocks big enough to climb, or shatters into rubble that is not. Where and how hard decides which. |
 | **Which way it falls** | A release has a direction | A tree becomes a bridge if it falls across the gap. Which side of its roots is dug decides where it lands. |
 | **One thing, two jobs** | The only lifter, float or weight is needed twice | The crate that plugs the outlet is the crate that reaches the ledge. Something else has to plug the outlet. |
+| **Nothing underneath** | The ground itself is finite | An island is thin in places. A blast too many under a pool, a stack or the player's own feet sends it through to the sky. |
 | **Borrowed force** | A creature does what the player cannot | A roller will follow down a groove dug for it into a bank the player cannot reach. A bell-carrier walking onto one end of a seesaw throws what is on the other. |
 
 ## Puzzle ideas by cluster
@@ -95,7 +98,8 @@ thing the puzzle turns on.
 | E3 | The exit is on a ledge too high to grab. Blast the overhang above so its rubble makes a ramp. | X | | Height |
 | E4 | Three grenades, four banks. One bank hides nothing; read the room before spending. | X | | Blast |
 | E5 | The only path up is an earth stair beside a tempting bank. Blasting the bank drops the stair: the room teaches that a blast can cost height. | X | | Height |
-| E6 | Dig down to pass under a pool, and meet water. The tunnel has to stay shallow and come up early. | X | Water | Height |
+| E6 | The island is thin under the path and thick under the hill. A tunnel has to follow the thick ground or it opens onto the sky. | X | | Height |
+| E9 | The exit is on a lower island, straight below. Find where to dig through so the fall ends on it. A hole is a one-way door. | X | Body | Height |
 | E7 | A stack of boxes blocks an earth ledge that is the only way on. A grenade would take the ledge too: carry them off, or topple them from the side. | X | Objects | Height |
 | E8 | A tree stands by a gap. Dig under the roots on the far side and it falls across as a bridge; dig the near side and it falls away. | X | Objects | Blast |
 
@@ -111,6 +115,7 @@ thing the puzzle turns on.
 | W6 | Fill a shaft from a spring to swim up to the top of it. | C | Body | Water |
 | W7 | Driftwood lies behind a dam. Breached as it is, the wood rides out and jams the channel the water was meant to fill. Fish it out first, or leave a grating of earth for it to catch on. | X | Objects | Water |
 | W8 | A reservoir fills slowly and will drown the low path, and cannot be breached: the float that reaches the exit only gets there when it is full. Work below while it rises. | X | Objects | Safety |
+| W10 | A pool sits on thin ground. A blast on its bed empties it through the island onto whatever is below: a basin on the next island down, or a creature. | C | Earth | Water |
 | W9 | A boulder sits on an earth shelf above a spring. Undermine the shelf and the boulder drops to plug it. | C | Earth, Objects | Height |
 
 ### Objects
@@ -125,6 +130,7 @@ thing the puzzle turns on.
 | O6 | A seesaw with a heavy thing on the far end. Drop onto the near end from height to throw it. | X | Body | Height |
 | O7 | One crate. It is wanted as a plug in the outlet and as a step to the ledge. Find the other thing in the room that can plug. | X | Water | Lifters |
 | O8 | A trampoline on a float. Too little water and the bounce falls short; too much and the float rides over the lip and is lost. | C | Water | Water |
+| O10 | A crate is wanted on the island below. Carry it to the hole and drop it through, where it will land and not roll off. | C | Earth | Height |
 | O9 | A fountain tower stands by a wall. Cleave it at the neck and its blocks fall as a stair; blast it at the base and it shatters too small to climb. | X | Earth | Blast |
 
 ### Machines
@@ -201,7 +207,6 @@ each hard one:
 | Room reset at a shrine | Every room, since actions are irreversible | Not built |
 | Grenades as a limited pickup | E4 and the Blast economy | Grenades are free |
 | Room exit | Every room | A `Goal` object exists; untested as a room exit |
-| Flooding below a water table | Rule 7 | Not built |
 
 ## Open questions
 
