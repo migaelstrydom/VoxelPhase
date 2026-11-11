@@ -56,6 +56,13 @@ const BREAK_ELEVATION: f32 = 0.28;
 /// shell's wall its middle sits.
 const EYE_RADIUS: f32 = 0.046;
 const EYE_SET_BACK: f32 = 0.085;
+/// A hand of it, wrist to fingertip, m, and how far each joint of its
+/// fingers is curled to hook over the shell's edge, radians.
+const HAND: f32 = 0.22;
+const GRIP: f32 = 1.4;
+/// How far a gripping hand leans out from the wall toward its fingers,
+/// radians.
+const LEAN: f32 = 0.5;
 /// What is inside (linear).
 const INNARDS: (f32, f32, f32) = (0.13, 0.03, 0.03);
 /// The lids of its eye: skin that has not seen light (linear).
@@ -140,8 +147,9 @@ impl EggWalkerDef {
         (out * inside, out)
     }
 
-    /// The shell: hollow, broken open, cracked, and holed for the legs.
-    fn shell(rig: &StiltRigConfig) -> MeshPrimitive {
+    /// The shell's form: hollow, broken open, cracked, and holed for the
+    /// legs.
+    fn shell_form(rig: &StiltRigConfig) -> Clay {
         let at = |azimuth: f32, elevation: f32| {
             let (point, _) = Self::on_shell(azimuth, elevation);
             (point.x, point.y, point.z)
@@ -185,8 +193,35 @@ impl EggWalkerDef {
         for side in [-1.0, 1.0] {
             shell = shell.cut(Lump::ball(0.088, (side * rig.hip_width, hips, 0.0)), 0.012);
         }
+        shell
+    }
 
-        let mut mesh = shell.skin(SHELL_GRAIN, Paint::Shell.id());
+    /// How far up from the equator the break's lower edge is, radians, at
+    /// its highest within `reach` radians either side of `azimuth`: the
+    /// edge a hand that wide can hook over without a finger through the
+    /// wall.
+    fn rim(shell: &Clay, azimuth: f32, reach: f32) -> f32 {
+        let solid = |azimuth: f32, elevation: f32| {
+            let (surface, out) = Self::on_shell(azimuth, elevation);
+            shell.distance(surface - out * 0.5 * SHELL_THICKNESS) < 0.0
+        };
+        // Down from the break's middle to the first of the wall, wherever
+        // the break is open at that height.
+        let lower_edge = |azimuth: f32| {
+            (!solid(azimuth, BREAK_ELEVATION)).then(|| {
+                (1..80)
+                    .map(|step| BREAK_ELEVATION - 0.01 * step as f32)
+                    .find(|&elevation| solid(azimuth, elevation))
+            })?
+        };
+        (-2..=2)
+            .filter_map(|across| lower_edge(azimuth + 0.5 * reach * across as f32))
+            .fold(f32::MIN, f32::max)
+    }
+
+    /// The shell, skinned and stained.
+    fn shell(form: &Clay) -> MeshPrimitive {
+        let mut mesh = form.skin(SHELL_GRAIN, Paint::Shell.id());
         Mottle {
             frequency: 4.0,
             value: 0.12,
@@ -224,6 +259,7 @@ impl EggWalkerDef {
     /// Its dress, against the palette's slots.
     pub fn sculpt() -> Dress {
         let rig = Self::rig();
+        let shell = Self::shell_form(&rig);
         let (hole, out) = Self::on_shell(0.0, BREAK_ELEVATION);
         let socket = hole - out * EYE_SET_BACK;
 
@@ -248,14 +284,13 @@ impl EggWalkerDef {
             .skin(0.012, Paint::Wet.id());
 
         // Eight fingers hooked over the lower edge of the break, from
-        // inside: each hand turned so its fingers come up and over.
-        let over = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -1.1);
-        let grip = |side: FootSide, azimuth: f32, drop: f32| {
-            // The rim it grips, and the hand laid so the middle of its
-            // fingers rides over that.
-            let (rim, out) = Self::on_shell(azimuth, BREAK_ELEVATION - drop);
-            let size = 0.22;
-            let mut hand = anatomy::flesh(&anatomy::hand(size, 1.0, side), DIGIT_GRAIN);
+        // inside: each palm flat against the inside of the wall under the
+        // edge, its fingers up over the edge and down the outside.
+        let grip = |side: FootSide, azimuth: f32| {
+            let size = HAND;
+            let elevation = Self::rim(&shell, azimuth, 0.15 * size / 0.27);
+            let (rim, out) = Self::on_shell(azimuth, elevation);
+            let mut hand = anatomy::flesh(&anatomy::hand(size, GRIP, side), DIGIT_GRAIN);
             // Fingers that have scrabbled at the inside of a shell.
             for vertex in &mut hand.vertices {
                 let along = (vertex.pos.z / size - 0.55).clamp(0.0, 1.0);
@@ -264,8 +299,18 @@ impl EggWalkerDef {
                 vertex.color.y *= dirt * 0.96;
                 vertex.color.z *= dirt * 0.9;
             }
-            let reach = over * Vector3::new(0.0, 0.0, 0.7 * size);
-            placed(hand, over, rim + out * 0.012 + Vector3::y() * 0.012 - reach)
+            // Up the wall here, and the hand laid along that with its
+            // back to the middle of the egg, then leant so its wrist is
+            // deep inside: the wall curves, and a flat palm against it
+            // would come out through it lower down.
+            let wall = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), azimuth)
+                * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -(FRAC_PI_2 + elevation));
+            let leant = wall * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), LEAN);
+            // Its knuckles inside the wall and just proud of the edge, as
+            // far in as its fingers reach back to the outside.
+            let knuckles = leant * Vector3::new(0.0, 0.0, 0.44 * size);
+            let inside = rim - out * (SHELL_THICKNESS + 0.11 * size) + wall * Vector3::z() * 0.006;
+            placed(hand, leant, inside - knuckles)
         };
 
         // What has run from the break and down the shell, and dried there
@@ -306,13 +351,13 @@ impl EggWalkerDef {
             drive: Drive::Lid { shut },
         };
         let mut pieces = vec![
-            (Worn::on(Joint::Head), vec![Self::shell(&rig)]),
+            (Worn::on(Joint::Head), vec![Self::shell(&shell)]),
             (Worn::on(Joint::Head).breathing(0.035), vec![innards]),
             (
                 Worn::on(Joint::Head),
                 vec![
-                    grip(FootSide::Left, 0.17, 0.4),
-                    grip(FootSide::Right, -0.2, 0.36),
+                    grip(FootSide::Left, 0.17),
+                    grip(FootSide::Right, -0.2),
                     leak,
                 ],
             ),
@@ -331,12 +376,12 @@ impl EggWalkerDef {
             // A heavy upper lid that never quite clears the iris, and a
             // lower one swollen under it.
             (
-                Worn::on(lid(FRAC_PI_2 - 0.75)),
-                vec![anatomy::eyelid(EYE_RADIUS, 1.42, false, LID)],
+                Worn::on(lid(FRAC_PI_2 - 0.5)),
+                vec![anatomy::eyelid(EYE_RADIUS, 1.17, false, LID)],
             ),
             (
-                Worn::on(lid(-0.3)),
-                vec![anatomy::eyelid(EYE_RADIUS, 1.1, true, LID)],
+                Worn::on(lid(-0.45)),
+                vec![anatomy::eyelid(EYE_RADIUS, 0.92, true, LID)],
             ),
         ];
         pieces.extend(bare_legs(&rig, 0.066, 0.21));

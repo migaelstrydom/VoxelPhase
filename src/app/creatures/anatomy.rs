@@ -35,6 +35,11 @@ pub const SOLE: (f32, f32, f32) = (0.55, 0.36, 0.28);
 /// A nail.
 pub const NAIL: (f32, f32, f32) = (0.5, 0.42, 0.32);
 
+/// How far above the sole an ankle turns, m: where a shin ends and where
+/// a foot's ankle bone sits, so the two stay joined however the shin leans
+/// over the foot.
+const ANKLE_RISE: f32 = 0.05;
+
 /// Side of the grid flesh is skinned from, m, for a limb and for a hand or
 /// a foot, whose toes need more.
 pub const LIMB_GRAIN: f32 = 0.009;
@@ -139,10 +144,10 @@ pub fn thigh(length: f32, girth: f32) -> Clay {
 }
 
 /// A bare shin `length` long under a thigh of `girth`: the knee at its
-/// origin, the ground `length` below it. It ends in an ankle, a foot's
-/// height short of the ground.
+/// origin, the ground `length` below it. It ends in an ankle,
+/// [`ANKLE_RISE`] short of the ground.
 pub fn shin(length: f32, girth: f32) -> Clay {
-    let ankle = -length + 0.075;
+    let ankle = -length + ANKLE_RISE;
     Clay::new(0.5 * girth)
         .add(
             Lump::limb(
@@ -186,20 +191,13 @@ pub fn foot(length: f32, side: FootSide) -> MeshPrimitive {
         // Heel, the column of the ankle over it, and the instep running
         // down to the ball of the foot.
         .add(Lump::ball(0.14 * l, (0.0, 0.14 * l, -0.2 * l)), SOLE)
-        // The ankle, narrow over the heel, and the tendon up the back of
-        // it.
-        .add(
-            Lump::limb(
-                (0.0, 0.2 * l, -0.1 * l),
-                (0.0, 0.5 * l, -0.04 * l),
-                (0.12 * l, 0.1 * l),
-            ),
-            FLESH,
-        )
+        // The ankle bone the shin turns on, and the tendon from the heel
+        // up the back of it.
+        .add(Lump::ball(0.13 * l, (0.0, ANKLE_RISE, 0.0)), FLESH)
         .add(
             Lump::limb(
                 (0.0, 0.16 * l, -0.26 * l),
-                (0.0, 0.52 * l, -0.12 * l),
+                (0.0, ANKLE_RISE + 0.015, -0.1 * l),
                 (0.05 * l, 0.04 * l),
             ),
             FLESH,
