@@ -52,11 +52,13 @@ impl ModelInstance {
     }
 }
 
-/// What a [`PosedModel`]'s poses are measured in.
+/// What a [`PosedModel`]'s poses are measured from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PoseFrame {
-    /// The world: for a rig, which works out where its joints are there.
-    World,
+    /// The entity's position, along the world's axes: for a rig, which
+    /// works out where its joints are in the world whichever way the body
+    /// carrying it has turned.
+    Position,
     /// The entity's own frame, at its position and turned as it is: for
     /// parts that move on a body the physics carries.
     Entity,

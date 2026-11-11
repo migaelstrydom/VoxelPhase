@@ -130,7 +130,7 @@ impl<'a> System<'a> for StiltAnimationSystem {
             );
 
             if let Some(posed) = posed.get_mut(entity) {
-                posed.poses = animator.poses();
+                posed.poses = animator.poses_from(&pos.0);
             }
 
             // Every walker owns a recorder but only one can be armed, so

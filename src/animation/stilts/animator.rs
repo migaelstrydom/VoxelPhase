@@ -332,6 +332,18 @@ impl StiltAnimator {
         })
     }
 
+    /// [`Self::poses`] measured from `origin`, along the world's axes: what
+    /// a [`PoseFrame::Position`] model of a body at `origin` is posed with.
+    ///
+    /// [`PoseFrame::Position`]: crate::components::PoseFrame::Position
+    pub fn poses_from(&self, origin: &Vector3<f32>) -> Vec<Transform> {
+        let mut poses = self.poses();
+        for pose in &mut poses {
+            pose.translation -= origin;
+        }
+        poses
+    }
+
     /// Where each part of the dress is this frame, in the world, in the
     /// order of the dress's parts. Empty for a walker with no dress.
     pub fn poses(&self) -> Vec<Transform> {
@@ -431,6 +443,11 @@ mod tests {
 
     /// A walker dressed in three empty parts: a head, an eye and a lid.
     fn walker() -> StiltAnimator {
+        walker_at(Point3::new(0.0, 1.0, 0.0))
+    }
+
+    /// [`walker`], its body at `body`.
+    fn walker_at(body: Point3<f32>) -> StiltAnimator {
         let dress = Dress {
             model: Arc::new(Model::flat(vec![
                 ModelPart::new(Vec::new()),
@@ -450,13 +467,7 @@ mod tests {
                 }),
             ],
         };
-        StiltAnimator::new(
-            StiltRigConfig::default(),
-            Point3::new(0.0, 1.0, 0.0),
-            1.0,
-            0.0,
-        )
-        .wearing(Arc::new(dress))
+        StiltAnimator::new(StiltRigConfig::default(), body, 1.0, 0.0).wearing(Arc::new(dress))
     }
 
     /// Stand `walker` still for `seconds` in `mood`.
@@ -474,6 +485,20 @@ mod tests {
                 &[],
                 mood,
             );
+        }
+    }
+
+    #[test]
+    fn poses_measured_from_the_body_stay_within_the_walker_wherever_it_stands() {
+        let body = Point3::new(40.0, 3.0, -25.0);
+        let walker = walker_at(body);
+        let reach = StiltRigConfig::default().body_height();
+        let (world, from_body) = (walker.poses(), walker.poses_from(&body.coords));
+        assert_eq!(from_body.len(), 3);
+        for (world, from_body) in world.iter().zip(&from_body) {
+            assert!(from_body.translation.norm() < reach, "{from_body:?}");
+            let back = from_body.translation + body.coords;
+            assert!((back - world.translation).norm() < 1.0e-4);
         }
     }
 

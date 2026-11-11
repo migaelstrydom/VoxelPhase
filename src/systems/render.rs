@@ -437,7 +437,7 @@ impl<'a> System<'a> for RenderSystem {
                         (&entities, &rebuilt.posed, &positions, &renderables).join()
                     {
                         let frame = match posed.frame {
-                            PoseFrame::World => Matrix4::identity(),
+                            PoseFrame::Position => Matrix4::new_translation(&pos.0),
                             PoseFrame::Entity => {
                                 Matrix4::new_translation(&pos.0)
                                     * entity_rotation(entity, &orientations, &rotations)

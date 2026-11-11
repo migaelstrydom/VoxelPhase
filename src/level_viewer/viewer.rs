@@ -347,7 +347,7 @@ impl LevelViewer {
             for (entity, posed, position, _) in (&entities, &posed, &positions, &renderables).join()
             {
                 let frame = match posed.frame {
-                    PoseFrame::World => Matrix4::identity(),
+                    PoseFrame::Position => Matrix4::new_translation(&position.0),
                     PoseFrame::Entity => {
                         Matrix4::new_translation(&position.0)
                             * entity_rotation(entity, &orientations, &rotations)

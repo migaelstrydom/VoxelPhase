@@ -181,8 +181,8 @@ impl StiltWalker {
         // shows it.
         let posed = PosedModel {
             model: self.dress.model.clone(),
-            poses: animator.poses(),
-            frame: PoseFrame::World,
+            poses: animator.poses_from(&initial_pos.coords),
+            frame: PoseFrame::Position,
         };
 
         // Reach is the rig's own geometry plus the target's girth, so
