@@ -25,7 +25,7 @@ use super::anatomy::{self, EyeLook, DIGIT_GRAIN};
 use super::likeness;
 use super::palette::{self, Paint, BESTIARY};
 use super::stilt_walker::{bare_legs, Peck, StiltWalker};
-use crate::animation::stilts::{Dress, Drive, Joint, StiltRigConfig, Worn};
+use crate::animation::stilts::{Carriage, Dress, Drive, Joint, StiltRigConfig, Worn};
 use crate::animation::{FootPlacerConfig, FootSide};
 use crate::app::sculpt::{Clay, Grime, Lump, Mottle, Relief, Spots, VertexPaint};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
@@ -115,6 +115,7 @@ impl EggWalkerDef {
             // Knees that bend the way a man's do.
             knee_bend: 1.0,
             foot_placer: FootPlacerConfig::default(),
+            carriage: Carriage::default(),
         }
     }
 

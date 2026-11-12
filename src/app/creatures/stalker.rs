@@ -34,7 +34,7 @@ use super::bird_anatomy::{
 use super::likeness;
 use super::palette::{self, Paint, BESTIARY};
 use super::stilt_walker::{Peck, StiltWalker};
-use crate::animation::stilts::{Dress, Drive, Joint, StiltRigConfig, Worn};
+use crate::animation::stilts::{Carriage, Dress, Drive, Joint, StiltRigConfig, Worn};
 use crate::animation::{FootPlacerConfig, FootSide};
 use crate::app::sculpt::{
     scatter, Blush, Clay, Ellipsoid, Grime, Lump, Mottle, Relief, Spots, Veins, VertexPaint,
@@ -1403,6 +1403,7 @@ impl StalkerDef {
             stride_gain: 0.6,
             knee_bend: -1.0,
             foot_placer: FootPlacerConfig::default(),
+            carriage: Carriage::default(),
         }
     }
 

@@ -25,7 +25,7 @@ use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{Gaze, Lobber, LobberBody, Swell};
+use crate::creature::{Gaze, Lobber, LobberBody, Swell, Throw};
 use crate::damage::{Health, Ragdoll};
 use crate::model::{MeshPrimitive, Model, ModelPart, Transform};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
@@ -56,8 +56,8 @@ const PARTS: usize = 5;
 
 /// The bag's size just after a throw and as the next is due, as scales of
 /// the size it is sculpted.
-const SLACK: (f32, f32, f32) = (0.96, 0.89, 0.96);
-const TIGHT: (f32, f32, f32) = (1.06, 1.06, 1.06);
+const SLACK: (f32, f32, f32) = (0.94, 0.84, 0.94);
+const TIGHT: (f32, f32, f32) = (1.07, 1.09, 1.07);
 /// The cheeks' size between puffs and at the top of one.
 const CHEEKS_SLACK: f32 = 0.84;
 const CHEEKS_TIGHT: f32 = 1.1;
@@ -95,6 +95,7 @@ impl PiperDef {
                 tight: Vector3::repeat(CHEEKS_TIGHT),
             }),
             eyes: [eye(0), eye(1)],
+            frame: Some(FIXTURES),
         }
     }
 
@@ -138,7 +139,12 @@ impl PiperDef {
     /// watching `target` (in its own frame).
     fn poses(fullness: f32, target: Option<Vector3<f32>>) -> Vec<Transform> {
         let mut poses = vec![Transform::default(); PARTS];
-        Self::body().pose(&mut poses, fullness, 0.0, target);
+        let throw = Throw {
+            fullness,
+            since: None,
+            until: None,
+        };
+        Self::body().pose(&mut poses, throw, 0.0, target);
         poses
     }
 
@@ -211,6 +217,7 @@ impl Spawnable for PiperDef {
             range: RANGE,
             interval: INTERVAL,
             remaining: INTERVAL,
+            since_throw: None,
             flight_time: FLIGHT_TIME,
             muzzle: Vector3::y() * MUZZLE,
             body: Some(Self::body()),

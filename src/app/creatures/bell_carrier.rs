@@ -29,7 +29,7 @@ use super::anatomy::{self, EyeLook};
 use super::likeness;
 use super::palette::{self, Paint, BESTIARY};
 use super::stilt_walker::{bare_legs, Peck, StiltWalker};
-use crate::animation::stilts::{Dress, Drive, Joint, StiltRigConfig, Worn};
+use crate::animation::stilts::{Carriage, Dress, Drive, Joint, StiltRigConfig, Worn};
 use crate::animation::{FootPlacerConfig, FootSide};
 use crate::app::sculpt::{scatter, Blush, Clay, Grime, Lump, Mottle, Relief, VertexPaint};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
@@ -381,6 +381,19 @@ impl BellCarrierDef {
             stride_gain: 0.6,
             knee_bend: 1.0,
             foot_placer: FootPlacerConfig::default(),
+            // A bronze bell on short legs: it waddles, rolling well over
+            // each planted foot and swinging past it, slow to answer and
+            // slow to settle.
+            carriage: Carriage {
+                dip: 0.12,
+                sway: 0.17,
+                lean: 0.05,
+                stride_speed: 1.8,
+                heft: 0.04,
+                frequency: 7.0,
+                damping: 0.22,
+                ..Carriage::default()
+            },
         }
     }
 

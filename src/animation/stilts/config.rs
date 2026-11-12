@@ -2,6 +2,8 @@
 
 use crate::animation::FootPlacerConfig;
 
+use super::carriage::Carriage;
+
 /// The proportions of a creature on two long legs.
 ///
 /// ```text
@@ -68,6 +70,8 @@ pub struct StiltRigConfig {
     pub knee_bend: f32,
 
     pub foot_placer: FootPlacerConfig,
+    /// How the body rides the legs: its dip, lean, rock and heft.
+    pub carriage: Carriage,
 }
 
 impl StiltRigConfig {
@@ -149,6 +153,7 @@ impl Default for StiltRigConfig {
             knee_bend: -1.0,
 
             foot_placer: FootPlacerConfig::default(),
+            carriage: Carriage::default(),
         }
     }
 }

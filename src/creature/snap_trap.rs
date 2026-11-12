@@ -9,6 +9,9 @@
 //!             jaw parts a crack and the catch is drawn in
 //!     creak   the jaw eases open again; then it lies open, waiting
 //!
+//!   lying open, the jaw rises and falls a little with its breath; with
+//!   someone near it narrows and quivers, which is all the warning it gives
+//!
 //!   Moment ──TrapRig::poses──▶ PosedModel: the jaw on its hinge, the muscle
 //!                              stretched between the jaws, the flesh
 //!                              breathing in the bed, the catch
@@ -25,7 +28,7 @@ use specs::{
     Component, DenseVecStorage, Join, LendJoin, Read, ReadStorage, System, Write, WriteStorage,
 };
 
-use super::perception::Perception;
+use super::perception::{PerceivedTarget, Perception};
 use crate::components::{PosedModel, Position};
 use crate::damage::{DamageKind, DamageQueue, Dead};
 use crate::model::Transform;
@@ -36,6 +39,19 @@ const DEPTH: f32 = 1.0;
 
 /// Breaths a second of the flesh in a trap.
 const BREATH_RATE: f32 = 0.22;
+
+/// How far an open jaw sinks with each breath, as a share of its gape.
+const IDLE_GAPE: f32 = 0.07;
+
+/// How near something must be for the trap to grow wary, as a multiple of
+/// its bite radius, and how fast it grows wary or calms again, 1/s.
+const WARY_RANGE: f32 = 4.0;
+const WARY_RATE: f32 = 3.0;
+/// How far a wary jaw narrows, as a share of its gape, and how far and how
+/// fast it quivers, rad/s.
+const WARY_NARROW: f32 = 0.1;
+const QUIVER: f32 = 0.035;
+const QUIVER_RATE: f32 = 57.0;
 
 /// The shudder as the jaw lands: how far it bounces open, as a share of its
 /// gape, how fast that dies away, 1/s, and how fast it rattles, rad/s.
@@ -310,6 +326,8 @@ pub struct SnapTrap {
     since_bite: Option<f32>,
     /// Seconds it has lain there: the clock its flesh breathes by.
     clock: f32,
+    /// How wary it is of something near, 0 to 1.
+    wary: f32,
 }
 
 impl SnapTrap {
@@ -322,6 +340,7 @@ impl SnapTrap {
             rig,
             since_bite: None,
             clock: 0.0,
+            wary: 0.0,
         }
     }
 
@@ -330,9 +349,12 @@ impl SnapTrap {
         self.since_bite.is_none()
     }
 
-    /// Advance by `dt` with something in it or not. Returns whether it bit.
-    fn tick(&mut self, dt: f32, occupied: bool) -> bool {
+    /// Advance by `dt` with something in it or not, and something near it
+    /// or not. Returns whether it bit.
+    fn tick(&mut self, dt: f32, occupied: bool, near: bool) -> bool {
         self.clock += dt;
+        let wary = if near || occupied { 1.0 } else { 0.0 };
+        self.wary += (wary - self.wary) * (1.0 - (-WARY_RATE * dt).exp());
         match self.since_bite {
             None if occupied => {
                 self.since_bite = Some(0.0);
@@ -353,11 +375,26 @@ impl SnapTrap {
             Some(since) => self.cycle.jaw(since),
             None => (1.0, None),
         };
+        let breath = self.clock * BREATH_RATE * TAU;
+        // With nothing between its jaws they are as open as it holds them,
+        // and the slam and the creak run from and to that.
+        let gape = match caught {
+            Some(_) => gape,
+            None => gape * self.held_open(breath),
+        };
         Moment {
             gape,
             caught,
-            breath: self.clock * BREATH_RATE * TAU,
+            breath,
         }
+    }
+
+    /// How far open it holds its jaw lying in wait, as a share of its gape:
+    /// sinking a little as it breathes out, narrowed and quivering when wary.
+    fn held_open(&self, breath: f32) -> f32 {
+        let exhaled = 0.5 - 0.5 * breath.cos();
+        let quiver = QUIVER * (self.clock * QUIVER_RATE).sin();
+        1.0 - IDLE_GAPE * exhaled - self.wary * (WARY_NARROW + quiver)
     }
 
     /// Each part of its model's pose now, in part order.
@@ -391,12 +428,15 @@ impl<'a> System<'a> for SnapTrapSystem {
         )
             .join()
         {
-            let victim = perception.target.filter(|target| {
-                target.visible
-                    && target.distance <= trap.radius
-                    && (target.position.y - position.0.y).abs() <= DEPTH
+            let level =
+                |target: &PerceivedTarget| (target.position.y - position.0.y).abs() <= DEPTH;
+            let victim = perception
+                .target
+                .filter(|target| target.visible && target.distance <= trap.radius && level(target));
+            let near = perception.target.is_some_and(|target| {
+                target.visible && target.distance <= WARY_RANGE * trap.radius && level(&target)
             });
-            let bit = trap.tick(time.delta_seconds(), victim.is_some());
+            let bit = trap.tick(time.delta_seconds(), victim.is_some(), near);
             if let Some(victim) = victim.filter(|_| bit) {
                 queue.push(victim.entity, trap.damage, DamageKind::Melee);
             }
@@ -479,9 +519,11 @@ mod tests {
             posed.get(trap).unwrap().poses[1].rotation.angle()
         };
 
-        // The frame it bites, its jaw still stands open.
+        // The frame it bites, its jaw still stands open, as open as it
+        // holds it lying in wait.
         SnapTrapSystem.run_now(&world);
-        assert!((jaw_turn(&world) - FRAC_PI_2).abs() < 1e-3);
+        let held = 1.0 - IDLE_GAPE - WARY_NARROW - QUIVER;
+        assert!(jaw_turn(&world) > held * FRAC_PI_2 - 1e-3);
         // A fifth of a second on, it has shut, and it bit the once.
         for _ in 0..10 {
             SnapTrapSystem.run_now(&world);
@@ -497,23 +539,51 @@ mod tests {
     #[test]
     fn it_bites_once_holds_shut_and_then_opens() {
         let mut trap = trap();
-        assert!(!trap.tick(0.1, false), "sprung by nothing");
+        assert!(!trap.tick(0.1, false, false), "sprung by nothing");
         assert!(trap.is_open());
-        assert!(trap.tick(0.1, true));
+        assert!(trap.tick(0.1, true, true));
         assert!(!trap.is_open());
         // Shut, it does not bite again whoever is still in it.
-        assert!(!trap.tick(1.0, true));
+        assert!(!trap.tick(1.0, true, true));
         assert!(trap.moment().gape < 0.01, "it should be holding shut");
         // Nor while it is easing open.
-        assert!(!trap.tick(1.5, true));
+        assert!(!trap.tick(1.5, true, true));
         assert!(!trap.is_open());
         let half_way = trap.moment().gape;
         assert!((0.2..0.8).contains(&half_way), "easing open at {half_way}");
-        assert!(!trap.tick(0.6, true));
+        assert!(!trap.tick(0.6, true, true));
         assert!(trap.is_open(), "it should have opened");
-        assert_eq!(trap.moment().gape, 1.0);
+        let gape = trap.moment().gape;
+        assert!(
+            gape > 1.0 - IDLE_GAPE - WARY_NARROW - QUIVER,
+            "open to {gape}"
+        );
         // And is ready again.
-        assert!(trap.tick(0.1, true));
+        assert!(trap.tick(0.1, true, true));
+    }
+
+    #[test]
+    fn lying_open_it_breathes_and_narrows_its_jaw_when_someone_comes_near() {
+        let mut trap = trap();
+        let mut gapes = Vec::new();
+        for _ in 0..(2.0 / (BREATH_RATE * 0.05)) as usize {
+            trap.tick(0.05, false, false);
+            gapes.push(trap.moment().gape);
+        }
+        let (low, high) = gapes
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), g| (lo.min(*g), hi.max(*g)));
+        assert!(high > 0.99 && low < 1.0 - 0.9 * IDLE_GAPE, "{low}..{high}");
+
+        let calm: f32 = gapes.iter().sum::<f32>() / gapes.len() as f32;
+        let mut wary = Vec::new();
+        for _ in 0..gapes.len() {
+            trap.tick(0.05, false, true);
+            wary.push(trap.moment().gape);
+        }
+        let wary: f32 = wary.iter().sum::<f32>() / wary.len() as f32;
+        assert!(wary < calm - 0.7 * WARY_NARROW, "calm {calm}, wary {wary}");
+        assert!(trap.is_open(), "only coming near does not spring it");
     }
 
     #[test]

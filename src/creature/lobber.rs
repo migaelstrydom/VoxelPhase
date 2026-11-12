@@ -5,10 +5,14 @@
 //!                                   lands on the target after `flight_time`
 //!
 //!   seconds to the next throw ──▶ LobberBody ──▶ PosedModel: a bag that sags
-//!   what it watches ────────────▶                after a throw and swells
-//!                                                tight as the next comes,
+//!   seconds since the last ─────▶                after a throw and swells
+//!   what it watches ────────────▶                tight as the next comes,
 //!                                                cheeks that fill it, eyes
-//!                                                that follow the target
+//!                                                that follow the target,
+//!                                                and the whole of it
+//!                                                squatting and trembling
+//!                                                as it winds up, heaving
+//!                                                up as the bomb leaves
 //! ```
 //!
 //! The bombs are the game's own grenades, so they fall, bounce, go off and
@@ -43,6 +47,22 @@ const PUFF_RATE: (f32, f32) = (0.9, 2.6);
 /// How far past slack a dead lobber's bag sinks, as a share of the way from
 /// slack to tight.
 const DEAD_SAG: f32 = 0.6;
+
+/// Seconds before a throw it squats into it, how far it sinks and spreads
+/// at the bottom of the squat (shares of its height and width), and how
+/// fast and how hard it trembles there.
+const WINDUP_SECONDS: f32 = 0.55;
+const WINDUP_SQUAT: f32 = 0.09;
+const WINDUP_SPREAD: f32 = 0.05;
+const TREMBLE_RATE: f32 = 11.0;
+const TREMBLE: f32 = 0.015;
+
+/// How far it stretches up as a bomb leaves (a share of its height), how
+/// fast that dies away (seconds to fall to a third), and how many times a
+/// second it bounces as it settles.
+const HEAVE: f32 = 0.16;
+const HEAVE_DECAY: f32 = 0.2;
+const HEAVE_RATE: f32 = 2.4;
 
 /// A part of a lobber's model that swells and sags.
 #[derive(Debug, Clone, Copy)]
@@ -119,20 +139,52 @@ pub struct LobberBody {
     pub cheeks: Option<Swell>,
     /// Eyes that follow what it throws at.
     pub eyes: [Option<Gaze>; 2],
+    /// The part that carries the rest (pipes, head, limbs), if it has one:
+    /// it moves only with the heave of the whole.
+    pub frame: Option<usize>,
+}
+
+/// Where a lobber is in a throw, for its body to show.
+#[derive(Debug, Clone, Copy)]
+pub struct Throw {
+    /// How far it is from one throw to the next, 0 to 1.
+    pub fullness: f32,
+    /// Seconds since it last threw, if it has.
+    pub since: Option<f32>,
+    /// Seconds until it throws, if it has something to throw at.
+    pub until: Option<f32>,
+}
+
+impl Throw {
+    /// How the whole body is scaled about its seat this instant: squatting
+    /// and trembling into a throw, stretched up and bouncing after one.
+    pub fn heave(&self, clock: f32) -> Vector3<f32> {
+        let windup = self.until.map_or(0.0, |until| {
+            let into = (1.0 - until / WINDUP_SECONDS).clamp(0.0, 1.0);
+            into * into * (3.0 - 2.0 * into)
+        });
+        let tremble = TREMBLE * windup * (clock * TREMBLE_RATE * TAU).sin();
+        let release = self.since.map_or(0.0, |since| {
+            HEAVE * (-since / HEAVE_DECAY).exp() * (since * HEAVE_RATE * TAU).cos()
+        });
+        let up = 1.0 - WINDUP_SQUAT * windup + tremble + release;
+        let across = 1.0 + WINDUP_SPREAD * windup - 0.5 * release;
+        Vector3::new(across, up, across)
+    }
 }
 
 impl LobberBody {
     /// Pose the parts it moves, in `poses` (one to a part of the model):
-    /// `fullness` of the way from one throw to the next, `clock` seconds
-    /// into its breathing, watching `target` (in the entity's frame).
+    /// where it is in `throw`, `clock` seconds into its breathing, watching
+    /// `target` (in the entity's frame).
     pub fn pose(
         &self,
         poses: &mut [Transform],
-        fullness: f32,
+        throw: Throw,
         clock: f32,
         target: Option<Vector3<f32>>,
     ) {
-        let fullness = fullness.clamp(0.0, 1.0);
+        let fullness = throw.fullness.clamp(0.0, 1.0);
         // It fills fast at first and strains at the end.
         let filled = 1.0 - (1.0 - fullness) * (1.0 - fullness);
         let breath = BREATH_DEPTH * (clock * BREATH_RATE * TAU).sin();
@@ -149,6 +201,30 @@ impl LobberBody {
         }
         for eye in self.eyes.iter().flatten() {
             set(poses, eye.part, eye.pose(target));
+        }
+        if let Some(frame) = self.frame {
+            set(poses, frame, Transform::default());
+        }
+        self.heave(poses, throw.heave(clock));
+    }
+
+    /// Scale every part it moves by `scale` about the bag's seat, the point
+    /// it squats on.
+    fn heave(&self, poses: &mut [Transform], scale: Vector3<f32>) {
+        let seat = self.bag.seat;
+        let parts = [
+            Some(self.bag.part),
+            self.cheeks.map(|cheeks| cheeks.part),
+            self.frame,
+        ]
+        .into_iter()
+        .chain(self.eyes.iter().map(|eye| eye.map(|eye| eye.part)))
+        .flatten();
+        for part in parts {
+            if let Some(pose) = poses.get_mut(part) {
+                pose.translation = seat + (pose.translation - seat).component_mul(&scale);
+                pose.scale = pose.scale.component_mul(&scale);
+            }
         }
     }
 
@@ -191,6 +267,8 @@ pub struct Lobber {
     /// The parts of its [`PosedModel`] that show a throw coming, if it has
     /// any.
     pub body: Option<LobberBody>,
+    /// Seconds since it last threw, if it has.
+    pub since_throw: Option<f32>,
 }
 
 impl Lobber {
@@ -259,7 +337,13 @@ impl<'a> System<'a> for LobberSystem {
             (&entities, &positions, &perceptions, &mut lobbers, !&deads).join()
         {
             lobber.remaining = (lobber.remaining - time.delta_seconds()).max(0.0);
+            if let Some(since) = &mut lobber.since_throw {
+                *since += time.delta_seconds();
+            }
             let target = perception.target.filter(|target| target.visible);
+            let in_range = target.is_some_and(|target| {
+                target.distance >= lobber.range.0 && target.distance <= lobber.range.1
+            });
 
             if let (Some(body), Some(posed)) = (lobber.body, posed.get_mut(entity)) {
                 let facing = orientations
@@ -269,18 +353,23 @@ impl<'a> System<'a> for LobberSystem {
                     target.map(|target| facing.inverse() * (target.position.coords - position.0));
                 // No two breathe together.
                 let clock = time.total_seconds() + 1.7 * entity.id() as f32;
-                body.pose(&mut posed.poses, lobber.fullness(), clock, watched);
+                let throw = Throw {
+                    fullness: lobber.fullness(),
+                    since: lobber.since_throw,
+                    until: in_range.then_some(lobber.remaining),
+                };
+                body.pose(&mut posed.poses, throw, clock, watched);
             }
 
             let (Some(target), Some((config, model)), Some(gravity)) = (target, &grenades, gravity)
             else {
                 continue;
             };
-            let in_range = target.distance >= lobber.range.0 && target.distance <= lobber.range.1;
             if lobber.remaining > 0.0 || !in_range {
                 continue;
             }
             lobber.remaining = lobber.interval;
+            lobber.since_throw = Some(0.0);
             let origin = Point3::from(position.0 + lobber.muzzle);
             spawn_grenade(
                 lazy.create_entity(&entities),
@@ -329,6 +418,16 @@ mod tests {
                 }),
                 None,
             ],
+            frame: Some(3),
+        }
+    }
+
+    /// At `fullness`, with no throw lately and none coming.
+    fn resting(fullness: f32) -> Throw {
+        Throw {
+            fullness,
+            since: None,
+            until: None,
         }
     }
 
@@ -340,6 +439,7 @@ mod tests {
             flight_time: 1.8,
             muzzle: Vector3::y(),
             body: Some(body()),
+            since_throw: None,
         }
     }
 
@@ -363,12 +463,12 @@ mod tests {
     #[test]
     fn its_bag_sags_after_a_throw_and_swells_tight_as_the_next_comes() {
         let body = body();
-        let mut poses = vec![Transform::default(); 3];
+        let mut poses = vec![Transform::default(); 4];
         // At the same instant of its breath, from the throw to the next.
         let mut last = 0.0;
         for step in 0..=8 {
             let lobber = lobber(4.0 - 0.5 * step as f32);
-            body.pose(&mut poses, lobber.fullness(), 0.0, None);
+            body.pose(&mut poses, resting(lobber.fullness()), 0.0, None);
             let height = poses[0].scale.y;
             assert!(height > last, "it sank at step {step}: {height}");
             last = height;
@@ -378,15 +478,15 @@ mod tests {
                 .transform_point(&Point3::from(body.bag.seat));
             assert!((seat.coords - body.bag.seat).norm() < 1e-5);
         }
-        body.pose(&mut poses, 0.0, 0.0, None);
+        body.pose(&mut poses, resting(0.0), 0.0, None);
         assert!((poses[0].scale - body.bag.slack).norm() < 1e-5);
-        body.pose(&mut poses, 1.0, 0.0, None);
+        body.pose(&mut poses, resting(1.0), 0.0, None);
         assert!((poses[0].scale - body.bag.tight).norm() < 1e-5);
 
         // A breath moves it a little, and never as far as a throw does.
         let breathing: Vec<f32> = (0..40)
             .map(|tick| {
-                body.pose(&mut poses, 0.5, tick as f32 * 0.1, None);
+                body.pose(&mut poses, resting(0.5), tick as f32 * 0.1, None);
                 poses[0].scale.y
             })
             .collect();
@@ -399,6 +499,52 @@ mod tests {
         // Dead, it lies lower than it ever did alive.
         body.slump(&mut poses);
         assert!(poses[0].scale.y < body.bag.slack.y);
+    }
+
+    #[test]
+    fn it_squats_into_a_throw_and_heaves_up_as_the_bomb_leaves() {
+        let body = body();
+        let mut poses = vec![Transform::default(); 4];
+        let height = |poses: &[Transform]| poses[3].scale.y;
+        let at = |throw: Throw, poses: &mut Vec<Transform>| {
+            // At a crossing of its tremble, so only the squat shows.
+            body.pose(poses, throw, 0.0, None);
+            height(poses)
+        };
+        let still = at(resting(0.5), &mut poses);
+        assert!((still - 1.0).abs() < 1e-5, "at rest it is as sculpted");
+        let due = |until| Throw {
+            fullness: 1.0,
+            since: None,
+            until: Some(until),
+        };
+        assert!(
+            (at(due(2.0), &mut poses) - 1.0).abs() < 1e-5,
+            "too early to squat"
+        );
+        let squat = at(due(0.0), &mut poses);
+        assert!(
+            squat < 1.0 - 0.8 * WINDUP_SQUAT,
+            "it did not squat: {squat}"
+        );
+        let thrown = |since| Throw {
+            fullness: 0.0,
+            since: Some(since),
+            until: None,
+        };
+        let heave = at(thrown(0.0), &mut poses);
+        assert!(heave > 1.0 + 0.9 * HEAVE, "it did not heave: {heave}");
+        assert!(
+            (at(thrown(2.0), &mut poses) - 1.0).abs() < 0.01,
+            "it never settled"
+        );
+
+        // Squatting or heaving, it stays on its seat.
+        body.pose(&mut poses, due(0.0), 0.0, None);
+        let seat = poses[0]
+            .to_matrix()
+            .transform_point(&Point3::from(body.bag.seat));
+        assert!((seat.coords - body.bag.seat).norm() < 1e-5);
     }
 
     #[test]

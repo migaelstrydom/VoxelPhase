@@ -32,7 +32,7 @@ use super::fish_anatomy::{
 use super::likeness;
 use super::palette::{self, Paint, BESTIARY};
 use super::stilt_walker::{bare_legs, Peck, StiltWalker};
-use crate::animation::stilts::{Dress, Drive, Joint, StiltRigConfig, Worn};
+use crate::animation::stilts::{Carriage, Dress, Drive, Joint, StiltRigConfig, Worn};
 use crate::animation::FootPlacerConfig;
 use crate::app::sculpt::{scatter, Blush, Clay, Ellipsoid, Lump, Mottle, Relief, VertexPaint};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
@@ -253,6 +253,7 @@ impl FishWalkerDef {
             stride_gain: 0.6,
             knee_bend: 1.0,
             foot_placer: FootPlacerConfig::default(),
+            carriage: Carriage::default(),
         }
     }
 

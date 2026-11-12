@@ -26,6 +26,7 @@ use crate::character::{CharacterIntent, Grounding};
 use crate::model::Transform;
 use crate::sensing::{ContactCandidate, Probe};
 
+use super::carriage::{CarriageMotion, Gait};
 use super::config::StiltRigConfig;
 use super::dress::{Dress, Drive, Joint};
 use super::skeleton::{aim, FootPose, StiltSkeleton};
@@ -48,13 +49,6 @@ const BLINK_EVERY: (f32, f32) = (1.8, 6.0);
 const GLANCE_EVERY: (f32, f32) = (0.4, 2.2);
 const GLANCE_REACH: f32 = 0.7;
 const EYE_RATE: f32 = 18.0;
-
-/// How far the body leans over its planted foot when the other is at the
-/// top of its swing, radians, how fast it leans, 1/s, and how far it idles
-/// from side to side when it is going nowhere.
-const SWAY: f32 = 0.085;
-const SWAY_RATE: f32 = 9.0;
-const IDLE_SWAY: f32 = 0.012;
 
 /// Breaths a second at rest.
 const BREATH_RATE: f32 = 0.35;
@@ -95,9 +89,8 @@ pub struct StiltAnimator {
     /// How shut the eyes are held, in `[0, 1]`. Chases the mood rather
     /// than snapping to it.
     lid_close: f32,
-    /// How far the body leans to its right, radians: over whichever foot
-    /// is planted while the other swings.
-    sway: f32,
+    /// How the body rides the legs this frame.
+    carriage: CarriageMotion,
     /// Where a strike is, as the mood last gave it.
     thrust: f32,
     /// What the eyes are turned to, as the mood last gave it.
@@ -147,7 +140,7 @@ impl StiltAnimator {
             dress: None,
             tuck: 0.0,
             lid_close: 1.0,
-            sway: 0.0,
+            carriage: CarriageMotion::default(),
             thrust: 0.0,
             watching: None,
             clock: 0.0,
@@ -230,16 +223,27 @@ impl StiltAnimator {
         let facing = facing_from(yaw);
         let feet = self.foot_poses(pelvis, facing);
         // It leans away from whichever foot is in the air, as anything on
-        // two legs must, and shifts its weight a little even standing.
+        // two legs must, sinks as both come down, and its top lags behind
+        // whatever its legs do.
         let lifted = (feet[0].position.y - feet[1].position.y) / self.config.step_height.max(1e-3);
-        let wanted = SWAY * lifted.clamp(-1.0, 1.0) + IDLE_SWAY * (self.clock * 0.7).sin();
-        self.sway += (wanted - self.sway) * approach(SWAY_RATE, dt);
+        self.carriage.step(
+            &self.config.carriage,
+            self.config.standing_height(),
+            dt,
+            &Gait {
+                velocity,
+                facing,
+                lifted: lifted * (1.0 - self.tuck),
+                clock: self.clock,
+            },
+        );
+        let carried = pelvis - Vector3::y() * self.carriage.dip();
         self.skeleton.update(
             &self.config,
-            pelvis,
+            carried,
             facing,
             self.neck_pitch(self.thrust),
-            self.sway,
+            self.carriage.tilt(facing),
             feet,
         );
     }
@@ -636,7 +640,8 @@ mod tests {
         assert!((off - 0.3).abs() < 0.01, "turned {off} rad");
         assert!(look.dot(&ahead_now) > 0.0, "it turned the wrong way round");
         // The head has not turned to help: it only sways as it stands.
-        assert!((side - side_now).norm() < 2.0 * IDLE_SWAY);
+        let idle_sway = StiltRigConfig::default().carriage.idle_sway;
+        assert!((side - side_now).norm() < 2.5 * idle_sway);
     }
 
     #[test]

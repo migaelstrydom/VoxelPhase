@@ -45,6 +45,9 @@ pub struct StiltSkeleton {
     pub crown: Vector3<f32>,
     /// Horizontal direction the creature faces.
     pub facing: Vector3<f32>,
+    /// How the body is tipped and leant over its hips, as its carriage
+    /// rocks it.
+    pub tilt: UnitQuaternion<f32>,
     /// Left leg, then right.
     pub legs: [Leg; 2],
 }
@@ -110,7 +113,8 @@ impl StiltSkeleton {
         });
 
         let shoulder = pelvis + Vector3::y() * config.haunch_height;
-        let (head, gaze, crown) = head_at(config, shoulder, facing, config.rest_pitch, 0.0);
+        let tilt = UnitQuaternion::identity();
+        let (head, gaze, crown) = head_at(config, shoulder, facing, config.rest_pitch, tilt);
 
         Self {
             pelvis,
@@ -119,27 +123,30 @@ impl StiltSkeleton {
             gaze,
             crown,
             facing,
+            tilt,
             legs,
         }
     }
 
-    /// Place the body, pitch the neck forward by `neck_pitch` and lean it
-    /// sideways by `sway` (radians, toward the walker's right for a
-    /// positive one), and solve the legs under it.
+    /// Place the body, tilt it over its hips by `tilt` (see
+    /// [`CarriageMotion::tilt`](super::carriage::CarriageMotion::tilt)),
+    /// pitch the neck forward of the body's upright by `neck_pitch`, and
+    /// solve the legs under it.
     pub fn update(
         &mut self,
         config: &StiltRigConfig,
         pelvis: Point3<f32>,
         facing: Vector3<f32>,
         neck_pitch: f32,
-        sway: f32,
+        tilt: UnitQuaternion<f32>,
         feet: [FootPose; 2],
     ) {
         self.facing = facing.try_normalize(1e-4).unwrap_or(self.facing);
         self.pelvis = pelvis;
-        self.shoulder = pelvis + Vector3::y() * config.haunch_height;
+        self.tilt = tilt;
+        self.shoulder = pelvis + tilt * Vector3::y() * config.haunch_height;
 
-        let (head, gaze, crown) = head_at(config, self.shoulder, self.facing, neck_pitch, sway);
+        let (head, gaze, crown) = head_at(config, self.shoulder, self.facing, neck_pitch, tilt);
         self.head = head;
         self.gaze = gaze;
         self.crown = crown;
@@ -163,9 +170,14 @@ impl StiltSkeleton {
         }
     }
 
-    /// Level over the hips, facing as the walker faces.
+    /// Over the hips, facing as the walker faces, tilted as its carriage
+    /// rocks it.
     pub fn hips(&self) -> Transform {
-        pose(self.pelvis, Vector3::y(), self.facing)
+        pose(
+            self.pelvis,
+            self.tilt * Vector3::y(),
+            self.tilt * self.facing,
+        )
     }
 
     /// At the shoulder, +Y to the head.
@@ -199,8 +211,8 @@ impl StiltSkeleton {
 }
 
 /// Where the head sits, what it is looking at and where its crown points,
-/// for a neck pitched `pitch` radians forward of vertical and leaning
-/// `sway` radians to the side.
+/// for a neck pitched `pitch` radians forward of the body's upright, the
+/// body tilted by `tilt`.
 ///
 /// The gaze is the neck direction turned a quarter of a turn forward, not
 /// the neck direction itself: the face is on the *front* of the head, so a
@@ -211,14 +223,13 @@ fn head_at(
     shoulder: Point3<f32>,
     facing: Vector3<f32>,
     pitch: f32,
-    sway: f32,
+    tilt: UnitQuaternion<f32>,
 ) -> (Point3<f32>, Vector3<f32>, Vector3<f32>) {
     let (sin, cos) = pitch.sin_cos();
-    // A lean is a turn about the way the walker faces: it carries the
-    // neck over to one side and the head's crown with it.
-    let lean = UnitQuaternion::from_scaled_axis(facing * sway);
-    let neck = lean * (Vector3::y() * cos + facing * sin);
-    let gaze = lean * (facing * cos - Vector3::y() * sin);
+    // The tilt carries the neck over with the body, and the head's crown
+    // with it.
+    let neck = tilt * (Vector3::y() * cos + facing * sin);
+    let gaze = tilt * (facing * cos - Vector3::y() * sin);
     (shoulder + neck * config.neck_length, gaze, neck)
 }
 
@@ -258,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sway_leans_the_head_over_to_one_side_and_keeps_it_as_far_from_the_shoulder() {
+    fn a_tilt_leans_the_head_over_to_one_side_and_keeps_it_as_far_from_the_shoulder() {
         let config = StiltRigConfig::default();
         let pelvis = Point3::new(0.0, 1.0, 0.0);
         let mut skeleton = StiltSkeleton::new(&config, pelvis, Vector3::z());
@@ -268,7 +279,8 @@ mod tests {
             forward: Vector3::z(),
             up: Vector3::y(),
         });
-        skeleton.update(&config, pelvis, Vector3::z(), config.rest_pitch, 0.2, feet);
+        let lean = UnitQuaternion::from_scaled_axis(Vector3::z() * 0.2);
+        skeleton.update(&config, pelvis, Vector3::z(), config.rest_pitch, lean, feet);
         // The left leg hangs on +X, so its right is −X.
         assert!(
             skeleton.head.x < upright.x - 0.05,
