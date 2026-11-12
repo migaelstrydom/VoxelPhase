@@ -236,6 +236,15 @@ marks one that depends on behaviour not yet confirmed in the engine.
 | A piper throws at what it sees. Seen from behind the dam, its bombs breach it; seen from behind the only ledge, they take that instead. | Shared support | Earth |
 | A roller in a crater is stranded until the crater floods. Then it floats out **(check)**. | Unwanted passenger | Water |
 
+### Third batch
+
+| Idea | Pattern | Also |
+|---|---|---|
+| A piper is slowly bombing the platforms the crossing needs. Cross before they are gone, or stop it seeing them. | The clock is the key | Creatures, Machines |
+| A creature stands in a dry channel below a dam. Burst the dam and it is washed off the island. | Borrowed force | Water, Creatures |
+| A creature throws the player's grenades back. Throw round it, over it, or so that its return lands where the blast is wanted **(build)**. | Borrowed force | Creatures |
+| A crate dropped in a stream will be carried to the bottom, where it is needed to cross. Get there before it goes over the edge. | Unwanted passenger | Water, Body |
+
 ## Order
 
 Clusters are taught in the order their rules depend on each other. Each
