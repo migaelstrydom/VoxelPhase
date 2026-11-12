@@ -9,10 +9,11 @@
 //! The animator never sees a `Brain`, so the same rig can be posed by a
 //! bench harness that has none.
 
+use nalgebra::UnitQuaternion;
 use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::character::{CharacterIntent, Grounding};
-use crate::components::{PosedModel, Position, Rotation, Velocity};
+use crate::components::{Orientation, PosedModel, Position, ProceduralMesh, Rotation, Velocity};
 use crate::creature::{Behaviour, Brain, MeleeAttack, Perception};
 use crate::debug::DebugLines;
 use crate::sensing::{ContactCandidates, SensorSet};
@@ -64,6 +65,8 @@ impl<'a> System<'a> for StiltAnimationSystem {
         ReadStorage<'a, Perception>,
         WriteStorage<'a, StiltAnimator>,
         WriteStorage<'a, PosedModel>,
+        ReadStorage<'a, Orientation>,
+        WriteStorage<'a, ProceduralMesh>,
         Write<'a, DebugLines>,
     );
 
@@ -82,6 +85,8 @@ impl<'a> System<'a> for StiltAnimationSystem {
             perceptions,
             mut animators,
             mut posed,
+            orientations,
+            mut procedural,
             mut debug_lines,
         ) = data;
 
@@ -131,6 +136,15 @@ impl<'a> System<'a> for StiltAnimationSystem {
 
             if let Some(posed) = posed.get_mut(entity) {
                 posed.poses = animator.poses_from(&pos.0);
+            }
+            // A drape is drawn in the entity's own frame, as the renderer
+            // places it.
+            if let Some(mesh) = procedural.get_mut(entity) {
+                let turn = orientations.get(entity).map_or_else(
+                    || UnitQuaternion::from_axis_angle(&nalgebra::Vector3::y_axis(), rot.0),
+                    |orientation| orientation.0,
+                );
+                animator.drape_into(&pos.0, &turn, &mut mesh.primitives);
             }
 
             // Every walker owns a recorder but only one can be armed, so

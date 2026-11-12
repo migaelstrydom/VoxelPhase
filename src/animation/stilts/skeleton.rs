@@ -169,7 +169,8 @@ impl StiltSkeleton {
         }
     }
 
-    fn leg(&self, side: FootSide) -> &Leg {
+    /// The leg on `side`.
+    pub fn leg(&self, side: FootSide) -> &Leg {
         match side {
             FootSide::Left => &self.legs[0],
             FootSide::Right => &self.legs[1],

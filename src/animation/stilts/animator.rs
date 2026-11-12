@@ -23,11 +23,12 @@ use specs::{Component, VecStorage};
 use crate::animation::rig::right_vector;
 use crate::animation::{FootSide, LegMode, LeggedLocomotion, LocomotionCtx};
 use crate::character::{CharacterIntent, Grounding};
-use crate::model::Transform;
+use crate::model::{MeshPrimitive, Transform};
 use crate::sensing::{ContactCandidate, Probe};
 
 use super::carriage::{CarriageMotion, Gait};
 use super::config::StiltRigConfig;
+use super::drape::DrapeMotion;
 use super::dress::{Dress, Drive, Joint};
 use super::skeleton::{aim, FootPose, StiltSkeleton};
 
@@ -83,6 +84,8 @@ pub struct StiltAnimator {
     pub skeleton: StiltSkeleton,
     /// What it is drawn as.
     dress: Option<Arc<Dress>>,
+    /// How its dress's drape, if it wears one, hangs now.
+    drape: DrapeMotion,
 
     /// How tucked the legs are, in `[0, 1]`.
     tuck: f32,
@@ -138,6 +141,7 @@ impl StiltAnimator {
             locomotion,
             skeleton,
             dress: None,
+            drape: DrapeMotion::default(),
             tuck: 0.0,
             lid_close: 1.0,
             carriage: CarriageMotion::default(),
@@ -246,6 +250,35 @@ impl StiltAnimator {
             self.carriage.tilt(facing),
             feet,
         );
+        if let Some(drape) = self.dress.as_ref().and_then(|dress| dress.drape.as_ref()) {
+            let legs = [FootSide::Left, FootSide::Right].map(|side| {
+                let leg = self.skeleton.leg(side);
+                [leg.hip, leg.knee, leg.foot]
+            });
+            self.drape.step(drape, &self.skeleton.hips(), &legs, dt);
+        }
+    }
+
+    /// Its dress's drape as it hangs now, in the frame at `origin` turned
+    /// by `turn` in the world: into `out`, reusing what it holds. Leaves
+    /// `out` alone for a walker that wears none.
+    pub fn drape_into(
+        &self,
+        origin: &Vector3<f32>,
+        turn: &UnitQuaternion<f32>,
+        out: &mut Vec<MeshPrimitive>,
+    ) {
+        let Some(drape) = self.dress.as_ref().and_then(|dress| dress.drape.as_ref()) else {
+            return;
+        };
+        let hips = self.skeleton.hips();
+        let back = turn.inverse();
+        let place = Transform {
+            translation: back * (hips.translation - origin),
+            rotation: back * hips.rotation,
+            scale: Vector3::repeat(1.0),
+        };
+        self.drape.shape(drape, &place, out);
     }
 
     /// The small motions nothing asks for: blinks and glances.
@@ -487,6 +520,7 @@ mod tests {
                     drive: Drive::Lid { shut: 1.2 },
                 }),
             ],
+            drape: None,
         };
         StiltAnimator::new(StiltRigConfig::default(), body, 1.0, 0.0).wearing(Arc::new(dress))
     }
@@ -598,6 +632,7 @@ mod tests {
                     swivel: 0.3,
                 }),
             ],
+            drape: None,
         };
         let mut walker = StiltAnimator::new(
             StiltRigConfig::default(),

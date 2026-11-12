@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 use crate::animation::stilts::{Dress, Mood, StiltAnimator, StiltRigConfig};
 use crate::app::creatures::{
@@ -168,7 +168,16 @@ impl Walker {
 
     fn meshes(&self, aside: Vector3<f32>) -> Vec<SceneMesh> {
         let dress = self.animator.dress().expect("a bench walker is dressed");
-        posed_meshes(&dress.model, &self.animator.poses(), aside)
+        let mut meshes = posed_meshes(&dress.model, &self.animator.poses(), aside);
+        let mut draped = Vec::new();
+        self.animator
+            .drape_into(&-aside, &UnitQuaternion::identity(), &mut draped);
+        let materials = creature_materials();
+        meshes.extend(draped.into_iter().map(|mesh| {
+            SceneMesh::new(mesh.vertices, mesh.indices)
+                .with_surface(materials[mesh.material.0 as usize].surface_params())
+        }));
+        meshes
     }
 }
 

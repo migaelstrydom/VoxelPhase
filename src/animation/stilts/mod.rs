@@ -3,6 +3,7 @@
 mod animator;
 mod carriage;
 mod config;
+mod drape;
 mod dress;
 mod skeleton;
 mod systems;
@@ -10,6 +11,7 @@ mod systems;
 pub use animator::{Mood, StiltAnimator};
 pub use carriage::{Carriage, CarriageMotion, Gait};
 pub use config::StiltRigConfig;
+pub use drape::{Drape, DrapeMotion};
 pub use dress::{Dress, Drive, Joint, Worn};
 pub use skeleton::{FootPose, StiltSkeleton};
 pub use systems::{StiltAnimationSystem, StiltProbeConfigSystem};

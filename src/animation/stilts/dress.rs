@@ -14,6 +14,10 @@
 //!   Foot     the middle of the sole's print, +Z to the toes     the instep
 //! ```
 //!
+//! Cloth the legs would come through can hang from the hips as a
+//! [`Drape`] instead: drawn apart from the parts, pushed out each frame
+//! where a leg presses it.
+//!
 //! The parts are rigid and only their poses change, so each may be as finely
 //! modelled as its maker likes. Where two meet (a shin on a thigh) each is
 //! modelled a little past the joint, and the overlap hides the turn.
@@ -24,6 +28,8 @@ use nalgebra::Vector3;
 
 use crate::animation::FootSide;
 use crate::model::{MeshPrimitive, Model, ModelPart};
+
+use super::drape::Drape;
 
 /// What turns a part hinged on the head.
 #[derive(Clone, Copy, Debug)]
@@ -100,6 +106,8 @@ pub struct Dress {
     pub model: Arc<Model>,
     /// How each part of the model is worn, in part order.
     pub worn: Vec<Worn>,
+    /// Cloth hung from the hips that the legs push out, if it wears any.
+    pub drape: Option<Drape>,
 }
 
 impl Dress {
@@ -113,7 +121,14 @@ impl Dress {
         Self {
             model: Arc::new(Model::flat(parts)),
             worn,
+            drape: None,
         }
+    }
+
+    /// The same dress with `drape` hung from its hips.
+    pub fn draped(mut self, drape: Drape) -> Self {
+        self.drape = Some(drape);
+        self
     }
 
     /// The same dress drawn in other materials: `material` gives each of
@@ -131,12 +146,19 @@ impl Dress {
         Self {
             model: Arc::new(model),
             worn: self.worn.clone(),
+            drape: self.drape.as_ref().map(|drape| drape.recoloured(&material)),
         }
     }
 
     /// Triangles in the whole dress.
     pub fn triangles(&self) -> usize {
-        let meshes = self.model.parts.iter().flat_map(|part| &part.primitives);
+        let draped = self.drape.iter().flat_map(|drape| drape.rest());
+        let meshes = self
+            .model
+            .parts
+            .iter()
+            .flat_map(|part| &part.primitives)
+            .chain(draped);
         meshes.map(|mesh| mesh.indices.len() / 3).sum()
     }
 }

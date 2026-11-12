@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitVector3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::anatomy::{self, LIMB_GRAIN};
@@ -23,8 +23,8 @@ use crate::animation::stilts::{Dress, Joint, StiltAnimator, StiltRigConfig, Worn
 use crate::animation::FootSide;
 use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
 use crate::components::{
-    Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Rotation,
-    Velocity,
+    Orientation, PoseFrame, PosedModel, Position, ProceduralMesh, Renderable, RigidBodyComponent,
+    Rotation, Velocity,
 };
 use crate::creature::{Brain, MeleeAttack, Perception};
 use crate::damage::{Health, Ragdoll};
@@ -173,6 +173,15 @@ impl StiltWalker {
             poses: animator.poses_from(&initial_pos.coords),
             frame: PoseFrame::Position,
         };
+        let drape = self.dress.drape.is_some().then(|| {
+            let mut mesh = ProceduralMesh::default();
+            animator.drape_into(
+                &initial_pos.coords,
+                &UnitQuaternion::identity(),
+                &mut mesh.primitives,
+            );
+            mesh
+        });
 
         // Reach is the rig's own geometry plus the target's girth, so
         // lengthening the neck lengthens the attack by itself. The standoff
@@ -255,6 +264,9 @@ impl StiltWalker {
             entity = entity
                 .with(Health::new(health, CORPSE_SECONDS))
                 .with(Ragdoll::new(vec![keep_upright]));
+        }
+        if let Some(drape) = drape {
+            entity = entity.with(drape);
         }
         vec![entity.build()]
     }

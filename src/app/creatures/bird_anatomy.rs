@@ -366,6 +366,12 @@ impl BirdLeg {
         1.2 * self.shank
     }
 
+    /// Radius of the hock, the knot at the top of the shank: the thickest
+    /// of the leg below the drumstick.
+    pub fn hock_radius(&self) -> f32 {
+        1.45 * self.shank
+    }
+
     /// The scales of the hide.
     fn scales(&self) -> Relief {
         Relief::Scales {
@@ -463,7 +469,7 @@ impl BirdLeg {
         let (l, s) = (length, self.shank);
         let ankle = -l + self.ankle_height();
         let mut smooth = Clay::new(0.6 * s)
-            .add(Lump::ball(1.45 * s, (0.0, 0.0, 0.0)), self.hide)
+            .add(Lump::ball(self.hock_radius(), (0.0, 0.0, 0.0)), self.hide)
             .add(Lump::ball(0.9 * s, (0.0, 0.5 * s, -1.2 * s)), self.hide)
             .add(
                 Lump::limb((0.0, 0.0, 0.0), (0.0, ankle, 0.0), (1.0 * s, 0.86 * s)),

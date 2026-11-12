@@ -17,10 +17,12 @@
 //!   robe     heavy cloth in folds from a hunched back to a torn hem,
 //!            a cowl over the shoulders, and out of one sleeve a
 //!            man's hand telling beads                               (Hips)
+//!   drape    the back of the robe, below the hips: pushed out over
+//!            each hock that would come through it                   (Drape)
 //!   legs     a wader's, dark and heavy                              (the bones)
 //! ```
 
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::sync::Arc;
 
 use nalgebra::{UnitQuaternion, Vector3};
@@ -34,7 +36,7 @@ use super::bird_anatomy::{
 use super::likeness;
 use super::palette::{self, Paint, BESTIARY};
 use super::stilt_walker::{Peck, StiltWalker};
-use crate::animation::stilts::{Carriage, Dress, Drive, Joint, StiltRigConfig, Worn};
+use crate::animation::stilts::{Carriage, Drape, Dress, Drive, Joint, StiltRigConfig, Worn};
 use crate::animation::{FootPlacerConfig, FootSide};
 use crate::app::sculpt::{
     scatter, Blush, Clay, Ellipsoid, Grime, Lump, Mottle, Relief, Spots, Veins, VertexPaint,
@@ -118,6 +120,20 @@ const ROBE_GRAIN: f32 = 0.018;
 /// toward the robe's middle, as a share of its width: enough to lie within
 /// the cloth.
 const LID_DRAWN_IN: f32 = 0.93;
+
+/// The back of the robe hangs free of the hips from this high in their
+/// frame down to the hem, and either side of straight behind as far round
+/// as this, radians: the hocks swing back further than any robe falls.
+const DRAPE_SEWN: f32 = 0.2;
+const DRAPE_ROUND: f32 = 1.2;
+/// How far below its seam, m, and round from its sides, radians, it takes
+/// the cloth to hang wholly free.
+const DRAPE_EASE_DOWN: f32 = 0.15;
+const DRAPE_EASE_ROUND: f32 = 0.35;
+/// Air kept between a hock and the cloth over it, and how wide the bulge
+/// it makes spreads either side, m.
+const DRAPE_AIR: f32 = 0.015;
+const DRAPE_SPREAD: f32 = 0.05;
 
 /// Its legs: a wader's, dark and heavy.
 const LEGS: BirdLeg = BirdLeg {
@@ -957,6 +973,37 @@ fn on_skirt(rig: &StiltRigConfig, round: f32, down: f32, inset: f32) -> Vector3<
         )
 }
 
+/// Where round the skirt `at` is, in the hips' frame: radians from
+/// straight ahead, positive toward +X.
+fn round_on_skirt(rig: &StiltRigConfig, at: Vector3<f32>) -> f32 {
+    let (top, _, _) = skirt(rig, 0.0);
+    let (bottom, _, _) = skirt(rig, 1.0);
+    let down = (top.y - at.y) / (top.y - bottom.y);
+    let (middle, wide, deep) = skirt(rig, down);
+    ((at.x - middle.x) / wide).atan2((at.z - middle.z) / deep)
+}
+
+/// Take the back of `robe` below the hips off it, to hang as a drape the
+/// legs push out.
+fn back_of_robe(rig: &StiltRigConfig, robe: &mut [MeshPrimitive]) -> Drape {
+    let behind = |at: Vector3<f32>| round_on_skirt(rig, at).abs() - (PI - DRAPE_ROUND);
+    let back = robe
+        .iter_mut()
+        .map(|mesh| mesh.split_off(|at| at.y < DRAPE_SEWN && behind(at) > 0.0))
+        .collect();
+    let freedom = |at: Vector3<f32>| {
+        ease(DRAPE_SEWN, DRAPE_SEWN - DRAPE_EASE_DOWN, at.y)
+            * ease(0.0, DRAPE_EASE_ROUND, behind(at))
+    };
+    Drape::new(
+        back,
+        DRAPE_SEWN,
+        freedom,
+        LEGS.hock_radius() + DRAPE_AIR,
+        DRAPE_SPREAD,
+    )
+}
+
 /// The robe: heavy cloth falling in pleats from a hunched back to a hem
 /// that is longer behind, torn and trailing threads, and one sleeve. Its
 /// cloth, what closes it from sight within, then its threads. In the hips'
@@ -1415,6 +1462,7 @@ impl StalkerDef {
         head.extend(upper_beak());
         head.push(hat());
         let mut body = robe(&rig);
+        let drape = back_of_robe(&rig, &mut body);
         body.push(cowl(&rig));
         body.extend(hand_and_beads());
         let jaw = Joint::Hinge {
@@ -1449,7 +1497,7 @@ impl StalkerDef {
             pieces.push((Worn::on(LOWER_LID.hinge(side)), vec![lower.clone()]));
         }
         pieces.extend(LEGS.legs(&rig));
-        Dress::of(pieces)
+        Dress::of(pieces).draped(drape)
     }
 
     /// Its dress against the palette's slots, sculpted once: for tools
