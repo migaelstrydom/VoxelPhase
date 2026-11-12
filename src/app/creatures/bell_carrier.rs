@@ -364,6 +364,7 @@ impl BellCarrierDef {
         StiltRigConfig {
             upper_leg_length: 0.2,
             lower_leg_length: 0.2,
+            ankle_height: anatomy::ANKLE_RISE,
             hip_width: 0.12,
             leg_radius: 0.04,
             haunch_height: 0.05,

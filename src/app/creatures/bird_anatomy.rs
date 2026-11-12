@@ -360,6 +360,12 @@ pub struct BirdLeg {
 }
 
 impl BirdLeg {
+    /// How far above the ground the shank ends and the toes spread from:
+    /// the rig's [`StiltRigConfig::ankle_height`].
+    pub fn ankle_height(&self) -> f32 {
+        1.2 * self.shank
+    }
+
     /// The scales of the hide.
     fn scales(&self) -> Relief {
         Relief::Scales {
@@ -455,7 +461,7 @@ impl BirdLeg {
     /// toes spread from.
     pub fn tarsus(&self, length: f32) -> MeshPrimitive {
         let (l, s) = (length, self.shank);
-        let ankle = -l + 1.2 * s;
+        let ankle = -l + self.ankle_height();
         let mut smooth = Clay::new(0.6 * s)
             .add(Lump::ball(1.45 * s, (0.0, 0.0, 0.0)), self.hide)
             .add(Lump::ball(0.9 * s, (0.0, 0.5 * s, -1.2 * s)), self.hide)
@@ -497,7 +503,7 @@ impl BirdLeg {
     pub fn foot(&self, side: FootSide) -> Vec<MeshPrimitive> {
         let s = self.shank;
         let outer = -inward(side);
-        let ball = Vector3::new(0.0, 1.2 * s, 0.0);
+        let ball = Vector3::new(0.0, self.ankle_height(), 0.0);
         let mut smooth = Clay::new(0.5 * s)
             .add(Lump::ball(1.25 * s, (ball.x, ball.y, ball.z)), self.hide)
             // The pad it stands on, under where the toes meet.

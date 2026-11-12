@@ -25,6 +25,7 @@ use nalgebra::{UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Entity, World};
 
+use super::anatomy;
 use super::fish_anatomy::{
     crown, flay, glass_eye, moved, point, sided, surface_along, Crevices, Fin, FinPaint, GlassLook,
     Hide, Ray, Runoff, RAW,
@@ -236,6 +237,7 @@ impl FishWalkerDef {
         StiltRigConfig {
             upper_leg_length: 0.42,
             lower_leg_length: 0.4,
+            ankle_height: anatomy::ANKLE_RISE,
             hip_width: 0.1,
             leg_radius: 0.045,
             haunch_height: 0.05,

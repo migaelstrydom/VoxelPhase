@@ -38,7 +38,12 @@ pub const NAIL: (f32, f32, f32) = (0.5, 0.42, 0.32);
 /// How far above the sole an ankle turns, m: where a shin ends and where
 /// a foot's ankle bone sits, so the two stay joined however the shin leans
 /// over the foot.
-const ANKLE_RISE: f32 = 0.05;
+pub const ANKLE_RISE: f32 = 0.05;
+
+/// How far forward of the ankle a foot's middle is, as a share of its
+/// length: the heel is short behind the leg and the toes long ahead, so
+/// the back of the leg runs down into the heel.
+const FOOT_AHEAD: f32 = 0.1;
 
 /// Side of the grid flesh is skinned from, m, for a limb and for a hand or
 /// a foot, whose toes need more.
@@ -175,6 +180,15 @@ pub fn shin(length: f32, girth: f32) -> Clay {
             ),
             FLESH,
         )
+        // The tendon from the calf down the back to the heel.
+        .add(
+            Lump::limb(
+                (0.0, -0.45 * length, -0.42 * girth),
+                (0.0, ankle + 0.01, -0.36 * girth),
+                (0.16 * girth, 0.12 * girth),
+            ),
+            FLESH,
+        )
         .add(Lump::ball(0.2 * girth, (0.3 * girth, ankle, -0.02)), FLUSH)
         .add(
             Lump::ball(0.2 * girth, (-0.3 * girth, ankle + 0.012, -0.02)),
@@ -187,25 +201,26 @@ pub fn shin(length: f32, girth: f32) -> Clay {
 pub fn foot(length: f32, side: FootSide) -> MeshPrimitive {
     let l = length;
     let inner = inward(side);
+    let ahead = FOOT_AHEAD * l;
     let mut clay = Clay::new(0.07 * l)
         // Heel, the column of the ankle over it, and the instep running
         // down to the ball of the foot.
-        .add(Lump::ball(0.14 * l, (0.0, 0.14 * l, -0.2 * l)), SOLE)
+        .add(Lump::ball(0.14 * l, (0.0, 0.14 * l, ahead - 0.2 * l)), SOLE)
         // The ankle bone the shin turns on, and the tendon from the heel
         // up the back of it.
         .add(Lump::ball(0.13 * l, (0.0, ANKLE_RISE, 0.0)), FLESH)
         .add(
             Lump::limb(
-                (0.0, 0.16 * l, -0.26 * l),
-                (0.0, ANKLE_RISE + 0.015, -0.1 * l),
+                (0.0, 0.16 * l, ahead - 0.26 * l),
+                (0.0, ANKLE_RISE + 0.015, -0.07 * l),
                 (0.05 * l, 0.04 * l),
             ),
             FLESH,
         )
         .add(
             Lump::limb(
-                (0.0, 0.22 * l, -0.06 * l),
-                (0.0, 0.1 * l, 0.42 * l),
+                (0.0, 0.22 * l, ahead - 0.06 * l),
+                (0.0, 0.1 * l, ahead + 0.42 * l),
                 (0.17 * l, 0.1 * l),
             ),
             FLESH,
@@ -213,7 +228,7 @@ pub fn foot(length: f32, side: FootSide) -> MeshPrimitive {
         .add(
             Lump::mass(
                 (0.2 * l, 0.075 * l, 0.17 * l),
-                (0.01 * l * inner, 0.08 * l, 0.4 * l),
+                (0.01 * l * inner, 0.08 * l, ahead + 0.4 * l),
             ),
             SOLE,
         )
@@ -228,6 +243,7 @@ pub fn foot(length: f32, side: FootSide) -> MeshPrimitive {
         (-0.155, 0.46, 0.12, 0.034),
     ];
     for (across, root, reach, thick) in toes {
+        let root = root + FOOT_AHEAD;
         let x = across * l * inner;
         // Splayed a little from the foot's middle line, and bent at its
         // one knuckle so its pad rests on the ground.
@@ -515,6 +531,13 @@ mod tests {
             .map(|v| v.pos.z)
             .fold(f32::MIN, f32::max);
         assert!((0.17..0.22).contains(&toes), "its toes reach {toes}");
+        // The heel is short behind the ankle, a quarter of the foot at most.
+        let heel = foot
+            .vertices
+            .iter()
+            .map(|v| v.pos.z)
+            .fold(f32::MAX, f32::min);
+        assert!(heel > -0.25 * (toes - heel), "its heel reaches {heel}");
         // The big toe is the furthest forward, and on the inner side: −X
         // for a left foot.
         let foremost = foot

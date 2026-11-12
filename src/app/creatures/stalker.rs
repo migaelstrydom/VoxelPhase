@@ -1386,6 +1386,7 @@ impl StalkerDef {
         StiltRigConfig {
             upper_leg_length: 0.78,
             lower_leg_length: 0.74,
+            ankle_height: LEGS.ankle_height(),
             hip_width: 0.1,
             leg_radius: 0.03,
             haunch_height: 0.42,

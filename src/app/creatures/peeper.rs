@@ -1079,6 +1079,7 @@ impl PeeperDef {
         StiltRigConfig {
             upper_leg_length: 0.52,
             lower_leg_length: 0.5,
+            ankle_height: LEGS.ankle_height(),
             hip_width: 0.07,
             leg_radius: 0.026,
             haunch_height: 0.16,

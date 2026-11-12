@@ -97,6 +97,7 @@ impl EggWalkerDef {
         StiltRigConfig {
             upper_leg_length: 0.3,
             lower_leg_length: 0.3,
+            ankle_height: anatomy::ANKLE_RISE,
             hip_width: 0.085,
             leg_radius: 0.05,
             haunch_height: 0.02,

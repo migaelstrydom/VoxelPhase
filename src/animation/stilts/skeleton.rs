@@ -3,8 +3,8 @@
 //! ```text
 //!   pelvis ──haunch──► shoulder ──neck(pitch)──► head ──► gaze
 //!     │
-//!     ├── hip L ──► knee L ──► foot L
-//!     └── hip R ──► knee R ──► foot R
+//!     ├── hip L ──► knee L ──► ankle L ──► sole L
+//!     └── hip R ──► knee R ──► ankle R ──► sole R
 //! ```
 //!
 //! Pure placement. What drives the feet is the gait, what drives the neck
@@ -48,8 +48,10 @@ pub struct StiltSkeleton {
     /// How the body is tipped and leant over its hips, as its carriage
     /// rocks it.
     pub tilt: UnitQuaternion<f32>,
-    /// Left leg, then right.
+    /// Left leg, then right, each solved to its ankle.
     pub legs: [Leg; 2],
+    /// How far above its sole each ankle is, along the sole's normal.
+    ankle_height: f32,
 }
 
 /// A pose at `origin` with +Y along `up` and +Z as near `forward` as that
@@ -106,7 +108,7 @@ impl StiltSkeleton {
             Leg::new(
                 pelvis + right * (side.side_sign() * config.hip_width),
                 config.upper_leg_length,
-                config.lower_leg_length,
+                config.shin_length(),
                 facing,
                 bend,
             )
@@ -125,6 +127,7 @@ impl StiltSkeleton {
             facing,
             tilt,
             legs,
+            ankle_height: config.ankle_height,
         }
     }
 
@@ -153,13 +156,16 @@ impl StiltSkeleton {
 
         let right = right_vector(self.facing);
         let bend = knee_bend(config, self.facing);
+        self.ankle_height = config.ankle_height;
 
         for (index, side) in [FootSide::Left, FootSide::Right].into_iter().enumerate() {
             let hip = self.pelvis + right * (side.side_sign() * config.hip_width);
             let foot = feet[index];
-            self.legs[index].solve(hip, foot.position, bend, Vector3::y());
+            let up = foot.up.try_normalize(1e-6).unwrap_or_else(Vector3::y);
+            let ankle = foot.position + up * self.ankle_height;
+            self.legs[index].solve(hip, ankle, bend, Vector3::y());
             self.legs[index].foot_forward = foot.forward;
-            self.legs[index].foot_up = foot.up;
+            self.legs[index].foot_up = up;
         }
     }
 
@@ -197,16 +203,23 @@ impl StiltSkeleton {
         pose(leg.hip, leg.hip - leg.knee, self.facing)
     }
 
-    /// At the knee, +Y from the foot to the knee.
+    /// At the knee, +Y from the ankle to the knee.
     pub fn shin(&self, side: FootSide) -> Transform {
         let leg = self.leg(side);
         pose(leg.knee, leg.knee - leg.foot, self.facing)
     }
 
-    /// At the foot, +Z to its toes and +Y off its sole.
+    /// At the sole under the ankle, +Z to its toes and +Y off its sole.
     pub fn foot(&self, side: FootSide) -> Transform {
         let leg = self.leg(side);
-        pose(leg.foot, leg.foot_up, leg.foot_forward)
+        pose(self.sole(side), leg.foot_up, leg.foot_forward)
+    }
+
+    /// Where a foot meets the ground: under its ankle along the sole's
+    /// normal.
+    pub fn sole(&self, side: FootSide) -> Point3<f32> {
+        let leg = self.leg(side);
+        leg.foot - leg.foot_up * self.ankle_height
     }
 }
 
@@ -275,7 +288,7 @@ mod tests {
         let mut skeleton = StiltSkeleton::new(&config, pelvis, Vector3::z());
         let upright = skeleton.head;
         let feet = [0, 1].map(|leg| FootPose {
-            position: skeleton.legs[leg].foot,
+            position: skeleton.sole([FootSide::Left, FootSide::Right][leg]),
             forward: Vector3::z(),
             up: Vector3::y(),
         });
@@ -310,5 +323,54 @@ mod tests {
         // The head looks the way the walker faces.
         let look = skeleton.head().rotation * Vector3::z();
         assert!(look.dot(&Vector3::z()) > 0.9);
+    }
+    #[test]
+    fn a_shin_ends_on_its_feet_ankle_however_far_it_leans() {
+        let config = StiltRigConfig {
+            ankle_height: 0.05,
+            ..StiltRigConfig::default()
+        };
+        let pelvis = Point3::new(0.0, 1.0, 0.0);
+        let mut skeleton = StiltSkeleton::new(&config, pelvis, Vector3::z());
+        // A foot swung far behind and tipped onto its toes, as at toe-off:
+        // the shin lies nearly flat and the sole's normal points forward.
+        let toe_off = UnitQuaternion::from_scaled_axis(Vector3::x() * 0.9);
+        let feet = [
+            FootPose {
+                position: Point3::new(0.07, 0.35, -0.75),
+                forward: toe_off * Vector3::z(),
+                up: toe_off * Vector3::y(),
+            },
+            FootPose {
+                position: Point3::new(-0.07, 0.0, 0.0),
+                forward: Vector3::z(),
+                up: Vector3::y(),
+            },
+        ];
+        skeleton.update(
+            &config,
+            pelvis,
+            Vector3::z(),
+            config.rest_pitch,
+            UnitQuaternion::identity(),
+            feet,
+        );
+        for side in [FootSide::Left, FootSide::Right] {
+            let shin_end = skeleton
+                .shin(side)
+                .to_matrix()
+                .transform_point(&Point3::new(0.0, -config.shin_length(), 0.0));
+            let ankle = skeleton
+                .foot(side)
+                .to_matrix()
+                .transform_point(&Point3::new(0.0, config.ankle_height, 0.0));
+            assert!(
+                (shin_end - ankle).norm() < 1e-3,
+                "{side:?}: {shin_end} vs {ankle}"
+            );
+        }
+        // The foot still stands where the gait put it.
+        let sole = skeleton.foot(FootSide::Left).translation;
+        assert!((sole - feet[0].position.coords).norm() < 1e-3, "{sole}");
     }
 }

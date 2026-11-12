@@ -21,8 +21,12 @@ use super::carriage::Carriage;
 pub struct StiltRigConfig {
     /// Hip to knee.
     pub upper_leg_length: f32,
-    /// Knee to foot.
+    /// Knee to sole: the shin, then the ankle under it.
     pub lower_leg_length: f32,
+    /// Height of the ankle over the sole, m: where the shin ends and the
+    /// foot turns. The shin reaches it along the shin, the foot along the
+    /// sole's normal, so the two meet however far the shin leans.
+    pub ankle_height: f32,
     /// Lateral hip separation. Narrow, and the legs cross close under the
     /// body like a wader's.
     pub hip_width: f32,
@@ -81,6 +85,12 @@ impl StiltRigConfig {
         self.upper_leg_length + self.lower_leg_length
     }
 
+    /// Knee to ankle: the shin bone the legs are solved with.
+    #[inline]
+    pub fn shin_length(&self) -> f32 {
+        self.lower_leg_length - self.ankle_height
+    }
+
     /// Pelvis height above the foot centres at rest.
     #[inline]
     pub fn standing_height(&self) -> f32 {
@@ -129,6 +139,7 @@ impl Default for StiltRigConfig {
         Self {
             upper_leg_length: 0.52,
             lower_leg_length: 0.5,
+            ankle_height: 0.0,
             hip_width: 0.07,
             leg_radius: 0.026,
 
