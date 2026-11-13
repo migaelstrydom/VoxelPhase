@@ -1,7 +1,7 @@
 use super::super::framework::{run_scenario, BenchRunConfig};
 use super::super::scenarios::{
     GrazingSphereWallCcdScenario, GrenadeSpeedWallCcdScenario, HighSpeedSphereCcdScenario,
-    SpeculativeBandApproachScenario, SphereIntoDynamicCornerScenario,
+    SlideIntoWallScenario, SpeculativeBandApproachScenario, SphereIntoDynamicCornerScenario,
     SphereThroughDynamicSlabScenario, SphereThroughTwoSlabsScenario, SteepFloorCcdScenario,
 };
 use super::assertions::*;
@@ -207,6 +207,35 @@ fn spheres_closing_in_the_speculative_band_do_not_interpenetrate() {
 #[test]
 fn boxes_closing_in_the_speculative_band_do_not_interpenetrate() {
     assert_band_pair_separates(SpeculativeBandApproachScenario::boxes(), "spec_boxes");
+}
+
+/// A shape already on the floor still sees the wall ahead. Before predicted
+/// contacts were merged with present ones, a collider touching static
+/// geometry was never predicted, and a sphere at 15 m/s sank 0.19 m into the
+/// wall before the discrete manifold found it.
+#[test]
+fn a_shape_sliding_on_the_floor_stops_at_the_wall() {
+    for speed in [8.0, 12.0, 15.0, 17.0] {
+        for scenario in [
+            SlideIntoWallScenario::sphere(speed),
+            SlideIntoWallScenario::cube(speed),
+        ] {
+            let run = run_scenario(
+                &scenario,
+                BenchRunConfig {
+                    duration: 0.5,
+                    ..BenchRunConfig::default()
+                },
+            );
+            let min_x = run.samples.iter().map(|s| s.x).fold(f32::MAX, f32::min);
+            let overlap = scenario.contact_x() - min_x;
+            assert!(
+                overlap < 0.01,
+                "{} at {speed} m/s overlapped the wall by {overlap:.3} m",
+                if scenario.boxes { "box" } else { "sphere" }
+            );
+        }
+    }
 }
 
 /// The pair must meet and stop there — neither overlapping nor stalling short.

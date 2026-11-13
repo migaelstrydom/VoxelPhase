@@ -21,7 +21,7 @@ use crate::physics::static_geometry::StaticGeometry;
 
 use super::config::{ContactHorizon, NarrowphaseConfig};
 use super::scope::{ContactRole, ContactScope};
-use super::speculative::rewind_to_now;
+use super::speculative::{merge_uncovered, rewind_to_now};
 use super::work_buffer::NarrowphaseWorkBuffer;
 
 /// Generate contacts between static geometry and every collider of a body
@@ -76,9 +76,10 @@ pub fn generate_static_contacts(
     buf.manifolds.extend(manifolds.into_iter().flatten());
 }
 
-/// The manifold of one collider against static geometry: its contacts now, or
-/// if it has none and is in the speculative band, speculative contacts where it
-/// will be at the end of `horizon`.
+/// The manifold of one collider against static geometry: its contacts now and,
+/// if it is in the speculative band, speculative contacts against the surfaces
+/// it will meet by the end of `horizon` that it does not touch already — a
+/// ball rolling along the floor still sees the wall ahead.
 fn collider_vs_static(
     body_handle: RigidBodyHandle,
     body: &RigidBody,
@@ -100,23 +101,19 @@ fn collider_vs_static(
         rotation,
         shape: collider.shape(),
     };
-    let manifold = shape_vs_static(&view, static_geometry, contact_margin);
+    let mut manifold = shape_vs_static(&view, static_geometry, contact_margin);
 
-    let manifold = if manifold.is_empty()
-        && config.admits_speculative(speed, horizon, collider.shape().bounding_radius())
-    {
+    if config.admits_speculative(speed, horizon, collider.shape().bounding_radius()) {
         let travel = linear_velocity * horizon.frame_dt();
         let predicted_view = ShapeView {
             center: center + travel,
             rotation,
             shape: collider.shape(),
         };
-        let mut m = shape_vs_static(&predicted_view, static_geometry, contact_margin);
-        rewind_to_now(&mut m, None, travel);
-        m
-    } else {
-        manifold
-    };
+        let mut predicted = shape_vs_static(&predicted_view, static_geometry, contact_margin);
+        rewind_to_now(&mut predicted, None, travel);
+        merge_uncovered(&mut manifold, &predicted);
+    }
 
     if manifold.is_empty() {
         return None;

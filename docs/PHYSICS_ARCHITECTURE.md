@@ -195,7 +195,10 @@ within the frame gets a contact generated at its predicted meeting pose and carr
 with the **gap** it still has to close. The solver lets the pair approach by that gap and
 arrests it only beyond it (`solver/closing_allowance.rs`, recomputed every substep from how
 far the bodies have moved), so the pair stops on arrival. A predicted contact without its
-gap halts bodies in mid-air.
+gap halts bodies in mid-air. Against static geometry a collider is predicted whether or not
+it is touching already: predicted points on surfaces it does not yet touch join its present
+ones (a ball rolling along the floor still sees the wall ahead), and the reducer shares the
+four points out by surface.
 
 ## Manifold cache
 

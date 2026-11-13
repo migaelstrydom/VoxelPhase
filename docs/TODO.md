@@ -23,20 +23,6 @@ Items explicitly deferred from the initial implementation. These should be addre
 
 ---
 
-## Speculative contacts: no prediction for a collider already touching the ground
-
-Static-geometry prediction runs only for a collider with no static contacts this frame,
-so a ball rolling along the floor toward a wall at band speeds (roughly 2–18 m/s for a
-0.2 m sphere at 60 Hz) gets no speculative contact against the wall and overlaps it by up
-to a frame's travel before the discrete manifold sees it. Body pairs are not affected —
-each pair is predicted on its own.
-
-The fix is to predict against the geometry the current manifold does not already cover
-and merge the two, which needs a rule for a manifold that holds both real and predicted
-points under the four-point limit.
-
----
-
 ## Terraced slopes in generated terrain
 
 Sloped ground carries faint terraces — bands running along the contours, spaced

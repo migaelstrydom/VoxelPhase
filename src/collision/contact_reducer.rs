@@ -68,15 +68,19 @@ impl ContactReducer {
     }
 }
 
+/// Whether two contact normals belong to the same surface.
+pub(crate) fn same_surface(a: &Vector3<f32>, b: &Vector3<f32>) -> bool {
+    a.dot(b) >= SAME_SURFACE_COS
+}
+
 /// Partition contacts into surfaces: each joins the first group whose first
 /// member's normal is within [`SAME_SURFACE_COS`] of its own.
 fn group_by_normal(contacts: &[ContactPoint]) -> SmallVec<[Indices; 4]> {
     let mut groups: SmallVec<[Indices; 4]> = SmallVec::new();
     for (idx, contact) in contacts.iter().enumerate() {
-        let normal: Vector3<f32> = contact.normal;
         match groups
             .iter_mut()
-            .find(|g| contacts[g[0]].normal.dot(&normal) >= SAME_SURFACE_COS)
+            .find(|g| same_surface(&contacts[g[0]].normal, &contact.normal))
         {
             Some(group) => group.push(idx),
             None => groups.push(SmallVec::from_slice(&[idx])),

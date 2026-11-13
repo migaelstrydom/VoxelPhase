@@ -14,6 +14,7 @@
 use nalgebra::Vector3;
 
 use crate::collision::contact::ContactManifold;
+use crate::collision::contact_reducer::{same_surface, ContactReducer};
 use crate::collision::continuous::gjk_raycast;
 
 use super::collider_state::ColliderState;
@@ -83,6 +84,36 @@ pub(super) fn rewind_to_now(
         cp.raw_depth = -separation;
         cp.depth = 0.0;
         cp.point -= point_shift;
+    }
+}
+
+/// Most points a manifold holding both present and speculative contacts
+/// keeps: as many as each shape's patch routine keeps on its own.
+const MERGED_MANIFOLD_POINTS: usize = 4;
+
+/// Add to `present` the speculative contacts in `predicted` on surfaces it
+/// does not already touch.
+///
+/// A predicted point on a surface the present manifold covers says nothing the
+/// present one does not (the floor under a rolling ball, seen again a frame
+/// on), so only points whose normal no present point shares are added. When
+/// the two together hold more than a manifold keeps, the reducer shares the
+/// points out by surface, deepest first: present points lie within the contact
+/// margin and speculative ones beyond it, so the surfaces touched now are
+/// served first and each surface ahead keeps a point while slots remain.
+pub(super) fn merge_uncovered(present: &mut ContactManifold, predicted: &ContactManifold) {
+    let start = present.points.len();
+    for cp in &predicted.points {
+        let covered = present.points[..start]
+            .iter()
+            .any(|p| same_surface(&p.normal, &cp.normal));
+        if !covered {
+            present.points.push(*cp);
+        }
+    }
+    if present.points.len() > MERGED_MANIFOLD_POINTS {
+        let reduced = ContactReducer::new(MERGED_MANIFOLD_POINTS).reduce(&present.points);
+        present.points = reduced.into_iter().collect();
     }
 }
 
@@ -206,6 +237,55 @@ mod tests {
         // A 0.6 m gap, closed at 24 m/s over a 1/30 s frame of 0.8 m.
         let t = time_of_impact(&a, &b, 1.0 / 30.0).expect("the pair meets");
         assert!((t - 0.75).abs() < 1e-3, "t = {t}");
+    }
+
+    fn point(normal: Vector3<f32>, raw_depth: f32) -> ContactPoint {
+        ContactPoint::new(Point3::origin(), normal, raw_depth, FeatureId::SINGLE)
+    }
+
+    /// A ball rolling along the floor toward a wall: the floor seen again a
+    /// frame ahead adds nothing, the wall ahead is added.
+    #[test]
+    fn a_surface_already_touched_is_not_predicted_again() {
+        let mut present = ContactManifold::single(point(Vector3::y(), 0.0));
+        let predicted = ContactManifold {
+            points: [point(Vector3::y(), 0.0), point(Vector3::x(), -0.1)]
+                .into_iter()
+                .collect(),
+        };
+        merge_uncovered(&mut present, &predicted);
+
+        assert_eq!(present.points.len(), 2);
+        assert_eq!(present.points[1].normal, Vector3::x());
+    }
+
+    /// A box flat on the floor holds four points; the wall ahead still gets
+    /// one, and the floor keeps the rest.
+    #[test]
+    fn a_full_manifold_makes_room_for_the_surface_ahead() {
+        let corner = |x: f32, z: f32| {
+            ContactPoint::new(Point3::new(x, 0.0, z), Vector3::y(), 0.0, FeatureId::SINGLE)
+        };
+        let mut present = ContactManifold {
+            points: [
+                corner(-1.0, -1.0),
+                corner(1.0, -1.0),
+                corner(1.0, 1.0),
+                corner(-1.0, 1.0),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let predicted = ContactManifold::single(point(Vector3::x(), -0.1));
+        merge_uncovered(&mut present, &predicted);
+
+        assert_eq!(present.points.len(), 4);
+        let walls = present
+            .points
+            .iter()
+            .filter(|p| p.normal == Vector3::x())
+            .count();
+        assert_eq!(walls, 1);
     }
 
     /// A point the pair is moving away from is not a gap to allow.

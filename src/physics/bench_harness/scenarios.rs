@@ -3907,6 +3907,84 @@ impl PhysicsBenchScenario for SpeculativeBandApproachScenario {
     }
 }
 
+/// A shape sliding along the floor into a wall, inside the speculative band.
+///
+/// Its floor contacts are present every frame, so the wall ahead can only be
+/// predicted alongside them: at 15 m/s a 0.2 m shape travels 0.25 m a frame,
+/// past the margin and under the 0.3 m frame-coverage gate. Frictionless, so it
+/// slides rather than rolls and the approach is the only motion to judge.
+#[derive(Debug, Clone)]
+pub struct SlideIntoWallScenario {
+    pub half_size: f32,
+    pub speed: f32,
+    /// When set, the shape is a box rather than a sphere.
+    pub boxes: bool,
+    geometry: WallAndFloorGeometry,
+}
+
+impl SlideIntoWallScenario {
+    pub fn sphere(speed: f32) -> Self {
+        Self {
+            half_size: 0.2,
+            speed,
+            boxes: false,
+            geometry: WallAndFloorGeometry::new(5.0, 2.0),
+        }
+    }
+
+    pub fn cube(speed: f32) -> Self {
+        Self {
+            boxes: true,
+            ..Self::sphere(speed)
+        }
+    }
+
+    /// The tracked body's x where it touches the wall (the wall is at x = 0).
+    pub fn contact_x(&self) -> f32 {
+        self.half_size
+    }
+}
+
+impl PhysicsBenchScenario for SlideIntoWallScenario {
+    fn name(&self) -> &'static str {
+        "slide_into_wall"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(1.5, self.half_size, 0.0))
+                .linear_velocity(Vector3::new(-self.speed, 0.0, 0.0)),
+        );
+        let shape = if self.boxes {
+            ColliderDesc::box_shape(Vector3::repeat(self.half_size))
+        } else {
+            ColliderDesc::sphere(self.half_size)
+        };
+        let _ = world.attach_collider(body, shape.density(1000.0).restitution(0.0).friction(0.0));
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+
+    fn frame_dt(&self, _frame_idx: u64) -> f32 {
+        // 4 substeps of 1/240: a 60 fps frame.
+        4.0 / 240.0
+    }
+}
+
 /// A grid of resting boxes with fast projectiles crossing it.
 ///
 /// The shape of world CCD costs the most in: many colliders that are not

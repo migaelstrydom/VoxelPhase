@@ -476,6 +476,9 @@ the physics pipeline predicts the contact rather than waiting for the overlap
    so the manifold has the points and normals the real contact will have.
 4. Rewinds that manifold to the present: each point carries its `gap`, the separation
    still to close, with `depth = 0` and `raw_depth = -gap`.
+5. Against static geometry, merges it with the collider's present contacts: predicted
+   points join only on surfaces no present point shares a normal with, and the
+   `ContactReducer` keeps four, shared out by surface.
 
 The solver lets the pair approach by the gap and arrests it only beyond it, so it stops
 on arrival — a zero-depth contact would stop it wherever it happened to be when the
