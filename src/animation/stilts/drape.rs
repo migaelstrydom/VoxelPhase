@@ -11,7 +11,9 @@
 //! ```
 //!
 //! No bones and no weights: the push is worked out from the leg's own
-//! joints, along the hips' −Z, and fades to nothing where the cloth is sewn
+//! joints, along the hips' −Z, on a lattice over the cloth far coarser than
+//! its pleats (a bulge is smooth), each vertex taking it from the four
+//! nodes around it. It fades to nothing where the cloth is sewn
 //! to what does not move (the seam at its top, and the rigid robe either
 //! side), so the two stay joined. A leg pushes the cloth at once, since
 //! cloth cannot be walked through; it falls back at its own pace.
@@ -35,6 +37,10 @@ const CELL: f32 = 0.025;
 /// outside skins, are pushed alike and keep their shape.
 const FACE_REACH: (i32, i32) = (3, 1);
 
+/// Spacing of the lattice the push is worked out on, m: a few nodes across
+/// a bulge, which is a spread either side of a leg and flat over it.
+const LATTICE: f32 = 0.02;
+
 /// How the cloth hangs: what it is at rest and where it is held.
 pub struct Drape {
     /// The cloth first, then anything hanging from it (threads at a hem),
@@ -43,9 +49,10 @@ pub struct Drape {
     /// For each vertex of each, how free it hangs: 0 where it is sewn to
     /// what does not move, 1 where it hangs free.
     freedom: Vec<Vec<f32>>,
-    /// For each vertex of each, the depth (z) of the cloth's inside face
-    /// where it is: what a leg is kept behind.
-    inside: Vec<Vec<f32>>,
+    /// For each vertex of each, the lattice nodes it takes its push from.
+    blends: Vec<Vec<Blend>>,
+    /// Where the push is worked out.
+    lattice: Lattice,
     /// The inside face mapped over the cloth's width and height.
     face: InsideFace,
     /// Height of the seam along its top, in the hips' frame.
@@ -74,19 +81,16 @@ impl Drape {
             .iter()
             .map(|mesh| mesh.vertices.iter().map(|v| freedom(v.pos)).collect())
             .collect();
-        let inside = rest
+        let lattice = Lattice::over(&rest, &face);
+        let blends = rest
             .iter()
-            .map(|mesh| {
-                mesh.vertices
-                    .iter()
-                    .map(|v| face.at(v.pos.x, v.pos.y).unwrap_or(v.pos.z).max(v.pos.z))
-                    .collect()
-            })
+            .map(|mesh| mesh.vertices.iter().map(|v| lattice.blend(v.pos)).collect())
             .collect();
         Self {
             rest,
             freedom,
-            inside,
+            blends,
+            lattice,
             face,
             sewn,
             clearance,
@@ -108,7 +112,8 @@ impl Drape {
         Self {
             rest,
             freedom: self.freedom.clone(),
-            inside: self.inside.clone(),
+            blends: self.blends.clone(),
+            lattice: self.lattice.clone(),
             face: self.face.clone(),
             sewn: self.sewn,
             clearance: self.clearance,
@@ -137,10 +142,12 @@ impl Drape {
         pressing
     }
 
-    /// How far back the inside of the cloth at `at`, whose inside face is
-    /// at depth `inside`, must be pushed to give to a leg at `leg`.
-    fn give(&self, at: Vector3<f32>, inside: f32, leg: &Point3<f32>) -> f32 {
-        let aside = (at.x - leg.x).abs() - self.clearance;
+    /// How far back the lattice node `at`, where the inside face is at
+    /// depth `at.z`, pushes the cloth to give to a leg at `leg`: the most
+    /// any cloth within a lattice spacing of it needs, so that what a
+    /// vertex blends from the nodes around it is never short.
+    fn give(&self, at: Vector3<f32>, leg: &Point3<f32>) -> f32 {
+        let aside = (at.x - leg.x).abs() - self.clearance - LATTICE;
         let spread = if aside <= 0.0 {
             1.0
         } else if aside > 3.0 * self.spread {
@@ -148,15 +155,99 @@ impl Drape {
         } else {
             (-0.5 * (aside / self.spread).powi(2)).exp()
         };
-        let behind = inside - (leg.z - self.clearance);
+        let behind = at.z - (leg.z - self.clearance);
         // Below the leg it hangs straight down from it; above, it is drawn
         // in a line from the seam down to it.
-        let drawn = if at.y <= leg.y {
+        let y = at.y - LATTICE;
+        let drawn = if y <= leg.y {
             1.0
         } else {
-            ((self.sewn - at.y) / (self.sewn - leg.y).max(1e-3)).clamp(0.0, 1.0)
+            ((self.sewn - y) / (self.sewn - leg.y).max(1e-3)).clamp(0.0, 1.0)
         };
         spread * drawn * behind.max(0.0)
+    }
+}
+
+/// Nodes over the cloth's width and height, each where its inside face is.
+#[derive(Clone)]
+struct Lattice {
+    /// Lowest x and y covered.
+    origin: (f32, f32),
+    /// Nodes across and up, two at least each way.
+    size: (usize, usize),
+    /// Each node's x, y and the depth of the inside face there (−∞ where
+    /// there is no cloth near), row by row.
+    nodes: Vec<Vector3<f32>>,
+}
+
+/// Where a vertex takes its push from: the lattice cell it is in, and its
+/// share of each of the cell's corners.
+#[derive(Clone, Copy)]
+struct Blend {
+    /// The cell's lowest, leftmost node.
+    corner: usize,
+    /// Its share of that node, the one right of it, the one above it and
+    /// the one above and right.
+    weights: [f32; 4],
+}
+
+impl Lattice {
+    /// A lattice over every vertex of `meshes`, depths read from `face`.
+    fn over(meshes: &[MeshPrimitive], face: &InsideFace) -> Self {
+        let (mut low, mut high) = ((f32::MAX, f32::MAX), (f32::MIN, f32::MIN));
+        for v in meshes.iter().flat_map(|mesh| &mesh.vertices) {
+            low = (low.0.min(v.pos.x), low.1.min(v.pos.y));
+            high = (high.0.max(v.pos.x), high.1.max(v.pos.y));
+        }
+        let size = (
+            ((high.0 - low.0) / LATTICE) as usize + 2,
+            ((high.1 - low.1) / LATTICE) as usize + 2,
+        );
+        let nodes = (0..size.1)
+            .flat_map(|row| (0..size.0).map(move |column| (column, row)))
+            .map(|(column, row)| {
+                let x = low.0 + column as f32 * LATTICE;
+                let y = low.1 + row as f32 * LATTICE;
+                Vector3::new(x, y, face.nearest(x, y).unwrap_or(f32::NEG_INFINITY))
+            })
+            .collect();
+        Self {
+            origin: low,
+            size,
+            nodes,
+        }
+    }
+
+    /// Where the vertex at `at` takes its push from.
+    fn blend(&self, at: Vector3<f32>) -> Blend {
+        let along = |value: f32, origin: f32, nodes: usize| {
+            let scaled = ((value - origin) / LATTICE).max(0.0);
+            let cell = (scaled as usize).min(nodes - 2);
+            (cell, (scaled - cell as f32).min(1.0))
+        };
+        let (column, across) = along(at.x, self.origin.0, self.size.0);
+        let (row, up) = along(at.y, self.origin.1, self.size.1);
+        Blend {
+            corner: row * self.size.0 + column,
+            weights: [
+                (1.0 - across) * (1.0 - up),
+                across * (1.0 - up),
+                (1.0 - across) * up,
+                across * up,
+            ],
+        }
+    }
+
+    /// The value at `blend` of what `values` holds per node.
+    fn sample(&self, values: &[f32], blend: &Blend) -> f32 {
+        let corner = blend.corner;
+        let up = corner + self.size.0;
+        let corners = [corner, corner + 1, up, up + 1];
+        corners
+            .iter()
+            .zip(blend.weights)
+            .map(|(&node, weight)| values.get(node).copied().unwrap_or(0.0) * weight)
+            .sum()
     }
 }
 
@@ -215,7 +306,12 @@ impl InsideFace {
     /// The inside face's depth at (`x`, `y`): the foremost cloth over the
     /// cells around it, smoothing over its pleats and any bite out of it.
     fn at(&self, x: f32, y: f32) -> Option<f32> {
-        let (reach_x, reach_y) = FACE_REACH;
+        self.around(x, y, 0)
+    }
+
+    /// The same, taken over `more` cells further each way.
+    fn around(&self, x: f32, y: f32, more: i32) -> Option<f32> {
+        let (reach_x, reach_y) = (FACE_REACH.0 + more, FACE_REACH.1 + more);
         (-reach_y..=reach_y)
             .flat_map(|up| (-reach_x..=reach_x).map(move |across| (across, up)))
             .filter_map(|(across, up)| self.cell(x + across as f32 * CELL, y + up as f32 * CELL))
@@ -223,26 +319,30 @@ impl InsideFace {
             .filter(|depth| !depth.is_nan())
             .reduce(f32::max)
     }
+
+    /// The foremost the inside face is for any point within a lattice
+    /// spacing of the point of it nearest (`x`, `y`).
+    fn nearest(&self, x: f32, y: f32) -> Option<f32> {
+        let last = |nodes: usize| (nodes as f32 - 0.5) * CELL;
+        let x = (x - self.origin.0).clamp(0.0, last(self.size.0)) + self.origin.0;
+        let y = (y - self.origin.1).clamp(0.0, last(self.size.1)) + self.origin.1;
+        self.around(x, y, (LATTICE / CELL).ceil() as i32)
+    }
 }
 
 /// A drape moving.
 #[derive(Clone, Debug, Default)]
 pub struct DrapeMotion {
-    /// How far back each vertex of each mesh is pushed, m.
-    push: Vec<Vec<f32>>,
+    /// How far back the cloth is pushed at each lattice node, m.
+    push: Vec<f32>,
 }
 
 impl DrapeMotion {
     /// Advance by `dt` seconds for `drape` on hips posed `hips`, over
     /// `legs` (hip, knee, ankle each, in the world).
     pub fn step(&mut self, drape: &Drape, hips: &Transform, legs: &[[Point3<f32>; 3]], dt: f32) {
-        if self.push.len() != drape.rest.len() {
-            self.push = drape
-                .rest
-                .iter()
-                .map(|m| vec![0.0; m.vertices.len()])
-                .collect();
-        }
+        let nodes = &drape.lattice.nodes;
+        self.push.resize(nodes.len(), 0.0);
         let into_hips = hips.rotation.inverse();
         let local: Vec<[Point3<f32>; 3]> = legs
             .iter()
@@ -250,33 +350,27 @@ impl DrapeMotion {
             .collect();
         let pressing = drape.pressing(&local);
         let fall = (-FALL_RATE * dt).exp();
-        for (mesh, ((push, freedom), inside)) in drape
-            .rest
-            .iter()
-            .zip(self.push.iter_mut().zip(&drape.freedom).zip(&drape.inside))
-        {
-            for (index, vertex) in mesh.vertices.iter().enumerate() {
-                let wanted = if freedom[index] > 0.0 {
-                    let most = pressing
-                        .iter()
-                        .map(|leg| drape.give(vertex.pos, inside[index], leg))
-                        .fold(0.0f32, f32::max);
-                    freedom[index] * most
-                } else {
-                    0.0
-                };
-                push[index] = wanted.max(push[index] * fall);
-            }
+        for (push, node) in self.push.iter_mut().zip(nodes) {
+            let wanted = pressing
+                .iter()
+                .map(|leg| drape.give(*node, leg))
+                .fold(0.0f32, f32::max);
+            *push = wanted.max(*push * fall);
         }
     }
 
-    /// How far back the vertex `index` of mesh `mesh` is pushed, m.
-    pub fn push(&self, mesh: usize, index: usize) -> f32 {
-        self.push
-            .get(mesh)
-            .and_then(|push| push.get(index))
-            .copied()
-            .unwrap_or(0.0)
+    /// How far back the vertex `index` of mesh `mesh` of `drape` is pushed, m.
+    pub fn push(&self, drape: &Drape, mesh: usize, index: usize) -> f32 {
+        let (Some(freedom), Some(blend)) = (
+            drape.freedom.get(mesh).and_then(|f| f.get(index)),
+            drape.blends.get(mesh).and_then(|b| b.get(index)),
+        ) else {
+            return 0.0;
+        };
+        if *freedom <= 0.0 {
+            return 0.0;
+        }
+        freedom * drape.lattice.sample(&self.push, blend)
     }
 
     /// The cloth as it hangs now, placed by `place` from the hips' frame:
@@ -292,7 +386,7 @@ impl DrapeMotion {
             // Each vertex keeps the normal it was sculpted with: the pleats
             // shade the cloth, and a push is too gentle a bend to need more.
             for (index, vertex) in mesh.vertices.iter_mut().enumerate() {
-                vertex.pos.z -= self.push(which, index);
+                vertex.pos.z -= self.push(drape, which, index);
                 vertex.pos = matrix.transform_point(&Point3::from(vertex.pos)).coords;
                 vertex.normal = place.rotation * vertex.normal;
             }
@@ -317,7 +411,7 @@ mod tests {
     fn sheet() -> Drape {
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        let (across, down) = (25, 33);
+        let (across, down) = (31, 33);
         for (skin, z) in [(0, -0.3), (1, -0.34)] {
             let base = (skin * across * down) as u32;
             for row in 0..down {
@@ -430,16 +524,16 @@ mod tests {
         let mut motion = DrapeMotion::default();
         motion.step(&drape, &hips(), &leg(Vector3::new(0.1, -0.25, -0.5)), DT);
         // The inside skin's hem, under the leg at x = 0.1.
-        let lowest = 32 * 25 + 16;
-        let pushed = motion.push(0, lowest);
+        let lowest = 32 * 31 + 20;
+        let pushed = motion.push(&drape, 0, lowest);
         assert!(pushed > 0.2, "{pushed}");
         let under = leg(Vector3::new(0.1, -0.7, -0.1));
         motion.step(&drape, &hips(), &under, DT);
-        let falling = motion.push(0, lowest);
+        let falling = motion.push(&drape, 0, lowest);
         assert!(falling > 0.8 * pushed && falling < pushed, "{falling}");
         for _ in 0..90 {
             motion.step(&drape, &hips(), &under, DT);
         }
-        assert!(motion.push(0, lowest) < 0.002);
+        assert!(motion.push(&drape, 0, lowest) < 0.002);
     }
 }
