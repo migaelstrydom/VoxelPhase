@@ -24,6 +24,10 @@ mod immersion;
 mod immersion_system;
 pub mod ledge;
 pub mod locomotion;
+mod overhang;
+#[cfg(all(test, feature = "traversal_scenarios"))]
+mod overhang_garden_tests;
+mod overhang_system;
 mod swim;
 mod throws;
 
@@ -40,5 +44,7 @@ pub use locomotion::{
     AirSteering, Conditioning, EntryEffects, Facts, Foot, LocomotionInput, LocomotionState,
     MovementRule, PlannedLanding, PlannedTakeoff, Requests, RuleSpeeds,
 };
+pub use overhang::OverhangSensor;
+pub use overhang_system::OverhangSensorSystem;
 pub use swim::SwimConfig;
 pub use throws::{ThrowStroke, ThrowingHand, Throws};

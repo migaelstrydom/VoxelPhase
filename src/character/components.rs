@@ -127,6 +127,10 @@ pub struct CharacterIntent {
     /// The edge at the hands, from `LedgeSensorSystem`. Consumed by
     /// `CharacterControlSystem`.
     pub edge: Option<SensedEdge>,
+    /// The way off a drop the character stands over, its centre past the
+    /// brink holding it up: a unit vector across the up axis, from
+    /// `OverhangSensorSystem`. Consumed by `CharacterControlSystem`.
+    pub overhang: Option<Vector3<f32>>,
 }
 
 impl Default for CharacterIntent {
@@ -148,6 +152,7 @@ impl Default for CharacterIntent {
             takeoff: None,
             landing: None,
             edge: None,
+            overhang: None,
         }
     }
 }

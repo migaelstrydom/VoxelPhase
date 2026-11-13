@@ -13,6 +13,8 @@
 
 use std::f32::consts::FRAC_PI_2;
 
+use nalgebra::Vector3;
+
 use crate::anim_viewer::{Beat, Script};
 use crate::character::LocomotionConfig;
 
@@ -215,5 +217,36 @@ pub fn catalogue() -> Vec<Scenario> {
                 Walk,
             )
         },
+        brink(
+            "brink_overhang",
+            "Traversal: edge off the 0.7 m ledge's top until the centre is past the brink, \
+             then stand still; slides off",
+            Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::crouch_walk(EDGE_OFF).towards(-Vector3::x()))
+                .then(Beat::stand(2.0)),
+        ),
+        brink(
+            "brink_stand",
+            "Traversal: stand still on the 0.7 m ledge's top, just behind the brink; stays",
+            Script::new().then(Beat::stand(2.0)),
+        ),
     ]
+}
+
+/// Seconds of crouch-walking from the top toward the brink.
+const EDGE_OFF: f32 = 0.15;
+
+/// On the 0.7 m ledge's top, 0.3 m behind its brink, facing up the lane.
+fn brink(name: &'static str, summary: &'static str, script: Script) -> Scenario {
+    Scenario {
+        name,
+        summary,
+        level: GARDEN,
+        start: (7.3, 58.0),
+        yaw: FRAC_PI_2,
+        script,
+        camera: CameraRig::side().with_distance(4.0),
+        judged: Judged::Motion,
+    }
 }
