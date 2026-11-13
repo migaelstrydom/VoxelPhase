@@ -2,11 +2,13 @@
 //!
 //! Closed-form swept tests for common shape pairs:
 //! - `swept_sphere_sphere`: quadratic for two moving spheres
+//! - `swept_sphere_capsule`: quadratics for a moving sphere vs a still capsule's side and ends
 //! - `swept_sphere_triangle`: plane + edge + vertex tests for a moving sphere vs triangle
 //! - `swept_sphere_plane`: sphere vs infinite plane (used internally and as standalone fast-path)
 
 use nalgebra::{Point3, Vector3};
 
+use crate::collision::segment::closest_point_on_segment;
 use crate::collision::sphere_triangle;
 use crate::collision::triangle::Triangle;
 
@@ -76,6 +78,61 @@ pub fn swept_sphere_sphere(
     } else {
         None
     }
+}
+
+/// When a sphere of `radius` moving from `start` to `end` first touches a
+/// still capsule of `capsule_radius` round the segment `a`–`b`, in [0, 1]:
+/// 0 if it overlaps it at the start.
+///
+/// The sphere's centre meets the segment inflated by both radii: a cylinder
+/// round it, met within its length, or a sphere round either end.
+pub fn swept_sphere_capsule(
+    start: Point3<f32>,
+    end: Point3<f32>,
+    radius: f32,
+    a: Point3<f32>,
+    b: Point3<f32>,
+    capsule_radius: f32,
+) -> Option<f32> {
+    let combined = radius + capsule_radius;
+    if (start - closest_point_on_segment(start, a, b)).magnitude_squared() < combined * combined {
+        return Some(0.0);
+    }
+    let motion = end - start;
+    let axis = b - a;
+    let axis_sq = axis.magnitude_squared();
+    let side = (axis_sq > 1e-12)
+        .then(|| {
+            let across = |v: Vector3<f32>| v - axis * (v.dot(&axis) / axis_sq);
+            let (from, moving) = (across(start - a), across(motion));
+            let t = entering_root(
+                moving.magnitude_squared(),
+                2.0 * from.dot(&moving),
+                from.magnitude_squared() - combined * combined,
+            )?;
+            let along = (start + motion * t - a).dot(&axis) / axis_sq;
+            (0.0..=1.0).contains(&along).then_some(t)
+        })
+        .flatten();
+    [a, b]
+        .into_iter()
+        .filter_map(|cap| swept_sphere_sphere(start, end, radius, cap, cap, capsule_radius))
+        .chain(side)
+        .min_by(f32::total_cmp)
+}
+
+/// The smaller root of `a t² + b t + c` (a moving point entering a round
+/// surface), if it lies in [0, 1].
+fn entering_root(a: f32, b: f32, c: f32) -> Option<f32> {
+    if a < 1e-10 {
+        return None;
+    }
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant < 0.0 {
+        return None;
+    }
+    let t = (-b - discriminant.sqrt()) / (2.0 * a);
+    (0.0..=1.0).contains(&t).then_some(t)
 }
 
 /// Swept sphere vs triangle collision test.

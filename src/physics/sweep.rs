@@ -28,8 +28,9 @@ use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
 
 use crate::collision::continuous::{
-    gjk_raycast, swept_sphere_sphere, swept_sphere_triangle, GjkRaycastHit,
+    gjk_raycast, swept_sphere_capsule, swept_sphere_sphere, swept_sphere_triangle, GjkRaycastHit,
 };
+use crate::collision::segment::closest_point_on_segment;
 use crate::collision::shape_view::ShapeView;
 use crate::collision::{SurfaceId, Triangle, AABB};
 
@@ -233,8 +234,30 @@ fn cast_against_collider(
             });
             sphere_against_faces(start, travel, *radius, faces)
         }
-        ColliderShape::Capsule { .. } => {
-            gjk_raycast(view, obstacle, travel, Vector3::zeros()).map(FaceHit::on_face)
+        ColliderShape::Capsule {
+            half_height,
+            radius: other,
+        } => {
+            // Solved outright, as against a sphere: GJK's march ends in an
+            // EPA expansion, which converges slowly on a round shape, and a
+            // tree is limbs and crowns of capsules.
+            let half_axis = obstacle.rotation * Vector3::y() * (half_height - other).max(0.0);
+            let (a, b) = (obstacle.center - half_axis, obstacle.center + half_axis);
+            let apart = start - closest_point_on_segment(start, a, b);
+            if apart.norm() <= *radius + *other && apart.dot(&travel) >= 0.0 {
+                return None;
+            }
+            let t = swept_sphere_capsule(start, end, *radius, a, b, *other)?;
+            let at = start + travel * t;
+            let axis_point = closest_point_on_segment(at, a, b);
+            let normal = (at - axis_point)
+                .try_normalize(1.0e-9)
+                .unwrap_or_else(|| -travel.normalize());
+            Some(FaceHit::on_face(GjkRaycastHit {
+                t,
+                normal,
+                point: axis_point + normal * *other,
+            }))
         }
     }
 }
@@ -873,5 +896,104 @@ mod tests {
                 hit.distance
             );
         }
+    }
+
+    /// A sphere cast at capsules in every pose, from every side, stops where
+    /// it first touches the capsule, meets it whenever GJK's march does, and
+    /// is turned back along the line from the capsule's axis to its centre.
+    /// The march can overshoot the touch by a centimetre, and its normal, from
+    /// an EPA expansion of a round shape, can be tens of degrees off.
+    #[test]
+    fn a_sphere_cast_at_a_capsule_stops_at_its_first_touch() {
+        use crate::collision::discrete::gjk::{gjk_query, GjkResult};
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let point = |rng: &mut rand::rngs::StdRng, half: f32, high: f32| {
+            Point3::new(
+                rng.gen_range(-half..half),
+                rng.gen_range(-high..high),
+                rng.gen_range(-half..half),
+            )
+        };
+        let mut hits = 0;
+        for _ in 0..2000 {
+            let turn = point(&mut rng, 1.0, 1.0).coords * 3.0;
+            let start = point(&mut rng, 3.0, 3.0);
+            // Aimed near the capsule, so most casts meet it.
+            let aim = point(&mut rng, 0.8, 1.5);
+            let (capsule_radius, length, sphere_radius, reach) = (
+                rng.gen_range(0.1..0.5),
+                rng.gen_range(0.0..1.5),
+                rng.gen_range(0.05..0.4),
+                rng.gen_range(0.5..2.0),
+            );
+            let capsule = ColliderShape::Capsule {
+                half_height: capsule_radius + length,
+                radius: capsule_radius,
+            };
+            let obstacle = ShapeView {
+                center: Point3::origin(),
+                rotation: nalgebra::UnitQuaternion::new(turn),
+                shape: &capsule,
+            };
+            let sphere = ColliderShape::Sphere {
+                radius: sphere_radius,
+            };
+            let view = ShapeView {
+                center: start,
+                rotation: nalgebra::UnitQuaternion::identity(),
+                shape: &sphere,
+            };
+            let travel = (aim - start) * reach;
+            if let GjkResult::Intersecting { .. } = gjk_query(&view, &obstacle) {
+                continue;
+            }
+            let solved = cast_against_collider(&view, &obstacle, travel);
+            let marched = gjk_raycast(&view, &obstacle, travel, Vector3::zeros());
+            let half_axis = obstacle.rotation * Vector3::y() * length;
+            let (low, high) = (Point3::origin() - half_axis, Point3::origin() + half_axis);
+            // How far the sphere is from the capsule's surface `t` along.
+            let apart = |t: f32| {
+                let at = start + travel * t;
+                (at - closest_point_on_segment(at, low, high)).norm()
+                    - sphere_radius
+                    - capsule_radius
+            };
+            let closest = |until: f32| {
+                (0..=400)
+                    .map(|step| apart(until * step as f32 / 400.0))
+                    .fold(f32::MAX, f32::min)
+            };
+            match solved {
+                Some(solved) => {
+                    hits += 1;
+                    let t = solved.hit.t;
+                    assert!(
+                        apart(t).abs() < 1.0e-4,
+                        "{} m apart where it stops",
+                        apart(t)
+                    );
+                    assert!(closest(t) > -1.0e-4, "met the capsule before it stopped");
+                    let at = start + travel * t;
+                    let off = solved
+                        .hit
+                        .normal
+                        .angle(&(at - closest_point_on_segment(at, low, high)))
+                        .to_degrees();
+                    assert!(off < 0.1, "normal {off}° off the line to the axis");
+                    match marched {
+                        Some(marched) => {
+                            let late = (t - marched.t) * travel.norm();
+                            assert!(late < 1.0e-3, "stops {late} m past GJK's touch");
+                        }
+                        // GJK misses only a graze.
+                        None => assert!(closest(1.0) > -1.0e-3, "GJK missed a cast that met it"),
+                    }
+                }
+                None => assert!(closest(1.0) > -1.0e-4, "passed through the capsule"),
+            }
+        }
+        assert!(hits > 500, "{hits} casts met the capsule");
     }
 }
