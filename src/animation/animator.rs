@@ -894,6 +894,7 @@ mod tests {
             phase,
             landing: None,
             rise_held: None,
+            flown: 0.0,
         })
     }
 

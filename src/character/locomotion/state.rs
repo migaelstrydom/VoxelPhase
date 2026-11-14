@@ -18,6 +18,7 @@ use super::takeoff::TakeoffPhase;
 ///
 /// ```text
 ///   OnFoot ──(plan's takeoff)──► Hop ──(down)──► OnFoot
+///      │                          ├──(jump pressed early)──► Jump
 ///      │                          └──(landing missed)──► Fall
 ///      ├──(jump pressed)──► Jump ──(down)──► OnFoot
 ///      └──(grace runs out)──► Fall ──(down)──► OnFoot

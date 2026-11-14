@@ -111,8 +111,8 @@ column gives the request or fact that causes each transition.
 | State | Entered from | Leaves for | Planner | Legs | Arms |
 |---|---|---|---|---|---|
 | `OnFoot { grace }` | Hop, Jump, Fall (down), Swim (feet down), Ledge (pull-up done) | Hop (a plan's takeoff), Jump (jump pressed), Fall (`grace` runs out), Swim (deep water) | On | Step | Swing |
-| `Hop { phase, landing }` | OnFoot (a plan's takeoff) | OnFoot (down), Fall (landing missed), Swim | On | Fly | Swing |
-| `Jump { kind, phase, steering }` | OnFoot, Swim (jump out of the water), Ledge (back-jump) | OnFoot (down), Swim (falling into deep water), Ledge (an edge at the hands) | Off | Off | Brace |
+| `Hop { phase, landing, flown }` | OnFoot (a plan's takeoff) | OnFoot (down), Jump (jump pressed early), Fall (landing missed), Swim | On | Fly | Swing |
+| `Jump { kind, phase, steering }` | OnFoot, Hop (jump pressed early), Swim (jump out of the water), Ledge (back-jump) | OnFoot (down), Swim (falling into deep water), Ledge (an edge at the hands) | Off | Off | Brace |
 | `Fall { steering }` | OnFoot (`grace` runs out), Hop (landing missed), Swim (out over a drop), Ledge (drop) | OnFoot (down), Swim, Ledge (an edge at the hands) | Off | Off | Brace |
 | `Swim` | OnFoot, Fall, Jump falling, once the water is deep | OnFoot, Fall, Jump, Ledge | Off | Off | Stroke |
 | `Ledge { edge, phase }` | Jump, Fall, Swim (an edge at the hands) | Fall (drop, edge lost), Jump (back-jump), OnFoot (pull-up done) | Off | Off | Grip |
@@ -159,6 +159,13 @@ when the legs were tried that way (2026-10-30).
 **A missed landing.** The Hop is a Fall when its landing time has passed with
 the body still in the air, or when the landing is out of a leg's reach of
 where the hip comes down (the stick steered away).
+
+**A jump pressed.** A jump pressed while the Hop launches, or within
+`LocomotionConfig::hop_jump_window` (0.1 s) of leaving the ground, turns it
+into that Jump, in the Hop's phase: the press is the player's, and the plan has
+no say over it. Later in the flight a jump from that high would read as a
+double jump, so the press waits: one within `jump_buffer_window` (0.12 s) of
+the landing jumps from it, and one between the two windows is still lost.
 
 **Touching down.** The Hop goes straight back to OnFoot, with the landing foot
 already on its footfall. There is no landing state between them.

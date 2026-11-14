@@ -77,6 +77,12 @@ pub struct LocomotionConfig {
     /// it has missed the landing and is a Fall (seconds): a body coming down
     /// a frame or two late on a step's lip still lands the Hop.
     pub hop_landing_slack: f32,
+    /// How long after a Hop leaves the ground a jump pressed still turns it
+    /// into that jump (seconds), as it does all through the Hop's launch.
+    /// Later, the body is too far into the plan's flight for a jump from it
+    /// to read as one from the ground, and the press is buffered for the
+    /// landing instead (`jump_buffer_window`).
+    pub hop_jump_window: f32,
     /// How long a roll-off keeps the climb it rode off a brow with, once off
     /// the ground, before its rise is cancelled (seconds): how far crests
     /// pop the body up. Zero is sticky, longer is floatier. The traversal
@@ -133,6 +139,7 @@ impl LocomotionConfig {
             ground_forgiveness_window: 0.08,
             launch_window: 0.2,
             hop_landing_slack: 0.05,
+            hop_jump_window: 0.1,
             roll_off_rise_held: 0.08,
             turn_aggression: 10.0,
             throw_turn_aggression: 20.0,

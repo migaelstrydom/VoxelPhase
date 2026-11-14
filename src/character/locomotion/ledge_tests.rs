@@ -156,6 +156,7 @@ fn a_hop_and_a_jump_still_launching_keep_their_hands() {
         phase: TakeoffPhase::Flight,
         landing: None,
         rise_held: None,
+        flown: 0.0,
     });
     assert!(!matches!(
         advance(hop, air().edge(hang_lip())).0,

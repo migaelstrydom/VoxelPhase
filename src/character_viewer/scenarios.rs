@@ -17,7 +17,7 @@
 //! `air_reverse`, `jump_straight`, `jump_standing`, `run_reverse` and
 //! `crouch_walk`, on the
 //! Traversal Garden's open ground,
-//! `hop_reverse` at its 25 cm step, `drop_reverse` off its 40 cm step, and
+//! `hop_reverse` and `hop_jump` at its 25 cm step, `drop_reverse` off its 40 cm step, and
 //! `shelf_sprint_off` and `shelf_dither` at the side of its scree's shelf.
 //! And `ride_ferry`, on the Traversal Garden's ferry: a moving platform
 //! shuttling along z = 90 between two decks level with it.
@@ -398,6 +398,20 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(2.3))
                 .then(Beat::walk(0.8).towards(-Vector3::x()).named("back"))
                 .then(Beat::stand(0.6)),
+            camera: CameraRig::side().with_distance(3.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
+            name: "hop_jump",
+            summary: "Traversal Garden: walk at the 25 cm step, and press jump just after the hop onto it has taken off (with --track)",
+            level: TRAVERSAL_GARDEN,
+            start: (-5.0, 0.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::walk(2.28))
+                .then(Beat::jump(0.5).named("jump"))
+                .then(Beat::walk(0.6)),
             camera: CameraRig::side().with_distance(3.0),
             judged: Judged::Motion,
         },

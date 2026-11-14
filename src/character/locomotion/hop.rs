@@ -3,6 +3,7 @@ use nalgebra::Vector3;
 use super::effects::EntryEffects;
 use super::fall::Fall;
 use super::input::{Facts, LocomotionInput, Requests};
+use super::jump::Jump;
 use super::on_foot::OnFoot;
 use super::requests::{PlannedLanding, PlannedTakeoff};
 use super::rule::{MovementRule, RuleSpeeds};
@@ -23,6 +24,8 @@ pub struct Hop {
     /// `LocomotionConfig::roll_off_rise_held` from losing contact, and then
     /// has cancelled. `None` for a hop, which left on a climb of its own.
     pub rise_held: Option<f32>,
+    /// Seconds since it left the ground; zero while it launches.
+    pub flown: f32,
 }
 
 impl Hop {
@@ -37,15 +40,20 @@ impl Hop {
                 Some(_) => None,
                 None => Some(config.roll_off_rise_held - facts.since_contact),
             },
+            flown: 0.0,
         }
     }
 
-    /// Down: on its feet, the landing foot on its footfall. Its landing
-    /// missed: a Fall.
+    /// Down: on its feet, the landing foot on its footfall. Jump pressed
+    /// while it launches or just after (`LocomotionConfig::hop_jump_window`):
+    /// that Jump, taking off as the hop did. Its landing missed: a Fall.
     pub fn tick(self, input: &LocomotionInput) -> LocomotionState {
         let grounded = input.facts.grounded;
         if self.phase.down(grounded) {
             return LocomotionState::OnFoot(OnFoot::default());
+        }
+        if input.requests.jump && self.flown <= input.config.hop_jump_window {
+            return LocomotionState::Jump(Jump::pressed(&input.requests, self.phase, input.config));
         }
         let flying = self.phase == TakeoffPhase::Flight;
         let hop = Self {
@@ -57,6 +65,7 @@ impl Hop {
             rise_held: self
                 .rise_held
                 .map(|held| if flying { held - input.dt } else { held }),
+            flown: if flying { self.flown + input.dt } else { 0.0 },
         };
         if flying && hop.missed(&input.facts, input.config) {
             return LocomotionState::Fall(Fall);

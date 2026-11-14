@@ -36,6 +36,7 @@ mod tests {
             phase: TakeoffPhase::Flight,
             landing: None,
             rise_held: None,
+            flown: 0.0,
         });
         let jump = LocomotionState::Jump(Jump {
             kind: JumpKind::Jump,

@@ -107,6 +107,7 @@ fn hop(phase: TakeoffPhase, landing: PlannedLanding) -> LocomotionState {
         phase,
         landing: Some(landing),
         rise_held: None,
+        flown: 0.0,
     })
 }
 fn jump(kind: JumpKind, phase: TakeoffPhase) -> LocomotionState {
@@ -192,6 +193,12 @@ fn the_transitions_are_the_designs() {
         (
             "hop jump pressed",
             on_course,
+            air().moving(toward).jump(),
+            "jump",
+        ),
+        (
+            "hop jump pressed late",
+            hop_flown(0.2),
             air().moving(toward).jump(),
             "hop",
         ),
@@ -589,4 +596,75 @@ fn a_roll_off_keeps_its_rise_only_so_long() {
         hop = advance(hop, rising).0;
         assert!(!hop.movement_rule(Vector3::x(), &SPEEDS).clamp_up);
     }
+}
+
+/// Flying toward [`hop_flown`]'s landing.
+const ON_COURSE: Vector3<f32> = Vector3::new(4.0, -1.0, 0.0);
+
+/// A Hop `flown` seconds into its flight toward a landing a metre ahead, a
+/// quarter second on.
+fn hop_flown(flown: f32) -> LocomotionState {
+    match hop(FLIGHT, landing_ahead(0.25)) {
+        LocomotionState::Hop(hop) => LocomotionState::Hop(Hop { flown, ..hop }),
+        _ => unreachable!(),
+    }
+}
+
+/// Jump pressed as a planned hop launches: that jump, from the ground it
+/// launches from, with a jump's impulse, and the press spent.
+#[test]
+fn a_jump_pressed_as_a_hop_launches_is_that_jump() {
+    let (state, effects) = advance(hop(launch(), landing_ahead(0.3)), ground().jump());
+    assert!(matches!(
+        state,
+        LocomotionState::Jump(Jump {
+            kind: JumpKind::Jump,
+            phase: TakeoffPhase::Launch { .. },
+            ..
+        })
+    ));
+    assert_eq!(
+        effects.vertical_speed,
+        Some(LocomotionConfig::player().jump_speed)
+    );
+    assert!(effects.consume_jump);
+}
+
+/// Just off the ground, the hop still turns into the jump pressed, in flight.
+#[test]
+fn a_jump_pressed_just_after_a_hop_leaves_is_that_jump() {
+    let window = LocomotionConfig::player().hop_jump_window;
+    let (state, effects) = advance(hop_flown(window - DT), air().moving(ON_COURSE).jump());
+    assert!(matches!(
+        state,
+        LocomotionState::Jump(Jump {
+            phase: TakeoffPhase::Flight,
+            ..
+        })
+    ));
+    assert!(effects.consume_jump);
+}
+
+/// Further into the hop's flight the press waits, buffered, for the landing.
+#[test]
+fn a_jump_pressed_late_in_a_hop_waits_for_the_landing() {
+    let window = LocomotionConfig::player().hop_jump_window;
+    let (state, effects) = advance(hop_flown(window + DT), air().moving(ON_COURSE).jump());
+    assert!(matches!(state, LocomotionState::Hop(_)));
+    assert!(!effects.consume_jump);
+}
+
+/// The Hop's clock runs only in flight.
+#[test]
+fn a_hop_counts_its_flight_from_leaving_the_ground() {
+    let (launching, _) = advance(hop(launch(), landing_ahead(0.3)), ground());
+    assert!(matches!(
+        launching,
+        LocomotionState::Hop(Hop { flown: 0.0, .. })
+    ));
+    let (flying, _) = advance(hop_flown(0.05), air().moving(ON_COURSE));
+    let LocomotionState::Hop(hop) = flying else {
+        panic!("still a hop");
+    };
+    assert!((hop.flown - (0.05 + DT)).abs() < 1e-6);
 }

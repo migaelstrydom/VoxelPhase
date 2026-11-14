@@ -52,17 +52,6 @@ the gait, not the pelvis.
 
 ---
 
-## Jump is lost through a planned hop
-
-A planned hop leaves the ground on its own, and while it is in the air the
-jump button does nothing: on a plank bridge, a press that falls in a hop is
-lost (0.28 s for a 1.5 m/s hop, 0.6 s at 3 m/s). The planner charges each
-second in the air for it (`CostWeights::airborne`), which keeps hops short,
-but cannot remove it. Proposed: a jump pressed within about 0.1 s of a
-planned hop's takeoff turns the hop into that jump.
-
----
-
 ## A run over loose crates flies high and lands hard
 
 Running the Traversal Garden's evenly set light crates (z = 74, no longer a
