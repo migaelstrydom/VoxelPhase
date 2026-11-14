@@ -1,16 +1,17 @@
 use nalgebra::{Point3, Vector3};
-use specs::{Component, DenseVecStorage};
 
 use crate::traversal::WorldCaster;
 
-/// Senses a character standing over a drop: held up by the brink of
-/// something, its centre past it, its feet over nothing.
+/// How a character finds it is standing over a drop: held up by the brink of
+/// something, its centre past it, its feet over nothing. `ContactGroundingSystem`
+/// asks it for every grounded body whose `LocomotionConfig` carries one and
+/// publishes the answer as `Grounding::over_drop`.
 ///
 /// Contacts cannot tell this from a slope. Terrain rounds every ledge into a
 /// bevel, and a capsule resting on one is held by a face that tilts like any
 /// walkable slope; friction and the drive's brake hold it there. What differs
 /// is what lies under the body's centre: on a slope the ground goes on
-/// beneath it, past a brink it falls away. So the sensor looks there, and
+/// beneath it, past a brink it falls away. So the probe looks there, and
 /// the body is steered off.
 ///
 /// ```text
@@ -21,9 +22,8 @@ use crate::traversal::WorldCaster;
 ///      ▓▓▓▓▓▓  probe: nothing within reach below the centre
 ///      ▓▓▓▓▓▓     ┆
 /// ```
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
-#[storage(DenseVecStorage)]
-pub struct OverhangSensor {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DropProbe {
     /// How far below the capsule's lowest point the ground under its centre
     /// may lie and still be ground the body stands over, in metres. Under a
     /// body of radius `r` on a slope of angle `θ`, the slope lies
@@ -42,7 +42,7 @@ pub struct OverhangSensor {
     pub slide_off_speed: f32,
 }
 
-impl Default for OverhangSensor {
+impl Default for DropProbe {
     fn default() -> Self {
         Self {
             reach_below: 0.3,
@@ -53,7 +53,7 @@ impl Default for OverhangSensor {
     }
 }
 
-impl OverhangSensor {
+impl DropProbe {
     /// The way off a drop for a capsule of `half_height` (caps included)
     /// centred at `centre`, held up along `support_normal`: outward, when the
     /// support leans and there is no ground within reach under the centre;
@@ -114,14 +114,14 @@ mod tests {
 
     #[test]
     fn a_body_standing_square_has_no_way_off() {
-        let sensor = OverhangSensor::default();
-        assert_eq!(sensor.outward(tilted(5.0), Vector3::y()), None);
+        let probe = DropProbe::default();
+        assert_eq!(probe.outward(tilted(5.0), Vector3::y()), None);
     }
 
     #[test]
     fn the_way_off_is_where_the_support_leans() {
-        let sensor = OverhangSensor::default();
-        let outward = sensor.outward(tilted(37.0), Vector3::y()).unwrap();
+        let probe = DropProbe::default();
+        let outward = probe.outward(tilted(37.0), Vector3::y()).unwrap();
         assert!((outward - Vector3::new(-1.0, 0.0, 0.0)).norm() < 1e-6);
     }
 
@@ -129,41 +129,41 @@ mod tests {
     /// under the player's centre: it is never a drop.
     #[test]
     fn the_steepest_floor_is_within_reach() {
-        let sensor = OverhangSensor::default();
+        let probe = DropProbe::default();
         let (radius, half_height) = (0.25, 0.5);
         let below_lowest = radius * (1.0 / 60f32.to_radians().cos() - 1.0);
         let below_centre = half_height + below_lowest;
-        assert!(below_centre - sensor.probe_radius < sensor.probe_length(half_height));
+        assert!(below_centre - probe.probe_radius < probe.probe_length(half_height));
     }
 
     #[test]
     fn a_standing_body_is_steered_off() {
-        let sensor = OverhangSensor::default();
-        let off = sensor.slide_off(Vector3::zeros(), Vector3::x());
+        let probe = DropProbe::default();
+        let off = probe.slide_off(Vector3::zeros(), Vector3::x());
         assert_eq!(off, Vector3::new(1.0, 0.0, 0.0));
     }
 
     #[test]
     fn walking_off_faster_is_left_alone() {
-        let sensor = OverhangSensor::default();
+        let probe = DropProbe::default();
         let walk = Vector3::new(5.0, 0.0, 0.0);
-        assert_eq!(sensor.slide_off(walk, Vector3::x()), walk);
+        assert_eq!(probe.slide_off(walk, Vector3::x()), walk);
     }
 
     #[test]
     fn walking_along_the_brink_is_also_steered_off() {
-        let sensor = OverhangSensor::default();
+        let probe = DropProbe::default();
         let along = Vector3::new(0.0, 0.0, 3.0);
         assert_eq!(
-            sensor.slide_off(along, Vector3::x()),
+            probe.slide_off(along, Vector3::x()),
             Vector3::new(1.0, 0.0, 3.0)
         );
     }
 
     #[test]
     fn walking_back_from_the_brink_is_left_alone() {
-        let sensor = OverhangSensor::default();
+        let probe = DropProbe::default();
         let back = Vector3::new(-2.0, 0.0, 0.0);
-        assert_eq!(sensor.slide_off(back, Vector3::x()), back);
+        assert_eq!(probe.slide_off(back, Vector3::x()), back);
     }
 }

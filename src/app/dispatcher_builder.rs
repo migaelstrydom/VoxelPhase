@@ -5,7 +5,7 @@ use crate::animation::critter::{CritterAnimationSystem, CritterProbeConfigSystem
 use crate::animation::peeper::{PeeperAnimationSystem, PeeperProbeConfigSystem};
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
 use crate::character::ledge::LedgeSensorSystem;
-use crate::character::{ContactGroundingSystem, ImmersionSystem, OverhangSensorSystem};
+use crate::character::{ContactGroundingSystem, ImmersionSystem};
 use crate::cleave::{SolidCleaveSystem, SolidShareSystem};
 use crate::creature::{
     AlertTelegraphSystem, BrainSystem, CollectionSystem, MeleeAttackSystem, PerceptionSystem,
@@ -76,18 +76,10 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // The edge at the hands, from the world as last stepped; drawn with
         // the plan's overlay.
         .with(LedgeSensorSystem, "ledge_sensor", &["traversal_plan"])
-        // A drop under the body's centre, from the world as last stepped.
-        .with(OverhangSensorSystem, "overhang_sensor", &["traversal_plan"])
         .with(
             CharacterControlSystem,
             "character_control",
-            &[
-                "player_input",
-                "brain",
-                "traversal_plan",
-                "ledge_sensor",
-                "overhang_sensor",
-            ],
+            &["player_input", "brain", "traversal_plan", "ledge_sensor"],
         )
         // Platform motors state their intent as a velocity, exactly as the
         // character systems do, and must land before physics_sync turns it

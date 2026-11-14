@@ -9,7 +9,7 @@ use crate::character::grab::GrabConfig;
 use crate::character::ledge::LedgeSensor;
 use crate::character::{
     AttitudeControl, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig,
-    OverhangSensor, Throws,
+    Throws,
 };
 use crate::cleave::BrittleSolid;
 use crate::components::{
@@ -82,7 +82,6 @@ impl WorldBuilder {
         world.register::<Player>();
         world.register::<PlansTraversal>();
         world.register::<LedgeSensor>();
-        world.register::<OverhangSensor>();
         world.register::<CharacterIntent>();
         world.register::<CharacterState>();
         world.register::<Throws>();

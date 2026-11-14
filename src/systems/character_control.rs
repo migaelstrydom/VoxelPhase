@@ -4,7 +4,7 @@ use crate::character::locomotion::{AirSteering, Jump, JumpKind};
 use crate::character::{
     approach, facing_from_rotation, ArmState, AttitudeControl, CharacterIntent, CharacterState,
     EntryEffects, Facts, Grounding, Immersion, LocomotionConfig, LocomotionInput, LocomotionState,
-    MovementRule, OverhangSensor, RuleSpeeds, Throws,
+    MovementRule, RuleSpeeds, Throws,
 };
 use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::debug::DebugOverlays;
@@ -55,7 +55,6 @@ impl<'a> System<'a> for CharacterControlSystem {
         ReadStorage<'a, Throws>,
         Write<'a, DebugOverlays>,
         ReadStorage<'a, Foliage>,
-        ReadStorage<'a, OverhangSensor>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -78,7 +77,6 @@ impl<'a> System<'a> for CharacterControlSystem {
             throws,
             mut debug_overlays,
             foliage,
-            overhang_sensors,
         ) = data;
         let dt = time.delta_seconds();
 
@@ -106,7 +104,6 @@ impl<'a> System<'a> for CharacterControlSystem {
             immersion,
             attitude,
             throws,
-            overhang,
         ) in (
             &mut intents,
             &mut character_states,
@@ -121,7 +118,6 @@ impl<'a> System<'a> for CharacterControlSystem {
             (&immersions).maybe(),
             (&attitudes).maybe(),
             (&throws).maybe(),
-            (&overhang_sensors).maybe(),
         )
             .join()
         {
@@ -290,10 +286,10 @@ impl<'a> System<'a> for CharacterControlSystem {
             }
             // Standing over a drop, held by the brink alone, the body is
             // steered off it through the same support that holds it.
-            if let (LocomotionState::OnFoot(_), Some(outward), Some(sensor)) =
-                (state.locomotion, target.overhang, overhang)
+            if let (LocomotionState::OnFoot(_), Some(outward), Some(probe)) =
+                (state.locomotion, grounding.over_drop, config.drop_probe)
             {
-                rule.target = sensor.slide_off(rule.target, outward);
+                rule.target = probe.slide_off(rule.target, outward);
             }
             // Whether the ground the character last stood on was still as it
             // left. `support` has let go by the time a walk-off clamps, so the
@@ -780,7 +776,6 @@ mod tests {
         world.register::<Grounding>();
         world.register::<Immersion>();
         world.register::<Foliage>();
-        world.register::<OverhangSensor>();
         world.register::<AttitudeControl>();
         world.register::<Throws>();
         world.register::<Position>();

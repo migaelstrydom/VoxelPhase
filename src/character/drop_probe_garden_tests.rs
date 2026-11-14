@@ -1,4 +1,4 @@
-//! The overhang sensor on voxel terrain, meshed as the game meshes it: the
+//! The drop probe on voxel terrain, meshed as the game meshes it: the
 //! Traversal Garden's 0.7 m ledge, whose brink is a bevel, against the
 //! garden's slopes and lips, which a body must be able to stand on.
 
@@ -12,7 +12,7 @@ use crate::physics::{CollisionFilter, PhysicsConfig, PhysicsWorld};
 use crate::terrain::TerrainWorld;
 use crate::traversal::WorldCaster;
 
-use super::{LocomotionConfig, OverhangSensor};
+use super::LocomotionConfig;
 
 /// Lanes of `levels/traversal_garden.level.ron`, in z.
 const LEDGE_LANE: f32 = 58.0;
@@ -47,7 +47,7 @@ impl Garden {
         }
     }
 
-    /// What the sensor says of the player's capsule at rest over `(x, z)`:
+    /// What the player's drop probe says of the player's capsule at rest over `(x, z)`:
     /// its bottom sphere let down onto the ground there, held up along the
     /// normal it lands on.
     fn way_off(&self, x: f32, z: f32) -> Option<Vector3<f32>> {
@@ -60,7 +60,8 @@ impl Garden {
             .cast(Point3::new(x, 20.0, z), -Vector3::y(), 25.0, radius)
             .unwrap_or_else(|| panic!("no ground at ({x}, {z})"));
         let centre = landed.centre + Vector3::y() * (half_height - radius);
-        OverhangSensor::default().way_off(
+        let probe = self.config.drop_probe.expect("the player probes for drops");
+        probe.way_off(
             &caster,
             centre,
             landed.contact.normal,
