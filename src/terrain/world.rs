@@ -1825,6 +1825,74 @@ mod tests {
         world_of(SegmentFrame::identity(), grid)
     }
 
+    /// The shading normals on a uniform slope, by where each vertex sits
+    /// between the lattice planes it crosses: the mean tilt off the true
+    /// slope, in degrees, in eight bands of height within a voxel. Terraces
+    /// are a tilt that swings with that height.
+    fn slope_tilt_by_height_in_cell(voxel_size: f32, rise: f32) -> [f32; 8] {
+        let mut terrain = flat_terrain(voxel_size, 3.0);
+        terrain.bounds.max = (16.0, 20.0, 16.0);
+        // Across the lattice, so its contours cut every column.
+        let (from, to) = ((2.0_f32, 3.3_f32), (14.0_f32, 12.1_f32));
+        terrain.features.push(TerrainFeature::Ramp {
+            from,
+            to,
+            start_height: 3.0,
+            end_height: 3.0 + rise,
+            width: 8.0,
+            flat_width: 6.0,
+        });
+        let world = meshed(&terrain);
+        let run = Vector3::new(to.0 - from.0, 0.0, to.1 - from.1);
+        let (length, along) = (run.norm(), run.normalize());
+        let slope = (rise / length).atan().to_degrees();
+
+        let mut bands = [(0.0_f32, 0_usize); 8];
+        for segment in world.segments() {
+            for chunk in segment.grid().chunks() {
+                for vertex in chunk.mesh().get_render_data().0 {
+                    let offset = Vector3::new(vertex.pos.x - from.0, 0.0, vertex.pos.z - from.1);
+                    let t = offset.dot(&along) / length;
+                    let off_centre = (offset - along * offset.dot(&along)).norm();
+                    // The flat middle, clear of its ends and of the floor.
+                    if !(0.3..0.7).contains(&t) || off_centre > 2.0 || vertex.pos.y < 2.0 {
+                        continue;
+                    }
+                    let tilt = vertex.normal.normalize().y.acos().to_degrees() - slope;
+                    let band =
+                        (((vertex.pos.y / voxel_size).rem_euclid(1.0) * 8.0) as usize).min(7);
+                    bands[band].0 += tilt;
+                    bands[band].1 += 1;
+                }
+            }
+        }
+        bands.map(|(sum, count)| {
+            assert!(count > 0, "no vertices in a band");
+            sum / count as f32
+        })
+    }
+
+    /// A slope shades as one surface, not as terraces a voxel high. Shading
+    /// normals come from the density's gradient, and density is a distance
+    /// clamped at a voxel: differences taken across a clamped sample read the
+    /// slope short, by more the further from a lattice plane the surface
+    /// crossed, which tilted mid-cell normals up to 7° steeper than the slope.
+    #[test]
+    fn a_slope_shades_without_terraces() {
+        for (voxel_size, rises) in [
+            (0.5_f32, &[3.0_f32, 6.0, 10.0, 16.0][..]),
+            (1.0, &[3.0, 6.0][..]),
+        ] {
+            for &rise in rises {
+                let bands = slope_tilt_by_height_in_cell(voxel_size, rise);
+                assert!(
+                    bands.iter().all(|tilt| tilt.abs() < 0.5),
+                    "{rise} m rise at {voxel_size} m voxels: tilt by height in cell {bands:?}"
+                );
+            }
+        }
+    }
+
     fn assert_watertight(label: &str, world: &TerrainWorld) {
         assert!(world.triangle_count() > 0, "{label}: meshed to nothing");
         assert_eq!(

@@ -245,39 +245,58 @@ fn majority_material([a, b, c]: [VoxelMaterial; 3]) -> VoxelMaterial {
     }
 }
 
-/// Central-difference gradient of the density field at grid index (x,y,z).
-/// Falls back to forward/backward differences at the grid boundary.
+/// Gradient of the density field at grid index (x,y,z), one axis at a time
+/// ([`axis_slope`]).
 fn sample_gradient(grid: &VoxelBlock, x: usize, y: usize, z: usize) -> Vector3<f32> {
     let [size_x, size_y, size_z] = grid.dims();
     let cell_size = grid.lattice().spacing();
-
     let d = |cx: usize, cy: usize, cz: usize| grid.get(cx, cy, cz).density;
+    let here = d(x, y, z);
+    let below = |i: usize| i.checked_sub(1);
+    let above = |i: usize, size: usize| (i + 1 < size).then_some(i + 1);
 
-    let dx = if x == 0 {
-        (d(x + 1, y, z) - d(x, y, z)) / cell_size
-    } else if x + 1 >= size_x {
-        (d(x, y, z) - d(x - 1, y, z)) / cell_size
-    } else {
-        (d(x + 1, y, z) - d(x - 1, y, z)) / (2.0 * cell_size)
-    };
+    Vector3::new(
+        axis_slope(
+            below(x).map(|i| d(i, y, z)),
+            here,
+            above(x, size_x).map(|i| d(i, y, z)),
+            cell_size,
+        ),
+        axis_slope(
+            below(y).map(|i| d(x, i, z)),
+            here,
+            above(y, size_y).map(|i| d(x, i, z)),
+            cell_size,
+        ),
+        axis_slope(
+            below(z).map(|i| d(x, y, i)),
+            here,
+            above(z, size_z).map(|i| d(x, y, i)),
+            cell_size,
+        ),
+    )
+}
 
-    let dy = if y == 0 {
-        (d(x, y + 1, z) - d(x, y, z)) / cell_size
-    } else if y + 1 >= size_y {
-        (d(x, y, z) - d(x, y - 1, z)) / cell_size
-    } else {
-        (d(x, y + 1, z) - d(x, y - 1, z)) / (2.0 * cell_size)
-    };
-
-    let dz = if z == 0 {
-        (d(x, y, z + 1) - d(x, y, z)) / cell_size
-    } else if z + 1 >= size_z {
-        (d(x, y, z) - d(x, y, z - 1)) / cell_size
-    } else {
-        (d(x, y, z + 1) - d(x, y, z - 1)) / (2.0 * cell_size)
-    };
-
-    Vector3::new(dx, dy, dz)
+/// The density's slope along one axis at a sample of density `here`, from
+/// its neighbours a `cell_size` either side (`None` past the grid's edge).
+///
+/// Density is a distance clamped to one voxel, so a saturated neighbour is
+/// only a bound: a difference taken across it reads the slope short. On a
+/// slope the samples flanking a vertex lie up to a voxel and a half from the
+/// surface, and the shortfall swings with where the surface crosses the cell:
+/// shading tilted by up to 7° and back, every voxel of height, read as
+/// terraces. So a central difference is taken only when neither neighbour is
+/// saturated, or both are; otherwise the one-sided difference toward the
+/// unsaturated one.
+fn axis_slope(before: Option<f32>, here: f32, after: Option<f32>, cell_size: f32) -> f32 {
+    let saturated = |density: f32| density.abs() >= 1.0;
+    match (before, after) {
+        (Some(b), Some(a)) if saturated(b) == saturated(a) => (a - b) / (2.0 * cell_size),
+        (Some(b), Some(a)) if saturated(a) => (here - b) / cell_size,
+        (_, Some(a)) => (a - here) / cell_size,
+        (Some(b), None) => (here - b) / cell_size,
+        (None, None) => 0.0,
+    }
 }
 
 /// Position of the iso-crossing a fraction `t` along the lattice edge `a`–`b`.
@@ -628,6 +647,33 @@ mod tests {
     use super::*;
     use crate::terrain::voxel::{Voxel, VoxelMaterial};
     use crate::terrain::voxel_block::{BlockRange, SampleLattice};
+
+    /// Densities along an axis a surface crosses at `surface`, in voxels,
+    /// solid below: the distance clamped at one voxel, as terrain writes it.
+    fn clamped_distance(at: f32, surface: f32) -> f32 {
+        (surface - at).clamp(-1.0, 1.0)
+    }
+
+    /// Wherever the surface crosses the cell, the slope at a sample beside it
+    /// is the field's true one, though a neighbour is clamped.
+    #[test]
+    fn a_slope_beside_the_surface_reads_true_past_a_clamped_neighbour() {
+        for surface in [0.1_f32, 0.3, 0.5, 0.7, 0.9] {
+            let at = |i: f32| clamped_distance(i, surface);
+            let slope = axis_slope(Some(at(-1.0)), at(0.0), Some(at(1.0)), 1.0);
+            assert!((slope + 1.0).abs() < 1e-6, "surface at {surface}: {slope}");
+        }
+    }
+
+    /// Unclamped either side, or clamped both sides, it is the central
+    /// difference; at the grid's edge, the one-sided one it has.
+    #[test]
+    fn a_slope_is_central_unless_one_neighbour_alone_is_clamped() {
+        assert_eq!(axis_slope(Some(0.6), 0.1, Some(-0.4), 1.0), -0.5);
+        assert_eq!(axis_slope(Some(1.0), 1.0, Some(1.0), 1.0), 0.0);
+        assert_eq!(axis_slope(None, 0.1, Some(-0.4), 1.0), -0.5);
+        assert_eq!(axis_slope(Some(0.6), 0.1, None, 1.0), -0.5);
+    }
 
     /// An all-air block of `n³` unit-spaced samples with its origin at zero.
     fn block(n: usize) -> VoxelBlock {
