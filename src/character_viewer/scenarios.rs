@@ -269,6 +269,20 @@ pub fn catalogue() -> Vec<Scenario> {
             judged: Judged::Motion,
         },
         Scenario {
+            name: "swim_to_quay",
+            summary: "swim into the quay's side, catch its lip from the stroke, stand up \
+                      into the hang and climb out",
+            level: LEVEL,
+            start: (16.0, 0.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(1.0).named("tread"))
+                .then(Beat::walk(5.0).named("swim").towards(Vector3::x()))
+                .then(Beat::stand(2.0)),
+            camera: CameraRig::side().with_distance(6.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
             name: "water_jump",
             summary: "tread water in the deep end, tap jump, then hold it: a short jump out \
                       of the water and a full one",

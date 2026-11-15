@@ -308,10 +308,9 @@ impl<'a> System<'a> for CharacterControlSystem {
             let rate = config
                 .swim
                 .pitch_rate_toward(state.body_pitch, target_pitch);
-            // A swimmer caught by an edge hangs upright at once rather than
-            // easing up from the stroke.
+            // A body caught by an edge stands up as the grip carries it.
             state.body_pitch = if hanging {
-                0.0
+                state.grip.map_or(0.0, |grip| grip.pitch(config))
             } else {
                 approach(state.body_pitch, target_pitch, rate, dt)
             };

@@ -328,9 +328,10 @@ Two of the controller's per-state choices take a Ledge into account:
 - **Facing.** The yaw drive faces `-outward`, as a thrower faces its throw.
   Otherwise it would turn to the stick, and a shimmy would turn the body along
   the wall.
-- **Pitch.** Upright, straight away. A swimmer caught by an edge is lying
-  over, and easing back up at the swim's `stand_rate` would start the hang
-  leaning.
+- **Pitch.** The grip's (`Grip::pitch`). A swimmer caught by an edge is
+  lying over, and stands up over `settle` as the grip carries it (see *The
+  grip*); a body caught from the air is upright already. Easing back up at
+  the swim's `stand_rate` would start the hang leaning.
 
 `LOCOMOTION_STATES.md` lists Ledge leaving for Swim. With drop always being a
 Fall, that exit isn't needed and is struck from its table.
@@ -351,6 +352,18 @@ geometry is right however the body has turned:
 Rotation is left free by the joint. The player's `KeepAttitude` holds it
 upright, and the yaw drive turns it to face `-outward` about its own axis,
 which is where the anchor is.
+
+A swimmer is caught lying along its stroke, so the anchor 0.53 m up its
+axis is its head, out in front. It stands up about its own centre: the
+grip records how far the body was tipped and which way, plans every path for
+the body upright, and adds the lean of the anchor off its upright place,
+eased to nothing over `settle`. `KeepAttitude` is held at the grip's pitch on
+the same schedule, so the joint and the attitude ask for one motion. Snapped
+upright at the catch instead, the attitude's rigid rows asked for an 80°
+turn in a frame while the rigid joint pinned the head: the two fought, and
+the solver threw the body off at hundreds of km/s. Turned about the pinned
+head instead of its centre, the body sank as it stood, out of the hands'
+catch band, and the edge was lost.
 
 Every phase moves only the edge-side anchor, so every path is in the edge's
 frame. Each frame the anchor stands where the body should be, and the
@@ -496,6 +509,9 @@ physics-free. Nothing is a canned clip:
   - an edge carried by its body when the body moves and turns.
 - The same on the Traversal Garden's cave roof as voxel terrain,
   `garden_tests.rs` (`traversal_scenarios`).
+- The grip carrying a body, `grip_tests.rs`: a swimmer caught lying over
+  stands up into the hang without spinning, and a body caught upright is
+  held upright from the first frame.
 - The state machine on scripted facts, `locomotion/ledge_tests.rs`:
   - catching from a fall, not from a Hop or a jump still launching;
   - the water giving up a swimmer to an edge, and never taking a hanger;
@@ -531,6 +547,12 @@ physics-free. Nothing is a canned clip:
 | `ledge_platform_lift` | catches the rim of a platform rising from 1 m to 3.5 m, rides it up and back down, and stands when its feet reach the ground |
 | `ledge_platform_side`, `ledge_platform_diagonal` | catches the rim of a platform going side to side, and one going diagonally to the side and up, and rides it; at a reversal the hanger's momentum tugs the deck's edge and turns the 270 kg deck a little |
 | `ledge_platform_still` | hangs from a platform holding still, pulls up and stands on the deck, which tips under them |
+
+And in `levels/swim_test.level.ron`, `swim_to_quay` (`character_viewer/scenarios.rs`): a
+swimmer stroking into the quay's side catches its lip lying at 79°, stands
+up into the hang in 0.3 s with its centre held within 3 cm, and pulls up
+onto the quay. Before the grip carried the stand-up, the same crossing threw
+the body to 60 km away.
 
 The Traversal Garden's `ledge_walk` (its 0.7 m ledge) now crosses on 5 of 5
 starts by mantling. Its baseline in `docs/traversal/BASELINE.md` was 0 of 5,

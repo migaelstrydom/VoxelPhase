@@ -16,19 +16,59 @@ use super::edge::{frame_of, SensedEdge, WorldEdge};
 /// Rotation is free; the body's attitude control keeps it upright, and it
 /// swings on the joint. Only a body that bears the hanger has an edge to hold
 /// (`LedgeConfig::bearing_mass_ratio`).
+///
+/// A body caught tipped over (a swimmer lying along its stroke, holding by
+/// the head end of its axis) stands up about its own centre over
+/// `LedgeConfig::settle`: the path is planned for the body upright, and the
+/// end carries the lean of the hands' point off it, easing to nothing. The
+/// attitude follows the same schedule ([`Grip::pitch`]), so the joint and the
+/// attitude ask for one motion; asked to stand at once while the joint pins
+/// the head, the two rigid rows fight, and the solver throws the body away.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Grip {
     constraint: ConstraintHandle,
     edge_body: Option<RigidBodyHandle>,
     /// Where the joint's edge end started its present motion (the catch's
-    /// ease, or the pull-up's climb), in the edge's frame.
+    /// ease, or the pull-up's climb), in the edge's frame, for the body
+    /// upright.
     from: Point3<f32>,
+    /// How the body stood when caught.
+    caught: Tilt,
+    /// Seconds since the catch, to the end of this frame.
+    since_catch: f32,
     /// Whether that motion is a pull-up.
     climbing: bool,
     /// Where the joint's edge end carries the body to by the end of this
     /// frame, in the edge's frame; the end is moved there next frame and set
     /// moving on.
     carried: Point3<f32>,
+}
+
+/// How far a body's axis tips off upright, and which way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Tilt {
+    /// Radians from upright.
+    pitch: f32,
+    /// Level direction the axis tips towards; zero for a body upright.
+    heading: Vector3<f32>,
+}
+
+impl Tilt {
+    /// The tilt of a body whose axis (local +Y) points along `axis`.
+    fn of(axis: Vector3<f32>) -> Self {
+        let level = Vector3::new(axis.x, 0.0, axis.z);
+        Self {
+            pitch: axis.y.clamp(-1.0, 1.0).acos(),
+            heading: level.try_normalize(1.0e-6).unwrap_or_else(Vector3::zeros),
+        }
+    }
+
+    /// Where a point `reach` up the axis lies from where it would upright,
+    /// with the body tipped `pitch` this way.
+    fn lean(&self, pitch: f32, reach: f32) -> Vector3<f32> {
+        let (sin, cos) = pitch.sin_cos();
+        (self.heading * sin + Vector3::y() * (cos - 1.0)) * reach
+    }
 }
 
 /// What [`Grip::reconcile`] reads this frame.
@@ -78,11 +118,15 @@ impl Grip {
         };
         current.settle_at(world, current.carried);
         let now = to_edge * current.carried;
+        let reach = frame.config.ledge.hang_reach;
         if matches!(phase, LedgePhase::PullUp { .. }) && !current.climbing {
-            current.from = current.carried;
+            let lean = current.caught.lean(current.pitch(frame.config), reach);
+            current.from = to_edge.inverse() * (now - lean);
             current.climbing = true;
         }
-        let target = match phase {
+        current.since_catch += frame.dt;
+        let lean = current.caught.lean(current.pitch(frame.config), reach);
+        let upright = match phase {
             LedgePhase::Grab { elapsed } => {
                 let t = smoothstep(elapsed / frame.config.ledge.settle);
                 let from = to_edge * current.from;
@@ -93,6 +137,7 @@ impl Grip {
                 climb(&at, to_edge * current.from, frame.config).at(smoothstep(elapsed / duration))
             }
         };
+        let target = upright + lean;
         let velocity = if frame.dt > 0.0 {
             (target - now) / frame.dt
         } else {
@@ -100,6 +145,12 @@ impl Grip {
         };
         current.aim(world, velocity);
         current.carried = to_edge.inverse() * target;
+    }
+
+    /// The pitch the body is held at by the end of this frame: the tilt it
+    /// was caught at, eased upright over `LedgeConfig::settle`.
+    pub fn pitch(&self, config: &LocomotionConfig) -> f32 {
+        self.caught.pitch * (1.0 - smoothstep(self.since_catch / config.ledge.settle))
     }
 
     /// Let go: the joint goes.
@@ -120,13 +171,18 @@ impl Grip {
         anchor: Point3<f32>,
         frame: &GripFrame,
     ) -> Option<Self> {
-        let from = frame_of(world, sensed.edge.body)?.inverse() * anchor;
+        let to_edge = frame_of(world, sensed.edge.body)?;
+        let body = world.body(frame.body)?;
+        let caught = Tilt::of(body.rotation() * Vector3::y());
+        let reach = frame.config.ledge.hang_reach;
+        let held = to_edge.inverse() * anchor;
+        let from = to_edge.inverse() * (anchor - caught.lean(caught.pitch, reach));
         // Unbreakable: the solver's limit is an impulse per substep, and
         // moving the edge end each frame asks for more than any hit would.
         let constraint = world.create_constraint(ConstraintKind::BallJoint {
             body_a: sensed.edge.body,
             body_b: frame.body,
-            local_anchor_a: from.coords,
+            local_anchor_a: held.coords,
             anchor_velocity: Vector3::zeros(),
             local_anchor_b: hang_anchor(frame.config),
             compliance: 0.0,
@@ -136,8 +192,10 @@ impl Grip {
             constraint,
             edge_body: sensed.edge.body,
             from,
+            caught,
+            since_catch: 0.0,
             climbing: false,
-            carried: from,
+            carried: held,
         })
     }
 

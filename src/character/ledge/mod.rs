@@ -12,6 +12,8 @@ mod system;
 #[cfg(all(test, feature = "traversal_scenarios"))]
 mod garden_tests;
 #[cfg(test)]
+mod grip_tests;
+#[cfg(test)]
 mod tests;
 
 pub use config::LedgeConfig;
