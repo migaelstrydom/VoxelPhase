@@ -54,6 +54,9 @@ const FOLDED_EXTENSION: f32 = 0.3;
 const STALL_SPEED: f32 = 1.0;
 /// How long both feet may stay down at that speed, in seconds: a stance.
 const STALL_SECONDS: f32 = 0.35;
+/// The shortest a foot stands between two swings, in seconds: a sprint's
+/// stance is about 0.08.
+const STUTTER_SECONDS: f32 = 0.04;
 
 /// Something a leg was drawn doing that legs do not do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -81,10 +84,13 @@ pub enum Oddity {
     /// On foot and travelling as asked with both feet down: the legs have
     /// stopped stepping. A body carried along as it stands is asked nothing.
     Stalled,
+    /// A foot put down and picked straight up again: a stance too short to
+    /// be one, between two swings.
+    Stutter,
 }
 
 impl Oddity {
-    pub const ALL: [Oddity; 8] = [
+    pub const ALL: [Oddity; 9] = [
         Oddity::Level,
         Oddity::OverHip,
         Oddity::Reined,
@@ -93,6 +99,7 @@ impl Oddity {
         Oddity::Crossed,
         Oddity::Folded,
         Oddity::Stalled,
+        Oddity::Stutter,
     ];
 
     pub fn name(self) -> &'static str {
@@ -105,6 +112,7 @@ impl Oddity {
             Oddity::Crossed => "crossed",
             Oddity::Folded => "folded",
             Oddity::Stalled => "stalled",
+            Oddity::Stutter => "stutter",
         }
     }
 
@@ -118,7 +126,8 @@ impl Oddity {
             | Oddity::Snap
             | Oddity::Jump
             | Oddity::Crossed
-            | Oddity::Folded => 0.0,
+            | Oddity::Folded
+            | Oddity::Stutter => 0.0,
         }
     }
 }
@@ -203,6 +212,7 @@ impl PoseAudit {
         for (key, run) in open {
             audit.close(key, run);
         }
+        audit.findings.extend(stutters(frames));
         audit
             .findings
             .sort_by(|a, b| a.start.total_cmp(&b.start).then(a.oddity.cmp(&b.oddity)));
@@ -320,7 +330,8 @@ fn worse(oddity: Oddity, a: f32, b: f32) -> f32 {
         | Oddity::Snap
         | Oddity::Jump
         | Oddity::Crossed
-        | Oddity::Stalled => a.max(b),
+        | Oddity::Stalled
+        | Oddity::Stutter => a.max(b),
     }
 }
 
@@ -382,6 +393,44 @@ fn oddities(
         seen.push((Oddity::Stalled, Leg::Both, 0.0));
     }
     seen
+}
+
+/// Every stance of `frames` too short to be one: a foot down between two
+/// swings for less than [`STUTTER_SECONDS`], with the body on foot
+/// throughout. A foot set down as the legs come back on (a landing) or
+/// taken up as they go off is not between two swings of the gait.
+fn stutters(frames: &[FrameRecord]) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for (index, leg) in [(0, Leg::Left), (1, Leg::Right)] {
+        // The frame a stance began on, if it began from a swing on foot.
+        let mut stance: Option<usize> = None;
+        for (i, pair) in frames.windows(2).enumerate() {
+            let (before, now) = (&pair[0], &pair[1]);
+            let on_foot =
+                before.locomotion == "on_foot" && now.locomotion == "on_foot" && now.beat != SETTLE;
+            let (was_down, down) = (before.feet[index].planted, now.feet[index].planted);
+            if !on_foot {
+                stance = None;
+            } else if down && !was_down {
+                stance = Some(i + 1);
+            } else if !down && was_down {
+                if let Some(began) = stance.take() {
+                    let seconds = now.time - frames[began].time;
+                    if seconds < STUTTER_SECONDS {
+                        found.push(Finding {
+                            oddity: Oddity::Stutter,
+                            leg,
+                            start: frames[began].time,
+                            frames: i + 1 - began,
+                            seconds,
+                            worst: seconds,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    found
 }
 
 /// `offset` as the rig faces in `frame`: to its right, up and ahead.
@@ -562,6 +611,27 @@ mod tests {
                 .findings,
             1
         );
+    }
+
+    /// A foot down for a frame between two swings is a stutter; one down
+    /// for a stance is a step.
+    #[test]
+    fn a_stance_too_short_to_be_one_is_a_stutter() {
+        let stepping = |down: std::ops::Range<usize>| -> Vec<FrameRecord> {
+            (0..30)
+                .map(|i| {
+                    let mut f = frame(i, STAND_LEFT, STAND_RIGHT);
+                    f.feet[0].planted = down.contains(&i);
+                    f.feet[1].planted = true;
+                    f
+                })
+                .collect()
+        };
+        let tapped = PoseAudit::of(&stepping(10..11));
+        assert_eq!(tapped.tally(Oddity::Stutter).findings, 1);
+        assert_eq!(tapped.findings[0].leg, Leg::Left);
+        let stepped = PoseAudit::of(&stepping(10..18));
+        assert_eq!(stepped.tally(Oddity::Stutter).findings, 0);
     }
 
     #[test]

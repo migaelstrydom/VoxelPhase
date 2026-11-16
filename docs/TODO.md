@@ -23,32 +23,36 @@ Items explicitly deferred from the initial implementation. These should be addre
 
 ---
 
-## Feet snap at a landing and a hop's launch
+## Crouch-walk has a flight phase
 
-A landing foot jumps 0.24–0.29 m relative to the pelvis in a frame
-(a swing moves about 0.13 m a frame), and a planned hop's launch pose
-0.29 m. Measured with `character_viewer` on `jump_straight`, `air_reverse`
-and `hop_reverse`, with and without `--track`: the same untracked, so not
-the planner's.
-
-The landing pop is deliberate: `lerp_feet` (`src/animation/pose.rs`) takes
-hip-anchored feet to world-placed ones in one frame, so a landing foot does
-not skate along the ground through the 0.1 s crossfade. A fix has to
-blend hanging feet onto their landing spot before touchdown rather than
-across it. The launch snap is not yet looked into.
+Crouch-walking at 2 m/s, both feet are off the ground for three or four
+frames of every step (`character_viewer crouch_walk --feet`). The gait takes
+its duty factor from the Froude number, and on legs half a metre long 2 m/s
+is already a run (`FootPlacerConfig::duty_froude_end`), so a crouch scurries
+where it should creep. The stance itself is symmetric (0.23 m ahead to
+0.22 m behind). A crouch preset that pins the duty factor above a half
+would fix it; `crouch_walk_alternates_with_continuous_support` holds only
+at the slower speed the invariant walks at.
 
 ---
 
-## Crouch-walk drags the trailing foot
+## Braking hard, a planned step is given up for a short one
 
-Crouch-walking, the trailing foot lifts 0.40 m behind the hip but plants only
-0.26 m ahead, so the legs read as dragging behind (`character_viewer
-crouch_walk`, untracked). It is the foot placer's own gait at crouch. Suspected,
-unverified: a foot may not lift until the other has landed, which holds the
-trailing foot back at crouch's slow cadence. The crouch's pelvis offset
-(0.12 m, both crouch presets) is bounded by the knee clearing the ground
-(`a_crouched_knee_clears_the_ground_wherever_the_foot_is`), so the fix is in
-the gait, not the pelvis.
+A body that brakes from a run to a crouch in a few frames stops short of the
+footfall its swinging foot was aimed at. The foot waits over a step only for
+a body about to arrive (`placer::LONGEST_WAIT`), and otherwise lands short
+under the hip, off the plan. Following the plan's footfalls as it replans
+for the slower body would land it on one.
+
+---
+
+## Planning costs most while turning
+
+`traversal_perf --turn 90` lays the path afresh every other frame, and each
+relay casts the whole strip again: 3000 casts and 3 to 5 ms on those frames,
+against a median of 0.3 ms. A cache of cast heights kept in the world, not
+along the path, would let a relaid path reuse the casts of the one before
+it.
 
 ---
 

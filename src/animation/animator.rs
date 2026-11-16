@@ -926,7 +926,8 @@ fn next_pose_state(
 mod tests {
     use super::*;
     use crate::animation::state::LandingSquash;
-    use crate::character::locomotion::{AirSteering, Fall, Hop, OnFoot, Swim};
+    use crate::character::locomotion::{AirSteering, Fall, OnFoot, Swim};
+    use crate::character::PlannedLanding;
 
     /// The pose `state` maps to from `current`, walking ahead.
     fn pose_in(state: LocomotionState, current: PoseState) -> PoseState {
@@ -962,6 +963,60 @@ mod tests {
     }
 
     const WALK: PoseState = PoseState::Grounded { gait: Gait::Walk };
+
+    /// A Hop `flown` seconds into its flight, coming down in `lands_in`.
+    fn flying_hop(flown: f32, lands_in: Option<f32>) -> LocomotionState {
+        LocomotionState::Hop(Hop {
+            phase: TakeoffPhase::Flight,
+            landing: lands_in.map(|in_seconds| PlannedLanding {
+                at: Point3::origin(),
+                in_seconds,
+                reach: 0.6,
+            }),
+            rise_held: None,
+            flown,
+        })
+    }
+
+    /// The legs stride through a Hop that has only just left the ground, or
+    /// that comes down within a stride or two of leaving it: a kerb, a step,
+    /// a leap. Through a long one (a planned drop off a ledge) they hang as
+    /// in any fall, and the pose is a flight's with them.
+    #[test]
+    fn a_hop_is_stridden_through_only_while_it_is_short() {
+        let hop_pose = PoseState::Hop {
+            takeoff: Takeoff::default(),
+        };
+        for (flown, lands_in, strides) in [
+            (0.05, None, true),
+            (0.05, Some(1.0), true),
+            (0.3, Some(0.1), true),
+            (0.3, None, false),
+            (0.3, Some(0.5), false),
+            (0.9, Some(0.1), false),
+        ] {
+            let state = flying_hop(flown, lands_in);
+            let legs = leg_mode(&state);
+            let pose = pose_in(state, hop_pose);
+            let what = format!("{flown} s in, landing in {lands_in:?}");
+            if strides {
+                assert_eq!(legs, LegMode::Step, "{what}");
+                assert!(matches!(pose, PoseState::Hop { .. }), "{what}: {pose:?}");
+            } else {
+                assert_eq!(legs, LegMode::Off, "{what}");
+                assert!(
+                    matches!(
+                        pose,
+                        PoseState::Airborne {
+                            kind: AirKind::Leap,
+                            ..
+                        }
+                    ),
+                    "{what}: {pose:?}"
+                );
+            }
+        }
+    }
 
     /// A jump out of the water flies at once: there is no ground under a
     /// swimmer to wind up against.

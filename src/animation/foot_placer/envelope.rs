@@ -98,11 +98,13 @@ impl LegEnvelope {
     }
 
     /// The hip the leg hangs from.
+    #[cfg(test)]
     pub(super) fn hip(&self) -> Point3<f32> {
         self.hip
     }
 
     /// The furthest the leg stretches, in metres.
+    #[cfg(test)]
     pub(super) fn reach(&self) -> f32 {
         self.reach
     }

@@ -8,17 +8,26 @@
 //!                                   │       substeps ≤ max_substep_dt,
 //!                                   ▼       lerping pelvis/yaw
 //!              ┌──────────── substep ─────────────┐
+//!              │ carry and swivel with the body   │
 //!              │ GaitTiming::derive (cadence)     │
 //!              │ GaitClock::advance (releases)    │
 //!              │ ideal targets (capture point)    │
+//!              │ let go of feet out of reach      │
 //!              │ fire ≤ 1 step                    │
 //!              │ advance swings, y-sync, ankles   │
+//!              │ draw within the LegEnvelope      │
 //!              └──────────────────────────────────┘
 //! ```
 //!
 //! The substep loop is what makes the placer frame-rate independent:
 //! plant→lift sequencing that would alias inside a 30 Hz frame resolves
 //! identically at any display rate.
+//!
+//! The feet are places in the world only while the legs have ground to
+//! answer to (`LegMode::Step`). Off, they are wherever a pose draws them
+//! ([`FootPlacer::hold_feet`]); and on, a plant or a swing the body has
+//! left behind is let go of or drawn at the edge of where a leg goes
+//! (`LegEnvelope`), never as a leg pointing at it.
 
 use nalgebra::{Point3, Vector2, Vector3};
 
@@ -73,6 +82,10 @@ pub(super) const SWIVEL_FROM: f32 = 4.0;
 /// they stood are on each other's side of the body half way through it, and
 /// take a second of crossed-over steps to come back.
 const SWIVEL_FULL: f32 = 8.0;
+
+/// The longest a foot waits over a step of the gait's own time for the body
+/// to come within the leg's reach of it, in seconds: three frames.
+const LONGEST_WAIT: f32 = 0.05;
 
 /// The speed a swinging foot is diverted at when a plan moves the footfall
 /// it swings to, in m/s: about a stride's own.
@@ -820,10 +833,12 @@ impl FootPlacer {
     /// an about-face in mid-air passes through the antipodal case a
     /// vector lerp has no answer for.
     ///
-    /// Only the drawn axes move here — phase, anchors and plant
-    /// references are exactly the state suspension exists to preserve.
-    /// `takeoff_up` follows the sole so a swing resumed after a short
-    /// airborne blip eases on from what was last drawn.
+    /// Only the drawn axes move here. Where the feet are is a pose's to say
+    /// while the legs are off ([`Self::hold_feet`]); left unsaid (a
+    /// creature's legs, off for a blip of its grounding), phase, anchors
+    /// and plant references stay as the gait left them. `takeoff_up`
+    /// follows the sole so a swing resumed after a short airborne blip
+    /// eases on from what was last drawn.
     fn relax_feet_toward_body(&mut self, ctx: &PlacerCtx<'_>) {
         self.prev_yaw = ctx.yaw;
         let alpha = 1.0 - (-ctx.config.ankle_slerp_rate * ctx.dt).exp();
@@ -1232,7 +1247,11 @@ fn advance_stepping(
             (Some(plant_at), _) => foot.plant(plant_at, &swing, &ctx.planned),
             // Over its planned step a moment before the body is down on it:
             // the foot waits there, at the end of its leg.
-            (None, Some(step)) if !swing.held && planar_distance(swing.to, step.at) <= ON_STEP => {
+            (None, Some(step))
+                if !swing.held
+                    && planar_distance(swing.to, step.at) <= ON_STEP
+                    && comes_within_reach(&step, hip, reach, ctx) =>
+            {
                 swing.retime(2.0 * frame_dt.max(ctx.dt), ctx.dt);
                 foot.position = LegEnvelope::of(foot.side, ctx, facing).draw(swing.position());
                 foot.phase = FootPhase::Stepping(swing);
@@ -1339,6 +1358,27 @@ fn advance_stepping(
     foot.forward = swing_forward(swing.from_forward, swing.to_forward, swing.progress());
     foot.pre_lift = 0.0;
     foot.phase = FootPhase::Stepping(swing);
+}
+
+/// Whether the body is about to bring its hip within the leg's `reach` of a
+/// planned `step` the foot has swung to ahead of it: the body is coming down
+/// on it from a flight, as the plan has it land there, or closing on it and
+/// [`LONGEST_WAIT`] or less away. A body that has braked short of a step is
+/// not: a foot held out over it would hang there, knee up, until the body
+/// crept under it.
+fn comes_within_reach(
+    step: &PlannedStep,
+    hip: Point3<f32>,
+    reach: f32,
+    ctx: &PlacerCtx<'_>,
+) -> bool {
+    if step.landing.is_some() {
+        return true;
+    }
+    let to_step = step.at - hip;
+    let distance = to_step.norm().max(1.0e-4);
+    let closing = to_step.dot(&ctx.velocity) / distance;
+    closing > 0.0 && distance - reach <= closing * LONGEST_WAIT
 }
 
 /// The share of their gap a swing's target, lift and clearance close in one
