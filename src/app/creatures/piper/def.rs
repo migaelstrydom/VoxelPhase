@@ -17,7 +17,7 @@ use nalgebra::{Point3, UnitVector3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::bag::{COLLAR, CORE};
+use super::bag::{COLLAR, CORE, THROAT};
 use super::frame::{MUZZLE, RADIUS};
 use super::pipes::Pipe;
 use super::shaping::{placed, surface, vector};
@@ -135,7 +135,7 @@ impl PiperDef {
             // collar, which stands out of the belly as the belly does there.
             head: Some(Rider {
                 part: HEAD,
-                anchor: bag::throat(),
+                anchor: vector(THROAT),
                 out: fastened(&belly, HEAD, vector(COLLAR)).out,
             }),
             cheeks: Some(Cheeks {

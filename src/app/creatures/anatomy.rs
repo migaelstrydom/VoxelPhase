@@ -297,6 +297,89 @@ pub fn foot(length: f32, side: FootSide) -> MeshPrimitive {
     mesh
 }
 
+/// The fingers: across the palm (shares of the hand's length, toward the
+/// thumb), and how long against the middle one.
+const FINGERS: [(f32, f32); 4] = [(-0.15, 0.86), (-0.05, 1.0), (0.05, 0.94), (0.145, 0.76)];
+
+/// Which way a finger's bone runs `turns` joints into a curl of `curl`
+/// radians a joint.
+fn finger_bend(curl: f32, turns: f32) -> Vector3<f32> {
+    UnitQuaternion::from_axis_angle(&Vector3::x_axis(), curl * turns) * Vector3::z()
+}
+
+/// The three bones of a finger `long` against the middle one, `across` the
+/// palm, of a hand `size` long curled `curl`: where each starts and ends,
+/// and how thick it is where it starts.
+fn finger_bones(
+    size: f32,
+    curl: f32,
+    across: f32,
+    long: f32,
+) -> [(Vector3<f32>, Vector3<f32>, f32); 3] {
+    let reach = 0.56 * size * long;
+    let mut at = Vector3::new(across * size, 0.0, 0.44 * size);
+    let mut thick = 0.03 * size;
+    let mut bones = [(Vector3::zeros(), Vector3::zeros(), 0.0); 3];
+    for (bone, share) in [0.45, 0.3, 0.25].into_iter().enumerate() {
+        let next = at + finger_bend(curl, bone as f32 + 0.6) * reach * share;
+        bones[bone] = (at, next, thick);
+        at = next;
+        thick *= 0.86;
+    }
+    bones
+}
+
+/// Where a hand `size` long whose fingers curl `curl` holds a pipe, in the
+/// hand's frame ([`hand`]), and the radius of the thickest pipe it closes
+/// round there without a finger or the palm passing into it: the point
+/// within the middle finger's curl furthest from every finger and the
+/// palm.
+pub fn grip(size: f32, curl: f32) -> (Vector3<f32>, f32) {
+    let bones: Vec<_> = FINGERS
+        .iter()
+        .flat_map(|&(across, long)| finger_bones(size, curl, across, long))
+        .collect();
+    // In the plane the fingers curl in: a finger is a line there.
+    let clearance = |y: f32, z: f32| {
+        let point = Vector3::new(0.0, y, z);
+        let palm = -PALM_HALF_DEPTH * size - y;
+        bones
+            .iter()
+            .map(|(from, to, thick)| {
+                let (from, to) = (
+                    Vector3::new(0.0, from.y, from.z),
+                    Vector3::new(0.0, to.y, to.z),
+                );
+                let run = to - from;
+                let t = ((point - from).dot(&run) / run.norm_squared()).clamp(0.0, 1.0);
+                (point - (from + run * t)).norm() - thick
+            })
+            .fold(palm, f32::min)
+    };
+    let middle = finger_bones(size, curl, 0.0, 1.0);
+    let (mut low, mut high) = (Vector3::repeat(f32::MAX), Vector3::repeat(f32::MIN));
+    for (from, to, _) in middle {
+        low = low.inf(&from).inf(&to);
+        high = high.sup(&from).sup(&to);
+    }
+    let steps = 60;
+    let mut best = (Vector3::new(0.0, low.y, low.z), f32::MIN);
+    for i in 0..=steps {
+        for j in 0..=steps {
+            let y = low.y + (high.y - low.y) * i as f32 / steps as f32;
+            let z = low.z + (high.z - low.z) * j as f32 / steps as f32;
+            let clear = clearance(y, z);
+            if clear > best.1 {
+                best = (Vector3::new(0.0, y, z), clear);
+            }
+        }
+    }
+    best
+}
+
+/// Half the depth of the palm, as a share of the hand's length.
+const PALM_HALF_DEPTH: f32 = 0.06;
+
 /// A hand `size` long from wrist to fingertip, its wrist at the origin and
 /// its fingers along +Z, each joint of them curled `curl` radians toward
 /// −Y: a little for a hand at rest, more to grip an edge. The thumb is on
@@ -314,24 +397,19 @@ pub fn hand(size: f32, curl: f32, side: FootSide) -> Clay {
             FLESH,
         )
         .add(
-            Lump::mass((0.19 * s, 0.06 * s, 0.22 * s), (0.0, 0.0, 0.26 * s)),
+            Lump::mass(
+                (0.19 * s, PALM_HALF_DEPTH * s, 0.22 * s),
+                (0.0, 0.0, 0.26 * s),
+            ),
             FLESH,
         )
         .smoothing(0.016 * s);
-    // Fingers: across the palm, how long against the middle one.
-    let fingers = [(-0.15, 0.86), (-0.05, 1.0), (0.05, 0.94), (0.145, 0.76)];
-    let bend = |turns: f32| {
-        UnitQuaternion::from_axis_angle(&Vector3::x_axis(), curl * turns) * Vector3::z()
-    };
-    for (across, long) in fingers {
-        let reach = 0.56 * s * long;
-        let mut at = Vector3::new(across * s * inner, 0.0, 0.44 * s);
-        let mut thick = 0.03 * s;
+    for (across, long) in FINGERS {
+        let bones = finger_bones(s, curl, across * inner, long);
         // Three bones, each curled on from the last, with the knuckle each
         // turns on standing under thin skin.
-        for (bone, share) in [0.45, 0.3, 0.25].into_iter().enumerate() {
-            let along = bend(bone as f32 + 0.6);
-            let next = at + along * reach * share;
+        for (bone, (at, next, thick)) in bones.into_iter().enumerate() {
+            let along = (next - at).normalize();
             let colour = if bone == 0 { FLESH } else { FLUSH };
             let back = Vector3::x().cross(&along);
             let knuckle = at - back * 0.25 * thick;
@@ -348,11 +426,11 @@ pub fn hand(size: f32, curl: f32, side: FootSide) -> Clay {
                     Lump::ball(1.16 * thick, (knuckle.x, knuckle.y, knuckle.z)),
                     FLUSH,
                 );
-            at = next;
-            thick *= 0.86;
         }
+        let (_, at, thick) = bones[2];
+        let thick = 0.86 * thick;
         // The nail, laid along the back of the last bone.
-        let along = bend(2.6);
+        let along = finger_bend(curl, 2.6);
         let back = Vector3::x().cross(&along);
         let nail = at - along * 0.05 * s - back * 0.9 * thick;
         clay = clay.add(

@@ -87,8 +87,10 @@ pub(super) struct Arm {
     pub(super) upper_arm: MeshPrimitive,
 }
 
-/// Size of the hand, m.
+/// Size of the hand, m, and how far each joint of its fingers curls round
+/// the chanter, radians.
 const HAND_SIZE: f32 = 0.16;
+const HAND_CURL: f32 = 1.0;
 
 /// How the hand holds `chanter`: the turn that sets it on the pipe, and
 /// where the arm's joints are.
@@ -101,7 +103,7 @@ fn hold(chanter: &Pipe) -> (UnitQuaternion<f32>, ArmJoints) {
     let elbow = Vector3::new(0.4, -0.19, 0.49);
     let shoulder = Vector3::new(0.27, -0.02, 0.2);
     // The pipe lies in the crook of the fingers.
-    let crook = Vector3::new(0.0, -0.19 * HAND_SIZE, 0.56 * HAND_SIZE);
+    let crook = anatomy::grip(HAND_SIZE, HAND_CURL).0;
     // The fingers lie across the pipe from outside it, the back of the
     // hand to whoever looks, and run on from the forearm: the wrist is
     // found from the hand's turn and the turn from the wrist, so it is
@@ -159,7 +161,7 @@ pub(super) fn arm(chanter: &Pipe) -> Arm {
         FLESH,
     );
     let mut hand = anatomy::flesh(
-        &anatomy::hand(HAND_SIZE, 1.12, FootSide::Left),
+        &anatomy::hand(HAND_SIZE, HAND_CURL, FootSide::Left),
         1.2 * DIGIT_GRAIN,
     );
     wash(&mut hand, |_| LIVID);
@@ -172,5 +174,34 @@ pub(super) fn arm(chanter: &Pipe) -> Arm {
         hand: placed(hand, turn, wrist),
         forearm: skin(&forearm),
         upper_arm: skin(&upper_arm),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_hand_closes_round_the_chanter_without_a_finger_in_it() {
+        let hand = anatomy::hand(HAND_SIZE, HAND_CURL, FootSide::Left);
+        let (centre, _) = anatomy::grip(HAND_SIZE, HAND_CURL);
+        // The chanter's shaft, a little wider than its girth, runs along
+        // the hand's x through its grip.
+        let shaft = 1.05 * 0.015;
+        let mut nearest = f32::MAX;
+        for across in -10..=10 {
+            for round in 0..48 {
+                let angle = std::f32::consts::TAU * round as f32 / 48.0;
+                let point = centre
+                    + Vector3::new(
+                        0.006 * across as f32,
+                        shaft * angle.cos(),
+                        shaft * angle.sin(),
+                    );
+                nearest = nearest.min(hand.distance(point));
+            }
+        }
+        println!("the hand is {nearest} m off the chanter at its nearest");
+        assert!(nearest > 0.0, "a finger is {} m into the chanter", -nearest);
     }
 }

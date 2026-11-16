@@ -37,7 +37,7 @@ const CHEEK_FLUSH: Vector3<f32> = Vector3::new(1.08, 0.78, 0.74);
 
 /// The middle of the head, how far it is bowed over its pipe, radians, and
 /// the radius of its eyes, m.
-pub(super) const HEAD: (f32, f32, f32) = (0.0, 0.385, 0.385);
+pub(super) const HEAD: (f32, f32, f32) = (0.0, 0.441, 0.406);
 const HEAD_BOW: f32 = 0.35;
 const EYE_RADIUS: f32 = 0.024;
 /// Where each eye sits in the head, mirrored for the other, and where the
@@ -59,7 +59,7 @@ pub(super) fn in_head(point: (f32, f32, f32)) -> Vector3<f32> {
 /// bag's collar, further than the bag ever sinks.
 pub(super) fn neck() -> MeshPrimitive {
     let mut neck = Clay::new(0.02).add(
-        Lump::limb((0.0, -0.1, -0.04), (0.0, -0.31, -0.11), (0.054, 0.064)),
+        Lump::limb((0.0, -0.1, -0.04), (0.0, -0.37, -0.11), (0.054, 0.064)),
         FLESH,
     );
     // The cords that stand in a neck when its owner strains, and the
@@ -68,13 +68,13 @@ pub(super) fn neck() -> MeshPrimitive {
         neck = neck.add(
             Lump::limb(
                 (0.05 * side, -0.07, -0.02),
-                (0.018 * side, -0.3, -0.045),
+                (0.018 * side, -0.36, -0.045),
                 (0.013, 0.012),
             ),
             FLESH,
         );
     }
-    let neck = neck.add(Lump::ball(0.02, (0.0, -0.17, 0.0)), FLUSH);
+    let neck = neck.add(Lump::ball(0.02, (0.0, -0.2, 0.0)), FLUSH);
     let mut mesh = anatomy::flesh(&neck, NECK_GRAIN);
     wash(&mut mesh, |vertex| {
         let closed = (1.0 - vertex.ao) / 0.75;

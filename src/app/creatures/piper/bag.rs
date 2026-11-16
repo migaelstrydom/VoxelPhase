@@ -13,7 +13,6 @@ use std::f32::consts::{PI, TAU};
 use nalgebra::Vector3;
 
 use super::frame::RADIUS;
-use super::head::HEAD;
 use super::pipes::Pipe;
 use super::shaping::{ease, surface, triple, turned_to, vector, wash};
 use crate::app::creatures::palette::Paint;
@@ -35,6 +34,9 @@ const THREAD: (f32, f32, f32) = (0.13, 0.09, 0.055);
 
 /// The middle of the bag's weight, which its swellings are found from.
 pub(super) const CORE: (f32, f32, f32) = (0.0, -0.05, -0.02);
+/// Where the bag's mouth is gathered round the head's neck: the top of the
+/// collar, a neck's length under the head.
+pub(super) const THROAT: (f32, f32, f32) = (0.0, 0.26, 0.35);
 /// Where the collar round the head's neck rises from the belly.
 pub(super) const COLLAR: (f32, f32, f32) = (0.0, 0.14, 0.24);
 /// Where the bag's neck is tied off, behind it.
@@ -94,7 +96,7 @@ pub(super) fn form(belly: &Clay, stocks: &[&Pipe]) -> Clay {
 
     // The collar: the bag's own mouth, drawn up round the neck of the
     // head and gathered there in a ring of puckers.
-    let throat = throat();
+    let throat = vector(THROAT);
     bag = bag
         .smoothing(0.08)
         .add(Lump::limb(COLLAR, triple(throat), (0.17, 0.082)), HIDE_THIN);
@@ -187,11 +189,6 @@ pub(super) fn form(belly: &Clay, stocks: &[&Pipe]) -> Clay {
             depth: 0.012,
             seed: 74,
         })
-}
-
-/// Where the bag's mouth is gathered round the head's neck.
-pub(super) fn throat() -> Vector3<f32> {
-    vector(HEAD) + Vector3::new(0.0, -0.125, -0.035)
 }
 
 /// The line the bag is sewn up along, over its top from the collar to
