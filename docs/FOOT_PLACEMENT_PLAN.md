@@ -135,11 +135,20 @@ Normal walking, sprinting, and push-recovery are the same mechanism scaled by in
 ```text
 src/animation/foot_placer/
     mod.rs
-    placer.rs          // FootPlacer: substep loop + per-foot Planted/Stepping FSM
+    placer.rs          // FootPlacer: substep loop, a substep as a list of stages, leg modes
+    pace.rs            // Pace: a substep's travel and cadence; the capture point's ideal targets
     timing.rs          // GaitTiming: trigger/cycle/duty/swing derived from speed
     clock.rs           // GaitClock: phase clock + latched stance-window releases
-    capture_point.rs   // pure math: capture point + turn-in-place
+    stance.rs          // a planted foot: Strain (releases asked, let go), kept on its ground
+    stepping.rs        // a swinging foot: lift, then when, where and how high it lands
     swing.rs           // swing arc: smoothstep horizontal + parabolic lift
+    ankle.rs           // the sole's turn: toe-off, takeoff and landing ease
+    planned.rs         // a plan's footfalls, and which of them these legs can land
+    envelope.rs        // LegEnvelope: where a leg goes, every drawn foot held within it
+    leg.rs             // hip, stance under it, stretch and reach budgets
+    floor.rs           // what a foot's probe says of the floor
+    capture_point.rs   // pure math: capture point + turn-in-place
+    geometry.rs        // facings, yaws, planar distances, blends
     sim.rs             // (test) scenario simulator over analytic terrain
     scenarios.rs       // (test) named scenario registry (terrain + inputs)
     trace.rs           // (test) stdout traces + CSV export for plotting
@@ -398,7 +407,7 @@ Stages 1 and 2 are landed. The placer owns foot xz for all grounded states; the 
 - `config.rs` — `FootPlacerConfig` (lives on `CharacterRigConfig::foot_placer`)
 - `capture_point.rs` — pure math: `capture_point_xz`, `turn_in_place_offset`, `stance_offset`. `GRAVITY` const = 9.81 (matches `PhysicsConfig::gravity` default magnitude).
 - `swing.rs` — `swing_position`: smoothstepped horizontal + parabolic lift. Minimum-jerk refinement deferred.
-- `placer.rs` — `FootPlacer`, per-foot `Planted`/`Stepping` FSM. Trace tests at the bottom under `#[cfg(test)] mod trace` — run with `cargo test --lib foot_placer::placer::trace -- --ignored --nocapture`.
+- `placer.rs` — `FootPlacer`, per-foot `Planted`/`Stepping` FSM. A substep is a list of stages (the diagram at the head of the file), each in the file named for what it works on: `pace.rs`, `stance.rs`, `stepping.rs`, `ankle.rs`, over the shared `leg.rs`, `floor.rs` and `geometry.rs`. Trace tests at the bottom under `#[cfg(test)] mod trace` — run with `cargo test --lib foot_placer::placer::trace -- --ignored --nocapture`.
 
 **Integration (`src/animation/animator.rs`):**
 - `update()` flow: `process_contacts` → compute `next_pose` → `tick_foot_placer(next_pose)` → `mirror_placer_into_state` → sample pose/upper with placer output already baked into `AnimationState.left/right.position` → blend crossfades → apply to skeleton.
@@ -568,12 +577,12 @@ Caveats:
 ### Gotchas already hit (don't re-burn these)
 
 1. **Coordinate convention.** `facing.cross(&Vector3::y())` is "right" and points to **−x when facing +z**. `FootPlacer::new` must initialise feet via `stance_offset` with the same sign convention, or left/right start swapped and every ideal pulls feet across the body.
-2. **Trigger-before-advance.** `try_trigger_step` must run *before* `advance_stepping`. If advance runs first, a completing foot transitions Stepping→Planted mid-tick and its now-huge error retriggers it the same frame, starving the other foot.
+2. **Trigger-before-advance.** A step must fire (`FootPlacer::fire`) *before* the swings advance (`advance_feet`). If advance runs first, a completing foot transitions Stepping→Planted mid-tick and its now-huge error retriggers it the same frame, starving the other foot.
 3. **Alternation preference.** At high speed, a freshly-planted foot's error immediately exceeds the trigger. Whichever foot is evaluated first re-fires forever. Fixed by tracking `last_planted_side` and evaluating the *other* side first.
 4. **No trigger floor larger than `settle_trigger` at speed.** A floor like the old `step_trigger` broke the symmetric-plant property: `stride_offset` scaled with gain but the trigger stayed pinned at the floor, so the foot ended up further behind the hip than it was ahead.
 5. **Don't project `to` by raw `duration`.** ~~Use `(ceil(duration/dt) − 1) · dt`~~ — superseded by substepping; raw `duration` is now correct to within one substep.
 6. **Never put `dt` inside a speed/threshold formula.** The old `settle_trigger / dt` intent floor made cadence frame-rate dependent and was the root cause of the clumped-takeoff bug. Rates and thresholds must be expressed in sim-time units; only integration multiplies by `dt`.
-7. **`planted_yaw` must be set at *landing*, not takeoff.** When it was assigned in `start_step`, a fast turn swept a large yaw angle mid-swing, so the foot landed already past the turn trigger and re-lifted after one substep of stance. The reference is now `yaw_from_facing(to_forward)` at the plant in `advance_stepping` (the orientation the foot actually landed with). Repro: `trace_reverse_direction_30hz`; pinned by `reverse_direction_settles_into_rhythm`.
+7. **`planted_yaw` must be set at *landing*, not takeoff.** When it was assigned in `start_step`, a fast turn swept a large yaw angle mid-swing, so the foot landed already past the turn trigger and re-lifted after one substep of stance. The reference is now `yaw_from_facing(to_forward)` at the plant in `PlacerFoot::plant` (the orientation the foot actually landed with). Repro: `trace_reverse_direction_30hz`; pinned by `reverse_direction_settles_into_rhythm`.
 8. **Drop clock releases that latch mid-swing.** The latch exists to survive coarse frames, but if a foot's stance-window exit happens while that foot is *already swinging* (gait accelerating through a speed ramp, or a turn step fired ahead of schedule), the pending release fired the instant the foot landed — another one-substep stance. The placer now consumes any pending release for a foot that is mid-swing; the next regular window exit re-arms it.
 9. **~~The clock must not free-run against the feet~~ — INVERTED by Stage 7.** `resync_to_takeoff` (every step fire re-anchored the phase to that foot's window edge) was introduced because off-schedule steps left a foot stranded ~0.76 m behind the pelvis waiting for a far-away window. But making the clock a follower meant every gate or reactive trigger that delayed a step reshaped the schedule itself, and off-antiphase timings became stable attractors (the in-game 0.6π/1.4π split). The stranded-foot problem is instead solved by the escape valves: the overstretch release caps how far behind a foot can get, and the mid-swing pending-drop (gotcha 8) absorbs the window/foot collisions. The clock free-runs; feet are pulled to it. The one thing it is pulled to is a planned footfall (`GaitClock::follow`), and that is not the old resync: what is measured is the phase against where the hip is along the way to the footfall, which a step fired late or early does not change (the phase has advanced by exactly the travel the hip has less to go), so no gate or trigger reshapes the schedule through it.
 10. **Turn steps must be single-support.** Releases carry a `ReleaseKind` (`Scheduled` / `Overstretch` / `Turn`, with upgrade priority in that order). `Turn` releases only fire while the other foot is planted, regardless of duty factor — during a fast reversal the body crosses the walk/run duty threshold mid-turn, and without this rule a turn step would lift the second foot while the first was still mid-swing (both feet visibly moving forward at once). `Overstretch` fires under normal gait rules like `Scheduled`: delaying it would stretch the leg without bound (e.g. replant-at-stance after landing while moving fast, where the second foot *must* lift before the first lands — that's just running).

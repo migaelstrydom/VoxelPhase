@@ -224,7 +224,8 @@ mod tests {
     use super::*;
     use crate::animation::foot_placer::capture_point::stance_offset;
     use crate::animation::foot_placer::config::FootPlacerConfig;
-    use crate::animation::foot_placer::placer::{facing_from_yaw, FootSide};
+    use crate::animation::foot_placer::geometry::facing_from_yaw;
+    use crate::animation::foot_placer::placer::FootSide;
     use crate::animation::foot_placer::scenarios;
     use crate::animation::foot_placer::sim::{simulate_rig, takeoffs, Frame, GaitParams, RigDims};
 

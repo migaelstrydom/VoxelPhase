@@ -21,8 +21,9 @@ use std::fmt::Write as _;
 use nalgebra::{Point3, Vector3};
 
 use super::config::FootPlacerConfig;
+use super::geometry::{facing_from_yaw, planar_distance};
 use super::mode::LegMode;
-use super::placer::{facing_from_yaw, planar_distance, FootPlacer, PlacerCtx};
+use super::placer::{FootPlacer, PlacerCtx};
 use super::planned::PlannedSteps;
 
 /// `FootPlacer::new` parameters captured by the recorder's `# init` line.

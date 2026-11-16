@@ -9,7 +9,8 @@
 
 use std::fmt::Write as _;
 
-use super::placer::{planar_distance, FootPhase};
+use super::geometry::planar_distance;
+use super::placer::FootPhase;
 use super::scenarios;
 use super::sim::{simulate_gait, Frame};
 

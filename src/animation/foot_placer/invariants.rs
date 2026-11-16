@@ -8,7 +8,8 @@ use nalgebra::{Point3, Vector2, Vector3};
 
 use super::capture_point::stance_offset;
 use super::config::FootPlacerConfig;
-use super::placer::{facing_from_yaw, planar_distance, FootPhase, FootSide, PlacerFoot};
+use super::geometry::{angle_diff, facing_from_yaw, planar_distance};
+use super::placer::{FootPhase, FootSide, PlacerFoot, SWIVEL_FROM};
 use super::scenarios;
 use super::sim::{
     self, simulate, simulate_gait, simulate_over, simulate_var_dt, simulate_with_suspend, takeoffs,
@@ -415,7 +416,7 @@ fn a_spin_on_the_spot_keeps_each_foot_on_its_own_side() {
         intent: Vector3::zeros(),
     });
     for (i, s) in frames.iter().enumerate() {
-        let facing = super::placer::facing_from_yaw(s.yaw);
+        let facing = facing_from_yaw(s.yaw);
         let right = Vector3::new(-facing.z, 0.0, facing.x);
         let aside = |foot: &PlacerFoot| (foot.position - s.pelvis).dot(&right);
         assert!(
@@ -438,7 +439,7 @@ fn a_spin_on_the_spot_keeps_each_foot_on_its_own_side() {
 /// it takes its feet round with it then (`placer::swivel_feet`).
 fn spinning(pair: &[Frame]) -> bool {
     let dt = (pair[1].time - pair[0].time).max(1e-6);
-    (super::placer::angle_diff(pair[1].yaw, pair[0].yaw) / dt).abs() > super::placer::SWIVEL_FROM
+    (angle_diff(pair[1].yaw, pair[0].yaw) / dt).abs() > SWIVEL_FROM
 }
 
 /// A planted foot is an anchor: its xz must not move between frames

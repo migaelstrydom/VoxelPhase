@@ -1,7 +1,9 @@
 use nalgebra::{Point3, Vector2};
 
 use super::capture_point::stance_offset;
-use super::placer::{facing_from_yaw, hip_position, max_leg_extension, FootSide, PlacerCtx};
+use super::geometry::facing_from_yaw;
+use super::leg::{hip_position, max_leg_extension};
+use super::placer::{FootSide, PlacerCtx};
 use super::timing::reach_budget;
 
 /// How far onto the other foot's side of the body a planned step may lie

@@ -3,16 +3,24 @@
 //! See `docs/FOOT_PLACEMENT_PLAN.md`. The placer owns foot xz (and y
 //! via probes) for all grounded states. It runs internally substepped
 //! so step sequencing is frame-rate independent — see `placer.rs` for
-//! the component diagram.
+//! the component diagram. Its stages are in the files named for what they
+//! work on: `pace`, `stance`, `stepping` and `ankle`.
 
+mod ankle;
 mod capture_point;
 mod clock;
 mod config;
 mod envelope;
+mod floor;
+mod geometry;
+mod leg;
 mod mode;
+mod pace;
 mod placer;
 mod planned;
 mod recorder;
+mod stance;
+mod stepping;
 mod swing;
 mod timing;
 
@@ -33,8 +41,8 @@ mod trace;
 
 pub use config::FootPlacerConfig;
 pub use envelope::LegEnvelope;
+pub(crate) use floor::{floor_height_at, is_floor};
 pub use mode::LegMode;
-pub(crate) use placer::{floor_height_at, is_floor};
 pub use placer::{FootPhase, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
 pub use planned::{PlannedStep, PlannedSteps, StepId};
 pub use recorder::PlacerRecorder;

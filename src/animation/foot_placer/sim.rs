@@ -7,8 +7,9 @@
 use nalgebra::{Point3, Vector2, Vector3};
 
 use super::config::FootPlacerConfig;
+use super::geometry::{angle_diff, facing_from_yaw};
 use super::mode::LegMode;
-use super::placer::{angle_diff, facing_from_yaw, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
+use super::placer::{FootPlacer, FootSide, PlacerCtx, PlacerFoot};
 use super::planned::PlannedSteps;
 
 pub const HIP_WIDTH: f32 = 0.12;

@@ -10,7 +10,8 @@ use nalgebra::{Point3, Vector3};
 
 use super::capture_point::stance_offset;
 use super::config::FootPlacerConfig;
-use super::placer::{facing_from_yaw, FootPhase, PlacerFoot};
+use super::geometry::{angle_diff, facing_from_yaw};
+use super::placer::{FootPhase, PlacerFoot};
 use super::planned::{PlannedStep, PlannedSteps};
 use super::scenarios;
 use super::sim::{simulate_planned, Frame, GaitParams, Input, RigDims, HIP_WIDTH, LEG_LENGTH};
@@ -146,7 +147,7 @@ impl Script {
             } else {
                 dv
             };
-            let turn = super::placer::angle_diff(window.yaw, yaw);
+            let turn = angle_diff(window.yaw, yaw);
             yaw += turn.clamp(-10.0 * dt, 10.0 * dt);
             at += velocity * dt;
             inputs.push((velocity, yaw));

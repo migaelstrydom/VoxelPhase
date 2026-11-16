@@ -4,7 +4,8 @@
 use nalgebra::{Point3, Vector3};
 
 use super::capture_point::stance_offset;
-use super::placer::{hip_position, max_leg_extension, FootSide, PlacerCtx};
+use super::leg::{hip_position, max_leg_extension};
+use super::placer::{FootSide, PlacerCtx};
 
 /// How far off straight down a swinging foot is drawn at most, as the
 /// tangent of the angle (60 degrees): the cone a stride sweeps. A swing
