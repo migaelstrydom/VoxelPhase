@@ -170,7 +170,7 @@ thing the puzzle turns on.
 |---|---|---|---|---|
 | W1 | A pool sits above a dry hollow that bars the way. Breach the pool's bank; the hollow fills and floats the player up to the exit, an island hanging in it. **Prototyped:** `levels/rooms/w1_flood_the_hollow.level.ron`. | T | Earth | Water |
 | W2 | The reverse: a flooded passage too long to swim. Breach its low side to drain it. | T | Earth | Water |
-| W3 | One pool, two hollows, and a ridge between them. Which bank is breached decides which fills. | X | Earth | Water |
+| W3 | One pool, two hollows, and a ridge between them. Which bank is breached decides which fills. **Prototyped:** `levels/rooms/w3_which_bank.level.ron`. | X | Earth | Water |
 | W4 | A stream runs past the place water is wanted. Blast a channel to turn it, or drop earth to dam it. | X | Earth | Blast |
 | W5 | A pump raises water as long as it is fed. Keep its basin from draining while using what it lifts. | X | Machines | Water |
 | W6 | Fill a shaft from a spring to swim up to the top of it. | C | Body | Water |

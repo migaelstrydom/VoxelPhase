@@ -1,0 +1,104 @@
+// Room W3 — which bank (docs/GAME_DESIGN.md, Water): the first room with a
+// wrong answer that looks right.
+//
+// Two pits side by side under a long ledge, a ridge between them that rises
+// to the terraces, and one reservoir behind both with a sand dam into each.
+// The exit is an island hanging over the west pit. The reservoir holds what
+// floods one pit to the island's top: hole the west dam and drop into the
+// west pit, and the flood floats you up to it. Hole the east dam and the
+// east pit fills instead, the reservoir sinks to its level, and the west pit
+// stays dry: the room must be reset.
+//
+// The east dam is the one in front of the player: spawned at the ledge's
+// east end, facing north, they see it straight ahead with the reservoir's
+// water above it. The west dam is off to the left, behind the island.
+//
+// The ledge is 2 m over the island's top and the island 14 m out from it, past
+// a running jump with the drop to help it. The pits' floors are 7 m under the
+// ledge: a pit, once dropped into, is chosen. Every other side of the island
+// is 8 m or more from a wall that rises past the terraces' top, with no dry
+// ground near its height.
+//
+// A hole must be cut above the island's top (10): the water field passes
+// nothing through a hole once the water on its far side has risen over it.
+//
+//               N (+z)
+//   ┌──────────────────────────────────────────────┐
+//   │      RESERVOIR, floor at 6, z 36–44           │  terrace top at 20
+//   ├────▐dam W▐─────────────────┬───▐dam E▐────────┤  z 34–36: wall, dams
+//   │                       │    │                  │
+//   │  west pit, floor 5    │ ri │  east pit,       │
+//   │        ┌───┐          │ dge│  floor 5         │
+//   │        │ ◎ │ island   │    │                  │
+//   │        └───┘ top 10   │    │                  │
+//   │                       │    │                  │  z = 8
+//   ├───────────────────────┴────┴──────────────────┤
+//   │  ledge at 12                         ☺ spawn   │
+//   └──────────────────────────────────────────────┘
+//    x 0  2                24   28                44 46
+Level(
+    name: "W3 Which Bank",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (46.0, 24.0, 46.0)),
+                base_height: 20.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The ledge along the pits' south side.
+                    Plateau(min: (2.0, 2.0), max: (44.0, 8.0), height: 12.0),
+                    // The pits, the ridge between them left at the terraces' top.
+                    Plateau(min: (2.0, 8.0), max: (24.0, 34.0), height: 5.0),
+                    Plateau(min: (28.0, 8.0), max: (44.0, 34.0), height: 5.0),
+                    // The reservoir, its floor a metre above the pits'.
+                    Plateau(min: (2.0, 36.0), max: (44.0, 44.0), height: 6.0),
+                    // The gaps in the wall between them that the dams fill.
+                    Plateau(min: (10.0, 34.0), max: (16.0, 36.0), height: 6.0),
+                    Plateau(min: (33.0, 34.0), max: (39.0, 36.0), height: 6.0),
+                ],
+
+                volumes: [
+                    // The dams: sand 1 m thick on each gap's pit side, from the
+                    // pit's floor to the terraces' top, a metre past each end
+                    // of the gap.
+                    Platform(center: (13.0, 20.0, 34.5), half_extents: (4.0, 0.5), thickness: 15.0, material: Sand),
+                    Platform(center: (36.0, 20.0, 34.5), half_extents: (4.0, 0.5), thickness: 15.0, material: Sand),
+                    // The island over the west pit, thin, so nothing knocked
+                    // off it stands tall.
+                    Platform(center: (13.0, 10.0, 24.0), half_extents: (2.0, 2.0), thickness: 1.0),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                // 3 m over the island: the goal counts a player within 3 m of
+                // it vertically, and set on the island it would count one
+                // jumping under it.
+                Goal(pos: (13.0, 13.0, 24.0), radius: 1.5, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (38.0, 13.0, 4.0),
+
+    water: Some((
+        bodies: [
+            Pool(seed: (23.0, 40.0), surface_level: 17.85),
+        ],
+    )),
+)

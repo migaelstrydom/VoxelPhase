@@ -4,5 +4,6 @@
     entries: [
         (level: "e3_rubble_ramp.level.ron", triangles: 30888, open_edges: 0),
         (level: "w1_flood_the_hollow.level.ron", triangles: 86320, open_edges: 0),
+        (level: "w3_which_bank.level.ron", triangles: 109544, open_edges: 0),
     ],
 )
