@@ -382,13 +382,10 @@ fn record(
                     w.max(other.angular_velocity().norm()),
                 )
             }),
-        feet: [FootSide::Left, FootSide::Right].map(|side| {
-            let drawn = match side {
-                FootSide::Left => animator.skeleton.left_foot,
-                FootSide::Right => animator.skeleton.right_foot,
-            };
-            foot_record(world, &physics.world, handle, animator, side, drawn)
-        }),
+        feet: [FootSide::Left, FootSide::Right]
+            .map(|side| foot_record(world, &physics.world, handle, animator, side)),
+        leg_length: animator.config.leg_length(),
+        facing: animator.state.facing,
     })
 }
 
@@ -420,16 +417,25 @@ fn ride_floor_at(
         .map(|hit| hit.z)
 }
 
-/// One foot as the placer holds it and the rig drew it at `drawn`, the
-/// floor under its plant, and where the traversal plan lands it next.
+/// One foot as the placer holds it, the animation asked for it and the rig
+/// drew it, the floor under its plant, and where the traversal plan lands it
+/// next.
 fn foot_record(
     world: &World,
     physics: &PhysicsWorld,
     character: RigidBodyHandle,
     animator: &CharacterAnimator,
     side: FootSide,
-    drawn: Point3<f32>,
 ) -> FootRecord {
+    let (skeleton, state) = (&animator.skeleton, &animator.state);
+    let (drawn, asked, hip) = match side {
+        FootSide::Left => (skeleton.left_foot, state.left.position, skeleton.left_hip),
+        FootSide::Right => (
+            skeleton.right_foot,
+            state.right.position,
+            skeleton.right_hip,
+        ),
+    };
     let foot = animator.locomotion.foot(side);
     let ground = foot.is_planted().then(|| {
         ride_floor_at(
@@ -445,6 +451,8 @@ fn foot_record(
         planted: foot.is_planted(),
         anchor: foot.planted_position,
         position: drawn,
+        asked,
+        hip,
         ground: ground.flatten(),
         planned: planned_footfall(world, side),
     }

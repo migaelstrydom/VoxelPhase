@@ -500,6 +500,8 @@ mod tests {
             planted: true,
             anchor: Point3::origin(),
             position: Point3::origin(),
+            asked: Point3::origin(),
+            hip: Point3::origin(),
             ground: Some(0.0),
             planned: None,
         };
@@ -530,6 +532,8 @@ mod tests {
             plan_diverged: false,
             others: (0.0, 0.0),
             feet: [foot, foot],
+            leg_length: 0.5,
+            facing: Vector3::z(),
         }
     }
 

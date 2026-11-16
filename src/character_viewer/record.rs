@@ -58,6 +58,10 @@ pub struct FrameRecord {
     pub plan_diverged: bool,
     /// The left foot and the right, as the rig drew them.
     pub feet: [FootRecord; 2],
+    /// The rig's leg, hip to foot at full stretch, in metres.
+    pub leg_length: f32,
+    /// The way the rig faces: horizontal, unit length.
+    pub facing: Vector3<f32>,
     /// The fastest other dynamic body this frame: its speed in m/s and its
     /// spin in rad/s, the fastest of each. What the character set going (a
     /// crate it hangs from or climbs) shows here.
@@ -73,6 +77,11 @@ pub struct FootRecord {
     pub anchor: Point3<f32>,
     /// Where the rig drew the foot.
     pub position: Point3<f32>,
+    /// Where the animation asked for it, before the rig held it to the
+    /// leg's length.
+    pub asked: Point3<f32>,
+    /// The hip the rig drew its leg from.
+    pub hip: Point3<f32>,
     /// Height of the floor under `anchor`, cast down from above it; `None`
     /// over nothing within reach, or while the foot is not planted.
     pub ground: Option<f32>,

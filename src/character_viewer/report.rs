@@ -6,8 +6,10 @@ use super::record::{FrameRecord, Take};
 use super::traversal::{summarise, TraversalSummary};
 
 /// Every state change the run went through, then a row every `every` frames,
-/// then how it crossed its station if it has one.
-pub fn report(take: &Take, every: usize) -> String {
+/// then how it crossed its station if it has one. With `feet`, each row ends
+/// with each foot against the pelvis: planted (`P`) or swinging (`s`), where
+/// it was drawn, and after `a` where the placer anchors it.
+pub fn report(take: &Take, every: usize, feet: bool) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "== {} ({} frames)", take.scenario, take.frames.len());
     let _ = writeln!(out, "-- transitions");
@@ -60,7 +62,16 @@ pub fn report(take: &Take, every: usize) -> String {
         "others v/w"
     );
     for frame in take.frames.iter().step_by(every.max(1)) {
-        let _ = writeln!(out, "  {}", row(frame));
+        let _ = writeln!(
+            out,
+            "  {}{}",
+            row(frame),
+            if feet {
+                feet_columns(frame)
+            } else {
+                String::new()
+            }
+        );
     }
     if let Some(summary) = traversal(take) {
         let _ = writeln!(out, "-- traversal");
@@ -83,26 +94,8 @@ fn row(f: &FrameRecord) -> String {
             .map(|s| format!("{:+7.2}", y - s))
             .unwrap_or_else(|| "      -".to_string())
     };
-    let feet = f
-        .feet
-        .iter()
-        .map(|foot| {
-            let d = foot.position - f.pelvis;
-            let a = foot.anchor - f.pelvis;
-            format!(
-                " {}{:+5.2},{:+5.2},{:+5.2} a{:+5.2},{:+5.2},{:+5.2}",
-                if foot.planted { "P" } else { "s" },
-                d.x,
-                d.y,
-                d.z,
-                a.x,
-                a.y,
-                a.z
-            )
-        })
-        .collect::<String>();
     format!(
-        "{:6.2} {:8} {:10} {:12} {:9} {:2.0}/{:2.0} {:>3} {} {} {} {} {:6.2} {:+6.2} {:6.2} {:6.2} {:6.2} {:6.2}/{:5.2}{feet}",
+        "{:6.2} {:8} {:10} {:12} {:9} {:2.0}/{:2.0} {:>3} {} {} {} {} {:6.2} {:+6.2} {:6.2} {:6.2} {:6.2} {:6.2}/{:5.2}",
         f.time,
         f.beat,
         f.locomotion,
@@ -123,6 +116,28 @@ fn row(f: &FrameRecord) -> String {
         f.others.0,
         f.others.1
     )
+}
+
+/// Each foot against the pelvis: planted or swinging, where it was drawn, and
+/// where the placer anchors it.
+fn feet_columns(f: &FrameRecord) -> String {
+    f.feet
+        .iter()
+        .map(|foot| {
+            let drawn = foot.position - f.pelvis;
+            let anchor = foot.anchor - f.pelvis;
+            format!(
+                " {}{:+5.2},{:+5.2},{:+5.2} a{:+5.2},{:+5.2},{:+5.2}",
+                if foot.planted { "P" } else { "s" },
+                drawn.x,
+                drawn.y,
+                drawn.z,
+                anchor.x,
+                anchor.y,
+                anchor.z
+            )
+        })
+        .collect()
 }
 
 /// How far the surface stands over the still water level: swell and ripples.

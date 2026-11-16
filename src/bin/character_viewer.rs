@@ -13,6 +13,9 @@
 //! cargo run --release --bin character_viewer -- traversal --tiles 0 --summary
 //! cargo run --release --bin character_viewer -- turning --tiles 0 --summary --track --starts 5
 //! cargo run --release --bin character_viewer -- contract --tiles 0
+//! cargo run --release --bin character_viewer -- all --tiles 0 --track --audit
+//! cargo run --release --bin character_viewer -- soak --track --seeds 0..40
+//! cargo run --release --bin character_viewer -- soak:ledge_garden:17 --track --feet
 //! ```
 //!
 //! `--plan` draws the traversal planner's plan in the frames filmed: the
@@ -40,6 +43,22 @@
 //! `character_viewer/contract.rs`), prints a row per check and fails if any
 //! does not hold.
 //!
+//! `--audit` prints, in place of the report, whether each run's legs were
+//! drawn as legs (`character_viewer/pose_audit.rs`): per oddity (a straight
+//! leg held out level, a foot over its hip, a foot asked for past the leg's
+//! reach, a foot snapping against the pelvis or asked to jump, crossed feet, a folded leg,
+//! legs that stopped stepping), how many times, over how many frames, and the
+//! longest. One scenario alone also lists each finding with its time.
+//! `--feet` ends each report row with where each foot was drawn against the
+//! pelvis.
+//!
+//! `soak` audits seeded random play (`character_viewer/soak.rs`): for each
+//! level (`--levels a,b`, by default every soak level) and each seed of
+//! `--seeds A..B`, a run from a random start under a random script of the
+//! stick, jump and crouch, a row each and the totals. A run is
+//! `soak:<level>:<seed>`, a scenario like any other: name it to see its
+//! report or film it.
+//!
 //! The anim_viewer is the fast, GPU-free tool for gait on analytic ground;
 //! this one is for anything the physics body itself does — floating, pitching
 //! over to swim, coming ashore — which a kinematic stand-in cannot show.
@@ -48,8 +67,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use voxel_phase::character_viewer::{
-    catalogue, check_contract, find, report, run, traversal, ContractCheck, Judged, RunConfig,
-    Scenario, Take, TraversalSpread, TurnSummary,
+    catalogue, check_contract, find, find_soak, report, run, soak_level, soak_scenario, traversal,
+    ContractCheck, Judged, Oddity, PoseAudit, RunConfig, Scenario, SoakLevel, Take,
+    TraversalSpread, TurnSummary, SOAK_LEVELS,
 };
 use voxel_phase::rendering::visual_bench::contact_sheet;
 
@@ -58,7 +78,8 @@ use voxel_phase::rendering::visual_bench::contact_sheet;
 const START_STAGGER: f32 = 0.11;
 
 const USAGE: &str =
-    "usage: character_viewer <scenario|all|traversal|turning|contract> [--list] [--summary] [--starts N] [--back M] [--plan] [--track] [--tiles N]
+    "usage: character_viewer <scenario|all|traversal|turning|contract|soak> [--list] [--summary] [--audit] [--feet] [--starts N] [--back M] [--plan] [--track] [--tiles N]
+                        [--seeds A..B] [--levels a,b]
                         [--from F] [--to F]
                         [--fps HZ] [--width W] [--height H] [--columns C]
                         [--every N] [--out <sheet.png>]
@@ -84,7 +105,19 @@ struct Args {
     starts: usize,
     /// Run the drive contract checks instead of scenarios.
     contract: bool,
+    /// Print each run's pose audit in place of its report.
+    audit: bool,
+    /// End each report row with the feet against the pelvis.
+    feet: bool,
+    /// The seeded random runs to audit instead of scenarios.
+    soak: Option<Soak>,
     out: Option<PathBuf>,
+}
+
+/// Which seeded random runs to play.
+struct Soak {
+    levels: Vec<SoakLevel>,
+    seeds: std::ops::Range<u64>,
 }
 
 fn main() -> ExitCode {
@@ -100,6 +133,27 @@ fn main() -> ExitCode {
 
     if args.contract {
         return contract(&args.config);
+    }
+    if let Some(soak) = &args.soak {
+        return run_soak(soak, &args.config);
+    }
+    if args.audit {
+        println!("{}", PoseAudit::header());
+        for scenario in &args.scenarios {
+            let take = match run(scenario, &args.config) {
+                Ok(take) => take,
+                Err(e) => {
+                    eprintln!("{}: {e}", scenario.name);
+                    return ExitCode::FAILURE;
+                }
+            };
+            let audit = PoseAudit::of(&take.frames);
+            println!("{}", audit.row(scenario.name));
+            if args.scenarios.len() == 1 {
+                print!("{}", audit.listing());
+            }
+        }
+        return ExitCode::SUCCESS;
     }
     if args.summary {
         let (turns, crossings): (Vec<_>, Vec<_>) = args
@@ -141,7 +195,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        print!("{}", report(&take, args.every));
+        print!("{}", report(&take, args.every, args.feet));
         if take.tiles.is_empty() {
             continue;
         }
@@ -187,6 +241,10 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
     let mut summary = false;
     let mut starts = 1;
     let mut back = 0.0;
+    let mut audit = false;
+    let mut feet = false;
+    let mut seeds = 0..20;
+    let mut levels = SOAK_LEVELS.to_vec();
     let mut out = None;
     let mut camera = CameraOverride::default();
 
@@ -200,6 +258,15 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
                 return Ok(None);
             }
             "--summary" => summary = true,
+            "--audit" => audit = true,
+            "--feet" => feet = true,
+            "--seeds" => seeds = parse_seeds(&value("--seeds")?)?,
+            "--levels" => {
+                levels = value("--levels")?
+                    .split(',')
+                    .map(|name| soak_level(name).ok_or(format!("no soak level '{name}'")))
+                    .collect::<Result<_, _>>()?
+            }
             "--starts" => starts = parse::<usize>(&value("--starts")?)?.max(1),
             "--back" => back = parse(&value("--back")?)?,
             "--plan" => config.plan = true,
@@ -223,7 +290,8 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
 
     let which = which.ok_or("name a scenario, or 'all'")?;
     let contract = which == "contract";
-    let mut scenarios = if contract {
+    let soak = (which == "soak").then_some(Soak { levels, seeds });
+    let mut scenarios = if contract || soak.is_some() {
         Vec::new()
     } else if which == "all" {
         catalogue()
@@ -238,7 +306,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
             .filter(|s| s.judged.station().is_some())
             .collect()
     } else {
-        vec![find(&which).ok_or(format!("no scenario '{which}' (try --list)"))?]
+        vec![find(&which)
+            .or_else(|| find_soak(&which))
+            .ok_or(format!("no scenario '{which}' (try --list)"))?]
     };
     for scenario in &mut scenarios {
         *scenario = scenario.started_back(back);
@@ -255,8 +325,67 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
         summary,
         starts,
         contract,
+        audit,
+        feet,
+        soak,
         out,
     }))
+}
+
+/// A range of seeds written `A..B`, or one seed `A`.
+fn parse_seeds(text: &str) -> Result<std::ops::Range<u64>, String> {
+    match text.split_once("..") {
+        Some((from, to)) => Ok(parse(from)?..parse(to)?),
+        None => {
+            let seed: u64 = parse(text)?;
+            Ok(seed..seed + 1)
+        }
+    }
+}
+
+/// Plays and audits every seeded run of `soak`, a row each, then the totals
+/// over all of them and the runs drawn oddly for longest.
+fn run_soak(soak: &Soak, config: &RunConfig) -> ExitCode {
+    let config = RunConfig {
+        tiles: 0,
+        ..*config
+    };
+    let mut audits: Vec<(&'static str, PoseAudit)> = Vec::new();
+    println!("{}", PoseAudit::header());
+    for level in &soak.levels {
+        for seed in soak.seeds.clone() {
+            let scenario = soak_scenario(level, seed);
+            match run(&scenario, &config) {
+                Ok(take) => {
+                    let audit = PoseAudit::of(&take.frames);
+                    println!("{}", audit.row(scenario.name));
+                    audits.push((scenario.name, audit));
+                }
+                // A start over no ground is no run.
+                Err(e) => eprintln!("{}: skipped: {e}", scenario.name),
+            }
+        }
+    }
+    let total = PoseAudit {
+        judged: audits.iter().map(|(_, audit)| audit.judged).sum(),
+        findings: audits
+            .iter()
+            .flat_map(|(_, audit)| audit.findings.iter().copied())
+            .collect(),
+    };
+    println!("{}", total.row(&format!("{} runs", audits.len())));
+    let held = |audit: &PoseAudit| -> usize {
+        [Oddity::Level, Oddity::OverHip, Oddity::Overreach]
+            .into_iter()
+            .map(|oddity| audit.tally(oddity).frames)
+            .sum()
+    };
+    audits.sort_by_key(|(_, audit)| std::cmp::Reverse((held(audit), audit.odd_frames())));
+    println!("-- drawn oddly for longest");
+    for (name, audit) in audits.iter().take(10).filter(|(_, a)| a.odd_frames() > 0) {
+        println!("{}", audit.row(name));
+    }
+    ExitCode::SUCCESS
 }
 
 /// Runs the drive contract checks, a row each; fails if any does not hold.
