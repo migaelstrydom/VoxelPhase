@@ -16,8 +16,9 @@ const LONGEST_FLOWN_SWING: f32 = 0.8;
 
 /// How far short of a planned step, past the leg's reach, the body may
 /// still be when the foot lands on it, in metres: the legs land a footfall
-/// in their own time, and wait over it a moment for the body; air steering
-/// and a plan a frame old put a flight's landing a stride out.
+/// in their own time, waiting over a flight's landing a moment for the body
+/// and shortening a step on the ground to where the leg reaches; air
+/// steering and a plan a frame old put a flight's landing a stride out.
 const STEP_SHORTFALL: f32 = 0.5;
 
 /// How far above the hip, and how far below the leg's reach under it, a
@@ -51,8 +52,10 @@ pub struct StepId(pub u32);
 /// Where a plan has each foot land next. A foot with a planned step lands
 /// on it rather than where the capture point would put it, if the body is
 /// coming to where the leg can ([`PlannedStep::landing`] aside, the plan
-/// says where and the legs say when: a foot lifts on the gait's own clock).
-/// A foot without one steps as the capture point has it.
+/// says where and the legs say when: a foot lifts on the gait's own clock,
+/// which follows the footfalls, `GaitClock::follow`, so that a stance on
+/// them stays under the hips). A foot without one steps as the capture
+/// point has it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlannedSteps {
     pub left: Option<PlannedStep>,

@@ -17,6 +17,12 @@
 //! the clock, not something the feet must negotiate. The phase is set
 //! only where no rhythm exists: gait start (`seed_to_release`) and the
 //! landing replant (`reset`).
+//!
+//! One thing the schedule is pulled to, at a bounded rate and never by
+//! setting the phase: a footfall a plan chose (`follow`). There the place
+//! is not the gait's to pull a foot to, and a schedule that ran on
+//! regardless would leave every stance wherever under the hips the gait's
+//! first steps happened to put it.
 
 use super::placer::FootSide;
 use super::timing::GaitTiming;
@@ -58,11 +64,13 @@ pub struct GaitClock {
     left_pending: Option<ReleaseKind>,
     right_pending: Option<ReleaseKind>,
     /// How far (in phase units) the feet are running ahead of the
-    /// schedule, measured at each reactive step fire. While positive,
-    /// `advance` runs at `CATCH_UP_RATE` and pays the debt down, so the
-    /// schedule recaptures a violently perturbed gait in a fraction of a
-    /// cycle instead of drifting back over seconds. Rate-bounded and
-    /// one-directional — the phase is still never *set* by step events.
+    /// schedule, measured at each reactive step fire and at each step
+    /// onto a planned footfall; negative where they run behind it, which
+    /// only a planned footfall says. While positive, `advance` runs at
+    /// `CATCH_UP_RATE` and pays the debt down, so the schedule recaptures
+    /// a violently perturbed gait in a fraction of a cycle instead of
+    /// drifting back over seconds; while negative, at `EASE_OFF_RATE`.
+    /// Rate-bounded — the phase is still never *set* by step events.
     phase_debt: f32,
 }
 
@@ -72,6 +80,11 @@ pub struct GaitClock {
 /// to recapture post-landing scrambles, subtle enough not to read as a
 /// skip.
 const CATCH_UP_RATE: f32 = 1.35;
+
+/// Clock rate multiplier while `phase_debt` is negative: the schedule
+/// waits for footfalls that run behind it as gently as it catches up with
+/// ones that run ahead.
+const EASE_OFF_RATE: f32 = 1.0 / CATCH_UP_RATE;
 
 impl GaitClock {
     /// A clock at phase 0 with stance membership consistent with that
@@ -102,7 +115,11 @@ impl GaitClock {
         if moving {
             let cycle = timing.cycle_distance.max(1e-3);
             let base = gait_speed * dt / cycle;
-            let extra = (base * (CATCH_UP_RATE - 1.0)).min(self.phase_debt);
+            let extra = if self.phase_debt >= 0.0 {
+                (base * (CATCH_UP_RATE - 1.0)).min(self.phase_debt)
+            } else {
+                (base * (EASE_OFF_RATE - 1.0)).max(self.phase_debt)
+            };
             self.phase_debt -= extra;
             self.phase = (self.phase + base + extra).rem_euclid(1.0);
         } else {
@@ -178,6 +195,29 @@ impl GaitClock {
         }
     }
 
+    /// Pull the schedule to a footfall a plan chose: `side` has lifted to
+    /// swing to one its hip is `ahead` metres short of, along its travel.
+    ///
+    /// A stance is hip-symmetric when the hip passes over the foot at the
+    /// centre of the foot's stance window. The gait's own steps are, by
+    /// construction: it puts each foot where the schedule will have the
+    /// hip. A planned footfall is where the plan put it, so the schedule
+    /// is what moves: how far short of (or past) the window's centre the
+    /// phase will be as the hip comes over the footfall is taken as the
+    /// phase debt, and `advance` pays it at its bounded rates. Measured
+    /// afresh at every such step, so it follows footfalls unevenly spaced
+    /// without adding up.
+    ///
+    /// The measure does not depend on when the step fired: by a step held
+    /// back a moment the phase has advanced by just the travel the hip has
+    /// less to go. That is what sets this apart from a resync to step
+    /// events (see `seed_to_release`), through which every gate that
+    /// delayed a step reshaped the schedule.
+    pub fn follow(&mut self, side: FootSide, ahead: f32, timing: &GaitTiming) {
+        let over_it = self.phase + ahead / timing.cycle_distance.max(1e-3);
+        self.phase_debt = (stance_centre(side) - over_it + 0.5).rem_euclid(1.0) - 0.5;
+    }
+
     /// Latch a release outside the normal schedule. A stronger kind
     /// upgrades a weaker pending one (`Turn` → `Overstretch` →
     /// `Scheduled`); never downgrades.
@@ -201,20 +241,21 @@ impl GaitClock {
 /// Whether `phase` lies inside the stance window of `side`. Right is
 /// centred on 0.0, left on 0.5; each window spans `duty_factor`.
 fn in_stance_window(phase: f32, side: FootSide, duty_factor: f32) -> bool {
-    let centre = match side {
+    phase_distance(phase, stance_centre(side)) <= duty_factor.clamp(0.05, 0.95) * 0.5
+}
+
+/// The phase at the centre of `side`'s stance window, where its hip is
+/// over the foot.
+fn stance_centre(side: FootSide) -> f32 {
+    match side {
         FootSide::Right => 0.0,
         FootSide::Left => 0.5,
-    };
-    phase_distance(phase, centre) <= duty_factor.clamp(0.05, 0.95) * 0.5
+    }
 }
 
 /// Phase at which `side` exits its stance window (its swing begins).
 fn exit_edge(side: FootSide, timing: &GaitTiming) -> f32 {
-    let centre = match side {
-        FootSide::Right => 0.0,
-        FootSide::Left => 0.5,
-    };
-    (centre + timing.duty_factor.clamp(0.05, 0.95) * 0.5).rem_euclid(1.0)
+    (stance_centre(side) + timing.duty_factor.clamp(0.05, 0.95) * 0.5).rem_euclid(1.0)
 }
 
 /// Shortest wrapped distance between two phases in `[0, 1)`.
@@ -345,6 +386,34 @@ mod tests {
         assert!(boosted.phase_debt <= 1e-6);
         let lead = (boosted.phase() - plain.phase()).rem_euclid(1.0);
         assert!((lead - 0.3).abs() < 1e-3, "lead {lead} != original debt");
+    }
+
+    /// A planned footfall short of, at, and beyond where the gait would
+    /// have stepped: the hip comes over each at the centre of the foot's
+    /// stance window, the schedule having run faster, as it was, or slower
+    /// to be there.
+    #[test]
+    fn the_schedule_is_pulled_to_a_planned_footfall_from_either_side() {
+        const HIP_STEP: f32 = 0.001;
+        let timing = timing();
+        // The right foot lifts at its exit edge, a plant's distance behind
+        // its hip; the gait's own next footfall is a cycle on from there.
+        let own = timing.cycle_distance - timing.plant_ahead();
+        for ahead in [own - 0.06, own, own + 0.06] {
+            let mut c = GaitClock::new();
+            c.phase = exit_edge(FootSide::Right, &timing);
+            c.follow(FootSide::Right, ahead, &timing);
+            let owed = (own - ahead) / timing.cycle_distance;
+            assert!((c.phase_debt - owed).abs() < 1e-4, "{ahead} m ahead");
+            for _ in 0..(ahead / HIP_STEP).round() as usize {
+                c.advance(HIP_STEP, 1.0, &timing, true);
+            }
+            let off_centre = phase_distance(c.phase(), stance_centre(FootSide::Right));
+            assert!(
+                off_centre < 5e-3,
+                "{ahead} m ahead: {off_centre} off centre"
+            );
+        }
     }
 
     #[test]

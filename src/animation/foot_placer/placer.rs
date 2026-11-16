@@ -83,8 +83,9 @@ pub(super) const SWIVEL_FROM: f32 = 4.0;
 /// take a second of crossed-over steps to come back.
 const SWIVEL_FULL: f32 = 8.0;
 
-/// The speed a swinging foot is diverted at when a plan moves the footfall
-/// it swings to, in m/s: about a stride's own.
+/// The speed a swinging foot's landing is diverted at when a plan moves the
+/// footfall it swings to, in m/s, over the time the swing has left: about a
+/// stride's own.
 const DIVERT_SPEED: f32 = 5.0;
 
 /// Least `normal.y` of a face a foot may stand on: about 66° from level.
@@ -655,13 +656,23 @@ impl FootPlacer {
                 FootSide::Right => (&mut self.right, right_ideal),
             };
             let kind = self.clock.pending(side);
-            start_step(foot, ideal, &timing, ctx, facing);
+            let planned = start_step(foot, ideal, &timing, ctx, facing);
             self.clock.consume(side);
             // Reactive fires ahead of schedule leave the clock with a
             // phase debt, paid down at a bounded catch-up rate (idle
             // settle steps have no pending kind and no schedule to owe).
             if let Some(kind) = kind {
                 self.clock.note_fire(side, kind, &timing);
+            }
+            // A footfall the plan chose, stepped onto on the gait's own
+            // clock, is where that clock is pulled to. A flight's landing
+            // is not: the plan times that one, and the gait starts again
+            // from it.
+            let stepped_onto = planned.filter(|step| moving && step.landing.is_none());
+            if let Some((ahead, _)) =
+                stepped_onto.and_then(|step| ahead_along_travel(&step, side, ctx, facing))
+            {
+                self.clock.follow(side, ahead, &timing);
             }
             self.since_takeoff = 0.0;
         }
@@ -1115,7 +1126,7 @@ fn start_step(
     timing: &GaitTiming,
     ctx: &PlacerCtx<'_>,
     facing: Vector3<f32>,
-) {
+) -> Option<PlannedStep> {
     let planned = planned_landing(ctx, foot.side, timing.swing_duration);
     // A swing through a flight leaves the ground with the body, at its
     // speed: from rest, a swing as long as a hop falls a leg's length behind
@@ -1155,6 +1166,28 @@ fn start_step(
     );
     swing.footfall = planned.and_then(|(step, _)| step.id);
     foot.phase = FootPhase::Stepping(swing);
+    planned.map(|(step, _)| step)
+}
+
+/// How far short of the planned `step` the hip of `side` is, along the
+/// body's travel over the ground, in metres, and the speed of that travel;
+/// `None` for a body that is not travelling.
+fn ahead_along_travel(
+    step: &PlannedStep,
+    side: FootSide,
+    ctx: &PlacerCtx<'_>,
+    facing: Vector3<f32>,
+) -> Option<(f32, f32)> {
+    let travel = Vector2::new(ctx.velocity.x, ctx.velocity.z);
+    let speed = travel.magnitude();
+    if speed <= ctx.config.moving_speed_threshold {
+        return None;
+    }
+    let to_step = step.at - hip_position(side, ctx, facing);
+    Some((
+        Vector2::new(to_step.x, to_step.z).dot(&travel) / speed,
+        speed,
+    ))
 }
 
 /// Advance a mid-swing foot along its swing; plant it when the swing
@@ -1295,13 +1328,19 @@ fn advance_stepping(
                 ideal.z + ctx.velocity.z * remaining,
             ),
         };
-        // A plan that moves a footfall far, late in the swing onto it, is
-        // given the time a foot takes to get there: the swing lands on it a
-        // little later, where in the time it had left it would dart there.
-        let diverts = planar_distance(desired_to, swing.to) / DIVERT_SPEED;
-        if planned.is_some() && diverts > remaining {
-            swing.retime(diverts, ctx.config.min_step_duration);
-        }
+        // A plan that moves a footfall far, late in the swing onto it,
+        // moves the landing only as far as a foot diverts in the time it
+        // has left: the swing lands short of the footfall, where otherwise
+        // it would dart there. Never by taking longer: a swing given more
+        // time lands late, and the gait has nothing to bring its stance
+        // forward again but the leg running out behind it.
+        let divert = desired_to - swing.to;
+        let (asked, most) = (divert.norm(), remaining * DIVERT_SPEED);
+        let desired_to = if planned.is_some() && asked > most {
+            swing.to + divert * (most / asked)
+        } else {
+            desired_to
+        };
         swing.to = lerp_point(swing.to, desired_to, chase);
         swing.footfall = planned.and_then(|step| step.id);
     }
@@ -1812,7 +1851,7 @@ pub(crate) fn angle_diff(b: f32, a: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::sim::{GaitParams, RigDims};
+    use super::super::sim::{simulate_planned, takeoffs, GaitParams, Input, RigDims};
     use super::*;
     use crate::animation::foot_placer::envelope::SWING_CONE_TANGENT;
     use crate::animation::foot_placer::planned::PlannedStep;
@@ -2299,8 +2338,8 @@ mod tests {
         assert_eq!(lands(ahead, None, running), Some(SWING));
         let hop = Point3::new(-0.12, 0.0, 1.5);
         assert_eq!(lands(hop, Some(0.45), running), Some(0.45));
-        // A stride further on than the leg lands it: the foot waits over it
-        // for the body.
+        // A stride further on than the leg lands it is still swung to: the
+        // swing ends where the leg reaches.
         assert_eq!(lands(at(-0.12, 0.0, 1.2), None, running), Some(SWING));
 
         assert_eq!(lands(at(-0.12, 0.0, -1.0), None, running), None, "behind");
@@ -2318,6 +2357,89 @@ mod tests {
         );
         assert_eq!(lands(at(-0.12, -3.0, 0.6), None, running), None, "below");
         assert_eq!(lands(at(-0.12, 1.5, 0.6), None, running), None, "above");
+    }
+
+    /// Footfalls a plan lays a little closer together than the gait's clock
+    /// would keep their stance under the hips, because the clock follows
+    /// them. A clock that ran on regardless would lift each foot later
+    /// against its footfall than the last, until every stance ended at the
+    /// end of the leg.
+    #[test]
+    fn a_stance_on_planned_footfalls_stays_under_the_hips() {
+        const DT: f32 = 1.0 / 60.0;
+        const SPEED: f32 = 4.0;
+        /// How near the hips come to a footfall before the plan names the
+        /// next one for that foot, in metres.
+        const NAMED_FROM: f32 = 0.1;
+        let config = FootPlacerConfig::default();
+        let dims = RigDims::player();
+        let gait = GaitParams::walk();
+        let level = |of: fn(f32, f32, f32, f32, &FootPlacerConfig) -> f32| {
+            of(
+                SPEED,
+                dims.standing_height,
+                dims.leg_length,
+                gait.stride_gain,
+                &config,
+            )
+        };
+        let step = 0.94 * level(GaitTiming::level_step);
+        let plant_ahead = level(GaitTiming::level_plant_ahead);
+        // Each foot's footfalls lie two steps apart along +z, the left's a
+        // step on from the right's.
+        let footfall = |side: FootSide, pelvis_z: f32| {
+            let first = match side {
+                FootSide::Right => 0.0,
+                FootSide::Left => step,
+            };
+            let nth = ((pelvis_z + NAMED_FROM - first) / (2.0 * step)).ceil();
+            Some(PlannedStep {
+                id: None,
+                at: Point3::new(-0.12 * side.side_sign(), 0.0, first + nth * 2.0 * step),
+                landing: None,
+            })
+        };
+        let frames = simulate_planned(
+            dims,
+            config.clone(),
+            600,
+            |_| DT,
+            gait,
+            |_, _| Some(0.0),
+            |_| Input::moving(Vector3::new(0.0, 0.0, SPEED), 0.0),
+            |_| false,
+            |_, pelvis, _| PlannedSteps {
+                left: footfall(FootSide::Left, pelvis.z),
+                right: footfall(FootSide::Right, pelvis.z),
+            },
+        );
+
+        let mut lifts = 0;
+        for (side, at) in takeoffs(&frames).into_iter().filter(|(_, at)| *at > 300) {
+            let last_stood = &frames[at - 1];
+            let foot = match side {
+                FootSide::Left => &last_stood.left,
+                FootSide::Right => &last_stood.right,
+            };
+            let on = footfall(side, foot.planted_position.z - 2.0 * NAMED_FROM)
+                .expect("a footfall")
+                .at;
+            assert!(
+                planar_distance(foot.planted_position, on) < 0.03,
+                "frame {at}: stood {:?}, off its footfall {on:?}",
+                foot.planted_position
+            );
+            // The frame before it lifts, the foot is up to a frame's
+            // travel short of where it lifts: a plant's distance behind
+            // its hip.
+            let trail = last_stood.pelvis.z - foot.planted_position.z;
+            assert!(
+                trail > plant_ahead - 2.0 * SPEED * DT && trail < plant_ahead + 0.03,
+                "frame {at}: lifted {trail:.2} m behind its hip, for {plant_ahead:.2}"
+            );
+            lifts += 1;
+        }
+        assert!(lifts >= 10, "{lifts} lifts");
     }
 
     /// Legs that go off keep no footfall, and coming back on far below they
