@@ -987,9 +987,22 @@ fn round_on_skirt(rig: &StiltRigConfig, at: Vector3<f32>) -> f32 {
 /// legs push out.
 fn back_of_robe(rig: &StiltRigConfig, robe: &mut [MeshPrimitive]) -> Drape {
     let behind = |at: Vector3<f32>| round_on_skirt(rig, at).abs() - (PI - DRAPE_ROUND);
+    // A margin in metres, round the skirt where it is narrowest is the
+    // most radians it takes.
+    let (_, narrowest, _) = skirt(rig, 0.0);
+    let draped = |at: Vector3<f32>, margin: f32| {
+        at.y < DRAPE_SEWN - margin && behind(at) > margin / narrowest
+    };
+    // The robe keeps the drape's edge as well, a cell wide, where the drape
+    // hardly moves: drawn in two frames, the two would otherwise crack
+    // apart along the seam and show what is behind.
     let back = robe
         .iter_mut()
-        .map(|mesh| mesh.split_off(|at| at.y < DRAPE_SEWN && behind(at) > 0.0))
+        .map(|mesh| {
+            let drape = mesh.clone().split_off(|at| draped(at, 0.0));
+            mesh.split_off(|at| draped(at, ROBE_GRAIN));
+            drape
+        })
         .collect();
     let freedom = |at: Vector3<f32>| {
         ease(DRAPE_SEWN, DRAPE_SEWN - DRAPE_EASE_DOWN, at.y)
