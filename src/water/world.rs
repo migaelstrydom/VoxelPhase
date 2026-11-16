@@ -121,10 +121,12 @@ impl WaterWorld {
     }
 
     /// Move the version of every chunk a jet has started or stopped landing
-    /// in, or lands in differently: a pump moved, run dry or working harder.
+    /// in, or lands in differently enough to be seen: a pump moved, run dry
+    /// or working harder. The jets kept are those last drawn, so a change
+    /// too small to see on any one frame is still drawn once it adds up.
     fn note_jets(&mut self) {
         let now: Vec<Jet> = self.field.jets().collect();
-        if now == self.jets {
+        if drawn_alike(&now, &self.jets) {
             return;
         }
         let mut slots: Vec<u32> = (self.jets.iter().chain(&now))
@@ -139,7 +141,7 @@ impl WaterWorld {
                     .copied()
                     .collect()
             };
-            if landing(&self.jets) != landing(&now) {
+            if !drawn_alike(&landing(&self.jets), &landing(&now)) {
                 self.versions.touch(slot as usize);
             }
         }
@@ -249,4 +251,9 @@ impl WaterWorld {
             format!("{:.3} s ({settled:.0} s settled)", took.as_secs_f64()),
         );
     }
+}
+
+/// Whether jets `a` would be drawn as jets `b` are, one for one.
+fn drawn_alike(a: &[Jet], b: &[Jet]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| a.drawn_alike(b))
 }

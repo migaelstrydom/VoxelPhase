@@ -31,6 +31,17 @@ pub struct PumpId {
     pub spout: u32,
 }
 
+/// Least distance a pump's intake or outlet must move, m, or change in its
+/// water's velocity, m/s, for the field to stand it anew. A pump on a body
+/// at rest still reads a pose that wobbles in its last bits; restanding it
+/// would retrace its cells and redraw its jet every frame. A millimetre
+/// per second shifts a jet's landing by about a millimetre a second of
+/// flight.
+const PUMP_MOVE_TOLERANCE: f32 = 1e-3;
+
+/// Least change in a jet's discharge, as a fraction of it, that is drawn.
+const DRAWN_DISCHARGE_CHANGE: f32 = 0.01;
+
 /// Where a pump stands and how hard it works.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PumpPlacement {
@@ -42,6 +53,17 @@ pub struct PumpPlacement {
     pub velocity: Vector3<f32>,
     /// The most it moves, m³/s.
     pub rate: f32,
+}
+
+impl PumpPlacement {
+    /// Whether a pump standing at `self` has been moved, or set working
+    /// differently, by being asked to stand at `other`.
+    fn moved_to(&self, other: &PumpPlacement) -> bool {
+        (self.intake - other.intake).norm() > PUMP_MOVE_TOLERANCE
+            || (self.outlet - other.outlet).norm() > PUMP_MOVE_TOLERANCE
+            || (self.velocity - other.velocity).norm() > PUMP_MOVE_TOLERANCE
+            || self.rate != other.rate
+    }
 }
 
 /// A stream of water thrown into the air from a point: a spring's, or a
@@ -63,6 +85,14 @@ impl Jet {
         self.origin == other.origin
             && self.velocity == other.velocity
             && self.landing == other.landing
+    }
+
+    /// Whether `other` would be drawn as this jet is: the same arc,
+    /// carrying the same water to within what can be seen.
+    pub fn drawn_alike(&self, other: &Jet) -> bool {
+        self.same_arc(other)
+            && (self.discharge - other.discharge).abs()
+                <= DRAWN_DISCHARGE_CHANGE * self.discharge.abs().max(other.discharge.abs())
     }
 }
 
@@ -163,7 +193,7 @@ impl Pumps {
         cells: &FieldCells,
     ) {
         match self.pumps.get_mut(&id) {
-            Some(pump) if pump.placement == placement => {}
+            Some(pump) if !pump.placement.moved_to(&placement) => {}
             Some(pump) => {
                 pump.placement = placement;
                 pump.retrace(graph, cells);
@@ -304,6 +334,40 @@ mod tests {
         let ledger = field.ledger();
         assert!((ledger.sunk - 0.3).abs() < 1.0e-3, "sunk {}", ledger.sunk);
         assert!((field.volume() + ledger.lost + ledger.sunk - before).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn a_pump_whose_pose_wobbles_keeps_flying_the_same_jet() {
+        let mut field = pond();
+        field.set_pump(PUMP, fountain(0.3));
+        field.step(DT);
+        let jet = field.jets().next().unwrap();
+        for frame in 0..60 {
+            let mut wobbled = fountain(0.3);
+            let wobble = if frame % 2 == 0 { 1.0e-6 } else { -1.0e-6 };
+            wobbled.velocity.x += wobble;
+            wobbled.outlet.z += wobble;
+            field.set_pump(PUMP, wobbled);
+            field.step(DT);
+            assert!(field.jets().next().unwrap().same_arc(&jet));
+        }
+    }
+
+    #[test]
+    fn a_pump_creeping_by_less_than_the_tolerance_a_frame_is_still_moved() {
+        let mut field = pond();
+        field.set_pump(PUMP, fountain(0.3));
+        field.step(DT);
+        let jet = field.jets().next().unwrap();
+        let mut crept = fountain(0.3);
+        for _ in 0..10 {
+            crept.velocity.x += 0.5 * PUMP_MOVE_TOLERANCE;
+            field.set_pump(PUMP, crept);
+            field.step(DT);
+        }
+        let moved = field.jets().next().unwrap();
+        assert!(!moved.same_arc(&jet));
+        assert!((moved.velocity.x - crept.velocity.x).abs() <= PUMP_MOVE_TOLERANCE);
     }
 
     #[test]
