@@ -458,6 +458,21 @@ pub fn catalogue() -> Vec<Scenario> {
             judged: Judged::Motion,
         },
         Scenario {
+            name: "shelf_waver",
+            summary: "Traversal Garden: run off the side of the scree's 5.6 m shelf, steer back in the air, then on again",
+            level: TRAVERSAL_GARDEN,
+            start: (17.0, 50.0),
+            yaw: 0.0,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::run(0.62).towards(Vector3::z()))
+                .then(Beat::run(0.12).towards(-Vector3::z()).named("back"))
+                .then(Beat::run(1.5).towards(Vector3::z()).named("on"))
+                .then(Beat::stand(0.6)),
+            camera: CameraRig::side().with_distance(4.0),
+            judged: Judged::Motion,
+        },
+        Scenario {
             name: "shelf_dither",
             summary: "Traversal Garden: run back and forth at the side of the scree's 5.6 m shelf, then off it",
             level: TRAVERSAL_GARDEN,

@@ -83,8 +83,26 @@ fn row(f: &FrameRecord) -> String {
             .map(|s| format!("{:+7.2}", y - s))
             .unwrap_or_else(|| "      -".to_string())
     };
+    let feet = f
+        .feet
+        .iter()
+        .map(|foot| {
+            let d = foot.position - f.pelvis;
+            let a = foot.anchor - f.pelvis;
+            format!(
+                " {}{:+5.2},{:+5.2},{:+5.2} a{:+5.2},{:+5.2},{:+5.2}",
+                if foot.planted { "P" } else { "s" },
+                d.x,
+                d.y,
+                d.z,
+                a.x,
+                a.y,
+                a.z
+            )
+        })
+        .collect::<String>();
     format!(
-        "{:6.2} {:8} {:10} {:12} {:9} {:2.0}/{:2.0} {:>3} {} {} {} {} {:6.2} {:+6.2} {:6.2} {:6.2} {:6.2} {:6.2}/{:5.2}",
+        "{:6.2} {:8} {:10} {:12} {:9} {:2.0}/{:2.0} {:>3} {} {} {} {} {:6.2} {:+6.2} {:6.2} {:6.2} {:6.2} {:6.2}/{:5.2}{feet}",
         f.time,
         f.beat,
         f.locomotion,
