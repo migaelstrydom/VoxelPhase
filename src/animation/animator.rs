@@ -789,14 +789,22 @@ fn copy_placer_foot(foot: &mut FootState, placer: &PlacerFoot) {
 }
 
 /// The arms' role: what the grab system has them doing, and otherwise the
-/// locomotion state's carriage. They swing on foot and through a Hop, which
-/// flows out of the run and back into it, brace through a jump or a fall,
-/// and stroke in the water. Which grabs a state allows is
+/// locomotion state's carriage. They swing on foot and through a Hop the
+/// legs stride through, which flows out of the run and back into it, brace
+/// through a jump, a fall or a Hop too long to stride through, and stroke in
+/// the water. Which grabs a state allows is
 /// `CharacterState::arm_state_allowed`.
 fn map_upper_state(arm: &ArmState, state: &LocomotionState) -> UpperState {
     match arm {
         ArmState::Idle => match state {
-            LocomotionState::OnFoot(_) | LocomotionState::Hop(_) => UpperState::Swinging,
+            LocomotionState::OnFoot(_) => UpperState::Swinging,
+            LocomotionState::Hop(hop) => {
+                if strides_through(hop) {
+                    UpperState::Swinging
+                } else {
+                    UpperState::Braced
+                }
+            }
             LocomotionState::Jump(_) | LocomotionState::Fall(_) => UpperState::Braced,
             LocomotionState::Ledge(_) => UpperState::Gripping,
             LocomotionState::Swim(_) => UpperState::Stroking,
@@ -1152,6 +1160,7 @@ mod tests {
                 UpperState::Swinging,
             ),
             (hop(TakeoffPhase::Flight), UpperState::Swinging),
+            (flying_hop(0.6, Some(0.4)), UpperState::Braced),
             (jump(TakeoffPhase::Flight), UpperState::Braced),
             (LocomotionState::Fall(Fall), UpperState::Braced),
             (LocomotionState::Swim(Swim), UpperState::Stroking),

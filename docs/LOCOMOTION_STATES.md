@@ -111,7 +111,7 @@ column gives the request or fact that causes each transition.
 | State | Entered from | Leaves for | Planner | Legs | Arms |
 |---|---|---|---|---|---|
 | `OnFoot { grace }` | Hop, Jump, Fall (down), Swim (feet down), Ledge (pull-up done) | Hop (a plan's takeoff), Jump (jump pressed), Fall (`grace` runs out), Swim (deep water) | On | Step | Swing |
-| `Hop { phase, landing, flown }` | OnFoot (a plan's takeoff) | OnFoot (down), Jump (jump pressed early), Fall (landing missed), Swim | On | Step if short enough to stride through, else Off | Swing |
+| `Hop { phase, landing, flown }` | OnFoot (a plan's takeoff) | OnFoot (down), Jump (jump pressed early), Fall (landing missed), Swim | On | Step if short enough to stride through, else Off | Swing with the legs on Step, else Brace |
 | `Jump { kind, phase, steering }` | OnFoot, Hop (jump pressed early), Swim (jump out of the water), Ledge (back-jump) | OnFoot (down), Swim (falling into deep water), Ledge (an edge at the hands) | Off | Off | Brace |
 | `Fall { steering }` | OnFoot (`grace` runs out), Hop (landing missed), Swim (out over a drop), Ledge (drop) | OnFoot (down), Swim, Ledge (an edge at the hands) | Off | Off | Brace |
 | `Swim` | OnFoot, Fall, Jump falling, once the water is deep | OnFoot, Fall, Jump, Ledge | Off | Off | Stroke |
@@ -284,13 +284,14 @@ they are allowed, as today. Otherwise:
 
 | State | Arms |
 |---|---|
-| OnFoot, Hop | Swing |
-| Jump, Fall | Brace |
+| OnFoot, a Hop the legs stride through | Swing |
+| Jump, Fall, a Hop too long to stride through | Brace |
 | Swim | Stroke |
 | Ledge | Grip (`UpperState::Gripping`) |
 
-Today a Hop braces the arms. Swinging through it is deliberate: a hop is a
-running leap that flows out of the run and back into it. Which `ArmState`s each
+Swinging through a Hop is deliberate: a hop is a running leap that flows out
+of the run and back into it. One too long for the legs to stride through (a
+planned drop off a ledge) is drawn as the fall it is, arms and legs alike. Which `ArmState`s each
 state allows is checked in one place, as `CharacterState::arm_state_allowed`
 is now.
 
@@ -305,9 +306,9 @@ it plays on a change:
 - the water-exit kick on a Jump out of Swim.
 
 The pose no longer splices in a `Landing` state or runs its own water test.
-During a Hop the legs are the placer's, and outside one never: the Hop pose
-draws the feet where the placer flies them or, flying none, hangs them
-from the hips.
+Through a Hop the legs stride through, the feet are the placer's; through any
+other flight the pose draws them, hung from the hips in the stride the body
+left the ground in, and hands them to the placer as it draws them.
 
 ## Structure
 
@@ -583,21 +584,35 @@ Each step ships with the game working, and its tests.
    - **One envelope draws every foot** (`foot_placer::LegEnvelope`): no
      higher than a tucked knee, no further off straight down than a stride
      sweeps, no further than the leg stretches, and for the humanoid on its
-     own side of the body. A plant or a swing the body has
-     outrun is drawn at its edge, knee bent, and a foot too high on a rock
-     stands sunk into it.
+     own side of the body. A plant or a swing the body has outrun is drawn
+     at its edge, knee bent, and a foot too high on a rock stands sunk into
+     it. The placer draws its own feet through it, and the humanoid draws
+     every pose that stands on its legs through it again, against the hips
+     as drawn: a crouch, a wind-up and a landing lower them after the gait
+     has placed its feet.
+   - **`FootSlew` has the last word** on where the humanoid's feet are
+     drawn: no faster against the hips, as the body faces, than a foot
+     moves.
    - **A planned step is checked before it is swung to**
      (`planned::planned_landing`): not behind a body travelling on, off to
      its side or across its midline, a storey above or below, strides
-     short of where the body will be, or a long flight away.
+     short of where the body will be, or a long flight away. A step a
+     flight comes before carries the plan's time, and its swing leaves and
+     lands moving with the body; every other step is the gait's own time.
    - **Feet go round with a body that spins** faster than feet step
      (`placer::swivel_feet`): an about-face on the stick turns the body half
      round in an eighth of a second.
-   - **`FootSlew` has the last word** on where the humanoid's feet are drawn:
-     no faster against the hips than a foot moves.
+   - **Blends hand feet over where they are.** Into placed feet, a blend
+     takes them as they are (`pose::lerp_feet`); out of the gait's feet into
+     feet that hang, it takes them along with the pelvis.
    - `FootAnchor::Flown`, `feet_flown`, `FlightLanding` and the placer's
-     flight swings are gone. `Hop::landing` stays, for the state machine's
-     missed landing and the stride-through rule.
+     flight swings are gone, and `PlannedLanding` names no foot.
+     `Hop::landing` stays, for the state machine's missed landing and the
+     stride-through rule.
+
+   What it costs: where the body is, not the plan, has the last say, so a
+   foot may slide a few centimetres at the envelope's edge, stand sunk in a
+   rock, or land short of a footfall the body stopped short of.
 
    Judged by the pose audit (`character_viewer --audit`, and `soak`'s seeded
    random play): see `docs/FOOT_PLACEMENT_PLAN.md`.
