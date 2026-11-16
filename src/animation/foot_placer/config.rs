@@ -139,6 +139,15 @@ pub struct FootPlacerConfig {
     pub duty_froude_start: f32,
     /// Froude number where duty factor reaches `fast_duty_factor`.
     pub duty_froude_end: f32,
+    /// How much of the hip's distance from the body's midline a step of the
+    /// gait's own keeps to its own side of it, in `[0, 1)`. A body carried
+    /// sideways (sliding along a wall it ran into at an angle, turning hard)
+    /// is then walked by steps that close up to each other, and a foot the
+    /// body passes over is drawn on its own side: the legs are never drawn
+    /// crossed. `0.0` lets the feet cross, as the gait does left alone: a
+    /// creature circling its quarry on long legs strides one through the
+    /// other.
+    pub own_side: f32,
 }
 
 impl Default for FootPlacerConfig {
@@ -171,6 +180,7 @@ impl Default for FootPlacerConfig {
             fast_duty_factor: 0.38,
             duty_froude_start: 0.25,
             duty_froude_end: 0.75,
+            own_side: 0.0,
         }
     }
 }

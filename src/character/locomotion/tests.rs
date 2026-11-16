@@ -47,10 +47,8 @@ fn sea(depth: f32) -> Immersion {
 /// A landing a metre ahead along +x, `in_seconds` from now.
 fn landing_ahead(in_seconds: f32) -> PlannedLanding {
     PlannedLanding {
-        foot: Foot::Left,
         at: Point3::new(1.0, 0.0, 0.0),
         in_seconds,
-        footfall: None,
         reach: 0.6,
     }
 }

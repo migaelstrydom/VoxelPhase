@@ -10,7 +10,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::capture_point::stance_offset;
 use super::config::FootPlacerConfig;
-use super::placer::{facing_from_yaw, PlacerFoot};
+use super::placer::{facing_from_yaw, FootPhase, PlacerFoot};
 use super::planned::{PlannedStep, PlannedSteps};
 use super::scenarios;
 use super::sim::{simulate_planned, Frame, GaitParams, Input, RigDims, HIP_WIDTH, LEG_LENGTH};
@@ -412,4 +412,57 @@ fn random_plans_keep_the_feet_in_the_legs_envelope() {
         kink.seed,
         kink.frame
     );
+}
+
+/// Prints the frames of one seed's planned run, for following a failure of
+/// the test above frame by frame: each foot against the pelvis, planted or
+/// swinging, and where its swing lands. Named by `PLAN_FUZZ_TRACE`, as
+/// `seed:from:to`:
+///
+/// ```text
+/// PLAN_FUZZ_TRACE=2:560:570 cargo test --release --lib plan_fuzz::trace -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn trace() {
+    let named = std::env::var("PLAN_FUZZ_TRACE").expect("PLAN_FUZZ_TRACE=seed:from:to");
+    let numbers: Vec<usize> = named
+        .split(':')
+        .map(|n| n.parse().expect("a number"))
+        .collect();
+    let (script, frames) = run(numbers[0] as u64, true);
+    for i in numbers[1]..numbers[2] {
+        let s = &frames[i];
+        let show = |foot: &PlacerFoot| {
+            let from_pelvis = foot.position - s.pelvis;
+            let phase = match foot.phase {
+                FootPhase::Planted => "planted".to_string(),
+                FootPhase::Stepping(swing) => {
+                    let to = swing.to - s.pelvis;
+                    format!(
+                        "lands in {:.3}{} at {:+.2},{:+.2},{:+.2}",
+                        swing.remaining(),
+                        if swing.held { " held" } else { "" },
+                        to.x,
+                        to.y,
+                        to.z
+                    )
+                }
+            };
+            format!(
+                "[{:+.2},{:+.2},{:+.2} {phase}]",
+                from_pelvis.x, from_pelvis.y, from_pelvis.z
+            )
+        };
+        eprintln!(
+            "{i} {:?}{} yaw {:.2} v {:.1},{:.1} L{} R{}",
+            script.window(i).mode,
+            if s.feet_placed { "" } else { " off" },
+            s.yaw,
+            s.velocity.x,
+            s.velocity.z,
+            show(&s.left),
+            show(&s.right)
+        );
+    }
 }

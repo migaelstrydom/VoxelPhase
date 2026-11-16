@@ -1,12 +1,5 @@
 use nalgebra::{Point3, Vector3};
 
-/// One of a biped's feet, as a request names it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Foot {
-    Left,
-    Right,
-}
-
 /// A takeoff a plan asks for: a hop, or a roll-off at a lip.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlannedTakeoff {
@@ -20,18 +13,15 @@ pub struct PlannedTakeoff {
     pub landing: Option<PlannedLanding>,
 }
 
-/// Where a Hop comes down: the foot that lands it, where, and when.
+/// Where a Hop comes down, and when. Which foot lands it is the legs' and
+/// the plan's between them (`animation::PlannedSteps`): the state only asks
+/// whether the body is still coming down there, and how soon.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlannedLanding {
-    /// The foot the flight lands on.
-    pub foot: Foot,
-    /// Where that foot lands, in the world.
+    /// Where the landing foot comes down, in the world.
     pub at: Point3<f32>,
     /// How long from now it lands, in seconds; negative once that is past.
     pub in_seconds: f32,
-    /// The plan's name for that footfall, opaque here: the legs hand it back
-    /// when the foot lands on it. `None` for a landing no plan names.
-    pub footfall: Option<u32>,
     /// How far, across the ground, the landing may lie from where the body's
     /// centre comes down and still be stood on, in metres: the leg's reach
     /// from the hip, and the hip's offset from the centre.

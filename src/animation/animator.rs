@@ -379,6 +379,7 @@ impl CharacterAnimator {
         let [left, right] = self.foot_slew.limit(
             [skeleton.left_hip, skeleton.right_hip],
             [skeleton.left_foot, skeleton.right_foot],
+            facing,
             dt,
         );
         self.skeleton

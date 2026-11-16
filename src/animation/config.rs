@@ -316,7 +316,11 @@ impl Default for CharacterRigConfig {
                 },
             },
 
-            foot_placer: FootPlacerConfig::default(),
+            // A person's legs do not stride through each other.
+            foot_placer: FootPlacerConfig {
+                own_side: 0.4,
+                ..FootPlacerConfig::default()
+            },
         }
     }
 }

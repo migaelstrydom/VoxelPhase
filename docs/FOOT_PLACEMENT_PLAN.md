@@ -162,9 +162,20 @@ update() flow becomes:
 
 ### Interaction with airborne states
 
-Airborne feet are not planted. The placer's `LegMode` comes from the locomotion state (`docs/LOCOMOTION_STATES.md`), never from the pose: `Off` in a jump or a fall, where the pose hangs the legs from the hips, and `Fly` in a planned Hop, where the placer swings the feet onto the landing. Back on the ground the feet are eligible to step at once — planted error will often exceed threshold on the first frame, which is what we want (feet catch up to the slide via capture-point stepping) — while the pose plays a landing squash on top of the gait.
+Airborne feet are not planted, and they hold no place in the world. The placer's `LegMode` comes from the locomotion state (`docs/LOCOMOTION_STATES.md`), never from the pose: `Step` on foot and through a planned Hop short enough to stride through, `Off` in any other flight, where the pose hangs the legs from the hips. While `Off` the humanoid hands the placer the feet as the pose drew them, every frame (`FootPlacer::hold_feet`), so that coming back on the ground no foot moves: each stands where it was last drawn, and the rear one steps first.
 
-For anticipatory landing IK (the airborne feet-gap problem), `FootPlacer` exposes `reach_toward_ground(probe_hit, weight)`. Orthogonal to this plan; mentioned to confirm composition.
+### The envelope a leg is drawn in
+
+A plant and a swing are places in the world, and the hip is a body that may rise, drop, spin or outrun them. Three rules keep what is drawn a leg, whatever the gait and the plan do:
+
+- **`within_leg`** draws every foot the placer holds, planted or swinging, no higher than a tucked knee (`SWING_LEAST_DROP`), no further off straight down than a stride sweeps (`SWING_CONE_TANGENT`, 60 degrees) and no further than the leg stretches. Inside it a foot is drawn where it is; a plant or swing outside it is drawn at its edge, knee bent.
+- **The legs let go** of a planted foot the hip has left out of reach (`LET_GO_MARGIN`), or is leaving with the leg pointing level at it (`LET_GO_TANGENT`): it steps at once, whatever the support and stagger rules say.
+- **`humanoid::FootSlew`** has the last word on where the humanoid's feet are drawn: no faster against the hips than a foot moves (14 m/s).
+
+A body that spins faster than feet step round (4 to 8 rad/s; the stick turns it at 20 and more) takes its feet round with it (`swivel_feet`).
+
+These are judged by the pose audit, not by eye alone: `character_viewer <scenario|all> --audit` names every stretch of frames a leg was drawn level, over its hip, asked for past its reach, snapping, crossed, folded or stalled, and `character_viewer soak` audits seeded random play (`src/character_viewer/pose_audit.rs`, `soak.rs`). A change to the legs is run through both.
+
 
 ---
 
@@ -388,7 +399,7 @@ Stages 1 and 2 are landed. The placer owns foot xz for all grounded states; the 
 
 **Integration (`src/animation/animator.rs`):**
 - `update()` flow: `process_contacts` → compute `next_pose` → `tick_foot_placer(next_pose)` → `mirror_placer_into_state` → sample pose/upper with placer output already baked into `AnimationState.left/right.position` → blend crossfades → apply to skeleton.
-- `FootPlacer::set_mode(LegMode)`, mapped from the locomotion state (`docs/LOCOMOTION_STATES.md`): `Step` on foot, `Fly` in a planned Hop, `Off` in a jump, a fall or the water. Back from `Off`, feet still within the leg's stretch of the hip are kept and the others planted at stance under the current pelvis; down from `Fly`, the flown feet land as they are.
+- `FootPlacer::set_mode(LegMode)`, mapped from the locomotion state (`docs/LOCOMOTION_STATES.md`): `Step` on foot and through a Hop short enough to stride through, `Off` in any other flight, the water or a hang. `Off`, the animator hands the placer the drawn feet each frame (`hold_feet`); back on, they stand where they were drawn. Feet no pose held (a creature's) are kept where still within the leg's stretch of the hip, and planted at stance under the current pelvis otherwise.
 - `stride_gain` comes from `gait_preset_for(next_pose)`; airborne-adjacent states fall back to the walk preset (placer is suspended there anyway).
 
 **Debug overlay (`src/animation/systems.rs::draw_foot_placer_overlay`):**

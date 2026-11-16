@@ -98,6 +98,18 @@ impl PoseFragment {
         }
     }
 
+    /// Return a copy whose feet the pelvis carries, wherever they were
+    /// placed.
+    pub fn carried(&self) -> Self {
+        Self {
+            feet: self.feet.as_ref().map(|feet| FeetPose {
+                anchor: FootAnchor::Hips,
+                ..feet.clone()
+            }),
+            ..self.clone()
+        }
+    }
+
     /// Return a copy with world-anchored feet pulled in to within `reach` of
     /// `pelvis`, along the line to it. Hip-carried feet are already within
     /// reach by construction, and are left alone.
@@ -292,11 +304,25 @@ impl<P: BlendPolicy> Crossfade<P> {
 
     /// Blend `self.from` (translated into the current pelvis frame) toward
     /// `current` using the policy weight.
+    ///
+    /// Feet held on the ground that are blending into feet the pelvis
+    /// carries have left the ground: they come along with the pelvis from
+    /// the moment the blend starts. Left where they stood for the blend, a
+    /// body running off a ledge draws them trailing at the leg's full
+    /// stretch behind it, a metre back by the time the blend is over.
     pub fn sample(&self, current: &PoseFragment, current_pelvis: Point3<f32>) -> PoseFragment {
         let t = self.policy.weight(self.elapsed, self.to_duration);
         let delta = current_pelvis - self.from_pelvis;
-        self.from
-            .translated(delta)
+        let leaving_the_ground = current
+            .feet
+            .as_ref()
+            .is_some_and(|feet| feet.anchor == FootAnchor::Hips);
+        let from = if leaving_the_ground {
+            self.from.carried()
+        } else {
+            self.from.clone()
+        };
+        from.translated(delta)
             .with_feet_within(self.reach, current_pelvis)
             .lerp(current, t)
     }

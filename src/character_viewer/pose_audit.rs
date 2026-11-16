@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 
 use super::record::{FootRecord, FrameRecord};
 use super::soak::SETTLE;
@@ -289,12 +289,18 @@ pub struct Tally {
     pub longest: usize,
 }
 
+/// How far the body may lean from upright and its legs still be judged
+/// against straight down, in degrees: a body jumping out of a stroke is
+/// still coming upright through the first of its flight.
+const UPRIGHT_WITHIN: f32 = 20.0;
+
 /// Whether `frame` is judged: the rig stands upright, on foot or in the
 /// air, in a run under way. A swimmer lies along its stroke and a hanger's
 /// legs are a climb's, which are drawn by other rules; and a soak run is
 /// first let settle where it was dropped ([`SETTLE`]).
 fn upright(frame: &FrameRecord) -> bool {
     frame.beat != SETTLE
+        && frame.body_pitch <= UPRIGHT_WITHIN
         && matches!(
             frame.locomotion.as_str(),
             "on_foot" | "grace" | "hop" | "jump" | "fall"
@@ -340,13 +346,18 @@ fn oddities(
             seen.push((Oddity::Overreach, leg, asked));
         }
         if let Some(previous) = previous.filter(|_| dt > 0.0) {
+            // As each frame's body faces: a body that spins takes its feet
+            // round with it, and nothing has jumped against it.
             let last = &previous.feet[index];
-            let snapped =
-                ((foot.position - frame.pelvis) - (last.position - previous.pelvis)).norm();
+            let moved = |now: Point3<f32>, before: Point3<f32>| {
+                (as_faced(frame, now - frame.pelvis) - as_faced(previous, before - previous.pelvis))
+                    .norm()
+            };
+            let snapped = moved(foot.position, last.position);
             if snapped > SNAP_SPEED * dt {
                 seen.push((Oddity::Snap, leg, snapped));
             }
-            let jumped = ((foot.asked - frame.pelvis) - (last.asked - previous.pelvis)).norm();
+            let jumped = moved(foot.asked, last.asked);
             if jumped > JUMP_SPEED * dt {
                 seen.push((Oddity::Jump, leg, jumped));
             }
@@ -368,6 +379,12 @@ fn oddities(
         seen.push((Oddity::Stalled, Leg::Both, 0.0));
     }
     seen
+}
+
+/// `offset` as the rig faces in `frame`: to its right, up and ahead.
+fn as_faced(frame: &FrameRecord, offset: Vector3<f32>) -> Vector3<f32> {
+    let right = frame.facing.cross(&Vector3::y());
+    Vector3::new(offset.dot(&right), offset.y, offset.dot(&frame.facing))
 }
 
 /// How much of the leg's length `foot` is drawn from its hip, and how far

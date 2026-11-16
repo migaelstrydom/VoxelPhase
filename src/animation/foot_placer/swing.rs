@@ -43,6 +43,12 @@ pub struct Swing {
     /// hard onto a target moving every substep, as a held swing's is, would
     /// hand the next path an acceleration that throws the foot.
     velocity: Vector3<f32>,
+    /// The velocity the path arrives with. Zero for a step on the ground,
+    /// which comes to rest on its landing; a foot swung through a flight
+    /// comes down with the body, at its speed, so that against the body it
+    /// eases from where it left to where it lands and neither trails nor
+    /// leads it on the way.
+    arrival: Vector3<f32>,
     /// The lift drawn, chasing `peak_lift`.
     lift: f32,
     /// The extra lift that clears the ground under the foot, chasing
@@ -78,6 +84,7 @@ impl Swing {
             peak_lift,
             path: from,
             velocity,
+            arrival: Vector3::zeros(),
             lift: peak_lift,
             clearance: 0.0,
             clearance_wanted: 0.0,
@@ -111,6 +118,12 @@ impl Swing {
         self.t = progress * self.duration;
     }
 
+    /// Land moving at `velocity`: a flying body's, for a foot that comes
+    /// down with it; zero, for a step that comes to rest.
+    pub fn arrive_at(&mut self, velocity: Vector3<f32>) {
+        self.arrival = velocity;
+    }
+
     /// Ask for `wanted` metres of extra lift where the foot is now, to
     /// clear the ground under it.
     pub fn clear(&mut self, wanted: f32) {
@@ -133,7 +146,14 @@ impl Swing {
             self.path = self.to;
             self.velocity = Vector3::zeros();
         } else {
-            let (path, velocity) = cubic_step(self.path, self.velocity, self.to, remaining, dt);
+            let (path, velocity) = cubic_step(
+                self.path,
+                self.velocity,
+                self.to,
+                self.arrival,
+                remaining,
+                dt,
+            );
             self.path = path;
             self.velocity = velocity;
         }
@@ -157,6 +177,7 @@ impl Swing {
         }
         for direction in [
             &mut self.velocity,
+            &mut self.arrival,
             &mut self.from_forward,
             &mut self.to_forward,
         ] {
@@ -182,19 +203,21 @@ pub(super) fn turned(vector: Vector3<f32>, angle: f32) -> Vector3<f32> {
 }
 
 /// One step of `dt` along the cubic from `position`, moving at `velocity`,
-/// that comes to rest on `target` in `time`. From rest onto a still target
-/// it is smoothstep; planned afresh from the current motion every step, it
-/// stays smooth through a target or time that changes along the way.
+/// that reaches `target` in `time` moving at `arrival`. From rest onto a
+/// still target, to rest, it is smoothstep; planned afresh from the current
+/// motion every step, it stays smooth through a target or time that changes
+/// along the way.
 fn cubic_step(
     position: Point3<f32>,
     velocity: Vector3<f32>,
     target: Point3<f32>,
+    arrival: Vector3<f32>,
     time: f32,
     dt: f32,
 ) -> (Point3<f32>, Vector3<f32>) {
     let (d, v, t) = (target - position, velocity, time);
-    let c2 = (d * 3.0 - v * (2.0 * t)) / (t * t);
-    let c3 = (d * -2.0 + v * t) / (t * t * t);
+    let c2 = (d * 3.0 - (v * 2.0 + arrival) * t) / (t * t);
+    let c3 = (d * -2.0 + (v + arrival) * t) / (t * t * t);
     let position = position + v * dt + c2 * (dt * dt) + c3 * (dt * dt * dt);
     let velocity = v + c2 * (2.0 * dt) + c3 * (3.0 * dt * dt);
     (position, velocity)
@@ -253,6 +276,30 @@ mod tests {
             "a churned target moved the foot {fastest_churned:.3} m in a frame, \
              a steady one {fastest_steady:.3} m"
         );
+    }
+
+    /// A foot swung through a flight leaves with the body and comes down
+    /// with it: against a body moving at that speed it eases from where it
+    /// left to where it lands, never further behind than it started nor
+    /// further ahead than it ends.
+    #[test]
+    fn a_swing_through_a_flight_neither_trails_nor_leads_the_body() {
+        let body = Vector3::new(0.0, 0.0, 6.0);
+        let (from, flight) = (Point3::new(0.0, 0.0, -0.3), 0.4);
+        // It lands 0.2 m ahead of where the body will be.
+        let to = Point3::origin() + body * flight + Vector3::new(0.0, 0.0, 0.2);
+        let mut swing = Swing::new(from, to, Vector3::z(), Vector3::z(), flight, 0.0, body);
+        swing.arrive_at(body);
+        let mut time = 0.0;
+        while swing.remaining() > DT {
+            swing.advance(DT, 1.0);
+            time += DT;
+            let ahead = swing.path().z - body.z * time;
+            assert!(
+                (-0.3 - 1e-3..=0.2 + 1e-3).contains(&ahead),
+                "{ahead:.2} m ahead of the body at {time:.2} s"
+            );
+        }
     }
 
     #[test]

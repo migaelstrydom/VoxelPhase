@@ -88,10 +88,27 @@ const SWIVEL_FULL: f32 = 8.0;
 /// it swings to, in m/s: about a stride's own.
 const DIVERT_SPEED: f32 = 5.0;
 
+/// The least a foot is drawn on its own side of the body's midline, as a
+/// fraction of what its steps aim to keep (`FootPlacerConfig::own_side`):
+/// a plant the body has passed over is short of what it aimed for, and is
+/// still not drawn crossed.
+const OWN_SIDE_DRAWN: f32 = 0.4;
+
+/// How far onto the other foot's side of the body a planned step may lie
+/// and still be this foot's to land, in metres: feet land near the body's
+/// midline on a plank or in a tight turn, and never well across it.
+const OWN_SIDE_MARGIN: f32 = 0.03;
+
 /// The longest a swing takes to a planned step a flight comes before, in
 /// seconds: a hop's flight and the stride after it. A step the body takes
 /// longer to reach is not this swing's to land.
 const LONGEST_FLOWN_SWING: f32 = 0.8;
+
+/// How far short of a planned step, past the leg's reach, the body may
+/// still be when the foot lands on it, in metres: the legs land a footfall
+/// in their own time, and wait over it a moment for the body; air steering
+/// and a plan a frame old put a flight's landing a stride out.
+const STEP_SHORTFALL: f32 = 0.5;
 
 /// How far above the hip, and how far below the leg's reach under it, a
 /// planned step may lie and still be one to swing to, in metres: a body
@@ -720,7 +737,7 @@ impl FootPlacer {
             // goes, until the leg lets go of it: the swing it starts then
             // is drawn from the same place.
             if foot.is_planted() {
-                foot.position = within_leg(foot.planted_position, hip, max_leg_extension(ctx));
+                foot.position = LegEnvelope::of(foot.side, ctx, facing).draw(foot.planted_position);
             }
         }
 
@@ -1094,7 +1111,17 @@ fn ideal_target(
         stride *= max_reach / stride_sq.sqrt();
     }
 
-    let target = pelvis_xz + stride + stance;
+    // Legs that keep to their own sides land each foot on its side of the
+    // body, however the body is carried: sideways, the leading foot steps
+    // out and the trailing one closes up to it, never through it.
+    let mut offset = stride + stance;
+    let own_side = stance_offset(facing, 1.0, side);
+    let (aside, least) = (offset.dot(&own_side), cfg.own_side * ctx.hip_width);
+    if cfg.own_side > 0.0 && aside < least {
+        offset += own_side * (least - aside);
+    }
+
+    let target = pelvis_xz + offset;
     Point3::new(target.x, ctx.foot_y_fallback, target.y)
 }
 
@@ -1194,6 +1221,17 @@ fn advance_stepping(
     // gait's again, and lands in the gait's time.
     let steered = swing.remaining() > frame_dt && !swing.held;
     let planned = planned_landing(ctx, foot.side, swing.remaining());
+    // A foot swung through a flight comes down with the body, at its speed;
+    // a step on the ground comes to rest on its landing.
+    swing.arrive_at(match planned {
+        Some((
+            PlannedStep {
+                landing: Some(_), ..
+            },
+            _,
+        )) if !swing.held => Vector3::new(ctx.velocity.x, 0.0, ctx.velocity.z),
+        Some(_) | None => Vector3::zeros(),
+    });
     if steered {
         match planned {
             Some((step, lands_in)) if step.landing.is_some() => {
@@ -1235,10 +1273,10 @@ fn advance_stepping(
             // the foot waits there, at the end of its leg.
             (None, Some(step)) if !swing.held && planar_distance(swing.to, step.at) <= ON_STEP => {
                 swing.retime(2.0 * frame_dt.max(ctx.dt), ctx.dt);
-                foot.position = within_leg(swing.position(), hip, reach);
+                foot.position = LegEnvelope::of(foot.side, ctx, facing).draw(swing.position());
                 foot.phase = FootPhase::Stepping(swing);
             }
-            (None, _) => hold_swing(foot, swing, under_hip, hip, ctx),
+            (None, _) => hold_swing(foot, swing, under_hip, ctx),
         }
         return;
     }
@@ -1336,7 +1374,7 @@ fn advance_stepping(
         }),
     );
     swing.advance(ctx.dt, chase);
-    foot.position = within_leg(swing.position(), hip, reach);
+    foot.position = LegEnvelope::of(foot.side, ctx, facing).draw(swing.position());
     foot.forward = swing_forward(swing.from_forward, swing.to_forward, swing.progress());
     foot.pre_lift = 0.0;
     foot.phase = FootPhase::Stepping(swing);
@@ -1348,8 +1386,7 @@ fn retarget_chase(ctx: &PlacerCtx<'_>) -> f32 {
     1.0 - (-ctx.config.swing_retarget_rate * ctx.dt).exp()
 }
 
-/// Where a foot the legs hold at `held` is drawn: there, kept to where a
-/// leg goes.
+/// Where one leg goes: what a foot the legs hold is drawn within.
 ///
 /// ```text
 ///            hip
@@ -1357,30 +1394,69 @@ fn retarget_chase(ctx: &PlacerCtx<'_>) -> f32 {
 ///          / 60° \        ([`SWING_LEAST_DROP`]), no further off straight
 ///         /_______\       down than a stride sweeps
 ///        (  reach  )     ([`SWING_CONE_TANGENT`]), no further than the
-///         `-------'      leg stretches
+///         `-------'      leg stretches, and on its own side of the body
+///                        (`FootPlacerConfig::own_side`)
 /// ```
 ///
 /// A plant and a swing are places in the world, and the hip a body that
-/// may rise, drop or outrun them: where one leaves this envelope the foot
-/// is drawn at its edge, knee bent, until the body brings the two back
-/// together or the leg lets go. A stride's own plants and swings lie
-/// inside it and are drawn where they are. Planted and swinging feet share
-/// it, so a foot let go of at its edge starts its swing where it was drawn.
-fn within_leg(held: Point3<f32>, hip: Point3<f32>, reach: f32) -> Point3<f32> {
-    let mut from_hip = held - hip;
-    from_hip.y = from_hip.y.min(-SWING_LEAST_DROP * reach);
-    let across = Vector2::new(from_hip.x, from_hip.z).magnitude();
-    let widest = SWING_CONE_TANGENT * -from_hip.y;
-    if across > widest {
-        let narrowed = widest / across;
-        from_hip.x *= narrowed;
-        from_hip.z *= narrowed;
+/// may rise, drop, slide sideways or outrun them: where one leaves this
+/// envelope the foot is drawn at its edge, knee bent, until the body brings
+/// the two back together or the leg lets go. A stride's own plants and
+/// swings lie inside it and are drawn where they are. Planted and swinging
+/// feet share it, so a foot let go of at its edge starts its swing where it
+/// was drawn.
+#[derive(Clone, Copy, Debug)]
+struct LegEnvelope {
+    hip: Point3<f32>,
+    /// The furthest the leg stretches from the hip, in metres.
+    reach: f32,
+    /// Horizontal unit direction from the body's midline out to this leg's
+    /// side.
+    own_side: Vector3<f32>,
+    /// How far the hip lies from the midline, in metres.
+    hip_width: f32,
+    /// The least the foot is drawn to its own side of the midline, in
+    /// metres; `None` for legs that may cross.
+    own_side_kept: Option<f32>,
+}
+
+impl LegEnvelope {
+    fn of(side: FootSide, ctx: &PlacerCtx<'_>, facing: Vector3<f32>) -> Self {
+        let own_side = stance_offset(facing, 1.0, side.side_sign());
+        Self {
+            hip: hip_position(side, ctx, facing),
+            reach: max_leg_extension(ctx),
+            own_side: Vector3::new(own_side.x, 0.0, own_side.y),
+            hip_width: ctx.hip_width,
+            own_side_kept: (ctx.config.own_side > 0.0)
+                .then(|| OWN_SIDE_DRAWN * ctx.config.own_side * ctx.hip_width),
+        }
     }
-    let distance = from_hip.norm();
-    if distance > reach {
-        from_hip *= reach / distance;
+
+    /// Where a foot the legs hold at `held` is drawn.
+    fn draw(&self, held: Point3<f32>) -> Point3<f32> {
+        let mut from_hip = held - self.hip;
+        if let Some(kept) = self.own_side_kept {
+            let inward = -from_hip.dot(&self.own_side);
+            let furthest_in = self.hip_width - kept;
+            if inward > furthest_in {
+                from_hip += self.own_side * (inward - furthest_in);
+            }
+        }
+        from_hip.y = from_hip.y.min(-SWING_LEAST_DROP * self.reach);
+        let across = Vector2::new(from_hip.x, from_hip.z).magnitude();
+        let widest = SWING_CONE_TANGENT * -from_hip.y;
+        if across > widest {
+            let narrowed = widest / across;
+            from_hip.x *= narrowed;
+            from_hip.z *= narrowed;
+        }
+        let distance = from_hip.norm();
+        if distance > self.reach {
+            from_hip *= self.reach / distance;
+        }
+        self.hip + from_hip
     }
-    hip + from_hip
 }
 
 /// Move everything this foot holds in world space along with the surface
@@ -1528,7 +1604,6 @@ fn hold_swing(
     foot: &mut PlacerFoot,
     mut swing: Swing,
     under_hip: Point3<f32>,
-    hip: Point3<f32>,
     ctx: &PlacerCtx<'_>,
 ) {
     let retreat = 1.0 - (-ctx.config.unsupported_retreat_rate * ctx.dt).exp();
@@ -1537,7 +1612,8 @@ fn hold_swing(
     swing.held = true;
     swing.footfall = None;
     swing.retime(ctx.dt, ctx.dt);
-    foot.position = within_leg(swing.position(), hip, max_leg_extension(ctx));
+    foot.position =
+        LegEnvelope::of(foot.side, ctx, facing_from_yaw(ctx.yaw)).draw(swing.position());
     foot.phase = FootPhase::Stepping(swing);
     foot.landing_shortened = true;
 }
@@ -1599,20 +1675,32 @@ fn max_leg_extension(ctx: &PlacerCtx<'_>) -> f32 {
 ///   the leg reaches back: a plan laid along a heading the body has not yet
 ///   turned to, as when the stick is swung back, lands the feet behind a body
 ///   still travelling the old way;
+/// - it lies on the other foot's side of the body ([`OWN_SIDE_MARGIN`]): a
+///   plan is laid along the way the body travels, and a body that faces
+///   another way (turned to throw behind it as it walks on) has its left
+///   foot where the plan's right one goes;
 /// - the body comes down on it later than [`LONGEST_FLOWN_SWING`] from now;
+/// - the body will still be strides short of it when the foot lands
+///   ([`STEP_SHORTFALL`]);
 /// - it lies higher over the hip or further under the leg's reach than a
 ///   hop's rise and fall account for ([`STEP_HEIGHT_SLACK`]).
 ///
-/// A footfall ahead is the plan's, however far the leg stretches to it: the
-/// legs land it in their own time, and a foot that gets there before the
-/// body waits over it.
+/// A footfall a stride ahead is the plan's, though the leg stretches to it:
+/// the legs land it in their own time, and a foot that gets there before
+/// the body waits over it.
 fn planned_landing(ctx: &PlacerCtx<'_>, side: FootSide, own: f32) -> Option<(PlannedStep, f32)> {
     let step = ctx.planned.of(side)?;
     let lands_in = step.landing.unwrap_or(own);
     if lands_in > LONGEST_FLOWN_SWING {
         return None;
     }
-    let hip = hip_position(side, ctx, facing_from_yaw(ctx.yaw));
+    let facing = facing_from_yaw(ctx.yaw);
+    let own_side = stance_offset(facing, 1.0, side.side_sign());
+    let from_pelvis = step.at - ctx.pelvis;
+    if Vector2::new(from_pelvis.x, from_pelvis.z).dot(&own_side) < -OWN_SIDE_MARGIN {
+        return None;
+    }
+    let hip = hip_position(side, ctx, facing);
     let offset = step.at - hip;
     let extension = max_leg_extension(ctx);
     if offset.y > STEP_HEIGHT_SLACK || offset.y < -(extension + STEP_HEIGHT_SLACK) {
@@ -1627,7 +1715,12 @@ fn planned_landing(ctx: &PlacerCtx<'_>, side: FootSide, own: f32) -> Option<(Pla
     let along = across.dot(&ahead);
     let aside = (across - ahead * along).magnitude();
     let passed_by = travel.magnitude() * lands_in.max(0.0) - along;
-    (aside <= reach && passed_by <= reach).then_some((step, lands_in))
+    // A step is where the body is when the foot lands: one the body,
+    // carried on as it moves, is still strides short of by then is a later
+    // step's, or another flight's.
+    let short_of = -passed_by;
+    (aside <= reach && passed_by <= reach && short_of <= reach + STEP_SHORTFALL)
+        .then_some((step, lands_in))
 }
 
 /// Plant `foot` at `position` at stance, facing the body, on no planned
@@ -2346,23 +2439,30 @@ mod tests {
             planned_landing(&ctx, FootSide::Right, SWING).map(|(_, lands_in)| lands_in)
         };
         let running = Vector3::new(0.0, 0.0, 3.0);
-        let ahead = Point3::new(-0.12, 0.0, 0.6);
+        let at = |x: f32, y: f32, z: f32| Point3::new(x, y, z);
+        let ahead = at(-0.12, 0.0, 0.6);
 
         // A step ahead is landed in the swing's own time; one a flight comes
         // before, as the body comes down on it.
         assert_eq!(lands(ahead, None, running), Some(SWING));
         let hop = Point3::new(-0.12, 0.0, 1.5);
         assert_eq!(lands(hop, Some(0.45), running), Some(0.45));
-        // However far ahead: the foot waits over it for the body.
-        assert_eq!(lands(hop, None, running), Some(SWING));
+        // A stride further on than the leg lands it: the foot waits over it
+        // for the body.
+        assert_eq!(lands(at(-0.12, 0.0, 1.2), None, running), Some(SWING));
 
-        let at = |x: f32, y: f32, z: f32| Point3::new(x, y, z);
         assert_eq!(lands(at(-0.12, 0.0, -1.0), None, running), None, "behind");
+        assert_eq!(lands(at(0.12, 0.0, 0.6), None, running), None, "crossed");
         assert_eq!(lands(at(-1.2, 0.0, 0.6), None, running), None, "aside");
         assert_eq!(
             lands(at(-0.12, 0.0, 4.0), Some(1.3), running),
             None,
             "far on"
+        );
+        assert_eq!(
+            lands(at(-0.12, 0.0, 3.0), Some(0.2), running),
+            None,
+            "short"
         );
         assert_eq!(lands(at(-0.12, -3.0, 0.6), None, running), None, "below");
         assert_eq!(lands(at(-0.12, 1.5, 0.6), None, running), None, "above");
@@ -2491,6 +2591,58 @@ mod tests {
             placer.right.is_stepping() || placer.released() == Some(FootSide::Right),
             "the rear foot steps first"
         );
+    }
+
+    /// The envelope draws a stride's own feet where they are, and one held
+    /// outside it at its edge: no higher than a tucked knee, no further off
+    /// straight down than a stride sweeps, no further than the leg
+    /// stretches and, for legs that keep to their sides, not across the
+    /// body.
+    #[test]
+    fn a_foot_is_drawn_where_a_leg_goes() {
+        let config = FootPlacerConfig {
+            own_side: 0.4,
+            ..FootPlacerConfig::default()
+        };
+        let pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        let ctx = riding(pelvis, Vector3::zeros(), &config);
+        // Facing +z, the right leg hangs at -x.
+        let leg = LegEnvelope::of(FootSide::Right, &ctx, Vector3::z());
+        let hip = leg.hip;
+        let drawn = |from_hip: Vector3<f32>| leg.draw(hip + from_hip) - hip;
+
+        for stride in [
+            Vector3::new(0.0, -STANDING_HEIGHT, 0.0),
+            Vector3::new(0.0, -STANDING_HEIGHT, 0.3),
+            Vector3::new(0.0, -0.38, -0.4),
+            Vector3::new(0.0, -0.28, 0.1),
+        ] {
+            assert!((drawn(stride) - stride).norm() < 1e-6, "{stride:?} moved");
+        }
+
+        let level = drawn(Vector3::new(0.0, -0.1, -0.5));
+        assert!(level.y <= -SWING_LEAST_DROP * leg.reach + 1e-6, "{level:?}");
+        assert!(
+            level.z.abs() <= SWING_CONE_TANGENT * -level.y + 1e-6,
+            "{level:?}"
+        );
+        let over_hip = drawn(Vector3::new(0.0, 0.3, 0.1));
+        assert!(over_hip.y <= -SWING_LEAST_DROP * leg.reach + 1e-6);
+        let far = drawn(Vector3::new(0.0, -2.0, 0.5));
+        assert!(far.norm() <= leg.reach + 1e-6);
+
+        // 0.2 m to the body's left of the right hip is across the midline.
+        let crossed = drawn(Vector3::new(0.2, -STANDING_HEIGHT, 0.0));
+        assert!(
+            crossed.x < HIP_WIDTH,
+            "drawn {:.2} m past the midline",
+            crossed.x - HIP_WIDTH
+        );
+        let free = FootPlacerConfig::default();
+        let ctx = riding(pelvis, Vector3::zeros(), &free);
+        let crossing = LegEnvelope::of(FootSide::Right, &ctx, Vector3::z());
+        let across = Vector3::new(0.2, -STANDING_HEIGHT, 0.0);
+        assert!((crossing.draw(hip + across) - (hip + across)).norm() < 1e-6);
     }
 
     /// A planted foot the hip has been carried out of reach of is let go of

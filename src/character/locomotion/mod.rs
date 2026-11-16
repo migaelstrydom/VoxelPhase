@@ -42,7 +42,7 @@ pub use input::{Facts, LocomotionInput, Requests};
 pub use jump::{Jump, JumpKind};
 pub use ledge::{Lean, LeanTowards, Ledge, LedgePhase, StickOnEdge};
 pub use on_foot::OnFoot;
-pub use requests::{Foot, PlannedLanding, PlannedTakeoff};
+pub use requests::{PlannedLanding, PlannedTakeoff};
 pub use rule::{AirSteering, MovementRule, RuleSpeeds};
 pub use state::LocomotionState;
 pub use swim::Swim;

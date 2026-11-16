@@ -111,7 +111,7 @@ column gives the request or fact that causes each transition.
 | State | Entered from | Leaves for | Planner | Legs | Arms |
 |---|---|---|---|---|---|
 | `OnFoot { grace }` | Hop, Jump, Fall (down), Swim (feet down), Ledge (pull-up done) | Hop (a plan's takeoff), Jump (jump pressed), Fall (`grace` runs out), Swim (deep water) | On | Step | Swing |
-| `Hop { phase, landing, flown }` | OnFoot (a plan's takeoff) | OnFoot (down), Jump (jump pressed early), Fall (landing missed), Swim | On | Fly | Swing |
+| `Hop { phase, landing, flown }` | OnFoot (a plan's takeoff) | OnFoot (down), Jump (jump pressed early), Fall (landing missed), Swim | On | Step if short enough to stride through, else Off | Swing |
 | `Jump { kind, phase, steering }` | OnFoot, Hop (jump pressed early), Swim (jump out of the water), Ledge (back-jump) | OnFoot (down), Swim (falling into deep water), Ledge (an edge at the hands) | Off | Off | Brace |
 | `Fall { steering }` | OnFoot (`grace` runs out), Hop (landing missed), Swim (out over a drop), Ledge (drop) | OnFoot (down), Swim, Ledge (an edge at the hands) | Off | Off | Brace |
 | `Swim` | OnFoot, Fall, Jump falling, once the water is deep | OnFoot, Fall, Jump, Ledge | Off | Off | Stroke |
@@ -242,23 +242,36 @@ Neither of those is a role.
 ### Legs (`FootPlacer`, `LeggedLocomotion`)
 
 ```rust
-enum LegMode { Step, Fly, Off }
+enum LegMode { Step, Off }
 ```
 
 | Mode | The placer | The probes |
 |---|---|---|
 | Step | the gait: clock, swings, capture point, the plan's footfalls if it has any | aim at the feet |
-| Fly | the landing foot swings onto the Hop's landing, the other trails | aim at the swing targets |
-| Off | idle; the pose draws the legs | straight down |
+| Off | idle; the pose draws the legs, and hands the feet back as it draws them | straight down |
 
-`enter` is the whole of what is now the `Flight` machine, `touch_down`, the
-fly-on rule and the held-swing rule:
-- **`enter(Fly, Step)`** lands the flown feet as they are.
-- **`enter(Off, Step)`** keeps each planted foot that is still within its
-  leg's reach of its hip, and plants the others at stance. A short drop, or a
-  creature's grounding flickering, therefore does not move feet that are still
-  under the body.
-- **`enter(_, Off)`** drops every swing and footfall.
+There is no mode for a flight (step 7). A foot holds a place in the world
+only while the body is over ground it can stand on: carried through a flight,
+a place left behind or not yet reached is a leg drawn pointing at it.
+
+- **A Hop short enough to stride through is Step.** A kerb, a hop up a step
+  and a leap between planks are the run going on: the plan's landing is an
+  ordinary planned step, which carries the plan's time for it
+  (`PlannedStep::landing`), and the landing foot swings to it through the
+  flight, moving with the body. A foot with nowhere to land gathers under
+  its hip, as it does through grace. The humanoid strides through a Hop
+  for its first 0.16 s (what forgiveness and grace carry unplanned), and
+  through the whole of one that comes down within 0.45 s
+  (`animator::strides_through`); the pose and the arms follow the same
+  rule, so a long planned drop is drawn as a fall.
+- **Off, the legs keep no feet of their own.** The humanoid hands the placer
+  the feet as the pose drew them, every frame (`FootPlacer::hold_feet`).
+- **`enter(Off, Step)`** lands the feet where they are: held feet stand
+  where they were last drawn, so a landing moves no foot, and the rear one
+  is released first. Feet no pose held (a creature's, whose grounding
+  flickers) are kept where still within reach of their hips, and planted at
+  stance otherwise.
+- **`enter(Step, Off)`** drops every footfall.
 
 Creatures keep using `LeggedLocomotion`, mapping their own grounding to Step
 or Off. They have no plan and no water.
@@ -392,7 +405,7 @@ what the planner hands them lasts only one tick.
 
 - The traction drive and the movement rule per state.
 - The planner and its tracker, for OnFoot and Hop.
-- The placer's gait (clock, swings, capture point), for Step and Fly.
+- The placer's gait (clock, swings, capture point), for Step.
 - Swimming's movement and attitude.
 - The grab system.
 - The pose samplers and the skeleton.
@@ -555,6 +568,37 @@ Each step ships with the game working, and its tests.
    scenarios. A bank higher than that is a Ledge.
 6. **Ledges.** The hand sensor, then `Ledge` with Grab, Hang and PullUp, from
    the air and from the water. Steps in `docs/LEDGE_GRABS.md`.
+
+7. **Legs without a flight mode.** Step 3's `LegMode::Fly` swung the feet
+   through whole flights between two points in the world, and every way a
+   flight could go on past them (a tall drop, the stick steered back, a plan
+   relaid in the air) drew a leg pointing at one: held out level behind a
+   body that had run off a ledge, for the length of the fall.
+
+   Done (2026-11-16). `LegMode` is `Step` or `Off`, as above. With it:
+   - **The legs let go.** A planted foot the hip has left out of reach, or
+     is leaving with the leg pointing level at it, steps whatever the
+     gait's support and stagger rules say (`placer::LET_GO_MARGIN`,
+     `LET_GO_TANGENT`).
+   - **One envelope draws every foot** (`placer::within_leg`): no higher
+     than a tucked knee, no further off straight down than a stride sweeps,
+     no further than the leg stretches. A plant or a swing the body has
+     outrun is drawn at its edge, knee bent, and a foot too high on a rock
+     stands sunk into it.
+   - **A planned step is checked before it is swung to**
+     (`placer::planned_landing`): not behind a body travelling on, off to
+     its side, a storey above or below, or a long flight away.
+   - **Feet go round with a body that spins** faster than feet step
+     (`placer::swivel_feet`): an about-face on the stick turns the body half
+     round in an eighth of a second.
+   - **`FootSlew` has the last word** on where the humanoid's feet are drawn:
+     no faster against the hips than a foot moves.
+   - `FootAnchor::Flown`, `feet_flown`, `FlightLanding` and the placer's
+     flight swings are gone. `Hop::landing` stays, for the state machine's
+     missed landing and the stride-through rule.
+
+   Judged by the pose audit (`character_viewer --audit`, and `soak`'s seeded
+   random play): see `docs/FOOT_PLACEMENT_PLAN.md`.
 
 A `character_viewer` scenario that swims off the edge of island_sea and falls
 checks steps 1 to 4 together: the planner off, the legs off, and nothing

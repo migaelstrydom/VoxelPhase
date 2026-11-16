@@ -41,8 +41,8 @@ pub use grounding_system::ContactGroundingSystem;
 pub use immersion::{Immersion, WaterAtBody};
 pub use immersion_system::ImmersionSystem;
 pub use locomotion::{
-    AirSteering, Conditioning, EntryEffects, Facts, Foot, LocomotionInput, LocomotionState,
-    MovementRule, PlannedLanding, PlannedTakeoff, Requests, RuleSpeeds,
+    AirSteering, Conditioning, EntryEffects, Facts, LocomotionInput, LocomotionState, MovementRule,
+    PlannedLanding, PlannedTakeoff, Requests, RuleSpeeds,
 };
 pub use swim::SwimConfig;
 pub use throws::{ThrowStroke, ThrowingHand, Throws};

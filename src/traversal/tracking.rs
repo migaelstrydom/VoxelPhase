@@ -1,9 +1,8 @@
-use traversal_planner::plan::Limb;
 use traversal_planner::section::Profile;
 use traversal_planner::{GaitParams, Motion, Phase, Plan};
 
 use super::path_frame::PathFrame;
-use crate::character::{Foot, PlannedLanding, PlannedTakeoff};
+use crate::character::{PlannedLanding, PlannedTakeoff};
 
 /// What a plan asks of the body over the next frame: how fast to drive, the
 /// takeoff to leave with if one falls in it, and where a flight under way
@@ -111,13 +110,8 @@ fn landing(plan: &Plan, flight: &Phase, frame: &PathFrame, reach: f32) -> Option
     plan.footfalls()
         .find(|(time, _)| *time > flight.start && plan.lands_a_flight(*time))
         .map(|(time, contact)| PlannedLanding {
-            foot: match contact.limb {
-                Limb::LeftFoot => Foot::Left,
-                Limb::RightFoot => Foot::Right,
-            },
             at: frame.world_point(contact.at),
             in_seconds: time,
-            footfall: contact.footfall.map(|id| id.0),
             reach,
         })
 }
@@ -351,7 +345,6 @@ mod tests {
             .takeoff
             .and_then(|takeoff| takeoff.landing)
             .expect("a landing");
-        assert_eq!(landing.foot, Foot::Left);
         assert!((landing.in_seconds - 0.3).abs() < 1.0e-6);
         assert_eq!(landing.at, along_z().world_point(stance().at));
         assert_eq!(landing.reach, REACH);
