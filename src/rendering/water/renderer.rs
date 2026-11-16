@@ -340,6 +340,20 @@ impl WaterRenderer {
             .point_refraction(refraction.depth_view(), refraction.colour_view());
     }
 
+    /// Drop every mesh built from the water drawn so far, so that the next
+    /// water is built afresh. A new level's bodies reuse the same ids and
+    /// shape versions, which the keys alone would take for the old ones.
+    pub fn forget_water(&mut self) {
+        self.mesh = WaterMesh::default();
+        self.key = MeshKey::new();
+        self.version += 1;
+        self.ocean = WaterMesh::default();
+        self.ocean_key = MeshKey::new();
+        self.ocean_version += 1;
+        self.rivers.forget();
+        self.river_version += 1;
+    }
+
     /// Point uploads at this frame's buffers, and forget last frame's plan.
     pub fn begin_frame(&mut self, slot: FrameSlot) {
         self.slot = slot;

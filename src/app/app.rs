@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use winit::{
@@ -13,6 +13,7 @@ use specs::{Dispatcher, World, WorldExt};
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
 use crate::debug::DebugConfig;
+use crate::input::GameplayActions;
 use crate::level::load_level;
 use crate::rendering::renderer::Renderer;
 use crate::resources::manager::ResourceManager;
@@ -22,6 +23,7 @@ use crate::time::Time;
 use super::event_handler::{set_mouse_captured, EventHandler, EventResult};
 use super::frame::run_frame;
 use super::game_world::GameWorld;
+use super::restart::restart_level;
 use super::spawners::spawn_camera;
 
 /// Fields drop in declaration order, so the order here is load-bearing: the
@@ -33,6 +35,11 @@ pub struct App<'a, 'b> {
     world: World,
     dispatcher: Dispatcher<'a, 'b>,
     window: Window,
+    /// The level file, read again on every restart.
+    level_path: PathBuf,
+    /// The size the window was opened at, which a restarted camera starts
+    /// from until the renderer gives it the real aspect.
+    viewport: (u32, u32),
 }
 
 impl<'a, 'b> App<'a, 'b> {
@@ -61,6 +68,8 @@ impl<'a, 'b> App<'a, 'b> {
             world,
             dispatcher,
             window,
+            level_path: level_path.to_path_buf(),
+            viewport: (window_width, window_height),
         })
     }
 
@@ -117,6 +126,8 @@ impl<'a, 'b> App<'a, 'b> {
         let window = &self.window;
         let world = &mut self.world;
         let dispatcher = &mut self.dispatcher;
+        let level_path = self.level_path.as_path();
+        let viewport = self.viewport;
 
         let run_result = event_loop.run(|event, elwt| {
             elwt.set_control_flow(ControlFlow::Poll);
@@ -140,6 +151,19 @@ impl<'a, 'b> App<'a, 'b> {
                 }
 
                 run_frame(world, dispatcher);
+
+                if world.read_resource::<GameplayActions>().restart_room {
+                    match load_level(level_path) {
+                        Err(e) => log::warn!("Level did not load, keeping the room: {}", e),
+                        Ok(level) => match restart_level(world, dispatcher, &level, viewport) {
+                            Ok(()) => log::info!("Restarted {}", level_path.display()),
+                            Err(e) => {
+                                log::error!("Restart failed: {}", e);
+                                elwt.exit();
+                            }
+                        },
+                    }
+                }
             }
         });
 

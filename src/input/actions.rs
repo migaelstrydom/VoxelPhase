@@ -48,6 +48,9 @@ pub struct GameplayActions {
     pub grab_just_pressed: bool,
     /// Grab button just released this frame.
     pub grab_just_released: bool,
+
+    /// Put the room back as it began (just pressed this frame).
+    pub restart_room: bool,
 }
 
 impl GameplayActions {
@@ -90,6 +93,9 @@ impl GameplayActions {
             grab_just_pressed: input.is_mouse_button_just_pressed(MouseButton::Right)
                 && input.is_mouse_captured(),
             grab_just_released: input.is_mouse_button_just_released(MouseButton::Right),
+
+            // Restart - R
+            restart_room: input.is_key_just_pressed(KeyCode::KeyR),
         }
     }
 }

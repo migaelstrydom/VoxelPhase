@@ -1643,6 +1643,20 @@ impl Renderer {
         self.active_fires.retain(|(e, _)| *e != entity);
     }
 
+    /// Forget everything held on behalf of the scene being drawn, for a new
+    /// one to take its place: fires, reflection probes and water meshes, all
+    /// named by ids a new scene will reuse. Models and terrain need nothing:
+    /// a model is let go once nothing draws it, and every terrain has its own
+    /// render version.
+    ///
+    /// The device must be idle, since the GPU may still be reading what this
+    /// lets go of.
+    pub fn forget_scene(&mut self) {
+        self.active_fires.clear();
+        self.probes.forget_captures();
+        self.water_renderer.forget_water();
+    }
+
     /// Hand the frame's particles to the renderer, to be recorded with the
     /// rest of the scene's blended geometry.
     ///

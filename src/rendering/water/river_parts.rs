@@ -70,6 +70,14 @@ impl RiverParts {
         self.budget = budget;
     }
 
+    /// Drop every surface, keeping the budget.
+    pub fn forget(&mut self) {
+        *self = Self {
+            budget: self.budget,
+            ..Self::default()
+        };
+    }
+
     /// Read again every surface whose version moved, build again the
     /// stalest of those whose shape changed, drop those gone, and join them
     /// all. Returns whether anything changed.

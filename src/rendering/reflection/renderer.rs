@@ -145,6 +145,13 @@ impl ProbeRenderer {
         self.config.faces_per_frame.min(MAX_FACES_PER_FRAME)
     }
 
+    /// Let go of every probe, so that a new scene's objects are captured
+    /// afresh rather than inheriting the faces of whatever held their owner
+    /// ids before.
+    pub fn forget_captures(&mut self) {
+        self.pool.clear();
+    }
+
     /// Start frame `slot`: hand the probes out for it and open its command
     /// buffer. Before any draw of the frame is issued, so that whether any
     /// probe is live — and so whether draws are collected — holds for the
