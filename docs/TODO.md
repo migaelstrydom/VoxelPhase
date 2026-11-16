@@ -59,3 +59,21 @@ reads the floor after the frame's physics. Why the plan chooses such high
 flights over light footing, or whether the drive flies higher than planned,
 is not known. Running the uneven crates, one start in 30 did not get across;
 not looked at.
+
+---
+
+## A rebuilt water surface re-uploads all the water
+
+When any river surface has to be built again rather than refreshed in place
+(`Refreshed::Reshaped` in `RiverParts::sync`, `rendering/water/river_parts.rs`),
+`RiverParts::join` copies every surface into the joined mesh again and
+`upload_slot` (`rendering/water/renderer.rs`) uploads the whole of it, vertices
+and indices, to the frame's buffers. One chunk's change costs the size of all
+the level's water. A refresh that holds copies only its own vertices, but still
+uploads everything. Sampled on island_sea while its fountain rebuilt four chunks
+every frame (fixed in 73d0a85), the two whole-mesh copies took about half the
+water's CPU time, more than meshing the chunks did, and the cost grew as the
+water spread. Keeping each surface at a stable place in the buffers, with room
+to grow, and uploading only the ranges that changed would make a rebuild cost
+what it changed. Measure with `render_perf --level levels/island_sea.level.ron
+--seconds 60 --csv`, column `cpu_water`.
