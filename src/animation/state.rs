@@ -242,11 +242,6 @@ pub struct AnimationState {
     /// `Grounding` component — the Support Set's answer, not the probes'.
     /// Animation reads support; it no longer decides it.
     pub is_grounded: bool,
-    /// Whether the foot placer is swinging the feet through a Hop onto its
-    /// landing: the Hop pose then draws them where the placer has them, not
-    /// hanging from the hips. Data the placer shares, not its mode: a Hop
-    /// whose landing is out of reach flies no foot.
-    pub feet_flown: bool,
 
     /// How far the physics body lies over from upright toward its facing, in
     /// radians, as measured — not as asked for. The rig is built in this
@@ -262,6 +257,11 @@ pub struct AnimationState {
     /// How deep the character is wading, in [0, 1]: 0 dry, 1 with the water
     /// at its chest. Eased, so a wave does not jerk the arms.
     pub wade: f32,
+    /// Which foot was ahead when the legs last stepped, `1.0` for the left
+    /// and `-1.0` for the right: the one a flight's legs hang with ahead, so
+    /// a body leaves the ground and comes back to it in the stride it was
+    /// in.
+    pub air_lead: f32,
     /// A fall into the water still being recovered from.
     pub water_entry: Option<WaterEntry>,
     /// A jump out of the water still driving the body up.
@@ -307,13 +307,13 @@ impl AnimationState {
             facing: Vector3::new(0.0, 0.0, 1.0),
 
             is_grounded: false,
-            feet_flown: false,
 
             body_pitch: 0.0,
             velocity: Vector3::zeros(),
             water_surface: None,
             stroke_phase: 0.0,
             wade: 0.0,
+            air_lead: 1.0,
             water_entry: None,
             water_exit: None,
             landing: None,

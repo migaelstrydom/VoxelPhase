@@ -22,10 +22,6 @@ use nalgebra::{Point3, Vector2, Vector3};
 ///
 ///   World: feet were placed on the ground (standing, walking, landing)
 ///         body moves -> feet stay, which is what standing on a floor means
-///
-///   Flown: feet the foot placer swings through the air to a planned
-///         landing, in the world (a flight the traversal plan lands)
-///         body moves -> feet stay, as placed; but nothing is on a floor
 /// ```
 ///
 /// Translating the second kind is how a *planted* foot gets dragged across the
@@ -37,9 +33,6 @@ pub enum FootAnchor {
     Hips,
     /// Placed on the ground; leave where it is.
     World,
-    /// Placed in the world but in the air, swung toward a landing; leave
-    /// where it is, and blend into it as into hip-hung feet.
-    Flown,
 }
 
 /// Target positions for both feet.
@@ -86,7 +79,7 @@ impl PoseFragment {
     pub fn translated(&self, delta: Vector3<f32>) -> Self {
         Self {
             feet: self.feet.as_ref().map(|f| match f.anchor {
-                FootAnchor::World | FootAnchor::Flown => f.clone(),
+                FootAnchor::World => f.clone(),
                 FootAnchor::Hips => FeetPose {
                     left: f.left + delta,
                     right: f.right + delta,
@@ -214,9 +207,7 @@ fn lerp_point(a: &Point3<f32>, b: &Point3<f32>, t: f32) -> Point3<f32> {
 /// a tenth of a second of skate.
 ///
 /// The reverse (ground to air) still blends: feet leaving the floor are
-/// leaving it gradually, and that is a lift, not a skate. So does a blend
-/// into feet the placer is flying through the air: they are on no floor,
-/// and a pop there is only a pop.
+/// leaving it gradually, and that is a lift, not a skate.
 ///
 /// The result takes the target's anchor: the blend is turning `a` into `b`,
 /// so if it is itself snapshotted for a further blend it should behave as

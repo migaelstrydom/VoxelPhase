@@ -7,7 +7,8 @@ use nalgebra::{Point3, Vector3};
 use specs::{Component, VecStorage};
 
 use super::config::{CharacterRigConfig, GaitPreset};
-use super::foot_placer::{FlightLanding, FootPlacer, FootSide, LegMode, PlacerFoot, StepId};
+use super::foot_placer::{FootPlacer, FootSide, LegMode, PlacerFoot};
+use super::humanoid::foot_slew::FootSlew;
 use super::humanoid::hang::{FigureNow, Hang, LedgeReading};
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Stroke, Takeoff, TickCtx};
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
@@ -17,10 +18,10 @@ use super::legged::{LeggedLocomotion, LocomotionCtx};
 use super::pose::{Crossfade, Linear, PoseFragment};
 use super::state::{AnimationState, FootState, ThrowGesture, WaterEntry, WaterExit};
 use crate::character::grab::GrabConfig;
-use crate::character::locomotion::{Jump, JumpKind, TakeoffPhase};
+use crate::character::locomotion::{Hop, Jump, JumpKind, TakeoffPhase};
 use crate::character::{
-    ArmState, CharacterIntent, CharacterState, Foot, Grounding, Immersion, LocomotionState,
-    ThrowStroke, ThrowingHand,
+    ArmState, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionState, ThrowStroke,
+    ThrowingHand,
 };
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
@@ -40,6 +41,16 @@ const STROKE_LENGTH: f32 = 1.8;
 /// Slowest stroke rate, in cycles per second: treading water, or a crawl
 /// barely under way.
 const TREAD_RATE: f32 = 0.7;
+
+/// How long into any planned flight the legs go on striding, in seconds: as
+/// long as they do through an unplanned loss of contact, which ground
+/// forgiveness and grace carry as on foot (`LocomotionConfig`).
+const STRIDE_CARRIES: f32 = 0.16;
+
+/// The longest planned flight the legs stride through from takeoff to
+/// landing, in seconds: a hop up a step, a leap between planks, a run over a
+/// kerb. A longer one is a fall, and the legs hang through it.
+const LONGEST_STRIDDEN_FLIGHT: f32 = 0.45;
 
 /// Extra step height a wader lifts its feet by at chest depth, in metres.
 /// Striding through water is done knees high.
@@ -99,6 +110,9 @@ pub struct CharacterAnimator {
     /// two-legged rig; the humanoid on top of it is what this animator
     /// adds.
     pub locomotion: LeggedLocomotion,
+    /// The last word on where the feet are drawn: no faster against the
+    /// hips than feet move, whatever the gait, the pose or a blend asks.
+    foot_slew: FootSlew,
 
     // Mesh caching
     cached_vertices: Vec<Vertex>,
@@ -145,6 +159,7 @@ impl CharacterAnimator {
             upper_crossfade: None,
             descent: 0.0,
             locomotion,
+            foot_slew: FootSlew::default(),
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
         }
@@ -249,6 +264,7 @@ impl CharacterAnimator {
         // Tick the foot placer before sampling so the pose layer reads a
         // current foot position. Off the legs, the feet come from the
         // airborne and swimming samplers.
+        let legs = leg_mode(&character_state.locomotion);
         self.tick_locomotion(
             dt,
             pelvis_position,
@@ -257,30 +273,17 @@ impl CharacterAnimator {
             support_velocity,
             target,
             &new_pose,
-            leg_mode(&character_state.locomotion),
+            legs,
         );
-        let flown_before = self.state.feet_flown;
         mirror_placer_into_state(&mut self.state, self.locomotion.placer());
-        // Feet the placer starts or stops flying to a landing come from it
-        // or from the hips without the pose changing: blend between the two.
-        if self.state.feet_flown != flown_before {
-            let before = AnimationState {
-                feet_flown: flown_before,
-                ..self.state.clone()
-            };
-            let from = self.pose_state.sample(&SampleCtx {
-                rig: &self.config,
-                anim: &before,
-                velocity,
-            });
-            self.pose_crossfade = Some(Crossfade {
-                from,
-                from_pelvis: pelvis_position,
-                reach: self.config.leg_length(),
-                to_duration: TRANSITION_BLEND_DURATION,
-                elapsed: 0.0,
-                policy: Linear,
-            });
+        // The stride a flight's legs hang in is the one the legs last
+        // stepped in.
+        match legs {
+            LegMode::Step => {
+                let ahead = (self.state.left.position - self.state.right.position).dot(&facing);
+                self.state.air_lead = if ahead >= 0.0 { 1.0 } else { -1.0 };
+            }
+            LegMode::Off => {}
         }
 
         // Stride phase is derived directly from the placer's stepping
@@ -370,13 +373,26 @@ impl CharacterAnimator {
             None => fragment,
         };
         self.apply_fragment_to_state(&fragment);
-        // While the legs are off and the pose places the feet (a climber's on
-        // the top), the legs take them as they stand, to keep coming back on.
-        if let (PoseState::Hanging, Some(feet)) = (&self.pose_state, &fragment.feet) {
-            self.locomotion.hold_feet(feet.left, feet.right, yaw);
-        }
         self.skeleton
             .apply_fragment(&fragment, &self.state, &self.config);
+        let skeleton = &self.skeleton;
+        let [left, right] = self.foot_slew.limit(
+            [skeleton.left_hip, skeleton.right_hip],
+            [skeleton.left_foot, skeleton.right_foot],
+            dt,
+        );
+        self.skeleton
+            .place_feet(left, right, &self.state, &self.config);
+        // While the legs are off the pose draws the feet (a faller's under
+        // its hips, a climber's on the top), and the legs take them as
+        // drawn: coming back on, every foot is where it was last seen.
+        match legs {
+            LegMode::Off => {
+                self.locomotion
+                    .hold_feet(self.skeleton.left_foot, self.skeleton.right_foot, yaw)
+            }
+            LegMode::Step => {}
+        }
     }
 
     /// Advance legged locomotion in `mode`. Runs before pose sampling; its
@@ -733,7 +749,6 @@ fn airborne_ctx_for(pose: &PoseState) -> Option<(AirKind, Takeoff)> {
 fn mirror_placer_into_state(state: &mut AnimationState, placer: &FootPlacer) {
     copy_placer_foot(&mut state.left, &placer.left);
     copy_placer_foot(&mut state.right, &placer.right);
-    state.feet_flown = placer.flies_to_landing();
 }
 
 fn copy_placer_foot(foot: &mut FootState, placer: &PlacerFoot) {
@@ -772,20 +787,19 @@ fn map_upper_state(arm: &ArmState, state: &LocomotionState) -> UpperState {
     }
 }
 
-/// The legs' mode in `state`: the gait on foot, a Hop's feet flown onto its
-/// landing, and off in a jump, a fall or the water.
+/// The legs' mode in `state`: the gait on foot and through a Hop short
+/// enough to stride through, and off in any other flight, the water or a
+/// hang.
 fn leg_mode(state: &LocomotionState) -> LegMode {
     match state {
         LocomotionState::OnFoot(_) => LegMode::Step,
-        LocomotionState::Hop(hop) => LegMode::Fly(hop.landing.map(|landing| FlightLanding {
-            side: match landing.foot {
-                Foot::Left => FootSide::Left,
-                Foot::Right => FootSide::Right,
-            },
-            at: landing.at,
-            in_seconds: landing.in_seconds,
-            footfall: landing.footfall.map(StepId),
-        })),
+        LocomotionState::Hop(hop) => {
+            if strides_through(hop) {
+                LegMode::Step
+            } else {
+                LegMode::Off
+            }
+        }
         LocomotionState::Jump(_)
         | LocomotionState::Fall(_)
         | LocomotionState::Swim(_)
@@ -793,8 +807,21 @@ fn leg_mode(state: &LocomotionState) -> LegMode {
     }
 }
 
-/// The pose for `character`'s locomotion state: on foot by gait, a Hop's
-/// leap, a jump's wind-up and then its flight, a fall, a swim by stroke. A
+/// Whether the legs stride through `hop` as it stands: it has only just
+/// left the ground, or it comes down again within a stride or two of
+/// leaving it. The run goes on through a kerb, a step or a leap; a planned
+/// drop off a ledge is a fall like any other once it is under way.
+fn strides_through(hop: &Hop) -> bool {
+    let whole_flight = hop
+        .landing
+        .map(|landing| hop.flown + landing.in_seconds.max(0.0));
+    hop.flown <= STRIDE_CARRIES
+        || whole_flight.is_some_and(|flight| flight <= LONGEST_STRIDDEN_FLIGHT)
+}
+
+/// The pose for `character`'s locomotion state: on foot by gait, a Hop
+/// stridden through or hung through as the legs do ([`strides_through`]), a
+/// jump's wind-up and then its flight, a fall, a swim by stroke. A
 /// jump that leaves from the ground winds up first, for the wind-up's own
 /// duration, while it is still a Jump; one from grace is already in the air.
 /// A flight's kind and takeoff carry over from the pose before.
@@ -829,7 +856,16 @@ fn next_pose_state(
             };
             PoseState::Grounded { gait }
         }
-        LocomotionState::Hop(_) => PoseState::Hop { takeoff },
+        LocomotionState::Hop(hop) => {
+            if strides_through(&hop) {
+                PoseState::Hop { takeoff }
+            } else {
+                PoseState::Airborne {
+                    kind: AirKind::Leap,
+                    takeoff,
+                }
+            }
+        }
         LocomotionState::Jump(Jump { kind, phase, .. }) => match current {
             PoseState::Launching { .. } if !current.timer_expired() => current,
             PoseState::Launching { kind, takeoff, .. } | PoseState::Airborne { kind, takeoff } => {

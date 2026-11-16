@@ -2,6 +2,7 @@
 //! hanging from and climbing onto ledges.
 
 pub mod body_frame;
+pub mod foot_slew;
 pub mod gait;
 pub mod hang;
 pub mod pose_state;
@@ -11,6 +12,7 @@ pub mod throw;
 pub mod upper_state;
 
 pub use body_frame::BodyFrame;
+pub use foot_slew::FootSlew;
 pub use gait::GaitCycle;
 pub use hang::{FigureNow, Hang, HangPhase, LedgeReading};
 pub use pose_state::{

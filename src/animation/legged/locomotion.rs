@@ -247,8 +247,8 @@ impl LeggedLocomotion {
             .unwrap_or(pelvis.y - self.dims.standing_height)
     }
 
-    /// Aim each foot's probe for the next frame. Stepping or flying, at the
-    /// foot's anchor: while it swings, its committed landing, so the swing
+    /// Aim each foot's probe for the next frame. Stepping, at the foot's
+    /// anchor: while it swings, its committed landing, so the swing
     /// reads the terrain height where it will plant rather than where the
     /// foot hangs; planted, the anchor, so the foot tracks the surface
     /// beneath it. Off, straight down from the hip.
@@ -260,7 +260,7 @@ impl LeggedLocomotion {
             .map(|side| {
                 let hip = pelvis + right * (side.side_sign() * self.dims.hip_width);
                 let aim = match self.placer.mode() {
-                    LegMode::Step | LegMode::Fly(_) => self.foot(side).probe_anchor(),
+                    LegMode::Step => self.foot(side).probe_anchor(),
                     LegMode::Off => hip,
                 };
                 self.foot_probe(ground::probe_tag(side), hip, aim)

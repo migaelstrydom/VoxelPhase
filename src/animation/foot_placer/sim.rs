@@ -7,7 +7,7 @@
 use nalgebra::{Point3, Vector2, Vector3};
 
 use super::config::FootPlacerConfig;
-use super::mode::{FlightLanding, LegMode};
+use super::mode::LegMode;
 use super::placer::{angle_diff, facing_from_yaw, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
 use super::planned::PlannedSteps;
 
@@ -130,9 +130,8 @@ pub struct Frame {
     /// The cadence the placer planned this frame, which is what a
     /// measured gait has to be judged against.
     pub timing: Option<super::timing::GaitTiming>,
-    /// Whether the feet are drawn where the placer has them: on the
-    /// ground, or flown onto a plan's landing. Otherwise they hang from
-    /// the hips.
+    /// Whether the feet are drawn where the placer has them. Otherwise
+    /// they hang from the hips.
     pub feet_placed: bool,
     pub left: PlacerFoot,
     pub right: PlacerFoot,
@@ -320,7 +319,7 @@ pub fn simulate_planned(
 
         let planned = planned(f, pelvis, velocity);
         placer.set_mode(if suspend(f) {
-            flight_mode(&planned)
+            LegMode::Off
         } else {
             LegMode::Step
         });
@@ -356,7 +355,7 @@ pub fn simulate_planned(
             yaw,
             gait_phase: placer.gait_phase(),
             timing: placer.timing(),
-            feet_placed: !placer.is_suspended() || placer.flies_to_landing(),
+            feet_placed: !placer.is_suspended(),
             left: placer.left.clone(),
             right: placer.right.clone(),
         });
@@ -390,21 +389,4 @@ pub fn takeoffs(frames: &[Frame]) -> Vec<(FootSide, usize)> {
         }
     }
     events
-}
-
-/// The legs' mode a suspended frame is in: a flight onto the planned step
-/// that lands one, as a Hop flies onto its landing, or off.
-fn flight_mode(planned: &PlannedSteps) -> LegMode {
-    [FootSide::Left, FootSide::Right]
-        .into_iter()
-        .find_map(|side| {
-            let step = planned.of(side)?;
-            Some(FlightLanding {
-                side,
-                at: step.at,
-                in_seconds: step.landing?,
-                footfall: step.id,
-            })
-        })
-        .map_or(LegMode::Off, |landing| LegMode::Fly(Some(landing)))
 }

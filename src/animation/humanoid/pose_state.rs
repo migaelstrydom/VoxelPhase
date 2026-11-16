@@ -163,8 +163,8 @@ pub enum PoseState {
         takeoff: Takeoff,
         t: f32,
     },
-    /// A planned hop's leap. The legs are the foot placer's: the feet it
-    /// flies onto the landing are drawn where it has them, as on the ground.
+    /// A planned hop the legs stride through: the feet are the foot placer's,
+    /// drawn where it has them, as on the ground.
     Hop { takeoff: Takeoff },
     /// In the air after a jump's wind-up, or falling: the legs hang from the
     /// hips.
@@ -251,14 +251,12 @@ impl PoseState {
                 }
             }
             PoseState::Launching { kind, t, .. } => sample_launching(ctx, *kind, *t),
-            PoseState::Hop { takeoff } => {
-                sample_airborne(ctx, AirKind::Leap, *takeoff, ctx.anim.feet_flown)
-            }
-            PoseState::Airborne { kind, takeoff } => sample_airborne(ctx, *kind, *takeoff, false),
+            PoseState::Hop { .. } => sample_striding_hop(ctx),
+            PoseState::Airborne { kind, takeoff } => sample_airborne(ctx, *kind, *takeoff),
             PoseState::Swimming { stroke } => sample_swimming(ctx, *stroke),
             PoseState::Hanging => match &ctx.anim.hang {
                 Some(hang) => hang::sample_hanging(hang, ctx.anim, ctx.rig),
-                None => sample_airborne(ctx, AirKind::Fall, Takeoff::default(), false),
+                None => sample_airborne(ctx, AirKind::Fall, Takeoff::default()),
             },
         }
     }
@@ -405,22 +403,15 @@ pub fn wade_lean(wade: f32) -> f32 {
     MAX_LEAN * wade.clamp(0.0, 1.0)
 }
 
-/// Airborne pose varies by `AirKind`:
+/// Airborne pose varies by `AirKind`, the legs hung in a stride opened by
+/// the body's speed over the ground (but for a long jump's):
 /// - `Jump`: tucked legs, small forward torso lean, neutral head.
 /// - `LongJump`: legs slightly extended forward along takeoff facing, body
 ///   committed forward, head pitched down.
-/// - `Leap`: a hop's, legs as `Jump`'s.
+/// - `Leap`: a planned hop too long to stride through, legs as `Jump`'s.
 /// - `Fall`: dangly legs, slight backward head tilt (arms handled by
 ///   `UpperState::Braced`).
-///
-/// With `flown`, the foot placer is swinging the feet onto the flight's
-/// landing, and they are drawn where it has them, as on the ground.
-fn sample_airborne(
-    ctx: &SampleCtx<'_>,
-    kind: AirKind,
-    takeoff: Takeoff,
-    flown: bool,
-) -> PoseFragment {
+fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> PoseFragment {
     let rig = ctx.rig;
     let anim = ctx.anim;
     let right = anim.facing.cross(&Vector3::y());
@@ -433,6 +424,18 @@ fn sample_airborne(
         AirKind::Leap => (0.9, 0.0, 0.12, Vector2::new(0.03, 0.0)),
         AirKind::Fall => (0.85, 0.0, -0.05, Vector2::new(-0.05, 0.0)),
     };
+
+    // Legs hang in the stride the body left the ground in, opened by its
+    // speed over the ground: a running fall comes down one foot ahead of the
+    // other, as a run lands, and a standing one with its feet together.
+    let speed = Vector2::new(ctx.velocity.x, ctx.velocity.z).magnitude();
+    let stride = match kind {
+        AirKind::LongJump => 0.0,
+        AirKind::Jump | AirKind::Leap | AirKind::Fall => {
+            AIR_STRIDE * smoothstep(AIR_STRIDE_FROM, AIR_STRIDE_FULL, speed) * anim.air_lead
+        }
+    };
+    let ahead = anim.facing * stride;
 
     let hang_distance = rig.standing_height() * hang_factor;
     let forward = match kind {
@@ -447,26 +450,18 @@ fn sample_airborne(
     };
     let foot_push = forward * feet_forward;
 
-    let feet = if flown {
-        FeetPose {
-            left: anim.left.position,
-            right: anim.right.position,
-            anchor: FootAnchor::Flown,
-        }
-    } else {
-        FeetPose {
-            left: Point3::new(
-                left_hip.x + foot_push.x,
-                anim.pelvis_position.y - hang_distance,
-                left_hip.z + foot_push.z,
-            ),
-            right: Point3::new(
-                right_hip.x + foot_push.x,
-                anim.pelvis_position.y - hang_distance,
-                right_hip.z + foot_push.z,
-            ),
-            anchor: FootAnchor::Hips,
-        }
+    let feet = FeetPose {
+        left: Point3::new(
+            left_hip.x + foot_push.x + ahead.x,
+            anim.pelvis_position.y - hang_distance,
+            left_hip.z + foot_push.z + ahead.z,
+        ),
+        right: Point3::new(
+            right_hip.x + foot_push.x - ahead.x,
+            anim.pelvis_position.y - hang_distance,
+            right_hip.z + foot_push.z - ahead.z,
+        ),
+        anchor: FootAnchor::Hips,
     };
 
     let fragment = PoseFragment {
@@ -479,8 +474,36 @@ fn sample_airborne(
         torso_pitch: Some(torso_pitch),
     };
     match anim.water_exit {
-        Some(exit) if !flown => kicked_out(ctx, fragment, &exit),
-        _ => fragment,
+        Some(exit) => kicked_out(ctx, fragment, &exit),
+        None => fragment,
+    }
+}
+
+/// How far ahead of its hip the leading foot hangs through a flight at
+/// speed, and the trailing one behind, in metres.
+const AIR_STRIDE: f32 = 0.12;
+/// The speed over the ground at which a flight's legs begin to open into a
+/// stride, in m/s.
+const AIR_STRIDE_FROM: f32 = 1.0;
+/// The speed at which they hang at the full [`AIR_STRIDE`], in m/s.
+const AIR_STRIDE_FULL: f32 = 5.0;
+
+/// A hop the legs stride through: the feet where the foot placer has them,
+/// as walking, under a trunk leant into the leap.
+fn sample_striding_hop(ctx: &SampleCtx<'_>) -> PoseFragment {
+    let anim = ctx.anim;
+    PoseFragment {
+        feet: Some(FeetPose {
+            left: anim.left.position,
+            right: anim.right.position,
+            anchor: FootAnchor::World,
+        }),
+        hands: None,
+        pelvis_offset: None,
+        shoulder_twist: None,
+        head_tilt: Some(Vector2::new(0.03, 0.0)),
+        head_bob: Some(0.0),
+        torso_pitch: Some(0.12),
     }
 }
 

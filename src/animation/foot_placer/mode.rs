@@ -1,41 +1,19 @@
-use std::mem::discriminant;
-
-use nalgebra::Point3;
-
-use super::placer::FootSide;
-use super::planned::StepId;
-
-/// What the legs do: the one thing that tells them whether the body has left
-/// the ground. The caller maps its own state to it (a character's locomotion
-/// state, a creature's grounding); the legs never decide it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// What the legs do: the one thing that tells them whether they have ground
+/// to answer to. The caller maps its own state to it (a character's
+/// locomotion state, a creature's grounding); the legs never decide it.
+///
+/// There is no mode for a flight. A foot holds a place in the world only
+/// while the body is over ground it can stand on; carried through a flight,
+/// a place left behind or one not yet reached is a leg drawn pointing at it.
+/// A flight short enough to stride through stays `Step`, where a foot with
+/// nowhere to land gathers under its hip; any other is `Off`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LegMode {
     /// The gait: clock, swings, capture point, a plan's footfalls if it has
     /// any.
     Step,
-    /// A flight the plan took off on: the landing foot swings onto
-    /// `landing`, the other trails. With no landing the feet are held.
-    Fly(Option<FlightLanding>),
-    /// Nothing under the body the legs answer to: the pose draws the legs.
+    /// Nothing under the body the legs answer to: the pose draws the legs,
+    /// and may hand the feet back as it draws them
+    /// ([`FootPlacer::hold_feet`](super::FootPlacer::hold_feet)).
     Off,
-}
-
-impl LegMode {
-    /// Whether `other` is the same mode, whatever it carries.
-    pub fn same_as(&self, other: &Self) -> bool {
-        discriminant(self) == discriminant(other)
-    }
-}
-
-/// Where a flight comes down: the foot that lands it, where, and when.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FlightLanding {
-    pub side: FootSide,
-    /// Where that foot lands, in the world: the sole's contact point.
-    pub at: Point3<f32>,
-    /// Seconds from the start of the frame until it lands.
-    pub in_seconds: f32,
-    /// The plan's name for the footfall, handed back when the foot lands on
-    /// it.
-    pub footfall: Option<StepId>,
 }

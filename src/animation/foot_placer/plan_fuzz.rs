@@ -48,7 +48,8 @@ enum Mode {
     /// Each foot given the other's footfall.
     Swapped,
     /// The body in the air, its landing handed between the feet, or gone
-    /// from the plan before it comes down.
+    /// from the plan before it comes down. The legs stride through it or go
+    /// off for it.
     Flight,
 }
 
@@ -252,16 +253,21 @@ impl Planner {
                 if self.withdrawn {
                     return PlannedSteps::default();
                 }
+                // The landing passes from foot to foot: the other foot's
+                // step is withdrawn while it does.
                 if self.rng.next() < 0.5 {
                     self.landing_foot = 1 - self.landing_foot;
                 }
                 let lands_in = (window.lands - f) as f32 / FPS;
-                let mut steps = [step(self.fixed[0]), step(self.fixed[1])];
+                let mut steps = [None, None];
                 steps[self.landing_foot] = Some(PlannedStep {
                     id: None,
                     at: self.fixed[self.landing_foot],
                     landing: Some(lands_in),
                 });
+                if self.rng.next() < 0.5 {
+                    steps[1 - self.landing_foot] = step(self.fixed[1 - self.landing_foot]);
+                }
                 PlannedSteps {
                     left: steps[0],
                     right: steps[1],
@@ -285,7 +291,11 @@ fn run(seed: u64, planned: bool) -> (Script, Vec<Frame>) {
             let (velocity, yaw) = script.inputs[f];
             Input::moving(velocity, yaw)
         },
-        |f| script.window(f).mode == Mode::Flight,
+        // Every other flight is too long to stride through: the legs go off.
+        |f| {
+            let window = script.window(f);
+            window.mode == Mode::Flight && window.start % 2 == 0
+        },
         |f, _, _| planner.steps(&script, f),
     );
     (script, frames)

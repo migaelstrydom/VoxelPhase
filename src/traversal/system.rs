@@ -2,7 +2,7 @@ use std::path::Path;
 
 use nalgebra::{Point3, Vector3};
 use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
-use traversal_planner::plan::{Limb, Motion};
+use traversal_planner::plan::{Limb, Motion, Plan};
 use traversal_planner::section::{SectionQuery, StripLayout, StripQuery};
 use traversal_planner::{GaitParams, PathVec, PlannerSettings};
 use winit::keyboard::KeyCode;
@@ -345,9 +345,10 @@ fn name_plant(frame: &PlanFrame, legs: &Legs, animator: &mut CharacterAnimator) 
     }
 }
 
-/// Where `frame`'s plan lands each foot next, in the world. The foot
-/// `landing_late` lands where the plan already stands it: handing it its
-/// footfall after would turn it in mid-swing.
+/// Where `frame`'s plan lands each foot next, in the world, and when where
+/// a flight comes before it: the legs time every other step themselves. The
+/// foot `landing_late` lands where the plan already stands it: handing it
+/// its footfall after would turn it in mid-swing.
 fn planned_steps(frame: &PlanFrame, landing_late: Option<Limb>) -> PlannedSteps {
     let plan = frame.plan();
     let next = |limb: Limb| {
@@ -365,7 +366,7 @@ fn planned_steps(frame: &PlanFrame, landing_late: Option<Limb>) -> PlannedSteps 
                 .map(|(time, contact)| PlannedStep {
                     id: contact.footfall.map(step_id),
                     at: frame.frame.world_point(contact.at),
-                    landing: plan.lands_a_flight(time).then_some(time),
+                    landing: follows_a_flight(plan, time).then_some(time),
                 })
         })
     };
@@ -373,6 +374,15 @@ fn planned_steps(frame: &PlanFrame, landing_late: Option<Limb>) -> PlannedSteps 
         left: next(Limb::LeftFoot),
         right: next(Limb::RightFoot),
     }
+}
+
+/// Whether one of `plan`'s flights, under way or still to come, starts
+/// before `time` seconds in: a footfall at `time` is that flight's landing
+/// or follows it.
+fn follows_a_flight(plan: &Plan, time: f32) -> bool {
+    plan.phases
+        .iter()
+        .any(|phase| matches!(phase.motion, Motion::Flight { .. }) && phase.start < time)
 }
 
 /// The plan in the world: the body's path (dashed in flight by its gaps) and

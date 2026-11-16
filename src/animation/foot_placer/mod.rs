@@ -31,7 +31,7 @@ mod sim;
 mod trace;
 
 pub use config::FootPlacerConfig;
-pub use mode::{FlightLanding, LegMode};
+pub use mode::LegMode;
 pub(crate) use placer::{floor_height_at, is_floor};
 pub use placer::{FootPhase, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
 pub use planned::{PlannedStep, PlannedSteps, StepId};

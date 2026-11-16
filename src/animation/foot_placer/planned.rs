@@ -10,9 +10,11 @@ pub struct PlannedStep {
     pub id: Option<StepId>,
     /// The landing, in the world: the sole's contact point.
     pub at: Point3<f32>,
-    /// Seconds from the start of the frame until the body comes down on
-    /// it, where the step ends a flight: the foot lands as the body does.
-    /// `None` where the legs step onto it on their own clock.
+    /// Seconds from the start of the frame until the body comes over it,
+    /// where a flight comes before it: a flight's landing, and the footfall
+    /// the foot that pushed off comes down on after it. The foot lands as
+    /// the body gets there. `None` where the legs step onto it on their own
+    /// clock, as they do every step on the ground.
     pub landing: Option<f32>,
 }
 
@@ -22,8 +24,10 @@ pub struct PlannedStep {
 pub struct StepId(pub u32);
 
 /// Where a plan has each foot land next. A foot with a planned step lands
-/// on it rather than where the capture point would put it, lifting on the
-/// gait's own clock; one without steps as the capture point has it.
+/// on it rather than where the capture point would put it, if the body is
+/// coming to where the leg can ([`PlannedStep::landing`] aside, the plan
+/// says where and the legs say when: a foot lifts on the gait's own clock).
+/// A foot without one steps as the capture point has it.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlannedSteps {
     pub left: Option<PlannedStep>,

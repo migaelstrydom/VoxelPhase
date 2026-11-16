@@ -129,6 +129,21 @@ impl Skeleton {
         self.apply_fragment(&PoseFragment::default(), state, config);
     }
 
+    /// Move the feet to `left` and `right`, each held to its leg's length,
+    /// and bend the knees to them: for a caller that has the last word on
+    /// where the feet are drawn after [`Self::apply_fragment`].
+    pub fn place_feet(
+        &mut self,
+        left: Point3<f32>,
+        right: Point3<f32>,
+        state: &AnimationState,
+        config: &CharacterRigConfig,
+    ) {
+        self.left_foot = within_reach(self.left_hip, left, config.leg_length());
+        self.right_foot = within_reach(self.right_hip, right, config.leg_length());
+        self.solve_knee_ik(&BodyFrame::new(state.facing, state.body_pitch), config);
+    }
+
     /// Update skeleton from a pose fragment, falling back to `state` for any
     /// channel the fragment leaves `None`. This is the single render-path
     /// entry point: all pose data flows through a `PoseFragment`.
