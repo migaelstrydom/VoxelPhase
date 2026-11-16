@@ -168,11 +168,10 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
                             let y = iy as f32 * step;
                             let density = column.density_at(y, step);
                             if y < column.height {
-                                let depth = top_voxel_y - y;
                                 let material = if y <= floor_y + terrain.bedrock_thickness {
                                     VoxelMaterial::Bedrock
                                 } else {
-                                    column.material_at(y, depth, step)
+                                    column.material_at(y, step)
                                 };
                                 let mut voxel = Voxel::solid(material);
                                 // Near the surface, the SDF density lands
@@ -208,7 +207,8 @@ struct Column<'a> {
     /// Index of the topmost partial-air voxel above the surface.
     air_top: i32,
     /// Vertical metres per metre of distance from the surface:
-    /// `sqrt(1 + slope²)` with `Terrain::smooth_slopes`, else 1.
+    /// `sqrt(1 + slope²)` with `Terrain::smooth_slopes`, else 1, where the
+    /// slope is the one the column's own surface keeps (`encoded_slope`).
     stretch: f32,
     /// The layers the column is laid with.
     layers: &'a [MaterialLayer],
@@ -218,6 +218,13 @@ struct Column<'a> {
     /// The lowest neighbouring surface. The column's voxels above it are
     /// exposed on that side, on the face of the drop.
     face_below: f32,
+    /// Height of the voxel that depth is measured down from: the column's own
+    /// top voxel, or the top voxel of the sheer face it lies under
+    /// (`face_top`).
+    depth_origin: f32,
+    /// Whether the column lies under the top of a sheer face, every voxel of
+    /// it on that face, its top one included.
+    under_face: bool,
 }
 
 impl<'a> Column<'a> {
@@ -237,18 +244,28 @@ impl<'a> Column<'a> {
             None
         };
         let slope = neighbours.map_or(0.0, |around| surface_slope(&around, step));
-        let stretch = if terrain.smooth_slopes {
-            slope.hypot(1.0)
-        } else {
-            1.0
+        let stretch = match neighbours {
+            Some(around) if terrain.smooth_slopes => {
+                encoded_slope(height, &around, step).hypot(1.0)
+            }
+            _ => 1.0,
         };
-        let top = (((height / step).ceil() as i32) - 1).max(iy0);
+        let top = top_voxel_index(height, step).max(iy0);
         // The last lattice plane within one voxel's distance above the surface.
         let air_top = ((((height + step * stretch) / step).ceil() as i32) - 1).max(top + 1);
         let layers = surface_layers(height, slope, terrain);
         let face_below =
             neighbours.map_or(height, |around| around.into_iter().fold(height, f32::min));
         let face_slope = (height - face_below) / step;
+        // A rise or drop is a face where it is a wall, and deeper than the top
+        // layer, which then could not show on it.
+        let sheer = layers
+            .first()
+            .map_or(1.0, |layer| layer.depth)
+            .max(WALL_SLOPE * step);
+        let face_above = neighbours
+            .filter(|_| height - face_below >= sheer)
+            .and_then(|around| face_top(x, z, height, around, step, sheer, terrain));
         Self {
             height,
             top,
@@ -257,10 +274,12 @@ impl<'a> Column<'a> {
             layers,
             face_layers: surface_layers(height, face_slope.max(slope), terrain),
             face_below,
+            depth_origin: top_voxel_index(face_above.unwrap_or(height), step) as f32 * step,
+            under_face: face_above.is_some(),
         }
     }
 
-    /// The material `depth` below the column's top voxel, at height `y`.
+    /// The material at height `y`, by its depth below `depth_origin`.
     ///
     /// Where the column stands above a neighbour, its side is bared down to
     /// that neighbour's surface, and that side is a face as steep as the drop.
@@ -270,8 +289,14 @@ impl<'a> Column<'a> {
     /// running across the lattice those columns alternate, hanging teeth of
     /// turf down the cliff. The top voxel keeps the column's own material,
     /// so the turf still runs to the edge.
-    fn material_at(&self, y: f32, depth: f32, step: f32) -> VoxelMaterial {
-        let on_face = depth >= step && y > self.face_below;
+    ///
+    /// A column under the top of a sheer face is all face, and its depth runs
+    /// from the top of the face: measured from its own top, each column down a
+    /// face only a few voxels wide began its layers again, and a ramp's flank
+    /// wore stripes of turf and soil parallel to the ramp.
+    fn material_at(&self, y: f32, step: f32) -> VoxelMaterial {
+        let depth = self.depth_origin - y;
+        let on_face = self.under_face || (depth >= step && y > self.face_below);
         material_at_depth(
             depth,
             if on_face {
@@ -325,14 +350,83 @@ fn surface_layers(height: f32, slope: f32, terrain: &Terrain) -> &[MaterialLayer
         .map_or(&terrain.material_layers, |band| &band.layers)
 }
 
-/// Heights of the heightfield a voxel away from (x, z): +x, -x, +z, -z.
+/// Index of the topmost voxel strictly below a surface at `height`.
+fn top_voxel_index(height: f32, step: f32) -> i32 {
+    ((height / step).ceil() as i32) - 1
+}
+
+/// Directions of a column's neighbours, in voxels: +x, -x, +z, -z.
+const NEIGHBOUR_OFFSETS: [(f32, f32); 4] = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
+
+/// Heights of the heightfield a voxel away from (x, z), in the order of
+/// [`NEIGHBOUR_OFFSETS`].
 fn neighbour_heights(x: f32, z: f32, step: f32, terrain: &Terrain) -> [f32; 4] {
-    [
-        height_at(x + step, z, terrain),
-        height_at(x - step, z, terrain),
-        height_at(x, z + step, terrain),
-        height_at(x, z - step, terrain),
-    ]
+    NEIGHBOUR_OFFSETS.map(|(dx, dz)| height_at(x + dx * step, z + dz * step, terrain))
+}
+
+/// Slope, rise over run, from which a drop between neighbouring columns is a
+/// wall rather than a hillside: a hill's flank keeps each column's own layers.
+const WALL_SLOPE: f32 = 3.0;
+
+/// Most voxels `face_top` climbs looking for the top of a face.
+const FACE_REACH: usize = 16;
+
+/// The top of the sheer face over a column at (x, z), if it lies under one:
+/// climbing to the highest neighbour while each rises at least `sheer`. None
+/// where no neighbour rises that far.
+fn face_top(
+    x: f32,
+    z: f32,
+    height: f32,
+    around: [f32; 4],
+    step: f32,
+    sheer: f32,
+    terrain: &Terrain,
+) -> Option<f32> {
+    let (mut x, mut z, mut top, mut around) = (x, z, height, around);
+    let mut climbed = false;
+    for _ in 0..FACE_REACH {
+        let (uphill, highest) =
+            around
+                .into_iter()
+                .enumerate()
+                .fold(
+                    (0, f32::MIN),
+                    |best, (i, h)| if h > best.1 { (i, h) } else { best },
+                );
+        if highest - top < sheer {
+            break;
+        }
+        let (dx, dz) = NEIGHBOUR_OFFSETS[uphill];
+        x += dx * step;
+        z += dz * step;
+        top = highest;
+        climbed = true;
+        around = neighbour_heights(x, z, step, terrain);
+    }
+    climbed.then_some(top)
+}
+
+/// The slope a column's own surface keeps, for its encoding: along each axis
+/// the gentler of its two sides, and none where they fall opposite ways.
+///
+/// On an even slope that is the slope. At a brink it is the flat side's: the
+/// last column of a plateau above a sheer drop is not on a slope, and encoded
+/// as one (a stretch of 16 over an 8 m wall of 0.25 m voxels) its density
+/// barely changed with height beside a neighbour's that changed fully, and
+/// the gradient normals along the rim swung back into the plateau and drew a
+/// black line down its edge.
+fn encoded_slope(height: f32, around: &[f32; 4], step: f32) -> f32 {
+    let axis = |ahead: f32, behind: f32| {
+        let rise_ahead = ahead - height;
+        let rise_behind = height - behind;
+        if rise_ahead * rise_behind <= 0.0 {
+            0.0
+        } else {
+            rise_ahead.abs().min(rise_behind.abs())
+        }
+    };
+    axis(around[0], around[1]).hypot(axis(around[2], around[3])) / step
 }
 
 /// Steepness of the heightfield, rise over run, from the heights a voxel away
@@ -1603,6 +1697,89 @@ mod tests {
             }],
             volumes: Vec::new(),
         }
+    }
+
+    /// A ramp standing 6.55 m over open ground at its high end, its flank a
+    /// sheer drop a few 0.25 m columns wide, laid grass over dirt over rock.
+    fn sheer_ramp() -> Terrain {
+        Terrain {
+            bedrock_thickness: 0.0,
+            voxel_size: 0.25,
+            bounds: Extent {
+                min: (0.0, 0.0, -4.0),
+                max: (16.0, 8.0, 4.0),
+            },
+            base_height: 0.0,
+            material_layers: [
+                (1.0, VoxelMaterialId::Grass),
+                (4.0, VoxelMaterialId::Dirt),
+                (999.0, VoxelMaterialId::Rock),
+            ]
+            .into_iter()
+            .map(|(depth, material)| MaterialLayer { depth, material })
+            .collect(),
+            surface_bands: Vec::new(),
+            smooth_slopes: true,
+            features: vec![TerrainFeature::Ramp {
+                from: (7.0, 0.0),
+                to: (13.0, 0.0),
+                start_height: 0.0,
+                end_height: 7.15,
+                width: 5.0,
+                flat_width: 4.0,
+            }],
+            volumes: Vec::new(),
+        }
+    }
+
+    /// A column partway down a sheer flank takes its layers from the top of
+    /// the flank, not from its own top: laid from its own, it began with turf
+    /// again, and the flank wore stripes of turf and soil along the ramp.
+    #[test]
+    fn a_sheer_flank_is_laid_from_its_top() {
+        let terrain = sheer_ramp();
+        let step = terrain.voxel_size;
+        let bounds = AABB::new(Point3::new(0.0, 0.0, -4.0), Point3::new(16.0, 8.0, 4.0));
+        let mut grid = ChunkGrid::new(step);
+        generate_terrain(&mut grid, &terrain, &bounds);
+
+        let top_material = |x: f32, z: f32| {
+            let height = debias_height(height_at(x, z, &terrain), step);
+            let y = top_voxel_index(height, step) as f32 * step;
+            (height, grid.get(Point3::new(x, y, z)).material)
+        };
+        // The flank's top column, where the flat run ends.
+        let (brink, at_brink) = top_material(12.5, 2.0);
+        // The next column out, partway down the drop.
+        let (partway, below_brink) = top_material(12.5, 2.25);
+        assert!(
+            brink - partway > 1.0 && partway > 1.0,
+            "expected a sheer flank: brink {brink}, partway {partway}"
+        );
+        assert_eq!(at_brink, VoxelMaterial::Grass, "the turf runs to the brink");
+        assert_eq!(
+            below_brink,
+            VoxelMaterial::Dirt,
+            "{:.2} m below the brink is soil, not turf",
+            brink - partway
+        );
+    }
+
+    /// A column flat on one side is not on a slope, and encodes no stretch:
+    /// a plateau's last column above a sheer drop once took the drop's
+    /// stretch, and its rim's normals swung back into the plateau.
+    #[test]
+    fn a_brink_or_a_foot_is_encoded_straight_down() {
+        let step = 0.25;
+        // +x, -x, +z, -z: the plateau inward, the drop outward.
+        assert_eq!(encoded_slope(8.0, &[8.0, 0.0, 8.0, 8.0], step), 0.0);
+        // The ground at the wall's foot.
+        assert_eq!(encoded_slope(0.0, &[8.0, 0.0, 0.0, 0.0], step), 0.0);
+        // A ridge falls both ways and is no slope either.
+        assert_eq!(encoded_slope(1.0, &[0.5, 0.5, 1.0, 1.0], step), 0.0);
+        // An even slope keeps its slope, and a bending one the gentler side's.
+        assert_eq!(encoded_slope(1.0, &[1.5, 0.5, 1.0, 1.0], step), 2.0);
+        assert_eq!(encoded_slope(1.0, &[1.25, 0.0, 1.0, 1.0], step), 1.0);
     }
 
     /// No soil below a column's top voxel opens onto a cliff. The last column

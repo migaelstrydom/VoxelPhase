@@ -247,9 +247,9 @@ pub struct Terrain {
     pub surface_bands: Vec<SurfaceBand>,
     /// Encode the heightfield's surface by its distance across the slope
     /// rather than straight down, so slopes steeper than one in one mesh as
-    /// smooth faces instead of half-voxel steps. A plateau's wall then leans
-    /// across the voxel at its edge instead of standing at its middle. On
-    /// unless a level turns it off.
+    /// smooth faces instead of half-voxel steps. A column flat on one side, at
+    /// a brink or a wall's foot, is not on a slope and is encoded straight
+    /// down. On unless a level turns it off.
     #[serde(default = "default_smooth_slopes")]
     pub smooth_slopes: bool,
     /// Thickness of the indestructible bedrock band at the bottom of `bounds`.
