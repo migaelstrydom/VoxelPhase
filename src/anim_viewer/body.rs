@@ -146,6 +146,7 @@ impl Body {
                 immersion: Immersion::dry(),
                 position: self.position,
                 velocity: self.velocity,
+                tilt: 0.0,
                 // No plan takes off here, and nothing else reads it.
                 since_contact: 0.0,
             },

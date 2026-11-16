@@ -25,6 +25,8 @@ pub struct Facts {
     pub position: Point3<f32>,
     /// The body's velocity, in m/s.
     pub velocity: Vector3<f32>,
+    /// How far the body's axis leans off upright, in radians.
+    pub tilt: f32,
     /// Seconds since the contacts last held the body up, forgiven or not;
     /// zero in contact.
     pub since_contact: f32,

@@ -58,6 +58,7 @@ fn frame(grounded: bool) -> Frame {
             immersion: Immersion::dry(),
             position: CENTRE,
             velocity: Vector3::zeros(),
+            tilt: 0.0,
             since_contact: 0.0,
         },
         requests: Requests::default(),
@@ -419,5 +420,22 @@ fn a_hanger_whose_feet_find_the_ground_stands() {
             Some(LedgePhase::PullUp { .. })
         ),
         "a pull-up meets the top with its feet and carries on"
+    );
+}
+
+#[test]
+fn a_swimmer_still_standing_up_from_its_stroke_is_not_stood_up_by_its_side() {
+    let mut leaning = air().edge(hang_lip());
+    leaning.facts.grounded = true;
+    leaning.facts.tilt = 75.0f32.to_radians();
+    let caught = ledge(hang_lip(), LedgePhase::Grab { elapsed: 0.1 });
+    assert!(
+        matches!(advance(caught, leaning).0, LocomotionState::Ledge(_)),
+        "a contact along its side is not ground under its feet"
+    );
+    leaning.facts.tilt = (config().stand_tilt_degrees - 1.0).to_radians();
+    assert_eq!(
+        advance(caught, leaning).0,
+        LocomotionState::OnFoot(OnFoot::default())
     );
 }

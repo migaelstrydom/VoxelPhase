@@ -51,6 +51,12 @@ pub struct LedgeConfig {
 
     /// Seconds after a catch that the stick is ignored.
     pub settle: f32,
+    /// Most a hanger may lean off upright, in degrees, for the ground it
+    /// touches to be under its feet. Leaning further (a swimmer still
+    /// standing up from its stroke), a contact along its side holds it up as
+    /// ground would: the physics counts as support a contact up to 60° off
+    /// vertical, which a capsule's side meets once it leans past 30°.
+    pub stand_tilt_degrees: f32,
     /// Seconds the stick must be held towards or away from the face before
     /// a pull-up or a drop commits.
     pub commit_hold: f32,
@@ -118,6 +124,7 @@ impl Default for LedgeConfig {
             catch_facing_degrees: 60.0,
             regrab_lock: 0.3,
             settle: 0.3,
+            stand_tilt_degrees: 30.0,
             commit_hold: 0.2,
             lean_cone_degrees: 45.0,
             stick_dead_zone: 0.3,

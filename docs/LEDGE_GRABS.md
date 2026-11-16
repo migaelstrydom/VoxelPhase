@@ -404,9 +404,14 @@ pull-up rising at 4 m/s now reports 4.2.
   hands are: each frame the sensor finds the lip again, which gives its
   height, face and way out, and the state keeps its own place along it
   (`Edge::held_along`). Re-centred on the body instead, the hands would
-  follow it as it drifts behind a moving edge, and slip along the lip. Each
-  frame the sensor tests the edge `shimmy_probe` (0.1 m) either way. Where
-  it fails (a corner, the end of the lip, a gap), the hands stop.
+  follow it as it drifts behind a moving edge, and slip along the lip. The
+  sensor feels for it facing the face from the body's distance and height,
+  but moved along the lip to under the hands. An edge caught aslant (a
+  swimmer's stroke meeting a block's face at an angle) can lie 0.4 m to one
+  side of the body's centre, and felt for from there one hand missed a
+  short lip. Each frame the sensor tests the edge `shimmy_probe` (0.1 m)
+  either way from there. Where it fails (a corner, the end of the lip, a
+  gap), the hands stop.
 - **PullUp.** The anchor moves along a lift path:
   - first up, until the capsule's bottom is `lip_clearance` (3 cm) above the
     lip, keeping `face_gap` off the face;
@@ -422,6 +427,12 @@ pull-up rising at 4 m/s now reports 4.2.
   the top, its contacts ground it, and the state is OnFoot.
 - **Leaving.** Drop, back-jump or a lost edge removes the joint, and the body
   leaves with the velocity it has. On a platform, that is the platform's.
+  Ground come up to the feet (a platform lowering its hanger) stands the
+  body up, but only while it leans less than `stand_tilt_degrees` (30°) off
+  upright. The physics counts a contact up to 60° off vertical as support,
+  which a capsule's side meets once it leans past 30°, so a swimmer still
+  standing up from its stroke, its side against a slope, would otherwise
+  be stood up mid-catch.
 
 **Bodies too light to hold.** An edge on a moving body lighter than
 `bearing_mass_ratio` (3) times the hanger is not sensed (`probe::bears`).

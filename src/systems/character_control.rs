@@ -144,6 +144,7 @@ impl<'a> System<'a> for CharacterControlSystem {
                     immersion,
                     position: Point3::from(pos.0),
                     velocity: motion.linear,
+                    tilt: (rotation.0 * Vector3::y()).y.clamp(-1.0, 1.0).acos(),
                     since_contact: state.conditioning.since_contact(),
                 },
                 requests,

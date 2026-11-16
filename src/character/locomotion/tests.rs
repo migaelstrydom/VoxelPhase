@@ -20,6 +20,7 @@ fn ground() -> Frame {
             immersion: Immersion::dry(),
             position: Point3::new(0.0, 0.5, 0.0),
             velocity: Vector3::zeros(),
+            tilt: 0.0,
             since_contact: 0.0,
         },
         requests: Requests::default(),

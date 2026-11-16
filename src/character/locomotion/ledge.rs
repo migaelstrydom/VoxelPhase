@@ -109,7 +109,8 @@ impl Ledge {
 
     /// The edge lost: a Fall. A pull-up runs its course to OnFoot. Otherwise
     /// ground come up to the feet (a platform lowering its hanger) stands
-    /// them up, jump is a back-jump and crouch a drop, at once; after the
+    /// them up, once the body stands near enough upright for what it touches
+    /// to be under its feet (`LedgeConfig::stand_tilt_degrees`), jump is a back-jump and crouch a drop, at once; after the
     /// settle the stick held away drops and held in pulls up.
     pub fn tick(self, input: &LocomotionInput) -> LocomotionState {
         let (requests, dt) = (&input.requests, input.dt);
@@ -130,7 +131,8 @@ impl Ledge {
         };
         let held = |phase| LocomotionState::Ledge(Self { edge, phase });
         let let_go = || {
-            if input.facts.grounded {
+            let feet_down = input.facts.tilt <= config.stand_tilt_degrees.to_radians();
+            if input.facts.grounded && feet_down {
                 Some(LocomotionState::OnFoot(OnFoot::default()))
             } else if requests.jump {
                 Some(LocomotionState::Jump(Jump::back_jump(

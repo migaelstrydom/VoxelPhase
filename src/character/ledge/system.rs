@@ -178,7 +178,10 @@ impl<'a> System<'a> for LedgeSensorSystem {
 }
 
 /// The held edge found again on the same body, facing it from where the
-/// body is now, and whether it carries on either way. A pull-up is
+/// body is now but felt for under the hands, and whether it carries on
+/// either way. Felt for from the body's centre, an edge caught aslant (a
+/// swimmer's stroke meeting a block's face at an angle) would lie off to one
+/// side of it, and a hand would miss a short one. A pull-up is
 /// committed: its edge is the one held, wherever its body has taken it.
 fn found_again(
     caster: &WorldCaster,
@@ -192,7 +195,12 @@ fn found_again(
         return sensed(world, held.edge, [false; 2]);
     }
     let heading = -at.outward.into_inner();
-    let here = reach(heading);
+    let body = reach(heading);
+    let along = at.along();
+    let here = Reach {
+        centre: body.centre + along * (at.grip() - body.centre).dot(&along),
+        ..body
+    };
     let same_body = |edge: &super::Edge| edge.body == held.edge.body;
     let edge = edge_at_hands(caster, &here, config).filter(same_body)?;
     let along = at.along() * config.shimmy_probe;
