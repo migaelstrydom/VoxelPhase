@@ -82,6 +82,40 @@ The patterns found so far:
 | **Nothing underneath** | The ground itself is finite | An island is thin in places. A blast too many under a pool, a stack or the player's own feet sends it through to the sky. |
 | **Borrowed force** | A creature does what the player cannot | A roller will follow down a groove dug for it into a bank the player cannot reach. A bell-carrier walking onto one end of a seesaw throws what is on the other. |
 
+## Authoring rules
+
+Learnt from building rooms. Each is a number or a habit a room is laid out
+against.
+
+- **The player's reach.** A full jump catches a lip up to about 3.2 m above
+  the feet; anything 3.7 m or more is out of reach. `level_check` prints the
+  jump envelope.
+- **A throw needs room.** A grenade arms 0.15 s after it leaves the hand,
+  about 3 m at throw speed. Nearer than that it bounces off unarmed. Every
+  target needs a clear line from 3 m or more, which makes rooms bigger and
+  more open than one screen.
+- **Cut the support, not the mass.** What a grenade must sever should be
+  slender: a leg, a neck, a thin root. The mass it holds can be any size.
+  A wide root, or rock (about 2.5 times the cost of dirt per cubic metre),
+  only dents.
+- **Name the join, not the shape.** An idea says what is joined to what.
+  Which volume builds it is found out in `rubble_viewer`, because only some
+  shapes cut the way they look as if they should (E3's overhang did not).
+- **Leave height for the player's own craters.** Blasting near where the
+  player will stand lowers that ground by about half a metre. Every height
+  a room depends on keeps that much to spare.
+- **A fall lands roughly.** What comes down may crack, tilt or roll. Give it
+  a generous place to land, not an exact one. Whether it cracks or drops
+  clean is a matter of style, set by how the rubble planner splits pieces.
+
+### Testing a room
+
+| Question | Tool |
+|---|---|
+| Does it cut, and what falls? | `rubble_viewer`, in milliseconds; a room's promise is kept there as a scenario |
+| Can the real body do this step? | `character_viewer`, for steps that come out the same every time: throws, fixed jumps |
+| Can a person find the way, and does it read? | Play it. R rebuilds the room from its file, so an edit is one key away |
+
 ## Puzzle ideas by cluster
 
 Each idea is filed under what the player mainly manipulates, and tagged with
@@ -95,7 +129,7 @@ thing the puzzle turns on.
 |---|---|---|---|---|
 | E1 | A dirt bank blocks the path, with grenades lying in front of it. Blast through. | T | | Blast |
 | E2 | A thin bank and a hillside. A grenade opens the bank and only dents the hill: digging costs blast by the metre. | T | | Blast |
-| E3 | The exit is on a ledge too high to grab. Blast the overhang above so its rubble makes a ramp. | X | | Height |
+| E3 | The exit is on a ledge too high to grab. A slab stands beside it on thin legs, as high and as out of reach. Blow the legs and it comes down as a step. **Prototyped:** `levels/rooms/e3_rubble_ramp.level.ron`. | X | | Height |
 | E4 | Three grenades, four banks. One bank hides nothing; read the room before spending. | X | | Blast |
 | E5 | The only path up is an earth stair beside a tempting bank. Blasting the bank drops the stair: the room teaches that a blast can cost height. | X | | Height |
 | E6 | The island is thin under the path and thick under the hill. A tunnel has to follow the thick ground or it opens onto the sky. | X | | Height |
@@ -280,7 +314,7 @@ each hard one:
 | Need | For | State |
 |---|---|---|
 | Death and respawn | Any room with a creature | Death exists, switched off; no respawn |
-| Room reset at a shrine | Every room, since actions are irreversible | Not built |
+| Room reset at a shrine | Every room, since actions are irreversible | R rebuilds the room from its file; no shrine |
 | Grenades as a limited pickup | E4 and the Blast economy | Grenades are free |
 | Room exit | Every room | A `Goal` object exists; untested as a room exit |
 
@@ -290,5 +324,8 @@ each hard one:
    the player think first. Draft assumes free.
 2. **Do creatures reset with the room?** Draft assumes yes.
 3. **Can the player be hurt by their own blast?** It changes how E-rooms feel.
+   It already comes up: a grenade thrown at something nearer than it flies
+   before arming bounces back and goes off at the thrower's feet. Fine for
+   now; to be tuned.
 4. **How big is a room?** Draft assumes one screen or two: the whole problem
    visible from the shrine.
