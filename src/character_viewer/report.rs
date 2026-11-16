@@ -2,13 +2,16 @@
 
 use std::fmt::Write;
 
+use nalgebra::Vector3;
+
 use super::record::{FrameRecord, Take};
 use super::traversal::{summarise, TraversalSummary};
 
 /// Every state change the run went through, then a row every `every` frames,
 /// then how it crossed its station if it has one. With `feet`, each row ends
-/// with each foot against the pelvis: planted (`P`) or swinging (`s`), where
-/// it was drawn, and after `a` where the placer anchors it.
+/// with the rig's facing and each foot against the pelvis, in the rig's own
+/// frame (right, up, ahead): planted (`P`) or swinging (`s`), where it was
+/// drawn, and after `a` where the placer anchors it.
 pub fn report(take: &Take, every: usize, feet: bool) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "== {} ({} frames)", take.scenario, take.frames.len());
@@ -118,26 +121,29 @@ fn row(f: &FrameRecord) -> String {
     )
 }
 
-/// Each foot against the pelvis: planted or swinging, where it was drawn, and
-/// where the placer anchors it.
+/// The way the rig faces, in degrees about +y, then each foot against the
+/// pelvis in the rig's own frame (to its right, up, ahead): planted or
+/// swinging, where it was drawn, and where the placer anchors it.
 fn feet_columns(f: &FrameRecord) -> String {
-    f.feet
-        .iter()
-        .map(|foot| {
-            let drawn = foot.position - f.pelvis;
-            let anchor = foot.anchor - f.pelvis;
-            format!(
-                " {}{:+5.2},{:+5.2},{:+5.2} a{:+5.2},{:+5.2},{:+5.2}",
-                if foot.planted { "P" } else { "s" },
-                drawn.x,
-                drawn.y,
-                drawn.z,
-                anchor.x,
-                anchor.y,
-                anchor.z
-            )
-        })
-        .collect()
+    let right = f.facing.cross(&Vector3::y());
+    let in_rig = |offset: Vector3<f32>| (offset.dot(&right), offset.y, offset.dot(&f.facing));
+    let mut out = format!(" {:4.0}°", f.facing.x.atan2(f.facing.z).to_degrees());
+    for foot in &f.feet {
+        let drawn = in_rig(foot.position - f.pelvis);
+        let anchor = in_rig(foot.anchor - f.pelvis);
+        let _ = write!(
+            out,
+            " {}{:+5.2},{:+5.2},{:+5.2} a{:+5.2},{:+5.2},{:+5.2}",
+            if foot.planted { "P" } else { "s" },
+            drawn.0,
+            drawn.1,
+            drawn.2,
+            anchor.0,
+            anchor.1,
+            anchor.2
+        );
+    }
+    out
 }
 
 /// How far the surface stands over the still water level: swell and ripples.

@@ -27,7 +27,7 @@ use super::clock::{GaitClock, ReleaseKind};
 use super::config::FootPlacerConfig;
 use super::mode::LegMode;
 use super::planned::{PlannedStep, PlannedSteps, StepId};
-use super::swing::Swing;
+use super::swing::{turned, Swing};
 use super::timing::{reach_budget, GaitTiming};
 
 /// How far from where a foot's probe struck its floor plane still tells the
@@ -72,6 +72,21 @@ const SWING_CONE_TANGENT: f32 = 1.73;
 /// The least a swinging foot is drawn under its hip, as a fraction of the
 /// leg's stretch: a knee tucked up as far as one goes.
 const SWING_LEAST_DROP: f32 = 0.3;
+
+/// The rate of turn at which a spinning body begins to take its feet round
+/// with it, in rad/s: about the fastest turn feet step round, a tight circle
+/// at a walk.
+pub(super) const SWIVEL_FROM: f32 = 4.0;
+
+/// The rate of turn at which it takes them round entirely, in rad/s. An
+/// about-face on the stick spins the body at 20 and more: feet left where
+/// they stood are on each other's side of the body half way through it, and
+/// take a second of crossed-over steps to come back.
+const SWIVEL_FULL: f32 = 8.0;
+
+/// The speed a swinging foot is diverted at when a plan moves the footfall
+/// it swings to, in m/s: about a stride's own.
+const DIVERT_SPEED: f32 = 5.0;
 
 /// The longest a swing takes to a planned step a flight comes before, in
 /// seconds: a hop's flight and the stride after it. A step the body takes
@@ -456,6 +471,12 @@ impl FootPlacer {
         let sub_dt = ctx.dt / substeps;
         let yaw_delta = angle_diff(ctx.yaw, self.prev_yaw);
 
+        // A body spinning faster than feet step round takes them round with
+        // it: the stance it stood in, about its own axis.
+        let spin = (yaw_delta / ctx.dt.max(1e-6)).abs();
+        let share = ((spin - SWIVEL_FROM) / (SWIVEL_FULL - SWIVEL_FROM)).clamp(0.0, 1.0);
+        let swivel = yaw_delta / substeps * (share * share * (3.0 - 2.0 * share));
+
         for i in 1..=n {
             let u = i as f32 / substeps;
             let sub_ctx = PlacerCtx {
@@ -465,21 +486,24 @@ impl FootPlacer {
                 planned: ctx.planned.later((i - 1) as f32 * sub_dt),
                 ..*ctx
             };
-            self.substep(&sub_ctx);
+            self.substep(&sub_ctx, swivel);
         }
 
         self.prev_pelvis = ctx.pelvis;
         self.prev_yaw = ctx.yaw;
     }
 
-    /// One fixed-size simulation step.
-    fn substep(&mut self, ctx: &PlacerCtx<'_>) {
+    /// One fixed-size simulation step, through which the body's spin takes
+    /// the feet round by `swivel` radians.
+    fn substep(&mut self, ctx: &PlacerCtx<'_>, swivel: f32) {
         let cfg = ctx.config;
         let facing = facing_from_yaw(ctx.yaw);
         // Before anything reads a foot: everything the placer holds in world
         // space belongs to the surface, not to the world.
-        carry_feet(&mut self.left, ctx);
-        carry_feet(&mut self.right, ctx);
+        for foot in [&mut self.left, &mut self.right] {
+            carry_feet(foot, ctx);
+            swivel_feet(foot, ctx.pelvis, swivel);
+        }
         self.since_takeoff = (self.since_takeoff + ctx.dt).min(LONG_AGO);
         for foot in [&mut self.left, &mut self.right] {
             if foot.is_planted() {
@@ -688,9 +712,15 @@ impl FootPlacer {
                 Some(_) => floor_height_near(ctx, foot.side, x, z),
                 None => Some(ctx.foot_y_fallback),
             };
+            let hip = hip_position(foot.side, ctx, facing);
             if let Some(y) = y {
-                let hip = hip_position(foot.side, ctx, facing);
                 sync_planted_y(foot, y, hip, max_leg_extension(ctx));
+            }
+            // A plant the hip is leaving is drawn no further out than a leg
+            // goes, until the leg lets go of it: the swing it starts then
+            // is drawn from the same place.
+            if foot.is_planted() {
+                foot.position = within_leg(foot.planted_position, hip, max_leg_extension(ctx));
             }
         }
 
@@ -1205,7 +1235,7 @@ fn advance_stepping(
             // the foot waits there, at the end of its leg.
             (None, Some(step)) if !swing.held && planar_distance(swing.to, step.at) <= ON_STEP => {
                 swing.retime(2.0 * frame_dt.max(ctx.dt), ctx.dt);
-                foot.position = within_leg(&swing, hip, reach);
+                foot.position = within_leg(swing.position(), hip, reach);
                 foot.phase = FootPhase::Stepping(swing);
             }
             (None, _) => hold_swing(foot, swing, under_hip, hip, ctx),
@@ -1245,6 +1275,13 @@ fn advance_stepping(
                 ideal.z + ctx.velocity.z * remaining,
             ),
         };
+        // A plan that moves a footfall far, late in the swing onto it, is
+        // given the time a foot takes to get there: the swing lands on it a
+        // little later, where in the time it had left it would dart there.
+        let diverts = planar_distance(desired_to, swing.to) / DIVERT_SPEED;
+        if planned.is_some() && diverts > remaining {
+            swing.retime(diverts, ctx.config.min_step_duration);
+        }
         swing.to = lerp_point(swing.to, desired_to, chase);
         swing.footfall = planned.and_then(|step| step.id);
     }
@@ -1299,7 +1336,7 @@ fn advance_stepping(
         }),
     );
     swing.advance(ctx.dt, chase);
-    foot.position = within_leg(&swing, hip, reach);
+    foot.position = within_leg(swing.position(), hip, reach);
     foot.forward = swing_forward(swing.from_forward, swing.to_forward, swing.progress());
     foot.pre_lift = 0.0;
     foot.phase = FootPhase::Stepping(swing);
@@ -1311,23 +1348,26 @@ fn retarget_chase(ctx: &PlacerCtx<'_>) -> f32 {
     1.0 - (-ctx.config.swing_retarget_rate * ctx.dt).exp()
 }
 
-/// Where a swinging foot is drawn: on its swing, kept to where a leg
-/// swings.
+/// Where a foot the legs hold at `held` is drawn: there, kept to where a
+/// leg goes.
 ///
 /// ```text
 ///            hip
-///           /   \        no higher than a tucked knee brings it
-///          / 60° \       ([`SWING_LEAST_DROP`]), no further off straight
-///         /_______\      down than a stride sweeps
+///           /   \         no higher than a tucked knee brings it
+///          / 60° \        ([`SWING_LEAST_DROP`]), no further off straight
+///         /_______\       down than a stride sweeps
 ///        (  reach  )     ([`SWING_CONE_TANGENT`]), no further than the
 ///         `-------'      leg stretches
 /// ```
 ///
-/// A swing is a path in the world, and the hip a body that may rise, drop
-/// or outrun it: where the path leaves this envelope the foot is drawn at
-/// its edge, knee bent, until the body brings the two back together.
-fn within_leg(swing: &Swing, hip: Point3<f32>, reach: f32) -> Point3<f32> {
-    let mut from_hip = swing.position() - hip;
+/// A plant and a swing are places in the world, and the hip a body that
+/// may rise, drop or outrun them: where one leaves this envelope the foot
+/// is drawn at its edge, knee bent, until the body brings the two back
+/// together or the leg lets go. A stride's own plants and swings lie
+/// inside it and are drawn where they are. Planted and swinging feet share
+/// it, so a foot let go of at its edge starts its swing where it was drawn.
+fn within_leg(held: Point3<f32>, hip: Point3<f32>, reach: f32) -> Point3<f32> {
+    let mut from_hip = held - hip;
     from_hip.y = from_hip.y.min(-SWING_LEAST_DROP * reach);
     let across = Vector2::new(from_hip.x, from_hip.z).magnitude();
     let widest = SWING_CONE_TANGENT * -from_hip.y;
@@ -1362,6 +1402,28 @@ fn carry_feet(foot: &mut PlacerFoot, ctx: &PlacerCtx<'_>) {
     foot.ideal_xz += carry;
     if let FootPhase::Stepping(swing) = &mut foot.phase {
         swing.carry(carry);
+    }
+}
+
+/// Turn everything this foot holds in world space by `angle` radians about
+/// the vertical through `pivot`, the pelvis of a body spinning on the spot.
+///
+/// Feet are placed in the world so that a body walking over them does not
+/// drag them. A body that spins in a frame or two is not walking over
+/// them: left where they stood, they end up behind it, crossed over, and
+/// the legs are drawn twisted until the gait has stepped them round. Turned
+/// with the body they keep the stance it stood in, sliding round on the
+/// ground, which is what a pivot is.
+fn swivel_feet(foot: &mut PlacerFoot, pivot: Point3<f32>, angle: f32) {
+    if angle == 0.0 {
+        return;
+    }
+    foot.planted_position = pivot + turned(foot.planted_position - pivot, angle);
+    foot.position = pivot + turned(foot.position - pivot, angle);
+    foot.forward = turned(foot.forward, angle);
+    foot.planted_yaw += angle;
+    if let FootPhase::Stepping(swing) = &mut foot.phase {
+        swing.swivel(pivot, angle);
     }
 }
 
@@ -1475,7 +1537,7 @@ fn hold_swing(
     swing.held = true;
     swing.footfall = None;
     swing.retime(ctx.dt, ctx.dt);
-    foot.position = within_leg(&swing, hip, max_leg_extension(ctx));
+    foot.position = within_leg(swing.position(), hip, max_leg_extension(ctx));
     foot.phase = FootPhase::Stepping(swing);
     foot.landing_shortened = true;
 }
@@ -1491,12 +1553,18 @@ fn hold_swing(
 /// chases it, so the character is drawn with one leg stretched to twice
 /// its length reaching after the floor. The leg simply runs out instead,
 /// and the foot hangs at the bottom of it.
+///
+/// Nor does a foot follow a floor up into its own hip: a rock beside the
+/// body, a crate shoved under a foot. It stands no higher than a tucked
+/// knee brings it ([`SWING_LEAST_DROP`]), sunk into what is higher: a foot
+/// in a rock is a foot, and a knee drawn up to the chest is not a stance.
 fn sync_planted_y(foot: &mut PlacerFoot, foot_y: f32, hip: Point3<f32>, reach: f32) {
     if !foot.is_planted() {
         return;
     }
     let lowest = lowest_reachable_y(hip, foot.planted_position, reach);
-    let y = foot_y.max(lowest);
+    let highest = hip.y - SWING_LEAST_DROP * reach;
+    let y = foot_y.max(lowest).min(highest);
     foot.position.y = y;
     foot.planted_position.y = y;
 }

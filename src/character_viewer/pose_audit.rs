@@ -23,6 +23,7 @@ use std::fmt::Write;
 use nalgebra::Vector3;
 
 use super::record::{FootRecord, FrameRecord};
+use super::soak::SETTLE;
 
 /// How far off straight down a leg near its full length may point, in
 /// degrees: a sprint's trailing leg at toe-off is about 45, a crouch-walk's
@@ -288,14 +289,16 @@ pub struct Tally {
     pub longest: usize,
 }
 
-/// Whether the rig stands upright in `frame`: on foot or in the air. A
-/// swimmer lies along its stroke and a hanger's legs are a climb's, which
-/// are drawn by other rules.
+/// Whether `frame` is judged: the rig stands upright, on foot or in the
+/// air, in a run under way. A swimmer lies along its stroke and a hanger's
+/// legs are a climb's, which are drawn by other rules; and a soak run is
+/// first let settle where it was dropped ([`SETTLE`]).
 fn upright(frame: &FrameRecord) -> bool {
-    matches!(
-        frame.locomotion.as_str(),
-        "on_foot" | "grace" | "hop" | "jump" | "fall"
-    )
+    frame.beat != SETTLE
+        && matches!(
+            frame.locomotion.as_str(),
+            "on_foot" | "grace" | "hop" | "jump" | "fall"
+        )
 }
 
 /// The more extreme of two measures of `oddity`.

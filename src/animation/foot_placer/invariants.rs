@@ -403,11 +403,48 @@ fn walk_to_idle_settles_without_micro_stepping() {
     }
 }
 
+/// An about-face on the spot, as the stick turns the body: half a turn in
+/// an eighth of a second. The feet go round with the body, each on its own
+/// side of it throughout, and neither has to step to get there.
+#[test]
+fn a_spin_on_the_spot_keeps_each_foot_on_its_own_side() {
+    const SPIN_FRAMES: usize = 8;
+    let frames = simulate(90, 60.0, scenarios::flat, |f| Input {
+        velocity: Vector3::zeros(),
+        yaw: std::f32::consts::PI * (f.saturating_sub(20) as f32 / SPIN_FRAMES as f32).min(1.0),
+        intent: Vector3::zeros(),
+    });
+    for (i, s) in frames.iter().enumerate() {
+        let facing = super::placer::facing_from_yaw(s.yaw);
+        let right = Vector3::new(-facing.z, 0.0, facing.x);
+        let aside = |foot: &PlacerFoot| (foot.position - s.pelvis).dot(&right);
+        assert!(
+            aside(&s.left) < -0.05 && aside(&s.right) > 0.05,
+            "frame {i}: the left foot is {:.2} m and the right {:.2} m to the body's right",
+            aside(&s.left),
+            aside(&s.right)
+        );
+    }
+    assert!(
+        takeoffs(&frames).is_empty(),
+        "a foot stepped: {:?}",
+        takeoffs(&frames)
+    );
+}
+
 // === Sweeps over the scenario registry ===
 
+/// Whether the body spun between two frames faster than feet step round:
+/// it takes its feet round with it then (`placer::swivel_feet`).
+fn spinning(pair: &[Frame]) -> bool {
+    let dt = (pair[1].time - pair[0].time).max(1e-6);
+    (super::placer::angle_diff(pair[1].yaw, pair[0].yaw) / dt).abs() > super::placer::SWIVEL_FROM
+}
+
 /// A planted foot is an anchor: its xz must not move between frames
-/// while it stays planted, in any scenario. Horizontal foot slide is
-/// the single most visible artefact this system exists to remove.
+/// while it stays planted, in any scenario, but round a body spinning on
+/// the spot. Horizontal foot slide is the single most visible artefact
+/// this system exists to remove.
 #[test]
 fn planted_feet_never_slide() {
     for sc in scenarios::all() {
@@ -417,7 +454,7 @@ fn planted_feet_never_slide() {
                 &s.right
             }] {
                 let (a, b) = (foot_of(&pair[0]), foot_of(&pair[1]));
-                if a.is_planted() && b.is_planted() {
+                if a.is_planted() && b.is_planted() && !spinning(pair) {
                     let slide = planar_distance(a.planted_position, b.planted_position);
                     assert!(
                         slide < 1e-4,
@@ -692,7 +729,7 @@ fn random_inputs_hold_core_invariants() {
             &s.right
         }] {
             let (a, b) = (foot_of(&pair[0]), foot_of(&pair[1]));
-            if a.is_planted() && b.is_planted() {
+            if a.is_planted() && b.is_planted() && !spinning(pair) {
                 let slide = planar_distance(a.planted_position, b.planted_position);
                 assert!(
                     slide < 1e-4,

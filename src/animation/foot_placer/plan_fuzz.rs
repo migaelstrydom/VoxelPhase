@@ -320,10 +320,12 @@ impl Worst {
 /// How far the drawn feet strayed from the leg's envelope.
 #[derive(Debug, Default)]
 struct Envelope {
-    /// The most a foot's motion against the pelvis changed from one frame
-    /// to the next, in metres a frame. A foot that jumps changes it by the
-    /// jump; one swung however fast, smoothly, by no more than the gait's
-    /// own steps do.
+    /// The most a foot's motion against the pelvis, in the body's own frame,
+    /// changed from one frame to the next, in metres a frame. A foot that
+    /// jumps changes it by the jump; one swung however fast, smoothly, by no
+    /// more than the gait's own steps do. In the body's frame, since a body
+    /// that spins takes its feet round with it: a jump across the world
+    /// that the body makes too.
     kink: Worst,
     /// The furthest a foot was from its hip.
     stretch: Worst,
@@ -349,9 +351,15 @@ impl Envelope {
             if i > 1 && frames[i - 1].feet_placed && frames[i - 2].feet_placed {
                 let (a, b) = (&frames[i - 2], &frames[i - 1]);
                 let feet = [(&a.left, &b.left, &s.left), (&a.right, &b.right, &s.right)];
+                let in_body = |s: &Frame, foot: &PlacerFoot| {
+                    let facing = facing_from_yaw(s.yaw);
+                    let right = Vector3::new(-facing.z, 0.0, facing.x);
+                    let offset = foot.position - s.pelvis;
+                    Vector3::new(offset.dot(&right), offset.y, offset.dot(&facing))
+                };
                 for (fa, fb, fc) in feet {
-                    let before = (fb.position - b.pelvis) - (fa.position - a.pelvis);
-                    let after = (fc.position - s.pelvis) - (fb.position - b.pelvis);
+                    let before = in_body(b, fb) - in_body(a, fa);
+                    let after = in_body(s, fc) - in_body(b, fb);
                     self.kink.see((after - before).norm(), seed, i);
                 }
             }

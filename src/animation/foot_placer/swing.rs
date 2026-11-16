@@ -149,10 +149,36 @@ impl Swing {
         self.path += by;
     }
 
+    /// Turn the whole swing by `angle` radians about the vertical through
+    /// `pivot`, with a body that spins and takes its feet round with it.
+    pub fn swivel(&mut self, pivot: Point3<f32>, angle: f32) {
+        for point in [&mut self.from, &mut self.to, &mut self.path] {
+            *point = pivot + turned(*point - pivot, angle);
+        }
+        for direction in [
+            &mut self.velocity,
+            &mut self.from_forward,
+            &mut self.to_forward,
+        ] {
+            *direction = turned(*direction, angle);
+        }
+    }
+
     /// The foot on its path, without the lift.
     pub fn path(&self) -> Point3<f32> {
         self.path
     }
+}
+
+/// `vector` turned by `angle` radians about +y, the way a yaw turns a
+/// facing: +z towards +x.
+pub(super) fn turned(vector: Vector3<f32>, angle: f32) -> Vector3<f32> {
+    let (sin, cos) = angle.sin_cos();
+    Vector3::new(
+        vector.x * cos + vector.z * sin,
+        vector.y,
+        -vector.x * sin + vector.z * cos,
+    )
 }
 
 /// One step of `dt` along the cubic from `position`, moving at `velocity`,

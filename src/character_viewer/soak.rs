@@ -18,6 +18,12 @@ use super::scenario::{CameraRig, Judged, Scenario};
 
 /// How long a soak run plays, in seconds.
 const RUN_SECONDS: f32 = 7.0;
+/// How long a run stands where it was dropped before its script begins, in
+/// seconds: a random start may be inside a rock or over a crate, and the
+/// body is shoved clear of it first.
+const SETTLE_SECONDS: f32 = 0.6;
+/// The label of that opening beat, which the pose audit does not judge.
+pub const SETTLE: &str = "settle";
 
 /// A level the soak plays in, and the ground it starts on.
 #[derive(Clone, Copy, Debug)]
@@ -106,7 +112,7 @@ pub fn soak_scenario(level: &SoakLevel, seed: u64) -> Scenario {
 /// 0 facing +z): mostly travel, with the turns, stops, reversals, jumps and
 /// crouches a player makes in the middle of it.
 fn random_script(rng: &mut Rng, mut heading: f32) -> Script {
-    let mut script = Script::new().then(Beat::stand(0.2));
+    let mut script = Script::new().then(Beat::stand(SETTLE_SECONDS).named(SETTLE));
     let mut sprint = rng.chance(0.5);
     while script.duration() < RUN_SECONDS {
         let towards = |heading: f32| Vector3::new(heading.sin(), 0.0, heading.cos());
