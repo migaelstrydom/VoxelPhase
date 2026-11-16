@@ -232,6 +232,29 @@ impl PoseState {
         }
     }
 
+    /// Whether the feet are the gait's, placed on the ground: on foot, and
+    /// through a hop stridden through.
+    pub fn strides(&self) -> bool {
+        match self {
+            PoseState::Grounded { .. } | PoseState::Hop { .. } => true,
+            PoseState::Launching { .. }
+            | PoseState::Airborne { .. }
+            | PoseState::Swimming { .. }
+            | PoseState::Hanging => false,
+        }
+    }
+
+    /// Whether the legs hang from the hips, the feet on nothing: a wind-up
+    /// off the ground, a flight, a swim.
+    pub fn hangs_its_legs(&self) -> bool {
+        match self {
+            PoseState::Launching { .. }
+            | PoseState::Airborne { .. }
+            | PoseState::Swimming { .. } => true,
+            PoseState::Grounded { .. } | PoseState::Hop { .. } | PoseState::Hanging => false,
+        }
+    }
+
     /// The kind of flight this pose is in, if it is in the air: what a
     /// landing from it squashes by.
     pub fn air_kind(&self) -> Option<AirKind> {

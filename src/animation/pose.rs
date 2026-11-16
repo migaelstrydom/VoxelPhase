@@ -99,7 +99,10 @@ impl PoseFragment {
     }
 
     /// Return a copy whose feet the pelvis carries, wherever they were
-    /// placed.
+    /// placed: for a blend out of feet that have left the ground with the
+    /// body. Left where they stood, a body running off a ledge draws them
+    /// trailing at the leg's full stretch behind it for the blend, a metre
+    /// back by the time it is over.
     pub fn carried(&self) -> Self {
         Self {
             feet: self.feet.as_ref().map(|feet| FeetPose {
@@ -208,24 +211,27 @@ fn lerp_point(a: &Point3<f32>, b: &Point3<f32>, t: f32) -> Point3<f32> {
 }
 
 /// Positions are world-space on both sides, so they lerp directly — except
-/// when the ground has just taken the feet over.
+/// into feet placed in the world, which are taken as they are.
 ///
 /// Lerping from hip-hung feet to placed ones walks the foot from under the
 /// pelvis to its plant in a straight line at floor level, over the whole
 /// blend, while the body keeps moving: a landing at speed draws a foot
-/// skating a quarter of a metre into position. There is nothing to
-/// interpolate there. The placer knows where the foot goes the moment the
-/// body is grounded, and the correction is worth one frame of pop instead of
-/// a tenth of a second of skate.
+/// skating a quarter of a metre into position. And placed feet blending
+/// into placed feet (a run slowing to a walk) are the same feet, the foot
+/// placer's, on both sides: a blend from where they were when it began
+/// drags a foot that has since stepped back toward where it stepped from.
+/// There is nothing to interpolate in either. The placer moves its feet
+/// continuously itself, and where a pose hands them over, it hands them
+/// over where they are drawn (`FootPlacer::hold_feet`).
 ///
-/// The reverse (ground to air) still blends: feet leaving the floor are
-/// leaving it gradually, and that is a lift, not a skate.
+/// Out of placed feet (ground to air) still blends: feet leaving the floor
+/// are leaving it gradually, and that is a lift, not a skate.
 ///
 /// The result takes the target's anchor: the blend is turning `a` into `b`,
 /// so if it is itself snapshotted for a further blend it should behave as
 /// what it is becoming.
 fn lerp_feet(a: &FeetPose, b: &FeetPose, t: f32) -> FeetPose {
-    if a.anchor == FootAnchor::Hips && b.anchor == FootAnchor::World {
+    if b.anchor == FootAnchor::World {
         return b.clone();
     }
     FeetPose {
@@ -304,25 +310,11 @@ impl<P: BlendPolicy> Crossfade<P> {
 
     /// Blend `self.from` (translated into the current pelvis frame) toward
     /// `current` using the policy weight.
-    ///
-    /// Feet held on the ground that are blending into feet the pelvis
-    /// carries have left the ground: they come along with the pelvis from
-    /// the moment the blend starts. Left where they stood for the blend, a
-    /// body running off a ledge draws them trailing at the leg's full
-    /// stretch behind it, a metre back by the time the blend is over.
     pub fn sample(&self, current: &PoseFragment, current_pelvis: Point3<f32>) -> PoseFragment {
         let t = self.policy.weight(self.elapsed, self.to_duration);
         let delta = current_pelvis - self.from_pelvis;
-        let leaving_the_ground = current
-            .feet
-            .as_ref()
-            .is_some_and(|feet| feet.anchor == FootAnchor::Hips);
-        let from = if leaving_the_ground {
-            self.from.carried()
-        } else {
-            self.from.clone()
-        };
-        from.translated(delta)
+        self.from
+            .translated(delta)
             .with_feet_within(self.reach, current_pelvis)
             .lerp(current, t)
     }

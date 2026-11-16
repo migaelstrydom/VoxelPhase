@@ -328,7 +328,18 @@ impl CharacterAnimator {
             pelvis_position,
             self.config.leg_length(),
             blend,
-            || self.pose_state.sample(&pose_sample_ctx),
+            || {
+                let from = self.pose_state.sample(&pose_sample_ctx);
+                // The gait's feet, blending into feet that hang from the
+                // hips, have left the ground with the body: they come along
+                // with it, from within the leg's reach of where it is.
+                if self.pose_state.strides() && new_pose.hangs_its_legs() {
+                    from.with_feet_within(self.config.leg_length(), pelvis_position)
+                        .carried()
+                } else {
+                    from
+                }
+            },
         );
         begin_crossfade_if_changed(
             &mut self.upper_crossfade,

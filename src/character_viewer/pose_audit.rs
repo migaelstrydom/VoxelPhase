@@ -54,9 +54,10 @@ const FOLDED_EXTENSION: f32 = 0.3;
 const STALL_SPEED: f32 = 1.0;
 /// How long both feet may stay down at that speed, in seconds: a stance.
 const STALL_SECONDS: f32 = 0.35;
-/// The shortest a foot stands between two swings, in seconds: a sprint's
-/// stance is about 0.08.
-const STUTTER_SECONDS: f32 = 0.04;
+/// The shortest a foot stands between two swings, in seconds: a frame and
+/// a little. A sprint's stance is three frames, and is seen on two when the
+/// frames fall badly; a foot down for one frame has tapped the ground.
+const STUTTER_SECONDS: f32 = 0.02;
 
 /// Something a leg was drawn doing that legs do not do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
