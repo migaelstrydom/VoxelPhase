@@ -36,16 +36,6 @@ at the slower speed the invariant walks at.
 
 ---
 
-## Braking hard, a planned step is given up for a short one
-
-A body that brakes from a run to a crouch in a few frames stops short of the
-footfall its swinging foot was aimed at. The foot waits over a step only for
-a body about to arrive (`placer::LONGEST_WAIT`), and otherwise lands short
-under the hip, off the plan. Following the plan's footfalls as it replans
-for the slower body would land it on one.
-
----
-
 ## Planning costs most while turning
 
 `traversal_perf --turn 90` lays the path afresh every other frame, and each

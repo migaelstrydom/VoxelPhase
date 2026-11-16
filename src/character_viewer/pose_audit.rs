@@ -54,6 +54,9 @@ const FOLDED_EXTENSION: f32 = 0.3;
 const STALL_SPEED: f32 = 1.0;
 /// How long both feet may stay down at that speed, in seconds: a stance.
 const STALL_SECONDS: f32 = 0.35;
+/// The speed over the ground from which a stance counts towards the
+/// stride's shape, in m/s: slower, the feet are settling, not striding.
+const STRIDE_SPEED: f32 = 2.0;
 /// The shortest a foot stands between two swings, in seconds: a frame and
 /// a little. A sprint's stance is three frames, and is seen on two when the
 /// frames fall badly; a foot down for one frame has tapped the ground.
@@ -158,12 +161,90 @@ pub struct Finding {
     pub worst: f32,
 }
 
-/// Every oddity a run's legs were drawn with.
+/// Every oddity a run's legs were drawn with, and the shape of its stride.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PoseAudit {
     /// Frames judged: the body upright on foot or in the air.
     pub judged: usize,
     pub findings: Vec<Finding>,
+    pub stride: StrideShape,
+}
+
+/// The shape of a run's stride while it travelled on foot: how long a foot
+/// stood, and where against its hip it was set down and picked up. No
+/// oddity is one frame of it; a gait whose every stance has slid behind the
+/// hips, or halved, shows only here, and against the same run before a
+/// change.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StrideShape {
+    /// Stances counted: begun and ended on foot at [`STRIDE_SPEED`] or more.
+    pub stances: usize,
+    /// Their summed length, in seconds.
+    pub seconds: f32,
+    /// Summed distance ahead of its hip, as the body faces, each was set
+    /// down at, in metres.
+    pub lead: f32,
+    /// Summed distance ahead of its hip each was picked up at (negative
+    /// behind), in metres.
+    pub trail: f32,
+}
+
+impl StrideShape {
+    /// The shape of `frames`' stride.
+    pub fn of(frames: &[FrameRecord]) -> Self {
+        let mut shape = Self::default();
+        for index in 0..2 {
+            // The frame a stance began on, if it began from a swing.
+            let mut stance: Option<usize> = None;
+            for (i, pair) in frames.windows(2).enumerate() {
+                let (before, now) = (&pair[0], &pair[1]);
+                let striding = [before, now].into_iter().all(|frame| {
+                    frame.locomotion == "on_foot" && frame.planar_speed() >= STRIDE_SPEED
+                });
+                let (was_down, down) = (before.feet[index].planted, now.feet[index].planted);
+                if !striding {
+                    stance = None;
+                } else if down && !was_down {
+                    stance = Some(i + 1);
+                } else if !down && was_down {
+                    if let Some(began) = stance.take() {
+                        let ahead = |frame: &FrameRecord| {
+                            let foot = &frame.feet[index];
+                            (foot.position - foot.hip).dot(&frame.facing)
+                        };
+                        shape.stances += 1;
+                        shape.seconds += now.time - frames[began].time;
+                        shape.lead += ahead(&frames[began]);
+                        shape.trail += ahead(before);
+                    }
+                }
+            }
+        }
+        shape
+    }
+
+    /// Both runs' stances together.
+    pub fn with(self, other: Self) -> Self {
+        Self {
+            stances: self.stances + other.stances,
+            seconds: self.seconds + other.seconds,
+            lead: self.lead + other.lead,
+            trail: self.trail + other.trail,
+        }
+    }
+
+    /// The mean stance: milliseconds stood, and centimetres ahead of the hip
+    /// set down and picked up. `None` with no stance counted.
+    pub fn mean(&self) -> Option<(f32, f32, f32)> {
+        (self.stances > 0).then(|| {
+            let stances = self.stances as f32;
+            (
+                1000.0 * self.seconds / stances,
+                100.0 * self.lead / stances,
+                100.0 * self.trail / stances,
+            )
+        })
+    }
 }
 
 /// An oddity still running, as the frames are read.
@@ -214,6 +295,7 @@ impl PoseAudit {
             audit.close(key, run);
         }
         audit.findings.extend(stutters(frames));
+        audit.stride = StrideShape::of(frames);
         audit
             .findings
             .sort_by(|a, b| a.start.total_cmp(&b.start).then(a.oddity.cmp(&b.oddity)));
@@ -258,10 +340,14 @@ impl PoseAudit {
         for oddity in Oddity::ALL {
             let _ = write!(out, " {:>12}", oddity.name());
         }
+        let _ = write!(out, " {:>20}", "stance:n/ms/lead/trail");
         out
     }
 
-    /// One line for the run `name`: per oddity, findings/frames/longest.
+    /// One line for the run `name`: per oddity, findings/frames/longest;
+    /// then the stride's shape, as stances counted, their mean length in
+    /// milliseconds, and the centimetres ahead of its hip a foot was set
+    /// down and picked up at.
     pub fn row(&self, name: &str) -> String {
         let mut out = format!("{:24} {:>6}", name, self.judged);
         for oddity in Oddity::ALL {
@@ -273,6 +359,13 @@ impl PoseAudit {
             };
             let _ = write!(out, " {cell:>12}");
         }
+        let stride = match self.stride.mean() {
+            Some((ms, lead, trail)) => {
+                format!("{}/{ms:.0}/{lead:+.0}/{trail:+.0}", self.stride.stances)
+            }
+            None => "-".to_string(),
+        };
+        let _ = write!(out, " {stride:>20}");
         out
     }
 
@@ -633,6 +726,35 @@ mod tests {
         assert_eq!(tapped.findings[0].leg, Leg::Left);
         let stepped = PoseAudit::of(&stepping(10..18));
         assert_eq!(stepped.tally(Oddity::Stutter).findings, 0);
+    }
+
+    /// The stride's shape is where a foot is set down and picked up against
+    /// its hip, and for how long it stands.
+    #[test]
+    fn the_strides_shape_is_its_stance() {
+        let frames: Vec<FrameRecord> = (0..40)
+            .map(|i| {
+                // Each foot down for five frames in ten, the left first,
+                // sliding back under the body from 0.2 m ahead.
+                let stance = |phase: usize| {
+                    let step = (i + phase) % 10;
+                    (step < 5).then(|| 0.2 - 0.1 * step as f32)
+                };
+                let mut f = frame(i, STAND_LEFT, STAND_RIGHT);
+                f.velocity = Vector3::new(0.0, 0.0, 6.0);
+                for (foot, ahead) in f.feet.iter_mut().zip([stance(0), stance(5)]) {
+                    foot.planted = ahead.is_some();
+                    foot.position = foot.hip + Vector3::new(0.0, -0.43, ahead.unwrap_or(0.0));
+                }
+                f
+            })
+            .collect();
+        let shape = StrideShape::of(&frames);
+        let (ms, lead, trail) = shape.mean().expect("stances");
+        assert!(shape.stances >= 5, "{shape:?}");
+        assert!((ms - 5.0 * 1000.0 * DT).abs() < 1.0, "{ms} ms");
+        assert!((lead - 20.0).abs() < 0.1, "set down {lead} cm ahead");
+        assert!((trail + 20.0).abs() < 0.1, "picked up {trail} cm ahead");
     }
 
     #[test]

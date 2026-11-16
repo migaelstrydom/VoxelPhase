@@ -18,7 +18,7 @@ mod turning;
 pub use contract::{check_contract, ContractCheck};
 pub use driver::{run, RunConfig};
 pub use pilot::Pilot;
-pub use pose_audit::{Finding, Leg, Oddity, PoseAudit, Tally};
+pub use pose_audit::{Finding, Leg, Oddity, PoseAudit, StrideShape, Tally};
 pub use record::{FootRecord, FrameRecord, Take, Tile};
 pub use report::{report, traversal};
 pub use scenario::{CameraRig, Judged, Scenario};

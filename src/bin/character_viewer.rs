@@ -48,8 +48,10 @@
 //! leg held out level, a foot over its hip, a foot reined in from where it
 //! was asked for, a foot snapping against the pelvis or asked to jump,
 //! crossed feet, a folded leg, legs that stopped stepping), how many times,
-//! over how many frames, and the longest. One scenario alone also lists each
-//! finding with its time.
+//! over how many frames, and the longest; then the stride's shape (stances
+//! counted, their mean length, and how far ahead of its hip a foot was set
+//! down and picked up), to hold against the same run before a change. One
+//! scenario alone also lists each finding with its time.
 //! `--feet` ends each report row with where each foot was drawn against the
 //! pelvis.
 //!
@@ -69,7 +71,7 @@ use std::process::ExitCode;
 
 use voxel_phase::character_viewer::{
     catalogue, check_contract, find, find_soak, report, run, soak_level, soak_scenario, traversal,
-    ContractCheck, Judged, Oddity, PoseAudit, RunConfig, Scenario, SoakLevel, Take,
+    ContractCheck, Judged, Oddity, PoseAudit, RunConfig, Scenario, SoakLevel, StrideShape, Take,
     TraversalSpread, TurnSummary, SOAK_LEVELS,
 };
 use voxel_phase::rendering::visual_bench::contact_sheet;
@@ -373,6 +375,11 @@ fn run_soak(soak: &Soak, config: &RunConfig) -> ExitCode {
             .iter()
             .flat_map(|(_, audit)| audit.findings.iter().copied())
             .collect(),
+        stride: audits
+            .iter()
+            .fold(StrideShape::default(), |all, (_, audit)| {
+                all.with(audit.stride)
+            }),
     };
     println!("{}", total.row(&format!("{} runs", audits.len())));
     let held = |audit: &PoseAudit| -> usize {

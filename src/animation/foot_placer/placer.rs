@@ -53,11 +53,11 @@ const MAX_SUBSTEPS: f32 = 64.0;
 const ON_STEP: f32 = 0.1;
 
 /// How far past the stretch that asks it to step a planted foot's hip may get
-/// before the leg lets go of it, in metres. The stretch release is a request,
-/// which the gait's support and stagger rules may hold back for a swing; past
-/// this the foot is somewhere the leg cannot be drawn standing, and it lets
-/// go whatever the gait says.
-const LET_GO_MARGIN: f32 = 0.1;
+/// before the leg lets go of it, as a fraction of the leg's length. The
+/// stretch release is a request, which the gait's support and stagger rules
+/// may hold back for a swing; past this the foot is somewhere the leg cannot
+/// be drawn standing, and it lets go whatever the gait says.
+const LET_GO_MARGIN: f32 = 0.2;
 
 /// How far off straight down a planted leg may point, as the tangent of the
 /// angle (65 degrees), before the leg lets go of a foot the hip is leaving:
@@ -68,9 +68,9 @@ const LET_GO_MARGIN: f32 = 0.1;
 const LET_GO_TANGENT: f32 = 2.14;
 
 /// The least a planted foot lies from under its hip, across the ground, for
-/// its leg's angle to let go of it, in metres: a body squashed down onto its
-/// feet has them close under it at any angle.
-const LET_GO_ACROSS: f32 = 0.2;
+/// its leg's angle to let go of it, as a fraction of the leg's length: a
+/// body squashed down onto its feet has them close under it at any angle.
+const LET_GO_ACROSS: f32 = 0.4;
 
 /// The rate of turn at which a spinning body begins to take its feet round
 /// with it, in rad/s: about the fastest turn feet step round, a tight circle
@@ -82,10 +82,6 @@ pub(super) const SWIVEL_FROM: f32 = 4.0;
 /// they stood are on each other's side of the body half way through it, and
 /// take a second of crossed-over steps to come back.
 const SWIVEL_FULL: f32 = 8.0;
-
-/// The longest a foot waits over a step of the gait's own time for the body
-/// to come within the leg's reach of it, in seconds: three frames.
-const LONGEST_WAIT: f32 = 0.05;
 
 /// The speed a swinging foot is diverted at when a plan moves the footfall
 /// it swings to, in m/s: about a stride's own.
@@ -619,9 +615,11 @@ impl FootPlacer {
             // is the next step up.
             let opening = away.dot(&ctx.velocity) > 0.0;
             let across = Vector2::new(away.x, away.z).magnitude();
-            let levelled =
-                opening && across >= LET_GO_ACROSS && across > LET_GO_TANGENT * away.y.max(0.0);
-            let_go[slot] = levelled || distance >= max_leg_extension(ctx) + LET_GO_MARGIN;
+            let levelled = opening
+                && across >= LET_GO_ACROSS * ctx.leg_length
+                && across > LET_GO_TANGENT * away.y.max(0.0);
+            let_go[slot] =
+                levelled || distance >= max_leg_extension(ctx) + LET_GO_MARGIN * ctx.leg_length;
             if moving {
                 // Full 3D radial speed: on slopes the hip moves away
                 // from a planted foot vertically as much as
@@ -1245,12 +1243,16 @@ fn advance_stepping(
             planned,
         ) {
             (Some(plant_at), _) => foot.plant(plant_at, &swing, &ctx.planned),
-            // Over its planned step a moment before the body is down on it:
-            // the foot waits there, at the end of its leg.
+            // Over a flight's landing a moment before the body is down on
+            // it: the foot waits there, at the end of its leg. Only a
+            // flight's: a step on the ground the leg cannot quite reach
+            // when its swing ends is shortened to where it can, at once. A
+            // foot that waited for the body there would plant frames late,
+            // and at a run every stance would lie behind the hips for it.
             (None, Some(step))
                 if !swing.held
-                    && planar_distance(swing.to, step.at) <= ON_STEP
-                    && comes_within_reach(&step, hip, reach, ctx) =>
+                    && step.landing.is_some()
+                    && planar_distance(swing.to, step.at) <= ON_STEP =>
             {
                 swing.retime(2.0 * frame_dt.max(ctx.dt), ctx.dt);
                 foot.position = LegEnvelope::of(foot.side, ctx, facing).draw(swing.position());
@@ -1358,27 +1360,6 @@ fn advance_stepping(
     foot.forward = swing_forward(swing.from_forward, swing.to_forward, swing.progress());
     foot.pre_lift = 0.0;
     foot.phase = FootPhase::Stepping(swing);
-}
-
-/// Whether the body is about to bring its hip within the leg's `reach` of a
-/// planned `step` the foot has swung to ahead of it: the body is coming down
-/// on it from a flight, as the plan has it land there, or closing on it and
-/// [`LONGEST_WAIT`] or less away. A body that has braked short of a step is
-/// not: a foot held out over it would hang there, knee up, until the body
-/// crept under it.
-fn comes_within_reach(
-    step: &PlannedStep,
-    hip: Point3<f32>,
-    reach: f32,
-    ctx: &PlacerCtx<'_>,
-) -> bool {
-    if step.landing.is_some() {
-        return true;
-    }
-    let to_step = step.at - hip;
-    let distance = to_step.norm().max(1.0e-4);
-    let closing = to_step.dot(&ctx.velocity) / distance;
-    closing > 0.0 && distance - reach <= closing * LONGEST_WAIT
 }
 
 /// The share of their gap a swing's target, lift and clearance close in one
