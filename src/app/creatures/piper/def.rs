@@ -2,32 +2,42 @@
 //! sculpture is put together into.
 //!
 //! ```text
-//!   bag, pipes, head, limbs ──sculpt──▶ Model: BAG, FIXTURES, CHEEKS, EYES
-//!   body() ──▶ LobberBody: which parts swell, puff and look ──▶ Lobber
+//!   bag, pipes, head, limbs ──sculpt──▶ Model: BAG, LEGS, HEAD, EYES,
+//!                                              DRONES, CHANTER
+//!   head ──cheeks──▶ Bulge: the cheeks blown out of the face
+//!   body() ──▶ LobberBody: which parts swell, ride the bag, puff and look
 //!   spawn ──▶ a damped ball kept upright, a PosedModel in its own frame,
-//!             all-round perception, a Lobber, Health
+//!             its cheeks a ProceduralMesh, all-round perception, a
+//!             Lobber, Health
 //! ```
+
+use std::sync::Arc;
 
 use nalgebra::{Point3, UnitVector3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::bag::{COLLAR, CORE};
 use super::frame::{MUZZLE, RADIUS};
 use super::pipes::Pipe;
-use super::shaping::{placed, vector};
+use super::shaping::{placed, surface, vector};
 use super::{bag, head, limbs, pipes};
 use crate::animation::FootSide;
 use crate::app::creatures::likeness;
 use crate::app::creatures::palette::{self, Paint, BESTIARY};
 use crate::app::creatures::sculpted::{all_round, ground_under, Exhibit};
+use crate::app::sculpt::Clay;
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::components::{
-    Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Velocity,
+    Orientation, PoseFrame, PosedModel, Position, ProceduralMesh, Renderable, RigidBodyComponent,
+    Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{Gaze, Lobber, LobberBody, Swell, Throw};
+use crate::creature::{
+    Cheeks, Gaze, Lobber, LobberBody, Puffing, Rider, Showing, Strut, Swell, Throw,
+};
 use crate::damage::{Health, Ragdoll};
-use crate::model::{MeshPrimitive, Model, ModelPart, Transform};
+use crate::model::{Bulge, MeshPrimitive, Model, ModelPart, Transform};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
 use crate::systems::PhysicsResource;
@@ -47,20 +57,27 @@ const FLIGHT_TIME: f32 = 1.9;
 /// Hit points it can take.
 const HEALTH: f32 = 25.0;
 
-/// The parts of its model, and how many there are.
+/// The parts of its model, and how many there are: the bag; the legs it
+/// squats on; the head with its neck and blowpipe; the eyes; the drones;
+/// the chanter with the hand on it; the arm, in two, its elbow on a thigh.
 const BAG: usize = 0;
-const FIXTURES: usize = 1;
-const CHEEKS: usize = 2;
+const LEGS: usize = 1;
+const HEAD: usize = 2;
 const EYES: [usize; 2] = [3, 4];
-const PARTS: usize = 5;
+const DRONES: [usize; 3] = [5, 6, 7];
+const CHANTER: usize = 8;
+const FOREARM: usize = 9;
+const UPPER_ARM: usize = 10;
+const PARTS: usize = 11;
 
 /// The bag's size just after a throw and as the next is due, as scales of
 /// the size it is sculpted.
 const SLACK: (f32, f32, f32) = (0.94, 0.84, 0.94);
 const TIGHT: (f32, f32, f32) = (1.07, 1.09, 1.07);
-/// The cheeks' size between puffs and at the top of one.
-const CHEEKS_SLACK: f32 = 0.84;
-const CHEEKS_TIGHT: f32 = 1.1;
+/// How far its cheeks are blown between puffs and at the top of the
+/// hardest, as shares of the way from let down to as sculpted.
+const CHEEKS_SLACK: f32 = 0.3;
+const CHEEKS_TIGHT: f32 = 1.05;
 
 /// A piper.
 #[derive(Deserialize)]
@@ -70,8 +87,9 @@ pub struct PiperDef {
 }
 
 impl PiperDef {
-    /// The parts of its model that show a throw coming.
-    fn body() -> LobberBody {
+    /// The parts of its model that show a throw coming, its cheeks blown
+    /// out of its face as `cheeks`.
+    fn body(cheeks: Arc<Bulge>) -> LobberBody {
         let sockets = head::sockets();
         let eye = |which: usize| {
             Some(Gaze {
@@ -81,6 +99,31 @@ impl PiperDef {
                 swivel: 0.6,
             })
         };
+        let belly = bag::belly();
+        let small = Self::small_pipes(&belly);
+        let mut riders: Vec<Rider> = pipes::drones(&belly)
+            .iter()
+            .zip(DRONES)
+            .map(|(drone, part)| fastened(&belly, part, drone.foot))
+            .collect();
+        riders.push(fastened(&belly, CHANTER, small[0].foot));
+        // The arm rests its elbow on a thigh, and its forearm turns there
+        // to keep hold of the chanter, its upper arm to stay in the bag.
+        let joints = limbs::arm_joints(&small[0]);
+        let struts = vec![
+            Strut {
+                part: FOREARM,
+                pivot: joints.elbow,
+                reach: joints.wrist,
+                held_by: Some(CHANTER),
+            },
+            Strut {
+                part: UPPER_ARM,
+                pivot: joints.elbow,
+                reach: joints.shoulder,
+                held_by: None,
+            },
+        ];
         LobberBody {
             bag: Swell {
                 part: BAG,
@@ -88,26 +131,40 @@ impl PiperDef {
                 slack: vector(SLACK),
                 tight: vector(TIGHT),
             },
-            cheeks: Some(Swell {
-                part: CHEEKS,
-                seat: head::in_head(head::CHEEK_ROOT),
-                slack: Vector3::repeat(CHEEKS_SLACK),
-                tight: Vector3::repeat(CHEEKS_TIGHT),
+            // Its neck is gathered in the bag's mouth, at the top of the
+            // collar, which stands out of the belly as the belly does there.
+            head: Some(Rider {
+                part: HEAD,
+                anchor: bag::throat(),
+                out: fastened(&belly, HEAD, vector(COLLAR)).out,
+            }),
+            cheeks: Some(Cheeks {
+                bulge: cheeks,
+                slack: CHEEKS_SLACK,
+                tight: CHEEKS_TIGHT,
             }),
             eyes: [eye(0), eye(1)],
-            frame: Some(FIXTURES),
+            riders,
+            struts,
+            frame: Some(LEGS),
         }
     }
 
+    /// The chanter and the blowpipe's two lengths.
+    fn small_pipes(belly: &Clay) -> [Pipe; 3] {
+        let lips = head::in_head(head::LIPS);
+        let blow = head::bow() * Vector3::new(0.0, -0.5, 0.87).normalize();
+        pipes::small_pipes(belly, lips, blow)
+    }
+
     /// How it looks, against the palette's slots, about the middle of the
-    /// ball it collides as: its parts at [`BAG`], [`FIXTURES`], [`CHEEKS`]
-    /// and [`EYES`].
+    /// ball it collides as: its parts at [`BAG`], [`LEGS`], [`HEAD`],
+    /// [`EYES`], [`DRONES`], [`CHANTER`], [`FOREARM`] and [`UPPER_ARM`].
+    /// Its cheeks are apart from it ([`head::cheeks`]).
     pub fn sculpt() -> Model {
         let belly = bag::belly();
         let drones = pipes::drones(&belly);
-        let lips = head::in_head(head::LIPS);
-        let blow = head::bow() * Vector3::new(0.0, -0.5, 0.87).normalize();
-        let small = pipes::small_pipes(&belly, lips, blow);
+        let small = Self::small_pipes(&belly);
         let stocks: Vec<&Pipe> = drones
             .iter()
             .chain(&small)
@@ -117,56 +174,86 @@ impl PiperDef {
         let form = bag::form(&belly, &stocks);
         let in_head = |mesh: MeshPrimitive| placed(mesh, head::bow(), vector(head::HEAD));
 
-        let mut fixtures: Vec<MeshPrimitive> =
-            drones.iter().chain(&small).flat_map(Pipe::meshes).collect();
-        fixtures.push(in_head(head::head()));
-        fixtures.push(in_head(head::neck()));
-        fixtures.extend(limbs::leg(FootSide::Left));
-        fixtures.extend(limbs::leg(FootSide::Right));
-        fixtures.extend(limbs::hand(&small[0]));
-
         let mut parts: [Vec<MeshPrimitive>; PARTS] = Default::default();
         parts[BAG] = vec![bag::hide(&form), bag::thread(&belly)];
-        parts[FIXTURES] = fixtures;
-        parts[CHEEKS] = vec![in_head(head::cheeks())];
+        parts[LEGS] = limbs::leg(FootSide::Left);
+        parts[LEGS].extend(limbs::leg(FootSide::Right));
+        // The blowpipe is held in the lips: it goes where the head goes,
+        // its stock sliding in and out of the bag.
+        parts[HEAD] = vec![in_head(head::head()), in_head(head::neck())];
+        parts[HEAD].extend(small[1..].iter().flat_map(Pipe::meshes));
         for eye in EYES {
             parts[eye] = vec![head::eye()];
         }
+        for (drone, part) in drones.iter().zip(DRONES) {
+            parts[part] = drone.meshes();
+        }
+        let arm = limbs::arm(&small[0]);
+        parts[CHANTER] = small[0].meshes();
+        parts[CHANTER].push(arm.hand);
+        parts[FOREARM] = vec![arm.forearm];
+        parts[UPPER_ARM] = vec![arm.upper_arm];
         Model::flat(parts.into_iter().map(ModelPart::new).collect())
     }
 
-    /// Its parts' poses `fullness` of the way from one throw to the next,
-    /// watching `target` (in its own frame).
-    fn poses(fullness: f32, target: Option<Vector3<f32>>) -> Vec<Transform> {
+    /// Its parts' poses and its cheeks, blown out of `cheeks`, `fullness`
+    /// of the way from one throw to the next, its cheeks `blown`, watching
+    /// `target` (in its own frame).
+    fn poses(
+        cheeks: Arc<Bulge>,
+        fullness: f32,
+        blown: f32,
+        target: Option<Vector3<f32>>,
+    ) -> (Vec<Transform>, Vec<MeshPrimitive>) {
         let mut poses = vec![Transform::default(); PARTS];
-        let throw = Throw {
-            fullness,
-            since: None,
-            until: None,
+        let mut shaped = Vec::new();
+        let now = Showing {
+            throw: Throw {
+                fullness,
+                since: None,
+                until: None,
+            },
+            clock: 0.0,
+            blown,
+            target,
         };
-        Self::body().pose(&mut poses, throw, 0.0, target);
-        poses
+        Self::body(cheeks).pose(&mut poses, &mut shaped, &now);
+        (poses, shaped)
     }
 
     /// The states it is shown in by tools.
     pub fn exhibits() -> Vec<Exhibit> {
         let model = likeness::model_sculpted(KIND, Self::sculpt);
+        let cheeks = likeness::bulge_sculpted(KIND, head::cheeks);
         // Whoever is looking at it, it is looking back.
         let watcher = Some(Vector3::new(2.4, 1.0, 3.6));
-        let shown = |name: &'static str, poses: Vec<Transform>| Exhibit {
-            name,
-            model: model.clone(),
-            poses,
-            lift: RADIUS,
-            reach: 1.3,
-        };
-        let mut spent = Self::poses(0.0, None);
-        Self::body().slump(&mut spent);
+        let shown =
+            |name: &'static str, (poses, shaped): (Vec<Transform>, Vec<MeshPrimitive>)| Exhibit {
+                name,
+                model: model.clone(),
+                poses,
+                shaped,
+                lift: RADIUS,
+                reach: 1.3,
+            };
+        let mut spent = (vec![Transform::default(); PARTS], Vec::new());
+        Self::body(cheeks.clone()).slump(&mut spent.0, &mut spent.1);
         vec![
-            shown("slack", Self::poses(0.0, watcher)),
-            shown("swollen", Self::poses(1.0, watcher)),
+            shown("slack", Self::poses(cheeks.clone(), 0.0, 0.0, watcher)),
+            shown("swollen", Self::poses(cheeks, 1.0, 1.0, watcher)),
             shown("spent", spent),
         ]
+    }
+}
+
+/// A rider of `part` fastened into the bag at `at`: standing out of the
+/// belly as the belly does there.
+fn fastened(belly: &Clay, part: usize, at: Vector3<f32>) -> Rider {
+    let core = vector(CORE);
+    Rider {
+        part,
+        anchor: at,
+        out: surface(belly, core, at - core).1,
     }
 }
 
@@ -213,6 +300,7 @@ impl Spawnable for PiperDef {
                 });
             (body, keep_upright)
         };
+        let cheeks = likeness::bulge(KIND, materials, head::cheeks);
         let lobber = Lobber {
             range: RANGE,
             interval: INTERVAL,
@@ -220,21 +308,24 @@ impl Spawnable for PiperDef {
             since_throw: None,
             flight_time: FLIGHT_TIME,
             muzzle: Vector3::y() * MUZZLE,
-            body: Some(Self::body()),
+            body: Some(Self::body(cheeks.clone())),
+            puffing: Puffing::default(),
         };
+        // Posed as it starts, so that a level looked at without being run
+        // shows it.
+        let (poses, shaped) = Self::poses(cheeks, lobber.fullness(), 0.0, None);
         vec![world
             .create_entity()
             .with(Position(at.coords))
             .with(Velocity(Vector3::zeros()))
             .with(Orientation::default())
             .with(RigidBodyComponent(body))
-            // Posed as it starts, so that a level looked at without being
-            // run shows it.
             .with(PosedModel {
                 model: likeness::model(KIND, materials, Self::sculpt),
-                poses: Self::poses(lobber.fullness(), None),
+                poses,
                 frame: PoseFrame::Entity,
             })
+            .with(ProceduralMesh { primitives: shaped })
             .with(Renderable)
             .with(all_round(RANGE.1))
             .with(lobber)
@@ -255,13 +346,21 @@ mod tests {
         let started = Instant::now();
         let model = PiperDef::sculpt();
         println!("sculpted in {:?}", started.elapsed());
-        assert_eq!(model.parts.len(), PiperDef::poses(0.5, None).len());
+        assert_eq!(model.parts.len(), PARTS);
         let mut triangles = 0;
-        for (part, name) in model
-            .parts
-            .iter()
-            .zip(["bag", "fixtures", "cheeks", "eye", "eye"])
-        {
+        for (part, name) in model.parts.iter().zip([
+            "bag",
+            "legs",
+            "head",
+            "eye",
+            "eye",
+            "bass",
+            "tenor",
+            "stump",
+            "chanter",
+            "forearm",
+            "upper arm",
+        ]) {
             let each: Vec<usize> = part
                 .primitives
                 .iter()
@@ -270,6 +369,9 @@ mod tests {
             println!("  {name}: {each:?}");
             triangles += each.iter().sum::<usize>();
         }
+        let cheeks = head::cheeks().blown().indices.len() / 3;
+        println!("  cheeks: {cheeks}");
+        triangles += cheeks;
         println!("a piper is {triangles} triangles");
         assert!(
             (30_000..200_000).contains(&triangles),
@@ -291,7 +393,7 @@ mod tests {
         assert!(bass.tip.xz().norm() < 1e-6);
 
         let model = PiperDef::sculpt();
-        let low = model.parts[FIXTURES]
+        let low = model.parts[LEGS]
             .primitives
             .iter()
             .flat_map(|mesh| &mesh.vertices)
@@ -302,7 +404,9 @@ mod tests {
 
     #[test]
     fn its_bag_is_bigger_swollen_than_slack_and_never_leaves_the_ground() {
-        let bag = |fullness: f32| PiperDef::poses(fullness, None)[BAG].clone();
+        let cheeks = Arc::new(head::cheeks());
+        let posed = |fullness: f32| PiperDef::poses(cheeks.clone(), fullness, 0.5, None).0;
+        let bag = |fullness: f32| posed(fullness)[BAG].clone();
         let (slack, swollen) = (bag(0.0), bag(1.0));
         assert!(swollen.scale.y > slack.scale.y + 0.1);
         assert!(swollen.scale.x > slack.scale.x);
@@ -313,7 +417,7 @@ mod tests {
             assert!((seat.y + RADIUS).abs() < 1e-5, "it sits at {}", seat.y);
         }
         // Its eyes are in its head, not where they were modelled.
-        let poses = PiperDef::poses(0.5, None);
+        let poses = posed(0.5);
         for eye in EYES {
             assert!((poses[eye].translation - vector(head::HEAD)).norm() < 0.15);
         }

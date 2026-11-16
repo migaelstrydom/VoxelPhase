@@ -35,6 +35,8 @@ const THREAD: (f32, f32, f32) = (0.13, 0.09, 0.055);
 
 /// The middle of the bag's weight, which its swellings are found from.
 pub(super) const CORE: (f32, f32, f32) = (0.0, -0.05, -0.02);
+/// Where the collar round the head's neck rises from the belly.
+pub(super) const COLLAR: (f32, f32, f32) = (0.0, 0.14, 0.24);
 /// Where the bag's neck is tied off, behind it.
 const TIE: (f32, f32, f32) = (0.12, 0.13, -0.6);
 
@@ -92,12 +94,10 @@ pub(super) fn form(belly: &Clay, stocks: &[&Pipe]) -> Clay {
 
     // The collar: the bag's own mouth, drawn up round the neck of the
     // head and gathered there in a ring of puckers.
-    let head = vector(HEAD);
-    let throat = head + Vector3::new(0.0, -0.125, -0.035);
-    bag = bag.smoothing(0.08).add(
-        Lump::limb((0.0, 0.14, 0.24), triple(throat), (0.17, 0.082)),
-        HIDE_THIN,
-    );
+    let throat = throat();
+    bag = bag
+        .smoothing(0.08)
+        .add(Lump::limb(COLLAR, triple(throat), (0.17, 0.082)), HIDE_THIN);
     bag = bag.smoothing(0.01);
     for pucker in 0..13 {
         let round = TAU * pucker as f32 / 13.0;
@@ -187,6 +187,11 @@ pub(super) fn form(belly: &Clay, stocks: &[&Pipe]) -> Clay {
             depth: 0.012,
             seed: 74,
         })
+}
+
+/// Where the bag's mouth is gathered round the head's neck.
+pub(super) fn throat() -> Vector3<f32> {
+    vector(HEAD) + Vector3::new(0.0, -0.125, -0.035)
 }
 
 /// The line the bag is sewn up along, over its top from the collar to

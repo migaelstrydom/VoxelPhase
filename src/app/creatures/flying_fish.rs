@@ -952,6 +952,7 @@ impl FlyingFishDef {
                 name,
                 poses: beat.poses(phase, model.parts.len()),
                 model: model.clone(),
+                shaped: Vec::new(),
                 lift: 1.3,
                 reach: 0.82,
             })

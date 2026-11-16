@@ -3,24 +3,36 @@
 //!
 //! Everything here is modelled in the head's own frame (its middle at the
 //! origin, +Z out of its face) and set on the piper by [`bow`] and
-//! [`HEAD`]; [`in_head`] takes a point across.
+//! [`HEAD`]; [`in_head`] takes a point across. The cheeks are flesh blown
+//! out of the face and let down into it again ([`Bulge`]), given already
+//! set on the piper.
 
 use std::f32::consts::TAU;
 
 use nalgebra::{UnitQuaternion, Vector3};
 
-use super::shaping::{ease, surface, triple, turned_to, vector, wash};
+use super::shaping::{ease, placed, surface, triple, turned_to, vector, wash, way_out};
 use crate::app::creatures::anatomy::{self, EyeLook, FLESH, FLUSH};
+use crate::app::creatures::palette::Paint;
 use crate::app::sculpt::{
     scatter, Blush, Clay, Ellipsoid, Lump, Mottle, Relief, Spots, VertexPaint,
 };
-use crate::model::MeshPrimitive;
+use crate::model::{Bulge, MeshPrimitive};
 
 /// Side of the grid the head is skinned from, m, and the grids of its
 /// cheeks and its neck.
 const HEAD_GRAIN: f32 = 0.005;
-const CHEEK_GRAIN: f32 = 0.006;
 const NECK_GRAIN: f32 = 0.011;
+
+/// How far the cheeks' join to the face is rounded off, m; how far proud
+/// of the face skin must stand to be cheek and not face, m; and how much
+/// further than flat a cheek sinks under the face let down, as a share of
+/// how proud it stood.
+const CHEEK_BLEND: f32 = 0.02;
+const CHEEK_PROUD: f32 = 0.0008;
+const CHEEK_SINK: f32 = 0.15;
+/// What a cheek's crown is washed with, drawn thin over the blood.
+const CHEEK_FLUSH: Vector3<f32> = Vector3::new(1.08, 0.78, 0.74);
 
 /// The middle of the head, how far it is bowed over its pipe, radians, and
 /// the radius of its eyes, m.
@@ -31,8 +43,6 @@ const EYE_RADIUS: f32 = 0.024;
 /// lips close on the pipe; both in the head's own frame.
 const SOCKET: (f32, f32, f32) = (0.036, 0.008, 0.074);
 pub(super) const LIPS: (f32, f32, f32) = (0.0, -0.08, 0.098);
-/// What the cheeks swell about, in the head's own frame.
-pub(super) const CHEEK_ROOT: (f32, f32, f32) = (0.0, -0.055, 0.02);
 
 /// The turn that bows the head over its pipe.
 pub(super) fn bow() -> UnitQuaternion<f32> {
@@ -80,6 +90,13 @@ pub(super) fn neck() -> MeshPrimitive {
 /// lids stretched round eyes that start from it, its lips a ring round
 /// the pipe, a vein standing on its temple.
 pub(super) fn head() -> MeshPrimitive {
+    let mut mesh = anatomy::flesh(&head_clay(), HEAD_GRAIN);
+    paint_head(&mut mesh);
+    mesh
+}
+
+/// The head's form, with the cheeks let down.
+fn head_clay() -> Clay {
     let lid = (0.47, 0.27, 0.25);
     let lip = (0.36, 0.14, 0.15);
     let vein = (0.4, 0.34, 0.44);
@@ -214,7 +231,12 @@ pub(super) fn head() -> MeshPrimitive {
             .cut(Lump::ball(0.006, (0.01 * side, -0.047, 0.106)), 0.002)
             .cut(Lump::ball(0.012, (0.097 * side, 0.002, 0.0)), 0.004);
     }
-    let mut mesh = anatomy::flesh(&head, HEAD_GRAIN);
+    head
+}
+
+/// Paint the head's skin, or flesh blown out of it, by where it is on the
+/// head.
+fn paint_head(mesh: &mut MeshPrimitive) {
     // Red with the effort where the blood is near the skin, dark
     // round eyes that do not shut, and an old man's spots on the skull.
     for (at, radius, tint) in [
@@ -230,7 +252,7 @@ pub(super) fn head() -> MeshPrimitive {
             radius,
             tint: vector(tint),
         }
-        .paint(&mut mesh);
+        .paint(mesh);
     }
     Spots {
         frequency: 30.0,
@@ -239,8 +261,8 @@ pub(super) fn head() -> MeshPrimitive {
         tint: Vector3::new(0.62, 0.46, 0.38),
         salt: 91,
     }
-    .paint(&mut mesh);
-    wash(&mut mesh, |vertex| {
+    .paint(mesh);
+    wash(mesh, |vertex| {
         let closed = (1.0 - vertex.ao) / 0.75;
         Vector3::new(
             1.06 - 0.3 * closed,
@@ -248,38 +270,81 @@ pub(super) fn head() -> MeshPrimitive {
             0.9 - 0.45 * closed,
         )
     });
-    mesh
 }
 
-/// The cheeks, in the head's own frame: blown out as far as skin
-/// goes, the blood driven to the crown of each.
-pub(super) fn cheeks() -> MeshPrimitive {
-    let mut cheeks = Clay::new(0.02);
+/// The cheeks, in the piper's frame: the face blown out round the pipe as
+/// far as skin goes, the blood driven to the crown of each, and the face
+/// they lie in when they are let down.
+pub(super) fn cheeks() -> Bulge {
+    let face = head_clay();
+    let mut blown = face.clone().smoothing(CHEEK_BLEND);
     for side in [-1.0, 1.0] {
-        cheeks = cheeks
+        blown = blown
             .add(
                 Lump::mass((0.043, 0.042, 0.041), (0.052 * side, -0.06, 0.052)),
                 FLESH,
             )
             .add(Lump::ball(0.026, (0.04 * side, -0.09, 0.048)), FLESH);
     }
-    let mut mesh = anatomy::flesh(&cheeks, CHEEK_GRAIN);
+    // Only what stands proud of the face: the rest is the head's own skin.
+    let mut mesh = blown
+        .skin(HEAD_GRAIN, Paint::Skin.id())
+        .split_off(|middle| face.distance(middle) > CHEEK_PROUD);
+    // Where each point of it lies on the face when let down, how far proud
+    // of that it is blown, and the way out of the face there.
+    let let_down: Vec<(Vector3<f32>, f32, Vector3<f32>)> = mesh
+        .vertices
+        .iter()
+        .map(|vertex| {
+            let proud = face.distance(vertex.pos).max(0.0);
+            let out = way_out(&face, vertex.pos).unwrap_or_else(Vector3::z);
+            (vertex.pos - out * proud, proud, out)
+        })
+        .collect();
+
+    // Painted as the face is where it lay on the face, which stretching
+    // does not move; flushed and mottled toward the crown of each, where
+    // it is drawn thinnest.
+    let blown_at: Vec<Vector3<f32>> = mesh.vertices.iter().map(|vertex| vertex.pos).collect();
+    for (vertex, (on_face, _, _)) in mesh.vertices.iter_mut().zip(&let_down) {
+        vertex.pos = *on_face;
+    }
+    anatomy::paint_skin(&mut mesh);
+    paint_head(&mut mesh);
+    let mut flushed = mesh.clone();
     Mottle {
         frequency: 45.0,
         value: 0.12,
         warmth: 0.2,
         seed: 92,
     }
-    .paint(&mut mesh);
-    // Flushed at the crown of each, where it is drawn thinnest, and in
-    // the shadow of the face where it leaves it.
-    let root = vector(CHEEK_ROOT);
-    wash(&mut mesh, |vertex| {
-        let out = ease(0.05, 0.085, (vertex.pos - root).norm());
-        let shade = 0.62 + 0.38 * ease(0.045, 0.062, (vertex.pos - root).norm());
-        Vector3::new(1.06, 0.96 - 0.2 * out, 0.9 - 0.16 * out) * shade
-    });
-    mesh
+    .paint(&mut flushed);
+    wash(&mut flushed, |_| CHEEK_FLUSH);
+    for (((vertex, flushed), (_, proud, _)), at) in mesh
+        .vertices
+        .iter_mut()
+        .zip(&flushed.vertices)
+        .zip(&let_down)
+        .zip(blown_at)
+    {
+        vertex.color = vertex
+            .color
+            .lerp(&flushed.color, ease(0.003, 0.025, *proud));
+        vertex.pos = at;
+    }
+
+    // Let down, each point of it lies a little under the face it was
+    // blown out of, facing as the face does.
+    let (turn, shift) = (bow(), vector(HEAD));
+    let empty: Vec<(Vector3<f32>, Vector3<f32>)> = let_down
+        .iter()
+        .zip(&mesh.vertices)
+        .map(|((_, proud, out), vertex)| {
+            let sunk = vertex.pos - *out * (*proud * (1.0 + CHEEK_SINK));
+            (turn * sunk + shift, turn * out)
+        })
+        .collect();
+    Bulge::new(placed(mesh, turn, shift), empty)
 }
 
 /// One of its eyes.

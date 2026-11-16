@@ -65,10 +65,29 @@ pub(super) fn leg(side: FootSide) -> Vec<MeshPrimitive> {
     ]
 }
 
-/// The hand that fingers the chanter, and the arm it is on, out of the
-/// bag's side.
-pub(super) fn hand(chanter: &Pipe) -> Vec<MeshPrimitive> {
-    let size = 0.16;
+/// Where the arm that fingers the chanter bends, in the piper's frame.
+pub(super) struct ArmJoints {
+    /// The wrist, where the hand meets the forearm.
+    pub(super) wrist: Vector3<f32>,
+    /// The elbow, resting on the thigh.
+    pub(super) elbow: Vector3<f32>,
+    /// The shoulder, in the bag.
+    pub(super) shoulder: Vector3<f32>,
+}
+
+/// The arm's hand, forearm and upper arm, in the piper's frame.
+pub(super) struct Arm {
+    pub(super) hand: MeshPrimitive,
+    pub(super) forearm: MeshPrimitive,
+    pub(super) upper_arm: MeshPrimitive,
+}
+
+/// Size of the hand, m.
+const HAND_SIZE: f32 = 0.16;
+
+/// How the hand holds `chanter`: the turn that sets it on the pipe, and
+/// where the arm's joints are.
+fn hold(chanter: &Pipe) -> (UnitQuaternion<f32>, ArmJoints) {
     let (top, end) = (chanter.foot, chanter.tip);
     let down = (end - top).normalize();
     let held = top + (end - top) * 0.47;
@@ -78,16 +97,38 @@ pub(super) fn hand(chanter: &Pipe) -> Vec<MeshPrimitive> {
     let fingers = (inward - down * inward.dot(&down)).normalize();
     let turn = UnitQuaternion::from_basis_unchecked(&[down, fingers.cross(&down), fingers]);
     // The pipe lies in the crook of the fingers.
-    let crook = Vector3::new(0.0, -0.19 * size, 0.56 * size);
-    let wrist = held - turn * crook;
-    // The elbow rests on the thigh; the rest of the arm is in the bag.
-    let elbow = Vector3::new(0.36, -0.2, 0.38);
-    let shoulder = Vector3::new(0.27, -0.02, 0.2);
+    let crook = Vector3::new(0.0, -0.19 * HAND_SIZE, 0.56 * HAND_SIZE);
+    let joints = ArmJoints {
+        wrist: held - turn * crook,
+        // The elbow rests on the thigh; the rest of the arm is in the bag.
+        elbow: Vector3::new(0.36, -0.2, 0.38),
+        shoulder: Vector3::new(0.27, -0.02, 0.2),
+    };
+    (turn, joints)
+}
+
+/// Where the arm that fingers `chanter` bends.
+pub(super) fn arm_joints(chanter: &Pipe) -> ArmJoints {
+    hold(chanter).1
+}
+
+/// The hand that fingers the chanter, and the arm it is on, out of the
+/// bag's side.
+pub(super) fn arm(chanter: &Pipe) -> Arm {
+    let (
+        turn,
+        ArmJoints {
+            wrist,
+            elbow,
+            shoulder,
+        },
+    ) = hold(chanter);
+    let fingers = turn * Vector3::z();
     // The forearm is thin at the wrist and thick with muscle below the
     // elbow.
     let cuff = wrist - fingers * 0.03;
     let belly = elbow + (cuff - elbow) * 0.38;
-    let arm = Clay::new(0.025)
+    let forearm = Clay::new(0.025)
         .add(
             Lump::limb(triple(cuff), triple(belly), (0.017, 0.029)),
             FLESH,
@@ -96,19 +137,24 @@ pub(super) fn hand(chanter: &Pipe) -> Vec<MeshPrimitive> {
             Lump::limb(triple(belly), triple(elbow), (0.029, 0.025)),
             FLESH,
         )
-        .add(Lump::ball(0.026, triple(elbow)), FLUSH)
-        .add(
-            Lump::limb(triple(elbow), triple(shoulder), (0.027, 0.036)),
-            FLESH,
-        );
+        .add(Lump::ball(0.026, triple(elbow)), FLUSH);
+    let upper_arm = Clay::new(0.025).add(
+        Lump::limb(triple(elbow), triple(shoulder), (0.027, 0.036)),
+        FLESH,
+    );
     let mut hand = anatomy::flesh(
-        &anatomy::hand(size, 1.12, FootSide::Left),
+        &anatomy::hand(HAND_SIZE, 1.12, FootSide::Left),
         1.2 * DIGIT_GRAIN,
     );
     wash(&mut hand, |_| LIVID);
-    vec![placed(hand, turn, wrist), {
-        let mut arm = anatomy::flesh(&arm, LIMB_GRAIN);
-        wash(&mut arm, |_| LIVID);
-        arm
-    }]
+    let skin = |clay: &Clay| {
+        let mut mesh = anatomy::flesh(clay, LIMB_GRAIN);
+        wash(&mut mesh, |_| LIVID);
+        mesh
+    };
+    Arm {
+        hand: placed(hand, turn, wrist),
+        forearm: skin(&forearm),
+        upper_arm: skin(&upper_arm),
+    }
 }

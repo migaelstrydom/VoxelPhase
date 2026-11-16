@@ -64,17 +64,20 @@ pub(super) fn surface(
         }
     }
     let point = from + along * inside;
+    (point, way_out(form, point).unwrap_or(along))
+}
+
+/// The way out of `form` at `point`, if it has one there.
+pub(super) fn way_out(form: &Clay, point: Vector3<f32>) -> Option<Vector3<f32>> {
     let slope = |axis: Vector3<f32>| {
         form.distance(point + axis * 0.004) - form.distance(point - axis * 0.004)
     };
-    let out = Vector3::new(
+    Vector3::new(
         slope(Vector3::x()),
         slope(Vector3::y()),
         slope(Vector3::z()),
     )
     .try_normalize(1e-9)
-    .unwrap_or(along);
-    (point, out)
 }
 
 /// Multiply a mesh's paint by `tint`.

@@ -968,6 +968,7 @@ impl RollerDef {
                     * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), pitch),
                 ..Transform::default()
             }],
+            shaped: Vec::new(),
             lift: SCULPTED_RADIUS,
             reach: 0.62,
         };

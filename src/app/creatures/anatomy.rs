@@ -97,12 +97,18 @@ const SKIN_MOLES: Spots = Spots {
 /// skin.
 pub fn flesh(clay: &Clay, grain: f32) -> MeshPrimitive {
     let mut mesh = clay.skin(grain, Paint::Skin.id());
-    SKIN_MOTTLE.paint(&mut mesh);
-    SKIN_BLOTCHES.paint(&mut mesh);
-    SKIN_VEINS.paint(&mut mesh);
-    SKIN_STUBBLE.paint(&mut mesh);
-    SKIN_MOLES.paint(&mut mesh);
+    paint_skin(&mut mesh);
     mesh
+}
+
+/// Paint a mesh's skin as [`flesh`] does, by where each vertex is: for
+/// skin painted where it lay before it was stretched.
+pub fn paint_skin(mesh: &mut MeshPrimitive) {
+    SKIN_MOTTLE.paint(mesh);
+    SKIN_BLOTCHES.paint(mesh);
+    SKIN_VEINS.paint(mesh);
+    SKIN_STUBBLE.paint(mesh);
+    SKIN_MOLES.paint(mesh);
 }
 
 /// +1 for the side whose inner edge (its big toe, its thumb) lies toward

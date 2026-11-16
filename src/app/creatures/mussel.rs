@@ -1187,6 +1187,7 @@ impl MusselDef {
             name,
             model: model.clone(),
             poses: rig.poses(moment),
+            shaped: Vec::new(),
             lift: -GROUND,
             reach,
         };

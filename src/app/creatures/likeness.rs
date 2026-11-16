@@ -18,7 +18,7 @@ use rustc_hash::FxHashMap;
 
 use super::palette::in_level;
 use crate::animation::stilts::Dress;
-use crate::model::Model;
+use crate::model::{Bulge, Model};
 use crate::rendering::material::MaterialId;
 
 /// One kind's look: as sculpted, and as last drawn in a level's materials.
@@ -83,6 +83,7 @@ impl<T> Looks<T> {
 
 static DRESSES: Looks<Dress> = Looks::new();
 static MODELS: Looks<Model> = Looks::new();
+static BULGES: Looks<Bulge> = Looks::new();
 
 /// The dress of the walkers of `kind`, drawn in the level's bestiary
 /// materials `ids`; `sculpt` makes it against the palette's slots, the
@@ -114,4 +115,18 @@ pub fn model(kind: &'static str, ids: &[MaterialId], sculpt: fn() -> Model) -> A
 /// The model of the creatures of `kind` against the palette's slots.
 pub fn model_sculpted(kind: &'static str, sculpt: fn() -> Model) -> Arc<Model> {
     MODELS.sculpted(kind, sculpt)
+}
+
+/// The flesh the creatures of `kind` blow out of themselves (a piper's
+/// cheeks), as [`model`] is.
+pub fn bulge(kind: &'static str, ids: &[MaterialId], sculpt: fn() -> Bulge) -> Arc<Bulge> {
+    BULGES.get(kind, ids, sculpt, |bulge, ids| {
+        bulge.recoloured(in_level(ids))
+    })
+}
+
+/// The flesh the creatures of `kind` blow out of themselves, against the
+/// palette's slots.
+pub fn bulge_sculpted(kind: &'static str, sculpt: fn() -> Bulge) -> Arc<Bulge> {
+    BULGES.sculpted(kind, sculpt)
 }

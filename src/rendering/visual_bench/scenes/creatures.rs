@@ -25,7 +25,7 @@ use crate::app::creatures::{
 };
 use crate::character::{CharacterIntent, Grounding};
 use crate::core::error::EngineResult;
-use crate::model::{Model, Transform};
+use crate::model::{MeshPrimitive, Model, Transform};
 use crate::rendering::colour::Colour;
 use crate::rendering::visual_bench::scene::{
     SceneCamera, SceneContext, SceneEnvironment, SceneMesh, SceneShot, VisualScene,
@@ -113,6 +113,22 @@ fn posed_meshes(model: &Model, poses: &[Transform], aside: Vector3<f32>) -> Vec<
         }
     }
     meshes
+}
+
+/// Meshes shaped in a creature's own frame, set `aside`.
+fn shaped_meshes(shaped: &[MeshPrimitive], aside: Vector3<f32>) -> Vec<SceneMesh> {
+    let materials = creature_materials();
+    shaped
+        .iter()
+        .map(|mesh| {
+            let mut vertices = mesh.vertices.clone();
+            for vertex in &mut vertices {
+                vertex.pos += aside;
+            }
+            SceneMesh::new(vertices, mesh.indices.clone())
+                .with_surface(materials[mesh.material.0 as usize].surface_params())
+        })
+        .collect()
 }
 
 /// A walker driven across flat ground, the way the game drives it.
@@ -291,7 +307,11 @@ fn exhibit_shots(exhibits: &[Exhibit]) -> Vec<SceneShot> {
     let mut shots = Vec::new();
     for (index, exhibit) in exhibits.iter().enumerate() {
         let middle = Point3::new(0.0, exhibit.lift, 0.0);
-        let meshes = || posed_meshes(&exhibit.model, &exhibit.poses, middle.coords);
+        let meshes = || {
+            let mut meshes = posed_meshes(&exhibit.model, &exhibit.poses, middle.coords);
+            meshes.extend(shaped_meshes(&exhibit.shaped, middle.coords));
+            meshes
+        };
         let view = |label: String, round: f32, back: f32| {
             shot(
                 &label,

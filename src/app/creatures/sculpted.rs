@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use specs::{World, WorldExt};
 
-use crate::model::{Model, Transform};
+use crate::model::{MeshPrimitive, Model, Transform};
 
 use crate::creature::Perception;
 use crate::terrain::TerrainWorld;
@@ -19,6 +19,9 @@ pub struct Exhibit {
     pub model: Arc<Model>,
     /// Each part's pose in this state, in part order.
     pub poses: Vec<Transform>,
+    /// Meshes shaped for this state, in its own frame: what its
+    /// `ProceduralMesh` holds in game (a piper's cheeks).
+    pub shaped: Vec<MeshPrimitive>,
     /// How high its origin is held off the ground, m.
     pub lift: f32,
     /// How big it is across, m: what a camera frames.
