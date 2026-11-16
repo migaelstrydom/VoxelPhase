@@ -83,6 +83,11 @@ pub(super) const SWIVEL_FROM: f32 = 4.0;
 /// take a second of crossed-over steps to come back.
 const SWIVEL_FULL: f32 = 8.0;
 
+/// How much sooner or later than the gait's own swing a foot may land on a
+/// planned step, as a fraction of the time that swing would have left, to
+/// come down a plant's distance ahead of the hip.
+const SWING_GIVE: f32 = 0.3;
+
 /// The speed a swinging foot's landing is diverted at when a plan moves the
 /// footfall it swings to, in m/s, over the time the swing has left: about a
 /// stride's own.
@@ -1169,6 +1174,31 @@ fn start_step(
     planned.map(|(step, _)| step)
 }
 
+/// When a `swing` onto the planned `step` lands, in seconds from now: as the
+/// hip comes a plant's distance short of it, where the gait itself would
+/// set the foot down, and within [`SWING_GIVE`] of the time the gait's own
+/// swing would have left. `None` for a body that is not travelling.
+///
+/// The gait's own steps aim a plant's distance ahead of where the hip will
+/// be, and are aimed again as the body speeds up or slows. A planned
+/// footfall is a place, so it is the time that gives: a body that gathers
+/// speed through the swing is over the footfall sooner than the gait's
+/// clock had it, and a foot that came down in the gait's time would land
+/// behind the hips, to be lifted again at once.
+fn paced_onto(
+    step: &PlannedStep,
+    swing: &Swing,
+    timing: &GaitTiming,
+    side: FootSide,
+    ctx: &PlacerCtx<'_>,
+    facing: Vector3<f32>,
+) -> Option<f32> {
+    let (ahead, speed) = ahead_along_travel(step, side, ctx, facing)?;
+    let comes_over = (ahead - timing.plant_ahead()) / speed;
+    let own = (1.0 - swing.progress()) * timing.swing_duration;
+    Some(comes_over.clamp(own * (1.0 - SWING_GIVE), own * (1.0 + SWING_GIVE)))
+}
+
 /// How far short of the planned `step` the hip of `side` is, along the
 /// body's travel over the ground, in metres, and the speed of that travel;
 /// `None` for a body that is not travelling.
@@ -1244,10 +1274,15 @@ fn advance_stepping(
             Some((step, lands_in)) if step.landing.is_some() => {
                 swing.retime(lands_in, ctx.config.min_step_duration);
             }
+            Some((step, _)) => {
+                if let Some(lands_in) = paced_onto(&step, &swing, timing, foot.side, ctx, facing) {
+                    swing.retime(lands_in, ctx.config.min_step_duration);
+                }
+            }
             None if swing.footfall.is_some() && swing.remaining() > timing.swing_duration => {
                 swing.retime(timing.swing_duration, ctx.config.min_step_duration);
             }
-            Some(_) | None => {}
+            None => {}
         }
     }
     let planned = planned.map(|(step, _)| step);
@@ -2440,6 +2475,93 @@ mod tests {
             lifts += 1;
         }
         assert!(lifts >= 10, "{lifts} lifts");
+    }
+
+    /// A body gathering speed is over a planned footfall sooner than the
+    /// gait's clock had it when the foot lifted. The swing is paced to the
+    /// footfall, so the foot comes down on it ahead of its hip; in the
+    /// gait's own time it would be too late for the footfall, and the legs
+    /// would give the plan up until the body was at speed.
+    #[test]
+    fn a_foot_lands_on_a_planned_footfall_ahead_of_a_hip_gathering_speed() {
+        const DT: f32 = 1.0 / 60.0;
+        const SPEED: f32 = 8.0;
+        const GATHERS: f32 = 16.0;
+        const NAMED_FROM: f32 = 0.1;
+        let config = FootPlacerConfig::default();
+        let dims = RigDims::player();
+        let gait = GaitParams::walk();
+        // The plan lays its footfalls for the speed asked for, from the
+        // start, as the game's does.
+        let step = GaitTiming::level_step(
+            SPEED,
+            dims.standing_height,
+            dims.leg_length,
+            gait.stride_gain,
+            &config,
+        );
+        let footfall = |side: FootSide, pelvis_z: f32| {
+            let first = match side {
+                FootSide::Right => 0.0,
+                FootSide::Left => step,
+            };
+            let nth = ((pelvis_z + NAMED_FROM - first) / (2.0 * step)).ceil();
+            Point3::new(-0.12 * side.side_sign(), 0.0, first + nth * 2.0 * step)
+        };
+        let planned = |side: FootSide, pelvis_z: f32| {
+            Some(PlannedStep {
+                id: None,
+                at: footfall(side, pelvis_z),
+                landing: None,
+            })
+        };
+        let frames = simulate_planned(
+            dims,
+            config.clone(),
+            150,
+            |_| DT,
+            gait,
+            |_, _| Some(0.0),
+            |f| {
+                let speed = (GATHERS * DT * f as f32).min(SPEED);
+                Input::moving(Vector3::new(0.0, 0.0, speed), 0.0)
+            },
+            |_| false,
+            |_, pelvis, _| PlannedSteps {
+                left: planned(FootSide::Left, pelvis.z),
+                right: planned(FootSide::Right, pelvis.z),
+            },
+        );
+
+        let mut on_footfalls = 0;
+        let mut while_gathering = 0;
+        for pair in frames.windows(2) {
+            for (before, now) in [
+                (&pair[0].left, &pair[1].left),
+                (&pair[0].right, &pair[1].right),
+            ] {
+                if !before.is_stepping() || !now.is_planted() {
+                    continue;
+                }
+                let on = footfall(now.side, now.planted_position.z - 2.0 * NAMED_FROM);
+                if planar_distance(now.planted_position, on) > 0.03 {
+                    continue;
+                }
+                on_footfalls += 1;
+                while_gathering += usize::from(pair[1].velocity.z < SPEED);
+                let lead = now.planted_position.z - pair[1].pelvis.z;
+                assert!(
+                    lead > 0.1,
+                    "{:.2} s: landed {lead:.2} m ahead of its hip",
+                    pair[1].time
+                );
+            }
+        }
+        assert!(on_footfalls >= 8, "{on_footfalls} plants on footfalls");
+        assert!(
+            while_gathering >= 2,
+            "{while_gathering} plants on footfalls while gathering speed"
+        );
     }
 
     /// Legs that go off keep no footfall, and coming back on far below they
