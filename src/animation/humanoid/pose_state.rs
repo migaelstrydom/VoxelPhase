@@ -219,6 +219,19 @@ impl PoseState {
         }
     }
 
+    /// Whether the legs are a standing body's, on foot or in the air, and
+    /// drawn where such legs go (`LegEnvelope`). A swimmer's trail down its
+    /// stroke and a hanger's climb the wall, by rules of their own.
+    pub fn stands_on_its_legs(&self) -> bool {
+        match self {
+            PoseState::Grounded { .. }
+            | PoseState::Launching { .. }
+            | PoseState::Hop { .. }
+            | PoseState::Airborne { .. } => true,
+            PoseState::Swimming { .. } | PoseState::Hanging => false,
+        }
+    }
+
     /// The kind of flight this pose is in, if it is in the air: what a
     /// landing from it squashes by.
     pub fn air_kind(&self) -> Option<AirKind> {

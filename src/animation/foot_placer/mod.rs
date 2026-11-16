@@ -8,6 +8,7 @@
 mod capture_point;
 mod clock;
 mod config;
+mod envelope;
 mod mode;
 mod placer;
 mod planned;
@@ -31,6 +32,7 @@ mod sim;
 mod trace;
 
 pub use config::FootPlacerConfig;
+pub use envelope::LegEnvelope;
 pub use mode::LegMode;
 pub(crate) use placer::{floor_height_at, is_floor};
 pub use placer::{FootPhase, FootPlacer, FootSide, PlacerCtx, PlacerFoot};

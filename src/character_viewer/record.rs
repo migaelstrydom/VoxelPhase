@@ -71,7 +71,8 @@ pub struct FrameRecord {
 /// One foot of one frame.
 #[derive(Clone, Copy, Debug)]
 pub struct FootRecord {
-    /// Whether the foot placer has the foot planted.
+    /// Whether the foot placer has the foot planted on the ground: not while
+    /// the legs are off and it holds the feet where a pose draws them.
     pub planted: bool,
     /// Where the foot placer has it planted; meaningful while `planted`.
     pub anchor: Point3<f32>,

@@ -35,9 +35,10 @@ const LEVEL_EXTENSION: f32 = 0.75;
 /// How much of its length a leg may span with its foot over its own hip:
 /// less is a heel tucked up behind.
 const OVER_HIP_EXTENSION: f32 = 0.45;
-/// How far past the leg's length a foot may be asked for, as a fraction of
-/// it: the gait lets a pushing-off leg stretch by 15%.
-const OVERREACH: f32 = 1.2;
+/// How far from where it was asked for a foot may be drawn, in metres: the
+/// gait lets a pushing-off leg stretch past its bones by 15%, which the rig
+/// draws 7 cm short.
+const REINED_BY: f32 = 0.12;
 /// The fastest a drawn foot moves against the pelvis, in m/s: what the rig
 /// holds its feet to (`humanoid::FootSlew`), and a little.
 const SNAP_SPEED: f32 = 14.5;
@@ -62,8 +63,11 @@ pub enum Oddity {
     Level,
     /// A foot over its own hip, the leg not tucked.
     OverHip,
-    /// A foot asked for well past the leg's reach, which the rig draws short.
-    Overreach,
+    /// A foot drawn well away from where it was asked for: asked for where
+    /// no leg goes, or faster than a foot moves, and held to what one does
+    /// by the rig's last word on its feet. Nothing odd is seen; something
+    /// upstream asked for it.
+    Reined,
     /// A drawn foot that jumps against the pelvis in one frame.
     Snap,
     /// A foot asked for somewhere else from one frame to the next, faster
@@ -83,7 +87,7 @@ impl Oddity {
     pub const ALL: [Oddity; 8] = [
         Oddity::Level,
         Oddity::OverHip,
-        Oddity::Overreach,
+        Oddity::Reined,
         Oddity::Snap,
         Oddity::Jump,
         Oddity::Crossed,
@@ -95,7 +99,7 @@ impl Oddity {
         match self {
             Oddity::Level => "level",
             Oddity::OverHip => "over_hip",
-            Oddity::Overreach => "overreach",
+            Oddity::Reined => "reined",
             Oddity::Snap => "snap",
             Oddity::Jump => "jump",
             Oddity::Crossed => "crossed",
@@ -110,7 +114,7 @@ impl Oddity {
             Oddity::Stalled => STALL_SECONDS,
             Oddity::Level
             | Oddity::OverHip
-            | Oddity::Overreach
+            | Oddity::Reined
             | Oddity::Snap
             | Oddity::Jump
             | Oddity::Crossed
@@ -139,9 +143,8 @@ pub struct Finding {
     /// How long it lasted, in seconds.
     pub seconds: f32,
     /// The oddity's own measure at its worst: degrees off straight down,
-    /// metres over the hip, the reach asked as a fraction of the leg, metres
-    /// snapped or jumped, metres crossed, the leg's span as a fraction, or
-    /// zero.
+    /// metres over the hip, metres reined in, snapped or jumped, metres
+    /// crossed, the leg's span as a fraction, or zero.
     pub worst: f32,
 }
 
@@ -313,7 +316,7 @@ fn worse(oddity: Oddity, a: f32, b: f32) -> f32 {
         Oddity::Folded => a.min(b),
         Oddity::Level
         | Oddity::OverHip
-        | Oddity::Overreach
+        | Oddity::Reined
         | Oddity::Snap
         | Oddity::Jump
         | Oddity::Crossed
@@ -341,9 +344,9 @@ fn oddities(
         if span < FOLDED_EXTENSION {
             seen.push((Oddity::Folded, leg, span));
         }
-        let asked = (foot.asked - foot.hip).norm() / frame.leg_length.max(1.0e-3);
-        if asked > OVERREACH {
-            seen.push((Oddity::Overreach, leg, asked));
+        let reined = (foot.asked - foot.position).norm();
+        if reined > REINED_BY {
+            seen.push((Oddity::Reined, leg, reined));
         }
         if let Some(previous) = previous.filter(|_| dt > 0.0) {
             // As each frame's body faces: a body that spins takes its feet
@@ -517,11 +520,11 @@ mod tests {
     }
 
     #[test]
-    fn a_foot_asked_for_past_the_leg_is_an_overreach() {
+    fn a_foot_drawn_far_from_where_it_was_asked_for_was_reined_in() {
         let mut stretched = frame(0, STAND_LEFT, STAND_RIGHT);
         stretched.feet[1].asked = stretched.feet[1].hip + Vector3::new(0.0, -0.5, -0.45);
         let audit = PoseAudit::of(&[stretched]);
-        assert_eq!(audit.tally(Oddity::Overreach).findings, 1);
+        assert_eq!(audit.tally(Oddity::Reined).findings, 1);
     }
 
     #[test]

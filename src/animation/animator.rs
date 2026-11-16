@@ -7,7 +7,8 @@ use nalgebra::{Point3, Vector3};
 use specs::{Component, VecStorage};
 
 use super::config::{CharacterRigConfig, GaitPreset};
-use super::foot_placer::{FootPlacer, FootSide, LegMode, PlacerFoot};
+use super::foot_placer::{FootPlacer, FootSide, LegEnvelope, LegMode, PlacerFoot};
+use super::humanoid::body_frame::BodyFrame;
 use super::humanoid::foot_slew::FootSlew;
 use super::humanoid::hang::{FigureNow, Hang, LedgeReading};
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Stroke, Takeoff, TickCtx};
@@ -375,13 +376,30 @@ impl CharacterAnimator {
         self.apply_fragment_to_state(&fragment);
         self.skeleton
             .apply_fragment(&fragment, &self.state, &self.config);
+        // The last word on the feet: inside the envelope a leg goes in,
+        // against the hips as drawn (a crouch, a wind-up and a landing lower
+        // them after the gait has placed its feet), and moving no faster
+        // than a foot moves.
         let skeleton = &self.skeleton;
-        let [left, right] = self.foot_slew.limit(
-            [skeleton.left_hip, skeleton.right_hip],
-            [skeleton.left_foot, skeleton.right_foot],
-            facing,
-            dt,
-        );
+        let hips = [skeleton.left_hip, skeleton.right_hip];
+        let mut feet = [skeleton.left_foot, skeleton.right_foot];
+        if self.pose_state.stands_on_its_legs() {
+            let frame = BodyFrame::new(facing, self.state.body_pitch);
+            let reach = self.config.leg_length() * self.config.foot_placer.max_leg_stretch_ratio;
+            let own_sides = [frame.left(), frame.right];
+            for side in 0..2 {
+                feet[side] = LegEnvelope::new(
+                    hips[side],
+                    frame.up,
+                    own_sides[side],
+                    self.config.hip_width,
+                    reach,
+                    self.config.foot_placer.own_side,
+                )
+                .draw(feet[side]);
+            }
+        }
+        let [left, right] = self.foot_slew.limit(hips, feet, facing, dt);
         self.skeleton
             .place_feet(left, right, &self.state, &self.config);
         // While the legs are off the pose draws the feet (a faller's under

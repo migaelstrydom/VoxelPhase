@@ -580,14 +580,16 @@ Each step ships with the game working, and its tests.
      is leaving with the leg pointing level at it, steps whatever the
      gait's support and stagger rules say (`placer::LET_GO_MARGIN`,
      `LET_GO_TANGENT`).
-   - **One envelope draws every foot** (`placer::within_leg`): no higher
-     than a tucked knee, no further off straight down than a stride sweeps,
-     no further than the leg stretches. A plant or a swing the body has
+   - **One envelope draws every foot** (`foot_placer::LegEnvelope`): no
+     higher than a tucked knee, no further off straight down than a stride
+     sweeps, no further than the leg stretches, and for the humanoid on its
+     own side of the body. A plant or a swing the body has
      outrun is drawn at its edge, knee bent, and a foot too high on a rock
      stands sunk into it.
    - **A planned step is checked before it is swung to**
-     (`placer::planned_landing`): not behind a body travelling on, off to
-     its side, a storey above or below, or a long flight away.
+     (`planned::planned_landing`): not behind a body travelling on, off to
+     its side or across its midline, a storey above or below, strides
+     short of where the body will be, or a long flight away.
    - **Feet go round with a body that spins** faster than feet step
      (`placer::swivel_feet`): an about-face on the stick turns the body half
      round in an eighth of a second.

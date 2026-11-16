@@ -168,7 +168,8 @@ Airborne feet are not planted, and they hold no place in the world. The placer's
 
 A plant and a swing are places in the world, and the hip is a body that may rise, drop, spin or outrun them. Three rules keep what is drawn a leg, whatever the gait and the plan do:
 
-- **`within_leg`** draws every foot the placer holds, planted or swinging, no higher than a tucked knee (`SWING_LEAST_DROP`), no further off straight down than a stride sweeps (`SWING_CONE_TANGENT`, 60 degrees) and no further than the leg stretches. Inside it a foot is drawn where it is; a plant or swing outside it is drawn at its edge, knee bent.
+- **`LegEnvelope`** (`foot_placer/envelope.rs`) draws every foot the placer holds, planted or swinging, no higher than a tucked knee (`SWING_LEAST_DROP`), no further off straight down than a stride sweeps (`SWING_CONE_TANGENT`, 60 degrees), no further than the leg stretches and, for legs that keep to their own sides (`FootPlacerConfig::own_side`, the humanoid's), not across the body's midline. Inside it a foot is drawn where it is; a plant or swing outside it is drawn at its edge, knee bent.
+- **A planned step is checked before it is swung to** (`planned::planned_landing`): the plan says where a foot lands, and the legs take the step only where the body is coming to it.
 - **The legs let go** of a planted foot the hip has left out of reach (`LET_GO_MARGIN`), or is leaving with the leg pointing level at it (`LET_GO_TANGENT`): it steps at once, whatever the support and stagger rules say.
 - **`humanoid::FootSlew`** has the last word on where the humanoid's feet are drawn: no faster against the hips than a foot moves (14 m/s).
 

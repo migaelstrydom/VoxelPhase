@@ -437,7 +437,9 @@ fn foot_record(
         ),
     };
     let foot = animator.locomotion.foot(side);
-    let ground = foot.is_planted().then(|| {
+    // Off, the legs hold the feet where the pose draws them: on no ground.
+    let planted = foot.is_planted() && !animator.locomotion.placer().is_suspended();
+    let ground = planted.then(|| {
         ride_floor_at(
             world,
             physics,
@@ -448,7 +450,7 @@ fn foot_record(
         .map(|centre| centre - FOOT_CAST_RADIUS)
     });
     FootRecord {
-        planted: foot.is_planted(),
+        planted,
         anchor: foot.planted_position,
         position: drawn,
         asked,

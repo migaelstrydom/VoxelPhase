@@ -45,9 +45,9 @@
 //!
 //! `--audit` prints, in place of the report, whether each run's legs were
 //! drawn as legs (`character_viewer/pose_audit.rs`): per oddity (a straight
-//! leg held out level, a foot over its hip, a foot asked for past the leg's
-//! reach, a foot snapping against the pelvis or asked to jump, crossed feet, a folded leg,
-//! legs that stopped stepping), how many times, over how many frames, and the
+//! leg held out level, a foot over its hip, a foot reined in from where it
+//! was asked for, a foot snapping against the pelvis or asked to jump, crossed
+//! feet, a folded leg, legs that stopped stepping), how many times, over how many frames, and the
 //! longest. One scenario alone also lists each finding with its time.
 //! `--feet` ends each report row with where each foot was drawn against the
 //! pelvis.
@@ -375,10 +375,15 @@ fn run_soak(soak: &Soak, config: &RunConfig) -> ExitCode {
     };
     println!("{}", total.row(&format!("{} runs", audits.len())));
     let held = |audit: &PoseAudit| -> usize {
-        [Oddity::Level, Oddity::OverHip, Oddity::Overreach]
-            .into_iter()
-            .map(|oddity| audit.tally(oddity).frames)
-            .sum()
+        [
+            Oddity::Level,
+            Oddity::OverHip,
+            Oddity::Crossed,
+            Oddity::Folded,
+        ]
+        .into_iter()
+        .map(|oddity| audit.tally(oddity).frames)
+        .sum()
     };
     audits.sort_by_key(|(_, audit)| std::cmp::Reverse((held(audit), audit.odd_frames())));
     println!("-- drawn oddly for longest");
