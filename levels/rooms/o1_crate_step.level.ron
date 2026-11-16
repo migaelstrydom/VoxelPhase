@@ -1,0 +1,54 @@
+// Room O1 — a crate is a step (docs/GAME_DESIGN.md, Objects).
+//
+// The exit is on a cliff top 4.5 m up, past the 3.2 m a jump catches. A
+// wooden crate 1.6 m on a side stands out on the floor. Push it to the foot
+// of the cliff and climb it: from its top the lip is 2.9 m up.
+//
+//               N (+z)
+//   ┌─────────────────────────────────┐
+//   │          cliff top, exit ◎      │  top at 6.5
+//   │═════════════════════════════════│  face at z = 20
+//   │                                 │
+//   │      ▣ crate                    │  floor at 2
+//   │                                 │
+//   │               ☺ spawn            │
+//   └─────────────────────────────────┘
+Level(
+    name: "O1 Crate Step",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (32.0, 24.0, 32.0)),
+                base_height: 2.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 2.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The cliff: 4.5 m tall, wall to wall.
+                    Plateau(min: (0.0, 20.0), max: (32.0, 32.0), height: 6.5),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Crate(pos: (10.0, 2.8, 12.0), size: 0.8),
+                Goal(pos: (16.0, 6.5, 26.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (16.0, 3.0, 6.0),
+)

@@ -2,8 +2,19 @@
 // `level_check` (see `levels/mesh_baselines.ron` for what the figures mean).
 (
     entries: [
+        (level: "b2_shimmy.level.ron", triangles: 41588, open_edges: 0),
+        (level: "e2_thin_bank.level.ron", triangles: 31392, open_edges: 0),
         (level: "e3_rubble_ramp.level.ron", triangles: 30888, open_edges: 0),
+        (level: "e5_bank_and_stair.level.ron", triangles: 32652, open_edges: 0),
+        (level: "e7_crates_on_the_corner.level.ron", triangles: 44196, open_edges: 0),
+        (level: "e9_one_way_down.level.ron", triangles: 40880, open_edges: 0),
+        (level: "m2_platform_and_column.level.ron", triangles: 44456, open_edges: 0),
+        (level: "m3_out_of_step.level.ron", triangles: 42816, open_edges: 0),
+        (level: "o1_crate_step.level.ron", triangles: 29084, open_edges: 0),
+        (level: "o2_raft.level.ron", triangles: 40600, open_edges: 0),
+        (level: "o3_trampoline.level.ron", triangles: 28736, open_edges: 0),
         (level: "w1_flood_the_hollow.level.ron", triangles: 86320, open_edges: 0),
+        (level: "w2_drain_the_pit.level.ron", triangles: 46848, open_edges: 0),
         (level: "w3_which_bank.level.ron", triangles: 109544, open_edges: 0),
     ],
 )

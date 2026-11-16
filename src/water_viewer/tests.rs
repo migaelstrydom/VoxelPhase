@@ -159,3 +159,24 @@ fn room_w1_a_high_breach_floods_the_pit_to_the_island() {
         "the pit stands at {pit}, not within 0.2 m of the island's top at {ISLAND_TOP}"
     );
 }
+
+/// Room W2's promise: the dam holed low, from the channel's floor, drains the
+/// pit to a wade over the exit on its floor (2.0); holed high, from the rim,
+/// it leaves the pit too deep to reach the exit from its surface.
+#[test]
+fn room_w2_only_a_low_breach_drains_the_pit() {
+    const WADE: f32 = 3.0;
+    let low = run("room_w2_breach_low");
+    let low = probe(&low, "pit").last().copied().flatten().unwrap_or(2.0);
+    assert!(
+        low < WADE,
+        "holed low, the pit stands at {low}, over {WADE}"
+    );
+    let high = run("room_w2_breach_high");
+    let high = probe(&high, "pit").last().copied().flatten();
+    let high = high.unwrap_or_else(|| panic!("holed high, the pit drained dry"));
+    assert!(
+        high > 5.0,
+        "holed high, the pit fell to {high}: the exit is in reach"
+    );
+}

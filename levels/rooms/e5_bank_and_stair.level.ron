@@ -1,0 +1,72 @@
+// Room E5 — a blast can cost height (docs/GAME_DESIGN.md, Earth).
+//
+// The exit is on a cliff top 8 m up. A notch in the cliff holds a rock stair
+// up to it, whose lowest tread, the landing, is 4.2 m off the floor: out of
+// reach. Across the notch's mouth lies a bank of earth 1.7 m high, which looks
+// like the thing in the way. It is the way: from its top the landing is
+// 2.5 m up. Blast it and the crater it leaves puts the landing further out of
+// reach than before; the room has to be reset.
+//
+// The stair and landing are rock, so a grenade only dents them: a crater cut
+// in their face is no foothold. The bank is dirt.
+//
+//               N (+z)
+//   ┌───────────────┬─────┬───────────────┐
+//   │  cliff top    │stair│   exit ◎      │  top at 10
+//   │               │  ▲  │               │
+//   │               │land.│               │  landing at 6.2, z 14–16
+//   ├───────────────┤▀▀▀▀▀├───────────────┤  face at z = 14
+//   │               │bank │               │  bank top 3.7, z 12–14
+//   │                                     │  floor at 2
+//   │                 ☺ spawn             │
+//   └─────────────────────────────────────┘
+//    x 0            13    19              32
+Level(
+    name: "E5 Bank and Stair",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (32.0, 24.0, 32.0)),
+                base_height: 2.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 2.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The cliff, 8 m tall, wall to wall.
+                    Plateau(min: (0.0, 14.0), max: (32.0, 32.0), height: 10.0),
+                    // The notch the stair climbs in.
+                    Plateau(min: (13.0, 14.0), max: (19.0, 22.0), height: 2.0),
+                ],
+
+                volumes: [
+                    // The landing, the stair's lowest tread: rock.
+                    Platform(center: (16.0, 6.2, 15.0), half_extents: (3.0, 1.0), thickness: 4.7),
+                    // The stair from the landing to the cliff top: rock.
+                    Staircase(from: (16.0, 6.2, 16.0), to: (16.0, 10.0, 22.0), width: 6.0, steps: 5, thickness: 4.7),
+                    // The bank across the notch's mouth: dirt.
+                    Platform(center: (16.0, 3.7, 13.0), half_extents: (3.0, 1.0), thickness: 2.2, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (16.0, 10.0, 27.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (16.0, 3.0, 4.0),
+)

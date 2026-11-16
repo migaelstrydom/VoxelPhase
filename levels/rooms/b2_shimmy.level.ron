@@ -1,0 +1,67 @@
+// Room B2 — shimmy past a gap (docs/GAME_DESIGN.md, Body).
+//
+// A corridor between two walls, its floor broken by a chasm 12 m long: past
+// any jump. The west wall is 3 m high, a lip a full jump catches, with a roof
+// half a metre in from its edge 0.6 m over its top: room to hang from, none to
+// stand on. Jump, catch the lip, shimmy north along it past the chasm, and
+// drop to the floor beyond.
+//
+//               N (+z)
+//   ┌────────┬─────────────────┬───────┐
+//   │  wall  │  floor, exit ◎  │ wall  │  floor at 2
+//   │  top   ├─────────────────┤ to 14 │  z = 22
+//   │  5.0,  │                 │       │
+//   │  roof  │  chasm, floor   │       │
+//   │  over  │  at -6          │       │
+//   │  it    ├─────────────────┤       │  z = 10
+//   │        │  ☺ spawn        │       │
+//   └────────┴─────────────────┴───────┘
+//    x 0      10                20      32
+Level(
+    name: "B2 Shimmy",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (32.0, 24.0, 32.0)),
+                base_height: 2.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 2.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The east wall, too tall to climb.
+                    Plateau(min: (20.0, 0.0), max: (32.0, 32.0), height: 14.0),
+                    // The chasm.
+                    Plateau(min: (10.0, 10.0), max: (20.0, 22.0), height: -6.0),
+                ],
+
+                volumes: [
+                    // The west wall: its face at x = 10, its top 3 m over the
+                    // floor, from the chasm's floor up.
+                    Platform(center: (8.0, 5.0, 16.0), half_extents: (2.0, 16.0), thickness: 11.5),
+                    // The roof over it, half a metre in from its lip.
+                    Platform(center: (7.75, 6.6, 16.0), half_extents: (1.75, 16.0), thickness: 1.0),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (15.0, 2.0, 27.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (15.0, 3.0, 4.0),
+)

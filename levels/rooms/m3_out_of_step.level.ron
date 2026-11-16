@@ -1,0 +1,71 @@
+// Room M3 — two platforms out of step (docs/GAME_DESIGN.md, Machines).
+//
+// A chasm 26 m wide with a rock pillar in its middle, its top level with both
+// edges. One platform shuttles between the near edge and the pillar, another
+// between the pillar and the far edge, at different speeds, so they meet the
+// pillar at different times. Ride the first out, wait on the pillar for the
+// second, and ride it across. Each gap is past any jump.
+//
+//               N (+z)
+//   ┌─────────────────────────────────┐
+//   │          far edge, exit ◎       │  ground at 10
+//   ├─────────────────────────────────┤  z = 32
+//   │              ▭▭▭  slow          │  z 22.0 → 30.4
+//   │              ▪▪▪ pillar          │  z 18–20, top at 10
+//   │              ▭▭▭  fast          │  z 7.6 → 16.0
+//   ├─────────────────────────────────┤  z = 6
+//   │              ☺ spawn             │  chasm floor at -4
+//   └─────────────────────────────────┘
+Level(
+    name: "M3 Out of Step",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (32.0, 24.0, 40.0)),
+                base_height: 10.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The chasm, wall to wall.
+                    Plateau(min: (0.0, 6.0), max: (32.0, 32.0), height: -4.0),
+                ],
+
+                volumes: [
+                    // The pillar, 2 m square, from the chasm's floor.
+                    Platform(center: (16.0, 10.0, 19.0), half_extents: (1.5, 1.0), thickness: 14.5),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                MovingPlatform(
+                    waypoints: [(16.0, 9.85, 7.6), (16.0, 9.85, 16.0)],
+                    half_extents: (1.5, 0.15, 1.5),
+                    speed: 2.5,
+                ),
+                MovingPlatform(
+                    waypoints: [(16.0, 9.85, 22.0), (16.0, 9.85, 30.4)],
+                    half_extents: (1.5, 0.15, 1.5),
+                    speed: 1.2,
+                ),
+                Goal(pos: (16.0, 10.0, 36.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (16.0, 11.0, 3.0),
+)

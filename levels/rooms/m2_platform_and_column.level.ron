@@ -1,0 +1,74 @@
+// Room M2 — a bank in a machine's way (docs/GAME_DESIGN.md, Machines).
+//
+// A chasm 16 m wide, past any jump, lies between the player and the exit. A
+// powered platform would shuttle across it, deck level with both edges, but a
+// column of earth stands in the chasm right in front of its dock, and it sits
+// pressed against the column going nowhere. Cut the column at the deck's
+// height and the platform sets off on its run.
+//
+// The cut has to be made from the ground: a grenade needs 3 m of flight to
+// arm, and from the deck the column is a metre off. The column is slender
+// dirt (1.2 m square) standing only 1.5 m over the deck, so one grenade takes
+// all of it above the deck's underside and leaves nothing to fall. A taller
+// column dropped its top on the docked platform and knocked it into the
+// chasm.
+//
+//               N (+z)
+//   ┌─────────────────────────────────┐
+//   │          far edge, exit ◎       │  ground at 10
+//   ├─────────────────────────────────┤  z = 28
+//   │                                 │
+//   │                                 │  chasm, floor at -4
+//   │               ▪ column          │  column at z 16, top at 11.5
+//   │              ▭▭▭ platform       │  platform shuttles z 13.6 → 26.4
+//   ├─────────────────────────────────┤  z = 12
+//   │               ☺ spawn            │
+//   └─────────────────────────────────┘
+Level(
+    name: "M2 Platform and Column",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (32.0, 24.0, 40.0)),
+                base_height: 10.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The chasm, wall to wall.
+                    Plateau(min: (0.0, 12.0), max: (32.0, 28.0), height: -4.0),
+                ],
+
+                volumes: [
+                    // The column, from the chasm's floor to 1.5 m over the
+                    // edges, 0.3 m off the docked deck's front.
+                    Platform(center: (16.0, 11.5, 16.0), half_extents: (0.6, 0.6), thickness: 16.0, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                MovingPlatform(
+                    waypoints: [(16.0, 9.85, 13.6), (16.0, 9.85, 26.4)],
+                    half_extents: (1.5, 0.15, 1.5),
+                ),
+                Goal(pos: (16.0, 10.0, 33.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (16.0, 11.0, 4.0),
+)

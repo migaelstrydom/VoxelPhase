@@ -1,0 +1,71 @@
+// Room E9 — a hole is a one-way door (docs/GAME_DESIGN.md, Earth).
+//
+// The player starts on an island of earth 2.5 m thick, floating high over a
+// floor far below. The exit is on a smaller island 10 m straight under the
+// first, tucked 1.5 m in from its south edge: looked for over that edge it
+// shows, but stepping off the edge falls past it. Dig down through the upper
+// island where the lower one lies, and drop through the hole onto it.
+//
+// The islands are all earth under the grass: three grenades, each thrown
+// into the last one's crater, go through.
+// A fall that misses ends on the floor 25 m down, and the room must be reset.
+//
+//   side view, looking west              plan
+//                                         N (+z)
+//    ☺                                   ┌───────────────────────┐
+//   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  top 19.25    │ upper island,         │ z = 32
+//                                         │ x 8–32                │
+//                     ▀▀▀▀▀  top 9.5      │       ☺               │
+//                    lower, z 9.5–17.5    │                       │
+//                                         │      ┌─────┐          │
+//                                         │      │lower│          │
+//   ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁  floor at -6   │      │  ◎  │          │
+//                                         │      └─────┘          │ z = 8
+//                                         └───────────────────────┘
+Level(
+    name: "E9 One Way Down",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                // Each island is a slab of dirt under a skin of grass. An
+                // `Island` volume takes its materials from the layers under the
+                // floor far below, and came out dirt on top and grass beneath.
+                volumes: [
+                    // The upper island, where the player starts.
+                    Platform(center: (20.0, 19.25, 20.0), half_extents: (12.0, 12.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 18.25, 20.0), half_extents: (12.0, 12.0), thickness: 1.5, material: Dirt),
+                    // The lower island, with the exit, under the upper's south edge.
+                    Platform(center: (20.0, 9.5, 13.5), half_extents: (4.0, 4.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 8.5, 13.5), half_extents: (4.0, 4.0), thickness: 1.0, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (20.0, 9.5, 13.5), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (20.0, 20.3, 28.0),
+)

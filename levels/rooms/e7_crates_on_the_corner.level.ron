@@ -1,0 +1,77 @@
+// Room E7 — shared support (docs/GAME_DESIGN.md, Earth).
+//
+// A walkway of earth crosses a chasm in an L: north from the player's edge,
+// then east to the exit. It is fixed to the ground only at its east end; the
+// long north arm hangs from the corner. A stack of three crates stands on the
+// corner, filling the walkway's width and too tall to climb. A grenade at the
+// crates cuts the corner, and the north arm, with the player's way across,
+// falls into the chasm. Push the stack north instead, off the corner's open
+// side, or carry the crates off.
+//
+// The north arm stops 1.5 m short of the player's edge: a step across, and no
+// join to hold it up.
+//
+//               N (+z)
+//   ┌───────────────────────────────────┐
+//   │                                   │
+//   │          ▣━━━━━━━━━━━━┓exit ◎     │  exit terrace x 26–36, z 24–40
+//   │          ┃ corner     ┗━━━━━━     │  east arm z 27.45–29.05
+//   │          ┃                         │
+//   │          ┃ north arm               │  chasm, floor at -4
+//   │          ┃ x 14.2–15.8             │  walkway top at 10
+//   │          ┃ z 9.5–29.05             │
+//   ├───────────────────────────────────┤  z = 8
+//   │          ☺ spawn                    │  ground at 10
+//   └───────────────────────────────────┘
+//    x 0       15            26          36
+Level(
+    name: "E7 Crates on the Corner",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (36.0, 24.0, 40.0)),
+                base_height: 10.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The chasm.
+                    Plateau(min: (0.0, 8.0), max: (36.0, 40.0), height: -4.0),
+                    // The exit terrace.
+                    Plateau(min: (26.0, 24.0), max: (36.0, 40.0), height: 10.0),
+                ],
+
+                volumes: [
+                    // The north arm, hanging from the corner.
+                    Platform(center: (15.0, 10.0, 19.275), half_extents: (0.8, 9.775), thickness: 1.0, material: Dirt),
+                    // The corner and the east arm, into the exit terrace.
+                    Platform(center: (20.6, 10.0, 28.25), half_extents: (6.4, 0.8), thickness: 1.0, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Stack(
+                    base: (15.0, 10.0, 28.25),
+                    items: [Crate(size: 0.6), Crate(size: 0.6), Crate(size: 0.6)],
+                ),
+                Goal(pos: (31.0, 10.0, 32.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (15.0, 11.0, 4.0),
+)

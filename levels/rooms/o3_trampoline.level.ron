@@ -1,0 +1,58 @@
+// Room O3 — a lifter in the wrong place (docs/GAME_DESIGN.md, Objects).
+//
+// The exit is on a cliff top 4.2 m up, past the 3.2 m a jump catches. A
+// trampoline stands out on the floor, 7 m from the cliff. Bounced on where it
+// stands, it throws the player high and nowhere. Grab it and carry it toward
+// the cliff (its frame is light and loose; walked into, it is not pushed, the
+// walker goes in under its bed), then bounce, pump it with hops, and lean
+// into the cliff at the top of a bounce: pumped, a bounce lifts the feet
+// about 3.8 m, and carries the player onto the cliff from 3.5 m out.
+//
+//               N (+z)
+//   ┌─────────────────────────────────┐
+//   │          cliff top, exit ◎      │  top at 6.2
+//   │═════════════════════════════════│  face at z = 20
+//   │                                 │
+//   │               ◯ trampoline      │  floor at 2
+//   │                                 │
+//   │               ☺ spawn            │
+//   └─────────────────────────────────┘
+Level(
+    name: "O3 Trampoline",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (32.0, 24.0, 32.0)),
+                base_height: 2.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 2.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The cliff: 4.2 m tall, wall to wall.
+                    Plateau(min: (0.0, 20.0), max: (32.0, 32.0), height: 6.2),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Trampoline(pos: (16.0, 2.0, 12.0)),
+                Goal(pos: (16.0, 6.2, 26.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (16.0, 3.0, 6.0),
+)

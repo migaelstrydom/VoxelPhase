@@ -130,6 +130,23 @@ against.
   opens a hole a reservoir empties through in about a minute; in 2 m it only
   trickles. Only the water above the hole's floor goes, so a reservoir's
   floor belongs below where the player's throw will strike its dam.
+- **Bed every volume.** A volume that ends exactly on a floor is not joined
+  to it: `rubble_viewer` reports it standing free as authored. Run it half a
+  metre into the ground.
+- **What falls lands on what is beside it.** M2's column, cut, dropped its
+  8 m top on the docked platform and knocked it into the chasm. Leave nothing
+  tall above a cut, or nothing that matters under it.
+- **A floated thing drifts with the flood.** O2's crate, floated in an open
+  pit, was carried to the far wall by the inflow. Float things in a well that
+  guides them.
+- **A machine does not wait.** A moving platform freed of what blocked it sets
+  off at once and never pauses at a stop; the player boards it on its way
+  back.
+- **Not every loose thing is pushed.** Walked into, a trampoline is walked
+  under; it has to be carried.
+- **Build islands from platforms.** An `Island` volume takes its materials
+  from the layers under the floor below it, and comes out earth on top and
+  grass beneath; two `Platform`s, grass over dirt, read right.
 - **Volumes come out larger than the sum.** Smoothed edges make a hollow hold
   more than its footprint times its depth. Size the water by measuring it
   in `water_viewer`, not by arithmetic.
@@ -140,7 +157,7 @@ against.
 |---|---|
 | Does it cut, and what falls? | `rubble_viewer`, in milliseconds; a room's promise is kept there as a scenario |
 | Where does the water go, and how high? | `water_viewer` with the game's grenade, probes in the room, in seconds; its promise kept as a test |
-| Can the real body do this step? | `character_viewer`, for steps that come out the same every time: throws, fixed jumps |
+| Can the real body do this step? | `character_viewer`, for steps that come out the same every time: throws (aimed up or down), fixed jumps, carrying (`grabbing()`); the `room_*` scenarios play each room's way through |
 | Can a person find the way, and does it read? | Play it. R rebuilds the room from its file, so an edit is one key away |
 
 ## Puzzle ideas by cluster
@@ -155,21 +172,21 @@ thing the puzzle turns on.
 | # | Idea | Kind | Also | Spends |
 |---|---|---|---|---|
 | E1 | A dirt bank blocks the path, with grenades lying in front of it. Blast through. | T | | Blast |
-| E2 | A thin bank and a hillside. A grenade opens the bank and only dents the hill: digging costs blast by the metre. | T | | Blast |
+| E2 | A thin bank and a hillside. A grenade opens the bank and only dents the hill: digging costs blast by the metre. **Prototyped:** `e2_thin_bank`, a plugged notch in a cliff. | T | | Blast |
 | E3 | The exit is on a ledge too high to grab. A slab stands beside it on thin legs, as high and as out of reach. Blow the legs and it comes down as a step. **Prototyped:** `levels/rooms/e3_rubble_ramp.level.ron`. | X | | Height |
 | E4 | Three grenades, four banks. One bank hides nothing; read the room before spending. | X | | Blast |
-| E5 | The only path up is an earth stair beside a tempting bank. Blasting the bank drops the stair: the room teaches that a blast can cost height. | X | | Height |
+| E5 | The only path up is an earth stair beside a tempting bank. Blasting the bank drops the stair: the room teaches that a blast can cost height. **Prototyped:** `e5_bank_and_stair`: the bank is the stair's first step, and the stair is rock, so a crater in it is no foothold. | X | | Height |
 | E6 | The island is thin under the path and thick under the hill. A tunnel has to follow the thick ground or it opens onto the sky. | X | | Height |
-| E9 | The exit is on a lower island, straight below. Find where to dig through so the fall ends on it. A hole is a one-way door. | X | Body | Height |
-| E7 | A stack of boxes blocks an earth ledge that is the only way on. A grenade would take the ledge too: carry them off, or topple them from the side. | X | Objects | Height |
-| E8 | A tree stands by a gap. Dig under the roots on the far side and it falls across as a bridge; dig the near side and it falls away. | X | Objects | Blast |
+| E9 | The exit is on a lower island, straight below. Find where to dig through so the fall ends on it. A hole is a one-way door. **Prototyped:** `e9_one_way_down`: three grenades, each into the last crater, go through 2.5 m of earth. | X | Body | Height |
+| E7 | A stack of boxes blocks an earth ledge that is the only way on. A grenade would take the ledge too: carry them off, or topple them from the side. **Prototyped:** `e7_crates_on_the_corner`: the ledge is a walkway hanging from its corner, and the crates stand on the corner. | X | Objects | Height |
+| E8 | A tree stands by a gap. Dig under the roots on the far side and it falls across as a bridge; dig the near side and it falls away. Not buildable yet: a lollipop tree's trunk is 0.07 m thick, and a menhir tall enough to span a gap past a running jump is anchored 3 m down and rolls once down. | X | Objects | Blast |
 
 ### Water
 
 | # | Idea | Kind | Also | Spends |
 |---|---|---|---|---|
 | W1 | A pool sits above a dry hollow that bars the way. Breach the pool's bank; the hollow fills and floats the player up to the exit, an island hanging in it. **Prototyped:** `levels/rooms/w1_flood_the_hollow.level.ron`. | T | Earth | Water |
-| W2 | The reverse: a flooded passage too long to swim. Breach its low side to drain it. | T | Earth | Water |
+| W2 | The reverse: a flooded passage too long to swim. Breach its low side to drain it. **Prototyped:** `w2_drain_the_pit`: the exit is on the floor of a pit 6 m under water, where a swimmer cannot reach it. | T | Earth | Water |
 | W3 | One pool, two hollows, and a ridge between them. Which bank is breached decides which fills. **Prototyped:** `levels/rooms/w3_which_bank.level.ron`. | X | Earth | Water |
 | W4 | A stream runs past the place water is wanted. Blast a channel to turn it, or drop earth to dam it. | X | Earth | Blast |
 | W5 | A pump raises water as long as it is fed. Keep its basin from draining while using what it lifts. | X | Machines | Water |
@@ -183,9 +200,9 @@ thing the puzzle turns on.
 
 | # | Idea | Kind | Also | Spends |
 |---|---|---|---|---|
-| O1 | A crate and a ledge just out of reach. Push the crate under it. | T | | |
-| O2 | A crate floats. Flood the hollow it sits in and it comes up to the far ledge with the player on it. | C | Water | Water |
-| O3 | A trampoline is in the wrong place. Push it to the right one. | T | | Lifters |
+| O1 | A crate and a ledge just out of reach. Push the crate under it. **Prototyped:** `o1_crate_step`. | T | | |
+| O2 | A crate floats. Flood the hollow it sits in and it comes up to the far ledge with the player on it. **Prototyped:** `o2_raft`: the hollow is a well, because a crate floated in open water drifts with the flood. | C | Water | Water |
+| O3 | A trampoline is in the wrong place. Push it to the right one. **Prototyped:** `o3_trampoline`: carried, since walked into, a trampoline is walked under. | T | | Lifters |
 | O4 | A trampoline sits in a dry basin across a gap. Fill the basin and it floats over. | C | Water | Lifters |
 | O5 | A stone ball rests on a slope behind a wedge of earth. Blast the wedge; the ball rolls and breaks what it meets. | C | Earth | Blast |
 | O6 | A seesaw with a heavy thing on the far end. Drop onto the near end from height to throw it. | X | Body | Height |
@@ -199,8 +216,8 @@ thing the puzzle turns on.
 | # | Idea | Kind | Also | Spends |
 |---|---|---|---|---|
 | M1 | A moving platform crosses a gap. Ride it. | T | | |
-| M2 | A platform's track runs behind an earth bank that stops it short. Clear the bank and it completes its run. | C | Earth | Blast |
-| M3 | Two platforms out of step. Cross both by timing the change. | X | Body | |
+| M2 | A platform's track runs behind an earth bank that stops it short. Clear the bank and it completes its run. **Prototyped:** `m2_platform_and_column`: a column against its dock. | C | Earth | Blast |
+| M3 | Two platforms out of step. Cross both by timing the change. **Prototyped:** `m3_out_of_step`. | X | Body | |
 | M4 | A platform passes under a ledge with a crate on it. Push the crate so the platform carries it where it is needed. | C | Objects | Lifters |
 | M5 | The hover sled crosses water but not a rise. Lower the rise or raise the water. | C | Earth, Water | Height |
 
@@ -226,7 +243,7 @@ a few rooms of its own early on to teach the moves.
 | # | Idea | Kind | Also | Spends |
 |---|---|---|---|---|
 | B1 | A wall with a lip. Jump, catch it, climb. | T | | |
-| B2 | Shimmy along a ledge past a gap in the floor. | T | | |
+| B2 | Shimmy along a ledge past a gap in the floor. **Prototyped:** `b2_shimmy`. | T | | |
 | B3 | Swim under a low arch and come up the far side. | T | Water | |
 | B4 | Any earlier room again with the footing narrowed, the water rising, or a creature loose. | X | any | Safety |
 

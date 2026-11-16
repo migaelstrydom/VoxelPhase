@@ -1,0 +1,61 @@
+// Room E2 — what a grenade costs (docs/GAME_DESIGN.md, Earth).
+//
+// A cliff 8 m high and 6 m deep crosses the room wall to wall, with the exit
+// beyond it. One notch is cut through it, 4 m wide, plugged by a bank of dirt
+// 1.5 m thick: one grenade opens it. The cliff either side is the same earth
+// at four times the depth, and a grenade there only dents it: digging costs
+// blast by the metre.
+//
+//               N (+z)
+//   ┌─────────────────────────────────┐
+//   │            exit ◎               │  ground at 2
+//   │▓▓▓▓▓▓▓▓▓▓▓▓▓▓┌──┐▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│  z = 22
+//   │▓▓ cliff, 8 m ▐▀▀▌▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│  bank, z 16–17.5, x 14–18
+//   │▓▓▓▓▓▓▓▓▓▓▓▓▓▓│  │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓│  z = 16
+//   │                                 │
+//   │              ☺ spawn             │
+//   └─────────────────────────────────┘
+Level(
+    name: "E2 Thin Bank",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (32.0, 24.0, 32.0)),
+                base_height: 2.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 999.0, material: Dirt),
+                ],
+
+                features: [
+                    // The cliff, wall to wall.
+                    Plateau(min: (0.0, 16.0), max: (32.0, 22.0), height: 10.0),
+                    // The notch through it.
+                    Plateau(min: (14.0, 16.0), max: (18.0, 22.0), height: 2.0),
+                ],
+
+                volumes: [
+                    // The bank plugging the notch's mouth.
+                    Platform(center: (16.0, 10.0, 16.75), half_extents: (2.5, 0.75), thickness: 8.5, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (16.0, 2.0, 27.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (16.0, 3.0, 6.0),
+)

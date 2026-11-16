@@ -1,0 +1,81 @@
+// Room W2 — blast lets water go (docs/GAME_DESIGN.md, Water): W1 reversed.
+//
+// The exit is on the floor of a pit 8 m deep, under 6 m of water. A swimmer
+// floats at the top and cannot dive to it. On the pit's east side a sand dam
+// holds the water back from a dry channel that runs off the room's edge.
+// Walk down the ramp into the channel and hole the dam low: the pit drains
+// down to the hole's floor, and the exit is a wade.
+//
+// A hole only lets out the water above its floor. Holed from the rim, high
+// up, the dam lets the pit fall a metre or two and no more; a second grenade
+// in the hole takes it lower.
+//
+//               N (+z)
+//   ┌───────────────────────────────────────┐
+//   │                                       │  ground at 10
+//   │       ┌───────────────┐               │  z = 24
+//   │       │               │               │
+//   │       │   pit,  ◎     ▐dam═══channel══▶│  sink off the edge
+//   │       │   water at 8  │       ▲       │  channel floor at 2
+//   │       └───────────────┘       ramp    │  z = 8
+//   │            ☺ spawn                    │
+//   └───────────────────────────────────────┘
+//    x 0     8              24 26  32       40
+Level(
+    name: "W2 Drain the Pit",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 32.0)),
+                base_height: 10.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The pit.
+                    Plateau(min: (8.0, 8.0), max: (24.0, 24.0), height: 2.0),
+                    // The channel, out to the room's east edge.
+                    Plateau(min: (26.0, 12.0), max: (40.0, 20.0), height: 2.0),
+                    // The gap in the wall between them that the dam fills.
+                    Plateau(min: (24.0, 13.0), max: (26.0, 19.0), height: 2.0),
+                    // The ramp down into the channel from the south.
+                    Ramp(from: (32.0, 4.0), to: (32.0, 12.5), start_height: 10.0, end_height: 2.0, width: 4.0),
+                ],
+
+                volumes: [
+                    // The dam: sand 1 m thick across the gap, from the floor
+                    // to the ground, a metre past each end of the gap.
+                    Platform(center: (25.0, 10.0, 16.0), half_extents: (0.5, 4.0), thickness: 8.5, material: Sand),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (16.0, 2.0, 16.0), radius: 2.5, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (16.0, 11.0, 4.0),
+
+    water: Some((
+        bodies: [
+            Pool(seed: (16.0, 16.0), surface_level: 8.0),
+            // Where the channel runs off the room's edge.
+            Sink(min: (38.0, -8.0, 12.0), max: (40.0, 3.0, 20.0)),
+        ],
+    )),
+)
