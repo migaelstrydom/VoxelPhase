@@ -132,7 +132,8 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         // sits, so the look direction is opposite it.
         let aim_of = |thrower: Entity, intent: &CharacterIntent, yaw: f32| {
             if let Some(aim) = intent.aim {
-                return (aim.x.atan2(aim.z), 0.0);
+                // The camera's pitch is positive looking down.
+                return (aim.x.atan2(aim.z), -aim.y.atan2(aim.x.hypot(aim.z)));
             }
             follow_targets
                 .join()

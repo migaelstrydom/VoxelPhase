@@ -35,6 +35,7 @@ impl<'a> Pilot<'a> {
         let was_crouching = self.previous.map_or(false, |b| b.crouch);
         let was_jumping = self.previous.map_or(false, |b| b.jump);
         let released = was_jumping && (first_frame && !beat.jump);
+        let was_grabbing = self.previous.map_or(false, |b| b.grab);
         self.previous = Some(beat);
 
         let direction = rotate_y(beat.direction, self.turn);
@@ -56,6 +57,9 @@ impl<'a> Pilot<'a> {
             sprint: beat.sprint,
             throw: beat.throw && first_frame,
             aim: beat.aim,
+            grab_held: beat.grab,
+            grab_just_pressed: beat.grab && !was_grabbing,
+            grab_just_released: was_grabbing && !beat.grab,
             takeoff,
             ..Default::default()
         };

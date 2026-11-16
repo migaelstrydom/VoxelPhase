@@ -113,9 +113,10 @@ pub struct CharacterIntent {
     pub throw: bool,
     /// Resolved by CharacterControlSystem: true when throw should spawn a grenade.
     pub throw_grenade: bool,
-    /// Horizontal direction to throw in, for a brain that aims somewhere
-    /// other than where it walks. `None` leaves the aim to the camera when
-    /// it follows this character, and to the facing otherwise.
+    /// Direction to throw in, for a brain that aims somewhere other than
+    /// where it walks: its bearing is the throw's, and its rise over its run
+    /// is read as the camera's pitch would be. `None` leaves the aim to the
+    /// camera when it follows this character, and to the facing otherwise.
     pub aim: Option<Vector3<f32>>,
     /// A takeoff planned for this frame: a traversal plan's hop or roll-off.
     /// Consumed by `CharacterControlSystem`; a jump pressed the same frame

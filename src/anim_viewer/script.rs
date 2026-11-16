@@ -33,6 +33,9 @@ pub struct Beat {
     /// Take off on the first frame of this beat as a traversal plan's hop
     /// does: `(speed, climb)` along `direction` and up, in m/s.
     pub planned_hop: Option<(f32, f32)>,
+    /// Hold grab through this beat: pressed on its first frame unless the
+    /// beat before held it too, released when a beat that does not follows.
+    pub grab: bool,
 }
 
 impl Beat {
@@ -49,6 +52,7 @@ impl Beat {
             aim: None,
             turn_rate: 0.0,
             planned_hop: None,
+            grab: false,
         }
     }
 
@@ -113,6 +117,12 @@ impl Beat {
     pub fn throwing_at(mut self, aim: Vector3<f32>) -> Self {
         self.throw = true;
         self.aim = Some(aim);
+        self
+    }
+
+    /// Hold grab through this beat.
+    pub fn grabbing(mut self) -> Self {
+        self.grab = true;
         self
     }
 
