@@ -1,34 +1,43 @@
 // Room W1 — blast moves water (docs/GAME_DESIGN.md, Water).
 //
-// A dry hollow 14 m across and 4 m deep bars the way: too far to jump, too
-// deep to climb out of. On a terrace to the west a reservoir stands 7 m
-// above the hollow's rim, held by a sand dam that faces the hollow. Hole
-// the dam and the reservoir pours into the hollow, filling it to just under
-// its rim. Swim across, and step out on the far side.
+// The player starts on the floor of a pit walled in 15 m high all round. The
+// exit is an island of stone hanging over the pit's middle, 5 m above its
+// floor and 9 m from every wall. Behind the west wall a reservoir is held by
+// a sand dam facing the pit. Hole the dam, and the pit floods to the island's
+// top and floats the player up to it.
 //
-// The reservoir holds what fills the hollow to its rim: 140 m² 6.7 m deep
-// against the hollow 3.9 m deep. Its floor is a metre above the room's, under
-// where a grenade thrown from the floor strikes the dam, so the crater
-// reaches below it and every drop can go.
+// No dry ground stands level with the island: every wall is a staircase (a
+// crater is a foothold) and a running jump carries over 9 m, so a ledge at
+// its height would be a way on without water. A ledge cut into a wall leaves
+// no run-up. What a blast knocks off the island is scree, which leaves
+// nothing where it lands, or a boulder about as tall as the island is thick,
+// which leaves its lip some 4 m over a player standing on it.
+//
+// The goal's point is 3 m above the island: it counts a player within 3 m of
+// it vertically, so set on the island it would count one jumping under it.
+//
+// The reservoir's floor is a metre above the pit's, under where a grenade
+// thrown from the floor strikes the dam, so the crater reaches below it. Pit
+// and reservoir end level, so the reservoir starts with enough for both.
 //
 // Every terrace wall is 2 m thick or more: a wall of 1 m between floors 4 m
 // apart is worn down by the slopes either side of it, and the reservoir
 // would leak. The dam is a volume, which the slopes leave alone.
 //
 //               N (+z)
-//   ┌──────┬─────────────────┬───────┐
-//   │      │  far floor, ◎   │       │  floor at 10
-//   │ RES- ├─────────────────┤ ter-  │  z = 23
-//   │ ERV- ▐dam   hollow     │ race  │  hollow floor at 6
-//   │ OIR  ▐                 │       │  dam: sand 1 m, x 7–8, z 12–20
-//   │ 11   ├─────────────────┤       │  z = 9
-//   │ 18   │  ☺ spawn        │  18   │  floor at 10
-//   └──────┴─────────────────┴───────┘
-//    x 0   8                 24      32
-//
-// The terraces are 8 m tall, so the only way across is through the hollow.
+//   ┌────────┬───────────────────────┬──────┐
+//   │        │                       │      │  terrace top at 20
+//   │  RES-  │                       │      │  z = 31
+//   │  ERV-  ▐dam     pit            │      │  pit 22 m square, floor at 5
+//   │  OIR   ▐         ┌───┐         │      │  island: x 21–25, z 18–22,
+//   │        ▐         │ ◎ │         │      │    top at 10, 1 m thick
+//   │  6     │         └───┘         │      │  dam: sand 1 m, x 11–12, z 16–24
+//   │        │       ☺ spawn         │      │  z = 9
+//   │        │                       │      │
+//   └────────┴───────────────────────┴──────┘
+//    x 0     12                      34    44
 Level(
-    name: "W1 Flood the Hollow",
+    name: "W1 Flood the Pit",
 
     segments: [
         (
@@ -36,8 +45,8 @@ Level(
 
             terrain: Terrain(
                 voxel_size: 0.5,
-                bounds: (min: (0.0, -8.0, 0.0), max: (32.0, 24.0, 32.0)),
-                base_height: 10.0,
+                bounds: (min: (0.0, -8.0, 0.0), max: (44.0, 24.0, 40.0)),
+                base_height: 20.0,
                 material_layers: [
                     (depth: 0.5,   material: Grass),
                     (depth: 3.0,   material: Dirt),
@@ -45,33 +54,33 @@ Level(
                 ],
 
                 features: [
-                    // The terraces either side, wall to wall along z.
-                    Plateau(min: (0.0, 0.0), max: (8.0, 32.0), height: 18.0),
-                    Plateau(min: (24.0, 0.0), max: (32.0, 32.0), height: 18.0),
-                    // The reservoir's basin, its floor a metre above the room's: under
-                    // where a grenade thrown from the floor strikes the dam, so
-                    // the crater it cuts reaches below it.
-                    Plateau(min: (2.0, 2.0), max: (6.0, 30.0), height: 11.0),
-                    // The gap in the terrace's wall that the dam fills.
-                    Plateau(min: (6.0, 13.0), max: (8.0, 19.0), height: 11.0),
-                    // The hollow.
-                    Plateau(min: (8.0, 9.0), max: (24.0, 23.0), height: 6.0),
+                    // The pit.
+                    Plateau(min: (12.0, 9.0), max: (34.0, 31.0), height: 5.0),
+                    // The reservoir's basin, its floor a metre above the pit's:
+                    // under where a grenade thrown from the floor strikes the
+                    // dam, so the crater it cuts reaches below it.
+                    Plateau(min: (2.0, 2.0), max: (10.0, 38.0), height: 6.0),
+                    // The gap in the wall between them that the dam fills.
+                    Plateau(min: (10.0, 17.0), max: (12.0, 23.0), height: 6.0),
                 ],
 
                 volumes: [
-                    // The dam: sand 1 m thick on the gap's hollow side, from
-                    // the room's floor, bedded in the gap's, to the terrace's
-                    // top, and a metre past each end of the gap. A volume is
-                    // not worn by the slopes that thin a terrace's wall, so
-                    // it can be thinner than one; at 2 m a grenade only
-                    // trickles through it.
-                    Platform(center: (7.5, 18.0, 16.0), half_extents: (0.5, 4.0), thickness: 8.0, material: Sand),
+                    // The dam: sand 1 m thick on the gap's pit side, from the
+                    // pit's floor, bedded in the gap's, to the terrace's top,
+                    // and a metre past each end of the gap. A volume is not
+                    // worn by the slopes that thin a terrace's wall, so it can
+                    // be thinner than one; at 2 m a grenade only trickles
+                    // through it.
+                    Platform(center: (11.5, 20.0, 20.0), half_extents: (0.5, 4.0), thickness: 15.0, material: Sand),
+                    // The island, hanging in the pit's middle with nothing
+                    // under it. Thin, so nothing knocked off it stands tall.
+                    Platform(center: (23.0, 10.0, 20.0), half_extents: (2.0, 2.0), thickness: 1.0),
                 ],
             ),
 
             anchors: [],
             objects: [
-                Goal(pos: (16.0, 10.0, 28.0), radius: 2.0, required_gems: 0),
+                Goal(pos: (23.0, 13.0, 20.0), radius: 1.5, required_gems: 0),
             ],
         ),
     ],
@@ -82,11 +91,11 @@ Level(
 
     connections: [],
 
-    player_spawn: (16.0, 11.0, 4.0),
+    player_spawn: (23.0, 6.0, 12.0),
 
     water: Some((
         bodies: [
-            Pool(seed: (4.0, 15.0), surface_level: 17.7),
+            Pool(seed: (6.0, 20.0), surface_level: 17.8),
         ],
     )),
 )

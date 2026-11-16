@@ -144,21 +144,18 @@ fn a_river_runs_as_deep_across_the_lattice_as_along_it() {
     );
 }
 
-/// Room W1's promise: a grenade thrown from the floor into the dam fills the
-/// hollow to within a swimmer's reach of its far rim (10.0), and none of it
-/// spills onto the floor beyond.
+/// Room W1's promise: a grenade that holes the dam above the island's height
+/// floods the pit to the island's top (10.0), within a swimmer's reach of its
+/// lip and no deeper than a wade over it. A hole lower down stops passing
+/// water once the pit rises over it, short of the island.
 #[test]
-fn room_w1_a_breach_from_the_floor_fills_the_hollow_to_its_rim() {
-    const RIM: f32 = 10.0;
-    let run = run("room_w1_breach_chest");
-    let hollow = probe(&run, "hollow").last().copied().flatten();
-    let hollow = hollow.unwrap_or_else(|| panic!("the hollow is dry"));
+fn room_w1_a_high_breach_floods_the_pit_to_the_island() {
+    const ISLAND_TOP: f32 = 10.0;
+    let run = run("room_w1_breach_high");
+    let pit = probe(&run, "pit").last().copied().flatten();
+    let pit = pit.unwrap_or_else(|| panic!("the pit is dry"));
     assert!(
-        (RIM - 0.3..RIM).contains(&hollow),
-        "the hollow stands at {hollow}, not within 0.3 m under its rim at {RIM}"
-    );
-    assert!(
-        probe(&run, "far floor").iter().all(Option::is_none),
-        "water reached the far floor"
+        (ISLAND_TOP - 0.2..ISLAND_TOP + 0.2).contains(&pit),
+        "the pit stands at {pit}, not within 0.2 m of the island's top at {ISLAND_TOP}"
     );
 }
