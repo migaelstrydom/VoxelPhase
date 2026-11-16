@@ -7,7 +7,7 @@ use super::frame::RADIUS;
 use super::pipes::Pipe;
 use super::shaping::{placed, triple, turned_to, wash};
 use crate::animation::FootSide;
-use crate::app::creatures::anatomy::{self, DIGIT_GRAIN, FLESH, FLUSH};
+use crate::app::creatures::anatomy::{self, ANKLE_RISE, DIGIT_GRAIN, FLESH, FLUSH};
 use crate::app::sculpt::{Clay, Grime, Lump, Mottle, VertexPaint};
 use crate::model::MeshPrimitive;
 
@@ -31,8 +31,13 @@ pub(super) fn leg(side: FootSide) -> Vec<MeshPrimitive> {
     let knee = sole + Vector3::new(0.05 * out, 0.17, 0.11);
     let hip = Vector3::new(0.23 * out, -0.28, 0.25);
 
+    // The shin ends at the ankle over the sole, where the foot turns, not
+    // at the sole: leaning, it would miss the foot's ankle.
+    let ankle = sole + Vector3::y() * ANKLE_RISE;
+    let shin_length = (knee - ankle).norm() + ANKLE_RISE;
+
     let mut thigh = anatomy::flesh(&anatomy::thigh((knee - hip).norm(), girth), LIMB_GRAIN);
-    let mut shin = anatomy::flesh(&anatomy::shin((knee - sole).norm(), girth), LIMB_GRAIN);
+    let mut shin = anatomy::flesh(&anatomy::shin(shin_length, girth), LIMB_GRAIN);
     // Legs that have borne the bag a long time without moving.
     for mesh in [&mut thigh, &mut shin] {
         Mottle {
@@ -45,14 +50,14 @@ pub(super) fn leg(side: FootSide) -> Vec<MeshPrimitive> {
         wash(mesh, |_| LIVID);
     }
     Grime {
-        below: -(knee - sole).norm() + 0.05,
+        below: -shin_length + 0.05,
         fade: 0.12,
         tint: Vector3::new(0.5, 0.42, 0.34),
     }
     .paint(&mut shin);
     vec![
         placed(thigh, turned_to(hip - knee, Vector3::y() + toes * 0.4), hip),
-        placed(shin, turned_to(knee - sole, toes), knee),
+        placed(shin, turned_to(knee - ankle, toes), knee),
         placed(
             {
                 let mut foot = anatomy::foot(0.165, side);
@@ -91,18 +96,28 @@ fn hold(chanter: &Pipe) -> (UnitQuaternion<f32>, ArmJoints) {
     let (top, end) = (chanter.foot, chanter.tip);
     let down = (end - top).normalize();
     let held = top + (end - top) * 0.47;
-    // The fingers lie across the pipe from outside it, the back of the
-    // hand to whoever looks.
-    let inward = -Vector3::x();
-    let fingers = (inward - down * inward.dot(&down)).normalize();
-    let turn = UnitQuaternion::from_basis_unchecked(&[down, fingers.cross(&down), fingers]);
+    // The elbow rests on the knee, outside the pipe, and the rest of the arm
+    // is in the bag.
+    let elbow = Vector3::new(0.4, -0.19, 0.49);
+    let shoulder = Vector3::new(0.27, -0.02, 0.2);
     // The pipe lies in the crook of the fingers.
     let crook = Vector3::new(0.0, -0.19 * HAND_SIZE, 0.56 * HAND_SIZE);
+    // The fingers lie across the pipe from outside it, the back of the
+    // hand to whoever looks, and run on from the forearm: the wrist is
+    // found from the hand's turn and the turn from the wrist, so it is
+    // settled in a few rounds.
+    let turn_for = |fingers: Vector3<f32>| {
+        let fingers = (fingers - down * fingers.dot(&down)).normalize();
+        UnitQuaternion::from_basis_unchecked(&[down, fingers.cross(&down), fingers])
+    };
+    let mut turn = turn_for(-Vector3::x());
+    for _ in 0..4 {
+        turn = turn_for(held - turn * crook - elbow);
+    }
     let joints = ArmJoints {
         wrist: held - turn * crook,
-        // The elbow rests on the thigh; the rest of the arm is in the bag.
-        elbow: Vector3::new(0.36, -0.2, 0.38),
-        shoulder: Vector3::new(0.27, -0.02, 0.2),
+        elbow,
+        shoulder,
     };
     (turn, joints)
 }
@@ -125,12 +140,13 @@ pub(super) fn arm(chanter: &Pipe) -> Arm {
     ) = hold(chanter);
     let fingers = turn * Vector3::z();
     // The forearm is thin at the wrist and thick with muscle below the
-    // elbow.
-    let cuff = wrist - fingers * 0.03;
+    // elbow. It starts over the end of the hand's wrist and is a little
+    // wider there, so the hand runs into it.
+    let cuff = wrist - fingers * 0.29 * HAND_SIZE;
     let belly = elbow + (cuff - elbow) * 0.38;
     let forearm = Clay::new(0.025)
         .add(
-            Lump::limb(triple(cuff), triple(belly), (0.017, 0.029)),
+            Lump::limb(triple(cuff), triple(belly), (0.021, 0.029)),
             FLESH,
         )
         .add(

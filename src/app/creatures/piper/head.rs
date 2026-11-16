@@ -22,6 +22,7 @@ use crate::model::{Bulge, MeshPrimitive};
 /// Side of the grid the head is skinned from, m, and the grids of its
 /// cheeks and its neck.
 const HEAD_GRAIN: f32 = 0.005;
+const CHEEK_GRAIN: f32 = 0.008;
 const NECK_GRAIN: f32 = 0.011;
 
 /// How far the cheeks' join to the face is rounded off, m; how far proud
@@ -288,7 +289,7 @@ pub(super) fn cheeks() -> Bulge {
     }
     // Only what stands proud of the face: the rest is the head's own skin.
     let mut mesh = blown
-        .skin(HEAD_GRAIN, Paint::Skin.id())
+        .skin(CHEEK_GRAIN, Paint::Skin.id())
         .split_off(|middle| face.distance(middle) > CHEEK_PROUD);
     // Where each point of it lies on the face when let down, how far proud
     // of that it is blown, and the way out of the face there.
