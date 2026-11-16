@@ -121,6 +121,23 @@ impl FootSide {
     }
 }
 
+/// One of something for each foot.
+#[derive(Clone, Copy, Debug, Default)]
+struct BySide<T> {
+    left: T,
+    right: T,
+}
+
+impl<T: Copy> BySide<T> {
+    /// The one for `side`.
+    fn of(&self, side: FootSide) -> T {
+        match side {
+            FootSide::Left => self.left,
+            FootSide::Right => self.right,
+        }
+    }
+}
+
 /// Current phase of a single foot.
 #[derive(Clone, Copy, Debug)]
 pub enum FootPhase {
@@ -487,10 +504,28 @@ impl FootPlacer {
     }
 
     /// One fixed-size simulation step, through which the body's spin takes
-    /// the feet round by `swivel` radians.
+    /// the feet round by `swivel` radians: the stages of the diagram at the
+    /// head of this file, each handed what the ones before it worked out.
     fn substep(&mut self, ctx: &PlacerCtx<'_>, swivel: f32) {
-        let cfg = ctx.config;
-        let facing = facing_from_yaw(ctx.yaw);
+        self.carry_with_body(ctx, swivel);
+        let pace = Pace::of(ctx);
+        self.last_timing = Some(pace.timing);
+        let ideals = self.aim(ctx, &pace);
+        self.run_clock(ctx, &pace, ideals);
+        let strain = self.ask_releases(ctx, &pace);
+        // Fire at most one step per substep, and never within a stagger
+        // interval of the previous takeoff: simultaneous releases must
+        // resolve as visibly staggered steps, not a double-flight hop.
+        if let Some(side) = self.select_step(ctx, &pace, strain, ideals) {
+            self.fire(side, ideals.of(side), ctx, &pace);
+        }
+        self.advance_feet(ctx, &pace, ideals);
+    }
+
+    /// Take everything the feet hold in the world along with the surface
+    /// they stand on, and round with a body that spins, and age the gait's
+    /// timers by the substep.
+    fn carry_with_body(&mut self, ctx: &PlacerCtx<'_>, swivel: f32) {
         // Before anything reads a foot: everything the placer holds in world
         // space belongs to the surface, not to the world.
         for foot in [&mut self.left, &mut self.right] {
@@ -503,50 +538,26 @@ impl FootPlacer {
                 foot.since_plant = (foot.since_plant + ctx.dt).min(LONG_AGO);
             }
         }
-        let horizontal_velocity = Vector3::new(ctx.velocity.x, 0.0, ctx.velocity.z);
-        let speed = horizontal_velocity.magnitude();
+    }
 
-        // The gait clock runs on actual horizontal speed, floored while
-        // the player holds a direction so the first step can fire before
-        // physics velocity catches up with input.
-        let has_intent =
-            Vector2::new(ctx.intent_direction.x, ctx.intent_direction.z).magnitude_squared() > 1e-4;
-        let gait_speed = if has_intent {
-            speed.max(cfg.intent_speed_floor)
-        } else {
-            speed
+    /// Where each foot would stand now: the capture point's targets, clamped
+    /// to the horizontal reach budget the leg can actually cover. Each is
+    /// kept on its foot for the debug overlay.
+    fn aim(&mut self, ctx: &PlacerCtx<'_>, pace: &Pace) -> BySide<Point3<f32>> {
+        let cp = capture_point_xz(ctx.pelvis, pace.velocity, ctx.standing_height);
+        let ideals = BySide {
+            left: ideal_target(&self.left, cp, ctx, pace),
+            right: ideal_target(&self.right, cp, ctx, pace),
         };
-        let moving = has_intent || speed > cfg.moving_speed_threshold;
+        self.left.ideal_xz = ideals.left;
+        self.right.ideal_xz = ideals.right;
+        ideals
+    }
 
-        // The reach budget shrinks with terrain slope: the downhill
-        // stance endpoint sits `slope · r` below the rest vertical, so
-        // plants and cadence must assume the worst endpoint or the
-        // planner aims landings the leg cannot reach (seen as straight-
-        // leg extensions descending, knees-up scrambling ascending, and
-        // overstretch re-pacing the gait into hops).
-        let travel = if speed > cfg.moving_speed_threshold {
-            Vector2::new(horizontal_velocity.x, horizontal_velocity.z) / speed
-        } else {
-            Vector2::new(facing.x, facing.z)
-        };
-        let max_reach = slope_aware_reach_budget(ctx, travel);
-        let timing = GaitTiming::derive(
-            gait_speed,
-            ctx.standing_height,
-            ctx.leg_length,
-            ctx.stride_gain,
-            max_reach,
-            cfg,
-        );
-        self.last_timing = Some(timing);
-        // Ideal targets for both feet from the capture point, clamped to
-        // the horizontal reach budget the leg can actually cover.
-        let cp = capture_point_xz(ctx.pelvis, horizontal_velocity, ctx.standing_height);
-        let left_ideal = ideal_target(&self.left, cp, ctx, facing, max_reach, &timing);
-        let right_ideal = ideal_target(&self.right, cp, ctx, facing, max_reach, &timing);
-        self.left.ideal_xz = left_ideal;
-        self.right.ideal_xz = right_ideal;
-
+    /// Run the gait's clock through the substep: seeded where a gait
+    /// starts, advanced by the hip's travel, and cleared of releases it
+    /// latched for feet already in the air.
+    fn run_clock(&mut self, ctx: &PlacerCtx<'_>, pace: &Pace, ideals: BySide<Point3<f32>>) {
         // Gait start: seed the clock so the foot further from its ideal
         // releases now and the other follows half a cycle later. Without
         // this, both feet hit their triggers near-simultaneously under a
@@ -554,19 +565,20 @@ impl FootPlacer {
         // of the stagger gap instead of π — the seed of the in-phase
         // "forward hopping" seen in game. Only seeds when both feet are
         // planted: a live swing means a rhythm already exists.
-        if moving && !self.was_moving && self.left.is_planted() && self.right.is_planted() {
-            let left_err = planar_distance(left_ideal, self.left.planted_position);
-            let right_err = planar_distance(right_ideal, self.right.planted_position);
+        if pace.moving && !self.was_moving && self.left.is_planted() && self.right.is_planted() {
+            let left_err = planar_distance(ideals.left, self.left.planted_position);
+            let right_err = planar_distance(ideals.right, self.right.planted_position);
             let lead = if left_err >= right_err {
                 FootSide::Left
             } else {
                 FootSide::Right
             };
-            self.clock.seed_to_release(lead, &timing);
+            self.clock.seed_to_release(lead, &pace.timing);
         }
-        self.was_moving = moving;
+        self.was_moving = pace.moving;
 
-        self.clock.advance(ctx.dt, gait_speed, &timing, moving);
+        self.clock
+            .advance(ctx.dt, pace.gait_speed, &pace.timing, pace.moving);
 
         // A release that latches while its foot is already mid-swing
         // means the foot stepped ahead of schedule (turn or overstretch
@@ -579,156 +591,71 @@ impl FootPlacer {
                 self.clock.consume(foot.side);
             }
         }
+    }
 
-        let min_takeoff_gap = timing.swing_duration * cfg.takeoff_stagger_fraction;
-        let min_stance = timing.swing_duration * cfg.min_stance_fraction;
-
-        // Event releases while moving: a planted foot is asked to step
-        // early when the facing has rotated far enough from its plant
-        // (turn step), or when the hip has slid to the leg's stretch
-        // limit (landing slides, hard accelerations). The kind controls
-        // the support rules the step fires under — see `select_step`.
-        // Overstretch additionally requires the leg to be *opening* (hip
-        // moving away from the foot): a foot that lands far ahead during
-        // a hard deceleration is momentarily stretched, but the pelvis
-        // is closing on it and the stretch resolves by itself — firing
-        // there would re-lift the foot after one frame of contact. The
-        // trigger is the *actual* stretch, never a prediction: a
-        // predictive lead (latching when the limit would be reached
-        // within the stagger gap) reads 0.3 m into the future at sprint
-        // speeds, and because latches are sticky it re-paced the whole
-        // gait reactively ~0.06 phase ahead of the schedule. Overshoot
-        // while a release is gate-blocked is bounded by the hard-margin
-        // stagger bypass below.
-        //
-        // A hip further still from its foot ([`LET_GO_MARGIN`]), or leaving
-        // one its leg points level at ([`LET_GO_TANGENT`]), lets go of it:
-        // moving or not, whatever the support and stagger rules below would
-        // hold a step back for. Those rules pace a gait; a foot left where
-        // the leg cannot stand on it is not part of one, and held there it
-        // is drawn as a leg pointing at it.
-        let mut hard_overstretch = [false; 2];
-        let mut let_go = [false; 2];
-        for (slot, foot) in [&self.left, &self.right].into_iter().enumerate() {
-            if !foot.is_planted() {
-                continue;
-            }
-            let hip = hip_position(foot.side, ctx, facing);
-            let away = hip - foot.planted_position;
-            let distance = away.norm().max(1e-4);
-            // Opening, as the stretch release is: a foot planted high ahead
-            // of a hip climbing to it points as far off straight down, and
-            // is the next step up.
-            let opening = away.dot(&ctx.velocity) > 0.0;
-            let across = Vector2::new(away.x, away.z).magnitude();
-            let levelled = opening
-                && across >= LET_GO_ACROSS * ctx.leg_length
-                && across > LET_GO_TANGENT * away.y.max(0.0);
-            let_go[slot] =
-                levelled || distance >= max_leg_extension(ctx) + LET_GO_MARGIN * ctx.leg_length;
-            if moving {
-                // Full 3D radial speed: on slopes the hip moves away
-                // from a planted foot vertically as much as
-                // horizontally, and an xz-only opening gate is blind
-                // to that half of the motion.
-                let radial_speed = away.dot(&ctx.velocity) / distance;
-                if radial_speed > 0.0 && distance >= max_leg_extension(ctx) {
-                    self.clock
-                        .request_release(foot.side, ReleaseKind::Overstretch);
-                    hard_overstretch[slot] =
-                        distance >= max_leg_extension(ctx) + cfg.overstretch_hard_margin;
-                } else if yaw_equivalent_error(foot, ctx) >= turn_trigger(cfg, ctx) {
-                    self.clock.request_release(foot.side, ReleaseKind::Turn);
-                }
+    /// Ask the clock for the steps the planted feet's legs call for ahead of
+    /// its schedule, and return what each leg says of its stance
+    /// ([`Strain`]).
+    fn ask_releases(&mut self, ctx: &PlacerCtx<'_>, pace: &Pace) -> BySide<Strain> {
+        let strain = BySide {
+            left: Strain::of(&self.left, ctx, pace),
+            right: Strain::of(&self.right, ctx, pace),
+        };
+        for side in [FootSide::Left, FootSide::Right] {
+            if let Some(kind) = strain.of(side).asks {
+                self.clock.request_release(side, kind);
             }
         }
+        strain
+    }
 
-        // Fire at most one step per substep, and never within a stagger
-        // interval of the previous takeoff: simultaneous releases must
-        // resolve as visibly staggered steps, not a double-flight hop.
-        if let Some(side) = self.select_step(
-            &timing,
-            moving,
-            min_takeoff_gap,
-            min_stance,
-            hard_overstretch,
-            let_go,
-            left_ideal,
-            right_ideal,
-        ) {
-            let (foot, ideal) = match side {
-                FootSide::Left => (&mut self.left, left_ideal),
-                FootSide::Right => (&mut self.right, right_ideal),
-            };
-            let kind = self.clock.pending(side);
-            let planned = start_step(foot, ideal, &timing, ctx, facing);
-            self.clock.consume(side);
-            // Reactive fires ahead of schedule leave the clock with a
-            // phase debt, paid down at a bounded catch-up rate (idle
-            // settle steps have no pending kind and no schedule to owe).
-            if let Some(kind) = kind {
-                self.clock.note_fire(side, kind, &timing);
-            }
-            // A footfall the plan chose, stepped onto on the gait's own
-            // clock, is where that clock is pulled to. A flight's landing
-            // is not: the plan times that one, and the gait starts again
-            // from it.
-            let stepped_onto = planned.filter(|step| moving && step.landing.is_none());
-            if let Some((ahead, _)) =
-                stepped_onto.and_then(|step| ahead_along_travel(&step, side, ctx, facing))
-            {
-                self.clock.follow(side, ahead, &timing);
-            }
-            self.since_takeoff = 0.0;
+    /// Lift `side`'s foot into its swing, towards `ideal` or the step the
+    /// plan has for it, and settle the takeoff with the clock.
+    fn fire(&mut self, side: FootSide, ideal: Point3<f32>, ctx: &PlacerCtx<'_>, pace: &Pace) {
+        let foot = match side {
+            FootSide::Left => &mut self.left,
+            FootSide::Right => &mut self.right,
+        };
+        let kind = self.clock.pending(side);
+        let planned = start_step(foot, ideal, ctx, pace);
+        self.clock.consume(side);
+        // Reactive fires ahead of schedule leave the clock with a
+        // phase debt, paid down at a bounded catch-up rate (idle
+        // settle steps have no pending kind and no schedule to owe).
+        if let Some(kind) = kind {
+            self.clock.note_fire(side, kind, &pace.timing);
         }
-
-        update_pre_lift(&mut self.left, left_ideal, &timing, ctx, moving);
-        update_pre_lift(&mut self.right, right_ideal, &timing, ctx, moving);
-
-        advance_stepping(
-            &mut self.left,
-            left_ideal,
-            &timing,
-            ctx,
-            facing,
-            self.frame_dt,
-        );
-        advance_stepping(
-            &mut self.right,
-            right_ideal,
-            &timing,
-            ctx,
-            facing,
-            self.frame_dt,
-        );
-
-        // Planted ankle y tracks the current terrain each substep rather
-        // than being frozen at plant time. Without this, a plant that
-        // landed mid-recoil (e.g. on the airborne→grounded edge, with
-        // physics still settling) leaves foot y stuck above or below
-        // the final terrain surface. The contact is extrapolated along
-        // its tangent plane to the foot's own xz, so a probe that hit
-        // slightly off the anchor still yields the right height.
-        // A probe that struck too far from the foot to tell, as one still
-        // aimed where the foot was before a replant, leaves it at its height.
-        for foot in [&mut self.left, &mut self.right] {
-            let (x, z) = (foot.planted_position.x, foot.planted_position.z);
-            let y = match floor_sample(ctx, foot.side) {
-                Some(_) => floor_height_near(ctx, foot.side, x, z),
-                None => Some(ctx.foot_y_fallback),
-            };
-            let hip = hip_position(foot.side, ctx, facing);
-            if let Some(y) = y {
-                sync_planted_y(foot, y, hip, max_leg_extension(ctx));
-            }
-            // A plant the hip is leaving is drawn no further out than a leg
-            // goes, until the leg lets go of it: the swing it starts then
-            // is drawn from the same place.
-            if foot.is_planted() {
-                foot.position = LegEnvelope::of(foot.side, ctx, facing).draw(foot.planted_position);
-            }
+        // A footfall the plan chose, stepped onto on the gait's own
+        // clock, is where that clock is pulled to. A flight's landing
+        // is not: the plan times that one, and the gait starts again
+        // from it.
+        let stepped_onto = planned.filter(|step| pace.moving && step.landing.is_none());
+        if let Some((ahead, _)) =
+            stepped_onto.and_then(|step| ahead_along_travel(&step, side, ctx, pace.facing))
+        {
+            self.clock.follow(side, ahead, &pace.timing);
         }
+        self.since_takeoff = 0.0;
+    }
 
+    /// Move each foot through the substep: a planted one's toe-off, a
+    /// swinging one's swing, then each stance settled on its ground and
+    /// each sole turned to it.
+    fn advance_feet(&mut self, ctx: &PlacerCtx<'_>, pace: &Pace, ideals: BySide<Point3<f32>>) {
+        let frame_dt = self.frame_dt;
+        let mut feet = [
+            (&mut self.left, ideals.left),
+            (&mut self.right, ideals.right),
+        ];
+        for (foot, ideal) in &mut feet {
+            update_pre_lift(foot, *ideal, ctx, pace);
+        }
+        for (foot, ideal) in &mut feet {
+            advance_stepping(foot, *ideal, ctx, pace, frame_dt);
+        }
+        for (foot, _) in &mut feet {
+            settle_stance(foot, ctx, pace.facing);
+        }
         // Ease each foot's up-axis toward its phase-dependent target.
         // Planted feet pull toward the current ground normal; swinging
         // feet ease off the takeoff pose, pass through neutral in the
@@ -752,34 +679,32 @@ impl FootPlacer {
     /// stance gate it would re-lift after a single frame. Ties go to
     /// the larger error.
     ///
-    /// A foot the leg has let go of (`let_go`) steps whatever those rules
-    /// say.
-    #[allow(clippy::too_many_arguments)]
+    /// A foot the leg has let go of ([`Strain::let_go`]) steps whatever those
+    /// rules say.
     fn select_step(
         &self,
-        timing: &GaitTiming,
-        moving: bool,
-        min_takeoff_gap: f32,
-        min_stance: f32,
-        hard_overstretch: [bool; 2],
-        let_go: [bool; 2],
-        left_ideal: Point3<f32>,
-        right_ideal: Point3<f32>,
+        ctx: &PlacerCtx<'_>,
+        pace: &Pace,
+        strain: BySide<Strain>,
+        ideals: BySide<Point3<f32>>,
     ) -> Option<FootSide> {
-        let left_err = planar_distance(left_ideal, self.left.planted_position);
-        let right_err = planar_distance(right_ideal, self.right.planted_position);
+        let timing = &pace.timing;
+        let min_takeoff_gap = timing.swing_duration * ctx.config.takeoff_stagger_fraction;
+        let min_stance = timing.swing_duration * ctx.config.min_stance_fraction;
+        let left_err = planar_distance(ideals.left, self.left.planted_position);
+        let right_err = planar_distance(ideals.right, self.right.planted_position);
 
-        let eligible = |foot: &PlacerFoot, other: &PlacerFoot, err: f32, hard: bool, gone: bool| {
+        let eligible = |foot: &PlacerFoot, other: &PlacerFoot, err: f32, strain: Strain| {
             if !foot.is_planted() {
                 return false;
             }
-            if gone {
+            if strain.let_go {
                 return true;
             }
             if timing.continuous_support && !other.is_planted() {
                 return false;
             }
-            if moving {
+            if pace.moving {
                 let staggered = self.since_takeoff >= min_takeoff_gap;
                 match self.clock.pending(foot.side) {
                     None => false,
@@ -790,7 +715,7 @@ impl FootPlacer {
                     // 11) is prevented at the source: resume replants
                     // are displacement-gated and split along travel, so
                     // feet no longer reach the stretch limit in unison.
-                    Some(ReleaseKind::Overstretch) => staggered || hard,
+                    Some(ReleaseKind::Overstretch) => staggered || strain.hard_overstretch,
                     Some(ReleaseKind::Turn) => {
                         staggered && foot.since_plant >= min_stance && other.is_planted()
                     }
@@ -808,20 +733,8 @@ impl FootPlacer {
             }
         };
 
-        let left_go = eligible(
-            &self.left,
-            &self.right,
-            left_err,
-            hard_overstretch[0],
-            let_go[0],
-        );
-        let right_go = eligible(
-            &self.right,
-            &self.left,
-            right_err,
-            hard_overstretch[1],
-            let_go[1],
-        );
+        let left_go = eligible(&self.left, &self.right, left_err, strain.left);
+        let right_go = eligible(&self.right, &self.left, right_err, strain.right);
         match (left_go, right_go) {
             (true, true) => Some(if left_err >= right_err {
                 FootSide::Left
@@ -1034,6 +947,162 @@ impl FootPlacer {
     }
 }
 
+/// How the body travels through one substep, and the cadence the gait keeps
+/// for it: worked out once from the substep's inputs, and handed to every
+/// stage after.
+#[derive(Clone, Copy, Debug)]
+struct Pace {
+    /// The way the body faces: level, unit length.
+    facing: Vector3<f32>,
+    /// The body's velocity over the surface it stands on, without its
+    /// vertical part.
+    velocity: Vector3<f32>,
+    /// The speed the gait's clock runs on: the body's own over the ground,
+    /// floored while a direction is held so that the first step can fire
+    /// before the body has gathered speed.
+    gait_speed: f32,
+    /// Whether the body travels or is asked to. Travelling, feet step on the
+    /// gait's clock; at rest, they settle under the body.
+    moving: bool,
+    /// How far from its hip, across the ground, a foot may aim to plant, in
+    /// metres: the leg's reach budget, less on a slope.
+    max_reach: f32,
+    /// The cadence at that speed and reach.
+    timing: GaitTiming,
+}
+
+impl Pace {
+    /// The pace of the body `ctx` describes.
+    fn of(ctx: &PlacerCtx<'_>) -> Self {
+        let cfg = ctx.config;
+        let facing = facing_from_yaw(ctx.yaw);
+        let horizontal_velocity = Vector3::new(ctx.velocity.x, 0.0, ctx.velocity.z);
+        let speed = horizontal_velocity.magnitude();
+
+        // The gait clock runs on actual horizontal speed, floored while
+        // the player holds a direction so the first step can fire before
+        // physics velocity catches up with input.
+        let has_intent =
+            Vector2::new(ctx.intent_direction.x, ctx.intent_direction.z).magnitude_squared() > 1e-4;
+        let gait_speed = if has_intent {
+            speed.max(cfg.intent_speed_floor)
+        } else {
+            speed
+        };
+        let moving = has_intent || speed > cfg.moving_speed_threshold;
+
+        // The reach budget shrinks with terrain slope: the downhill
+        // stance endpoint sits `slope · r` below the rest vertical, so
+        // plants and cadence must assume the worst endpoint or the
+        // planner aims landings the leg cannot reach (seen as straight-
+        // leg extensions descending, knees-up scrambling ascending, and
+        // overstretch re-pacing the gait into hops).
+        let travel = if speed > cfg.moving_speed_threshold {
+            Vector2::new(horizontal_velocity.x, horizontal_velocity.z) / speed
+        } else {
+            Vector2::new(facing.x, facing.z)
+        };
+        let max_reach = slope_aware_reach_budget(ctx, travel);
+        let timing = GaitTiming::derive(
+            gait_speed,
+            ctx.standing_height,
+            ctx.leg_length,
+            ctx.stride_gain,
+            max_reach,
+            cfg,
+        );
+        Self {
+            facing,
+            velocity: horizontal_velocity,
+            gait_speed,
+            moving,
+            max_reach,
+            timing,
+        }
+    }
+}
+
+/// What a planted foot's leg says of its stance this substep.
+#[derive(Clone, Copy, Debug, Default)]
+struct Strain {
+    /// The step the leg asks the clock for ahead of its schedule.
+    asks: Option<ReleaseKind>,
+    /// Whether the leg is stretched past its hard margin
+    /// (`overstretch_hard_margin`): its step does not wait out the stagger
+    /// between takeoffs.
+    hard_overstretch: bool,
+    /// Whether the foot is where the leg cannot be drawn standing on it: it
+    /// steps whatever the gait's rules say.
+    let_go: bool,
+}
+
+impl Strain {
+    /// What `foot`'s leg says of its stance; nothing, of a foot in the air.
+    ///
+    /// Event releases while moving: a planted foot is asked to step
+    /// early when the facing has rotated far enough from its plant
+    /// (turn step), or when the hip has slid to the leg's stretch
+    /// limit (landing slides, hard accelerations). The kind controls
+    /// the support rules the step fires under — see `select_step`.
+    /// Overstretch additionally requires the leg to be *opening* (hip
+    /// moving away from the foot): a foot that lands far ahead during
+    /// a hard deceleration is momentarily stretched, but the pelvis
+    /// is closing on it and the stretch resolves by itself — firing
+    /// there would re-lift the foot after one frame of contact. The
+    /// trigger is the *actual* stretch, never a prediction: a
+    /// predictive lead (latching when the limit would be reached
+    /// within the stagger gap) reads 0.3 m into the future at sprint
+    /// speeds, and because latches are sticky it re-paced the whole
+    /// gait reactively ~0.06 phase ahead of the schedule. Overshoot
+    /// while a release is gate-blocked is bounded by the hard-margin
+    /// stagger bypass in `FootPlacer::select_step`.
+    ///
+    /// A hip further still from its foot ([`LET_GO_MARGIN`]), or leaving
+    /// one its leg points level at ([`LET_GO_TANGENT`]), lets go of it:
+    /// moving or not, whatever the support and stagger rules there would
+    /// hold a step back for. Those rules pace a gait; a foot left where
+    /// the leg cannot stand on it is not part of one, and held there it
+    /// is drawn as a leg pointing at it.
+    fn of(foot: &PlacerFoot, ctx: &PlacerCtx<'_>, pace: &Pace) -> Self {
+        if !foot.is_planted() {
+            return Self::default();
+        }
+        let cfg = ctx.config;
+        let hip = hip_position(foot.side, ctx, pace.facing);
+        let away = hip - foot.planted_position;
+        let distance = away.norm().max(1e-4);
+        // Opening, as the stretch release is: a foot planted high ahead
+        // of a hip climbing to it points as far off straight down, and
+        // is the next step up.
+        let opening = away.dot(&ctx.velocity) > 0.0;
+        let across = Vector2::new(away.x, away.z).magnitude();
+        let levelled = opening
+            && across >= LET_GO_ACROSS * ctx.leg_length
+            && across > LET_GO_TANGENT * away.y.max(0.0);
+        let let_go =
+            levelled || distance >= max_leg_extension(ctx) + LET_GO_MARGIN * ctx.leg_length;
+        let (mut asks, mut hard_overstretch) = (None, false);
+        if pace.moving {
+            // Full 3D radial speed: on slopes the hip moves away
+            // from a planted foot vertically as much as
+            // horizontally, and an xz-only opening gate is blind
+            // to that half of the motion.
+            let radial_speed = away.dot(&ctx.velocity) / distance;
+            if radial_speed > 0.0 && distance >= max_leg_extension(ctx) {
+                asks = Some(ReleaseKind::Overstretch);
+                hard_overstretch = distance >= max_leg_extension(ctx) + cfg.overstretch_hard_margin;
+            } else if yaw_equivalent_error(foot, ctx) >= turn_trigger(cfg, ctx) {
+                asks = Some(ReleaseKind::Turn);
+            }
+        }
+        Self {
+            asks,
+            hard_overstretch,
+            let_go,
+        }
+    }
+}
+
 /// Neutral-stance foot position for a given side, given pelvis and
 /// facing. Uses the same lateral convention as `stance_offset` so
 /// initial feet sit where the placer wants them by default.
@@ -1055,11 +1124,10 @@ fn ideal_target(
     foot: &PlacerFoot,
     capture_point: Point3<f32>,
     ctx: &PlacerCtx<'_>,
-    facing: Vector3<f32>,
-    max_reach: f32,
-    timing: &GaitTiming,
+    pace: &Pace,
 ) -> Point3<f32> {
     let cfg = ctx.config;
+    let (facing, max_reach, timing) = (pace.facing, pace.max_reach, &pace.timing);
     let side = foot.side.side_sign();
     let turn = turn_in_place_offset(facing, ctx.yaw_rate, ctx.hip_width, cfg.k_yaw, side);
     let stance = stance_offset(facing, ctx.hip_width, side);
@@ -1128,10 +1196,10 @@ fn ideal_target(
 fn start_step(
     foot: &mut PlacerFoot,
     ideal: Point3<f32>,
-    timing: &GaitTiming,
     ctx: &PlacerCtx<'_>,
-    facing: Vector3<f32>,
+    pace: &Pace,
 ) -> Option<PlannedStep> {
+    let (timing, facing) = (&pace.timing, pace.facing);
     let planned = planned_landing(ctx, foot.side, timing.swing_duration);
     // A swing through a flight leaves the ground with the body, at its
     // speed: from rest, a swing as long as a hop falls a leg's length behind
@@ -1220,29 +1288,16 @@ fn ahead_along_travel(
     ))
 }
 
-/// Advance a mid-swing foot along its swing; plant it when the swing
-/// completes. Before the retarget cutoff, the landing target chases the
-/// latest ideal (projected by remaining travel), or the plan's step for
-/// the foot where it has one, so direction changes mid-swing don't land
-/// the foot somewhere stale. A swing onto a step a flight comes before lands
-/// as the body does, however long the flight ([`planned_landing`]): a hop's
-/// landing foot is in the air for the hop. Within the swing's last frame
-/// (`frame_dt`) neither its target nor its time is moved: the plan has been
-/// told the foot stands there, and has moved the foot's footfall on to its
-/// next. The landing *height* is the probed terrain, or the plan's footfall,
-/// for the whole swing: the swing carries the foot onto whatever its target
-/// becomes, so a late correction bends its path and a stale height would pop
-/// at plant.
-///
-/// A target the landing probe finds no ground under is illegal, and it
-/// takes precedence over both: the step shortens toward its takeoff
-/// point until the probe finds a surface again.
+/// Advance a mid-swing foot through one substep, and plant it when its swing
+/// completes. In order: when the swing lands ([`time_landing`]); the landing
+/// itself, if that is now ([`come_down`]); otherwise where it lands
+/// ([`aim_landing`]), how high ([`level_landing`]) and over what
+/// ([`clear_ground`]); and then the foot's move along it.
 fn advance_stepping(
     foot: &mut PlacerFoot,
     ideal: Point3<f32>,
-    timing: &GaitTiming,
     ctx: &PlacerCtx<'_>,
-    facing: Vector3<f32>,
+    pace: &Pace,
     frame_dt: f32,
 ) {
     let FootPhase::Stepping(mut swing) = foot.phase else {
@@ -1251,13 +1306,44 @@ fn advance_stepping(
         foot.position = foot.planted_position;
         return;
     };
+    let planned = time_landing(&mut swing, foot.side, ctx, pace, frame_dt);
+    if swing.remaining() <= ctx.dt {
+        come_down(foot, swing, planned, ctx, pace.facing, frame_dt);
+        return;
+    }
+    aim_landing(foot, &mut swing, planned, ideal, ctx, pace.facing, frame_dt);
+    level_landing(&mut swing, planned, foot.side, ctx, pace.facing);
+    clear_ground(&mut swing, foot.side, ctx);
+    swing.advance(ctx.dt, retarget_chase(ctx));
+    foot.position = LegEnvelope::of(foot.side, ctx, pace.facing).draw(swing.position());
+    foot.forward = swing_forward(swing.from_forward, swing.to_forward, swing.progress());
+    foot.pre_lift = 0.0;
+    foot.phase = FootPhase::Stepping(swing);
+}
 
-    // A swing onto a step a flight comes before lands as the body does,
-    // however long the flight; the swing is otherwise the gait's. One whose
-    // step the plan has taken away (or the body has turned from) is the
-    // gait's again, and lands in the gait's time.
+/// Set when `swing` lands, and return the planned step it swings to, where
+/// the plan has one for `side` that these legs can land
+/// ([`planned_landing`]).
+///
+/// A swing onto a step a flight comes before lands as the body does, however
+/// long the flight: a hop's landing foot is in the air for the hop. One onto
+/// a step on the ground is paced to it ([`paced_onto`]). One whose step the
+/// plan has taken away (or the body has turned from) is the gait's again,
+/// and lands in the gait's time.
+///
+/// Within the swing's last frame (`frame_dt`) its time is not moved: the
+/// plan has been told the foot stands there, and has moved the foot's
+/// footfall on to its next. Nor is a held swing's, which is due every
+/// substep until it finds somewhere to land.
+fn time_landing(
+    swing: &mut Swing,
+    side: FootSide,
+    ctx: &PlacerCtx<'_>,
+    pace: &Pace,
+    frame_dt: f32,
+) -> Option<PlannedStep> {
     let steered = swing.remaining() > frame_dt && !swing.held;
-    let planned = planned_landing(ctx, foot.side, swing.remaining());
+    let planned = planned_landing(ctx, side, swing.remaining());
     // A foot swung through a flight comes down with the body, at its speed;
     // a step on the ground comes to rest on its landing.
     swing.arrive_at(match planned {
@@ -1275,18 +1361,82 @@ fn advance_stepping(
                 swing.retime(lands_in, ctx.config.min_step_duration);
             }
             Some((step, _)) => {
-                if let Some(lands_in) = paced_onto(&step, &swing, timing, foot.side, ctx, facing) {
+                if let Some(lands_in) =
+                    paced_onto(&step, swing, &pace.timing, side, ctx, pace.facing)
+                {
                     swing.retime(lands_in, ctx.config.min_step_duration);
                 }
             }
-            None if swing.footfall.is_some() && swing.remaining() > timing.swing_duration => {
-                swing.retime(timing.swing_duration, ctx.config.min_step_duration);
+            None if swing.footfall.is_some() && swing.remaining() > pace.timing.swing_duration => {
+                swing.retime(pace.timing.swing_duration, ctx.config.min_step_duration);
             }
             None => {}
         }
     }
-    let planned = planned.map(|(step, _)| step);
+    planned.map(|(step, _)| step)
+}
+
+/// End a swing that is due this substep: plant the foot where the swing
+/// carried it, if a leg can stand there ([`plantable`]); wait over a
+/// flight's landing the body is not yet down on; and otherwise hold the
+/// swing, gathering under the hip ([`hold_swing`]).
+fn come_down(
+    foot: &mut PlacerFoot,
+    mut swing: Swing,
+    planned: Option<PlannedStep>,
+    ctx: &PlacerCtx<'_>,
+    facing: Vector3<f32>,
+    frame_dt: f32,
+) {
+    swing.advance(ctx.dt, retarget_chase(ctx));
     let landing = floor_sample(ctx, foot.side);
+    match (
+        plantable(swing.to, landing, ctx, foot.side, facing),
+        planned,
+    ) {
+        (Some(plant_at), _) => foot.plant(plant_at, &swing, &ctx.planned),
+        // Over a flight's landing a moment before the body is down on
+        // it: the foot waits there, at the end of its leg. Only a
+        // flight's: a step on the ground the leg cannot quite reach
+        // when its swing ends is shortened to where it can, at once. A
+        // foot that waited for the body there would plant frames late,
+        // and at a run every stance would lie behind the hips for it.
+        (None, Some(step))
+            if !swing.held
+                && step.landing.is_some()
+                && planar_distance(swing.to, step.at) <= ON_STEP =>
+        {
+            swing.retime(2.0 * frame_dt.max(ctx.dt), ctx.dt);
+            foot.position = LegEnvelope::of(foot.side, ctx, facing).draw(swing.position());
+            foot.phase = FootPhase::Stepping(swing);
+        }
+        (None, _) => hold_swing(foot, swing, under_hip(foot.side, ctx, facing), ctx),
+    }
+}
+
+/// Move where `swing` lands, and which way its toes point there.
+///
+/// Before the retarget cutoff, the landing chases the latest `ideal`
+/// (projected by remaining travel), or the plan's step for the foot where it
+/// has one, so direction changes mid-swing don't land the foot somewhere
+/// stale. Within the swing's last frame (`frame_dt`) it is not moved: the
+/// plan has been told the foot stands there, and has moved the foot's
+/// footfall on to its next.
+///
+/// A target the landing probe finds no ground under is illegal, and it
+/// takes precedence over both: the step shortens toward the stance under
+/// its hip until the probe finds a surface again.
+fn aim_landing(
+    foot: &mut PlacerFoot,
+    swing: &mut Swing,
+    planned: Option<PlannedStep>,
+    ideal: Point3<f32>,
+    ctx: &PlacerCtx<'_>,
+    facing: Vector3<f32>,
+    frame_dt: f32,
+) {
+    let chase = retarget_chase(ctx);
+    let u = swing.progress();
     // A target with *nothing* under it is the one that has to retreat. A
     // target with a wall or a body under it is a probe that learned nothing
     // about the floor this frame, and a swing that treats the two alike
@@ -1294,44 +1444,6 @@ fn advance_stepping(
     // thing it is chasing. A planned step is on a foothold the plan found,
     // across a gap the probe may not see over: it is not given up.
     let target_unsupported = planned.is_none() && !probe_found_geometry(ctx, foot.side);
-    let reach = max_leg_extension(ctx);
-    let hip = hip_position(foot.side, ctx, facing);
-    let under_hip = foot_position_from_stance(
-        ctx.pelvis,
-        facing,
-        ctx.hip_width,
-        ctx.foot_y_fallback,
-        foot.side,
-    );
-    let chase = retarget_chase(ctx);
-    if swing.remaining() <= ctx.dt {
-        swing.advance(ctx.dt, chase);
-        match (
-            plantable(swing.to, landing, ctx, foot.side, facing),
-            planned,
-        ) {
-            (Some(plant_at), _) => foot.plant(plant_at, &swing, &ctx.planned),
-            // Over a flight's landing a moment before the body is down on
-            // it: the foot waits there, at the end of its leg. Only a
-            // flight's: a step on the ground the leg cannot quite reach
-            // when its swing ends is shortened to where it can, at once. A
-            // foot that waited for the body there would plant frames late,
-            // and at a run every stance would lie behind the hips for it.
-            (None, Some(step))
-                if !swing.held
-                    && step.landing.is_some()
-                    && planar_distance(swing.to, step.at) <= ON_STEP =>
-            {
-                swing.retime(2.0 * frame_dt.max(ctx.dt), ctx.dt);
-                foot.position = LegEnvelope::of(foot.side, ctx, facing).draw(swing.position());
-                foot.phase = FootPhase::Stepping(swing);
-            }
-            (None, _) => hold_swing(foot, swing, under_hip, ctx),
-        }
-        return;
-    }
-
-    let u = swing.progress();
     if target_unsupported || swing.held {
         // The probe aims at the landing target, so an empty probe means
         // there is no ground under where this foot is about to plant —
@@ -1347,7 +1459,7 @@ fn advance_stepping(
         // trailing at full stretch until the airborne pose takes over. A
         // held swing, which found nowhere to land, gathers there too.
         let retreat = 1.0 - (-ctx.config.unsupported_retreat_rate * ctx.dt).exp();
-        swing.to = lerp_point(swing.to, under_hip, retreat);
+        swing.to = lerp_point(swing.to, under_hip(foot.side, ctx, facing), retreat);
         swing.footfall = None;
         foot.landing_shortened = true;
     } else if !foot.landing_shortened
@@ -1382,14 +1494,29 @@ fn advance_stepping(
     if u < ctx.config.swing_retarget_until_fraction {
         swing.to_forward = swing_forward(swing.to_forward, normalise_facing(facing), chase);
     }
+}
 
+/// Set the height `swing` lands at, and lift its arc over a landing above
+/// its takeoff. The height is the probed terrain, or the plan's footfall,
+/// for the whole swing: the swing carries the foot onto whatever its target
+/// becomes, so a late correction bends its path and a stale height would
+/// pop at plant.
+fn level_landing(
+    swing: &mut Swing,
+    planned: Option<PlannedStep>,
+    side: FootSide,
+    ctx: &PlacerCtx<'_>,
+    facing: Vector3<f32>,
+) {
+    let reach = max_leg_extension(ctx);
+    let hip = hip_position(side, ctx, facing);
     // A planned footfall's height is ground the plan sensed there. The
     // probe's floor counts only near where it struck: carried along its
     // plane to a footfall a leap away, it aims the foot half a metre over a
     // slope's shelf.
     let floor_y = match planned {
         Some(step) => Some(step.at.y),
-        None => floor_height_near(ctx, foot.side, swing.to.x, swing.to.z),
+        None => floor_height_near(ctx, side, swing.to.x, swing.to.z),
     };
     if let Some(floor_y) = floor_y {
         // No deeper than a leg below the hip. The probe goes on finding a
@@ -1420,20 +1547,24 @@ fn advance_stepping(
     // ground is close, and pulling the target up to meet the leg makes a
     // plant on a steep descent pop.
     swing.to.y = swing.to.y.min(hip.y);
+}
 
-    // Obstacle clearance: a riser or bump the probe finds under the foot
-    // must push the foot over it, not let the path cut through.
+/// Lift `swing` over what lies under its path: a riser or bump the probe
+/// finds under the foot must push the foot over it, not let the path cut
+/// through.
+fn clear_ground(swing: &mut Swing, side: FootSide, ctx: &PlacerCtx<'_>) {
     let path = swing.path();
     swing.clear(
-        floor_height_near(ctx, foot.side, path.x, path.z).map_or(0.0, |surface_y| {
+        floor_height_near(ctx, side, path.x, path.z).map_or(0.0, |surface_y| {
             surface_y + ctx.config.swing_obstacle_clearance - path.y
         }),
     );
-    swing.advance(ctx.dt, chase);
-    foot.position = LegEnvelope::of(foot.side, ctx, facing).draw(swing.position());
-    foot.forward = swing_forward(swing.from_forward, swing.to_forward, swing.progress());
-    foot.pre_lift = 0.0;
-    foot.phase = FootPhase::Stepping(swing);
+}
+
+/// The neutral stance under `side`'s hip: where a swing with nowhere to land
+/// gathers.
+fn under_hip(side: FootSide, ctx: &PlacerCtx<'_>, facing: Vector3<f32>) -> Point3<f32> {
+    foot_position_from_stance(ctx.pelvis, facing, ctx.hip_width, ctx.foot_y_fallback, side)
 }
 
 /// The share of their gap a swing's target, lift and clearance close in one
@@ -1601,6 +1732,35 @@ fn hold_swing(
     foot.landing_shortened = true;
 }
 
+/// Keep a planted foot on its ground, and drawn where a leg goes, as the
+/// ground and the hip move under and over it.
+fn settle_stance(foot: &mut PlacerFoot, ctx: &PlacerCtx<'_>, facing: Vector3<f32>) {
+    // Planted ankle y tracks the current terrain each substep rather
+    // than being frozen at plant time. Without this, a plant that
+    // landed mid-recoil (e.g. on the airborne→grounded edge, with
+    // physics still settling) leaves foot y stuck above or below
+    // the final terrain surface. The contact is extrapolated along
+    // its tangent plane to the foot's own xz, so a probe that hit
+    // slightly off the anchor still yields the right height.
+    // A probe that struck too far from the foot to tell, as one still
+    // aimed where the foot was before a replant, leaves it at its height.
+    let (x, z) = (foot.planted_position.x, foot.planted_position.z);
+    let y = match floor_sample(ctx, foot.side) {
+        Some(_) => floor_height_near(ctx, foot.side, x, z),
+        None => Some(ctx.foot_y_fallback),
+    };
+    let hip = hip_position(foot.side, ctx, facing);
+    if let Some(y) = y {
+        sync_planted_y(foot, y, hip, max_leg_extension(ctx));
+    }
+    // A plant the hip is leaving is drawn no further out than a leg
+    // goes, until the leg lets go of it: the swing it starts then
+    // is drawn from the same place.
+    if foot.is_planted() {
+        foot.position = LegEnvelope::of(foot.side, ctx, facing).draw(foot.planted_position);
+    }
+}
+
 /// Pull a planted foot's y to the current terrain surface, as far down
 /// as the leg goes. No-op while the foot is mid-step — the swing arc
 /// owns y during that window.
@@ -1735,16 +1895,11 @@ fn turn_trigger(cfg: &FootPlacerConfig, ctx: &PlacerCtx<'_>) -> f32 {
 
 /// Visual toe-off anticipation for a planted foot: rolls onto the toe
 /// as either the translational or turn trigger approaches.
-fn update_pre_lift(
-    foot: &mut PlacerFoot,
-    ideal: Point3<f32>,
-    timing: &GaitTiming,
-    ctx: &PlacerCtx<'_>,
-    moving: bool,
-) {
+fn update_pre_lift(foot: &mut PlacerFoot, ideal: Point3<f32>, ctx: &PlacerCtx<'_>, pace: &Pace) {
     if !foot.is_planted() {
         return;
     }
+    let (timing, moving) = (&pace.timing, pace.moving);
 
     let err = planar_distance(ideal, foot.planted_position);
     let translation = pre_lift_amount(
@@ -2245,6 +2400,16 @@ mod tests {
             GaitTiming::level_reach(dims.standing_height, dims.leg_length, config),
             config,
         )
+    }
+
+    /// The pace of the body `ctx` describes, stepping to the cadence `timing`
+    /// and facing along `facing`.
+    fn paced(ctx: &PlacerCtx<'_>, timing: &GaitTiming, facing: Vector3<f32>) -> Pace {
+        Pace {
+            timing: *timing,
+            facing,
+            ..Pace::of(ctx)
+        }
     }
 
     /// A hop stridden through is the landing foot's swing: over a 0.4 s hop
@@ -2852,9 +3017,8 @@ mod tests {
         advance_stepping(
             &mut placer.right,
             pelvis,
-            &timing,
             &ctx,
-            Vector3::z(),
+            &paced(&ctx, &timing, Vector3::z()),
             ctx.dt,
         );
         let FootPhase::Stepping(swing) = placer.right.phase else {
@@ -2896,9 +3060,8 @@ mod tests {
         advance_stepping(
             &mut placer.right,
             pelvis,
-            &level_timing(1.0, &config),
             &ctx,
-            Vector3::z(),
+            &paced(&ctx, &level_timing(1.0, &config), Vector3::z()),
             ctx.dt,
         );
         let FootPhase::Stepping(Swing { to: aimed, .. }) = placer.right.phase else {
@@ -2932,9 +3095,8 @@ mod tests {
         advance_stepping(
             &mut placer.right,
             pelvis,
-            &level_timing(1.0, &config),
             &ctx,
-            Vector3::z(),
+            &paced(&ctx, &level_timing(1.0, &config), Vector3::z()),
             ctx.dt,
         );
         let rise = placer.right.position.y - from.y;
@@ -3208,9 +3370,8 @@ mod tests {
         advance_stepping(
             &mut foot,
             far,
-            &level_timing(1.0, &config),
             &ctx,
-            facing,
+            &paced(&ctx, &level_timing(1.0, &config), facing),
             ctx.dt,
         );
 
