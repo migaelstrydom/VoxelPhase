@@ -7,6 +7,7 @@ mod pilot;
 mod pose_audit;
 mod record;
 mod report;
+mod room_scenarios;
 mod scenario;
 mod scenarios;
 mod shrub_scenarios;

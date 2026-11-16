@@ -1,0 +1,72 @@
+// Room E3 — blast to gain height (docs/GAME_DESIGN.md, Earth).
+//
+// The exit is on a cliff top 5 m up: past the reach of a full jump, which
+// catches a lip about 3.2 m above the feet. A slab of stone 2.6 m thick stands
+// on four thin legs a metre off the cliff's face, its top level with the
+// cliff's and as far out of reach. Blow the legs and it drops whole: from the
+// floor its top is 2.6 m up, and from its top the cliff's lip is 2.4 m:
+// both in reach with half a metre to spare, which the craters the legs'
+// grenades leave in front of it, and the slab settling into them, take.
+//
+//               N (+z)
+//   ┌─────────────────────────────────┐
+//   │          cliff top, exit ◎      │  top at 7
+//   │═════════════════════════════════│  face at z = 20
+//   │           ┌─────────┐           │  slab: z 15–19, x 12–20,
+//   │           │ ▪     ▪ │           │  top at 7, 2.6 m thick,
+//   │           │ ▪     ▪ │           │  legs 2.4 m tall
+//   │           └─────────┘           │
+//   │                                 │
+//   │               ☺ spawn            │  floor at 2
+//   └─────────────────────────────────┘
+//
+// The cliff runs the room's full width, so there is no way round.
+Level(
+    name: "E3 Slab",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (32.0, 24.0, 32.0)),
+                base_height: 2.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 2.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The cliff: 5 m tall, wall to wall.
+                    Plateau(min: (0.0, 20.0), max: (32.0, 32.0), height: 7.0),
+                ],
+
+                volumes: [
+                    // The slab, a metre clear of the face.
+                    Platform(center: (16.0, 7.0, 17.0), half_extents: (4.0, 2.0), thickness: 2.6),
+                    // Its legs, one grenade each, reaching a little into
+                    // its underside so each is joined to it.
+                    Pillar(center: (13.0, 15.8), height: 4.65, radius: 0.45),
+                    Pillar(center: (19.0, 15.8), height: 4.65, radius: 0.45),
+                    Pillar(center: (13.0, 18.2), height: 4.65, radius: 0.45),
+                    Pillar(center: (19.0, 18.2), height: 4.65, radius: 0.45),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (16.0, 7.0, 26.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (16.0, 3.0, 6.0),
+)

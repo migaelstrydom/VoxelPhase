@@ -6,6 +6,7 @@ use rand::{Rng, SeedableRng};
 
 use super::driver::Run;
 use super::garden;
+use super::rooms;
 use super::scenario::{Blast, Scenario};
 
 /// Every scenario, in the order `--list` prints them.
@@ -20,6 +21,7 @@ pub fn catalogue() -> Vec<Scenario> {
     ]
     .into_iter()
     .chain(garden::scenarios())
+    .chain(rooms::scenarios())
     .collect()
 }
 

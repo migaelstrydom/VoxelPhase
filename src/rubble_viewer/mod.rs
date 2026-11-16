@@ -33,6 +33,7 @@
 mod driver;
 mod garden;
 mod report;
+mod rooms;
 mod scenario;
 mod scenarios;
 #[cfg(all(test, feature = "rubble_scenarios"))]

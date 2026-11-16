@@ -1,0 +1,7 @@
+// Committed mesh-integrity baselines for the puzzle rooms, read by
+// `level_check` (see `levels/mesh_baselines.ron` for what the figures mean).
+(
+    entries: [
+        (level: "e3_rubble_ramp.level.ron", triangles: 30888, open_edges: 0),
+    ],
+)
