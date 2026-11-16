@@ -7,6 +7,7 @@
 use nalgebra::Point3;
 
 use super::hunt::hunt;
+use super::rooms;
 use super::scenario::{Action, Beat, Probe, Scenario};
 
 /// Every scenario, in the order they are worth reading: the acceptance
@@ -14,6 +15,7 @@ use super::scenario::{Action, Beat, Probe, Scenario};
 pub fn catalogue() -> Vec<Scenario> {
     let mut all = acceptance();
     all.extend(hunt());
+    all.extend(rooms::scenarios());
     all
 }
 

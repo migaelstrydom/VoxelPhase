@@ -107,12 +107,24 @@ against.
 - **A fall lands roughly.** What comes down may crack, tilt or roll. Give it
   a generous place to land, not an exact one. Whether it cracks or drops
   clean is a matter of style, set by how the rubble planner splits pieces.
+- **A terrace wall is 2 m thick or more.** The slopes either side of a
+  plateau's edge wear a 1 m wall down; W1's reservoir leaked at 10.83 through
+  one 7 m tall. A volume (a `Platform` dam) is not worn, so a dam can be
+  thinner. `level_check` reports where a pool spills: run it first.
+- **A breach is a hole, and a hole has a size.** A grenade in 1 m of sand
+  opens a hole a reservoir empties through in about a minute; in 2 m it only
+  trickles. Only the water above the hole's floor goes, so a reservoir's
+  floor belongs below where the player's throw will strike its dam.
+- **Volumes come out larger than the sum.** Smoothed edges make a hollow hold
+  more than its footprint times its depth. Size the water by measuring it
+  in `water_viewer`, not by arithmetic.
 
 ### Testing a room
 
 | Question | Tool |
 |---|---|
 | Does it cut, and what falls? | `rubble_viewer`, in milliseconds; a room's promise is kept there as a scenario |
+| Where does the water go, and how high? | `water_viewer` with the game's grenade, probes in the room, in seconds; its promise kept as a test |
 | Can the real body do this step? | `character_viewer`, for steps that come out the same every time: throws, fixed jumps |
 | Can a person find the way, and does it read? | Play it. R rebuilds the room from its file, so an edit is one key away |
 
@@ -141,7 +153,7 @@ thing the puzzle turns on.
 
 | # | Idea | Kind | Also | Spends |
 |---|---|---|---|---|
-| W1 | A pool sits above a dry hollow that bars the way. Breach the pool's bank; the hollow fills and can be swum. | T | Earth | Water |
+| W1 | A pool sits above a dry hollow that bars the way. Breach the pool's bank; the hollow fills and can be swum. **Prototyped:** `levels/rooms/w1_flood_the_hollow.level.ron`. | T | Earth | Water |
 | W2 | The reverse: a flooded passage too long to swim. Breach its low side to drain it. | T | Earth | Water |
 | W3 | One pool, two hollows, and a ridge between them. Which bank is breached decides which fills. | X | Earth | Water |
 | W4 | A stream runs past the place water is wanted. Blast a channel to turn it, or drop earth to dam it. | X | Earth | Blast |

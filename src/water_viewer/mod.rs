@@ -7,6 +7,7 @@
 mod driver;
 mod hunt;
 mod report;
+mod rooms;
 mod scenario;
 mod scenarios;
 #[cfg(all(test, feature = "water_scenarios"))]

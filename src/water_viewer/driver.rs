@@ -164,5 +164,12 @@ fn apply(terrain: &mut TerrainWorld, action: Action) -> String {
                 centre.x, centre.y, centre.z
             )
         }
+        Action::Grenade { centre } => {
+            terrain.detonate(centre, &BlastConfig::default());
+            format!(
+                "grenade at ({:.1}, {:.1}, {:.1})",
+                centre.x, centre.y, centre.z
+            )
+        }
     }
 }

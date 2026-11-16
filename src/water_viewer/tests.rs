@@ -143,3 +143,22 @@ fn a_river_runs_as_deep_across_the_lattice_as_along_it() {
         "along the lattice at {along}, across it at {across}"
     );
 }
+
+/// Room W1's promise: a grenade thrown from the floor into the dam fills the
+/// hollow to within a swimmer's reach of its far rim (10.0), and none of it
+/// spills onto the floor beyond.
+#[test]
+fn room_w1_a_breach_from_the_floor_fills_the_hollow_to_its_rim() {
+    const RIM: f32 = 10.0;
+    let run = run("room_w1_breach_chest");
+    let hollow = probe(&run, "hollow").last().copied().flatten();
+    let hollow = hollow.unwrap_or_else(|| panic!("the hollow is dry"));
+    assert!(
+        (RIM - 0.3..RIM).contains(&hollow),
+        "the hollow stands at {hollow}, not within 0.3 m under its rim at {RIM}"
+    );
+    assert!(
+        probe(&run, "far floor").iter().all(Option::is_none),
+        "water reached the far floor"
+    );
+}

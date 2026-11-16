@@ -21,6 +21,9 @@ pub struct Probe {
 pub enum Action {
     /// A charge that cuts a crater of exactly this radius.
     Blast { centre: Point3<f32>, radius: f32 },
+    /// The game's grenade, which cuts what its budget affords against the
+    /// ground it goes off in.
+    Grenade { centre: Point3<f32> },
 }
 
 /// One scripted action and when it happens, in simulated seconds.
