@@ -1,0 +1,67 @@
+// Room O11 — arrange the stop (docs/GAME_DESIGN.md, Second batch: "An ice
+// block pushed on level ground slides until something stops it").
+//
+// The exit is on a small island hanging beside a strip of island, its top
+// 4.5 m over the strip: past a jump. A block of ice 2 m tall stands at the
+// strip's south end, by its east edge. Pushed north, it slides past the exit
+// and off the strip's far end. Crater the strip under the exit first: the
+// block drops into the crater and stops, its top 3 m under the exit's lip.
+//
+// The goal's point is 2 m over the exit island.
+//
+//               N (+z)
+//         ┌───────────┐       z = 36
+//         │           │
+//         │           │ ┌───┐
+//         │         ✕ │ │ ◎ │ exit island, top 14.5, x 26.5–30.5
+//         │           │ └───┘ z 21–27
+//         │           │
+//         │         ▣ │       ice, 2 m, at z 8
+//         │     ☺     │       strip, top 10
+//         └───────────┘       z = 4
+//         x 14       26       floor far below at -6
+Level(
+    name: "O11 Ice Slide",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    // The strip.
+                    Platform(center: (20.0, 10.0, 20.0), half_extents: (6.0, 16.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 20.0), half_extents: (6.0, 16.0), thickness: 2.0, material: Dirt),
+                    // The exit island, half a metre off the strip's east edge.
+                    Platform(center: (28.5, 14.5, 24.0), half_extents: (2.0, 3.0), thickness: 1.0, material: Grass),
+                    Platform(center: (28.5, 13.5, 24.0), half_extents: (2.0, 3.0), thickness: 1.0, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                IceBox(pos: (24.5, 11.05, 8.0), half_extents: (1.0, 1.0, 1.0)),
+                Goal(pos: (28.5, 16.5, 24.0), radius: 1.5, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (20.0, 11.0, 5.5),
+)

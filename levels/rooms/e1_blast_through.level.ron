@@ -1,0 +1,61 @@
+// Room E1 — blast through (docs/GAME_DESIGN.md, Earth): the first grenade.
+//
+// A strip of island 6 m wide hangs over a floor far below. Halfway along it a
+// dirt bank 2 m thick and 5 m tall stands across the whole strip, past both
+// its edges, so there is no way round. Blast through it.
+//
+// Climbing it is a crater stair, and allowed: the room teaches the throw.
+//
+//               N (+z)
+//         ┌─────┐
+//         │  ◎  │  z = 36
+//         │     │
+//       ▐█████████▌  bank, z 19–21, top 15
+//         │     │
+//         │  ☺  │  strip, top 10
+//         └─────┘  z = 4
+//         x 17  23     floor far below at -6
+Level(
+    name: "E1 Blast Through",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    // The strip: grass over dirt.
+                    Platform(center: (20.0, 10.0, 20.0), half_extents: (3.0, 16.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 20.0), half_extents: (3.0, 16.0), thickness: 2.0, material: Dirt),
+                    // The bank, half a metre past each edge of the strip and
+                    // bedded half a metre into it.
+                    Platform(center: (20.0, 15.0, 20.0), half_extents: (3.5, 1.0), thickness: 5.5, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (20.0, 10.0, 33.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (20.0, 11.0, 6.0),
+)

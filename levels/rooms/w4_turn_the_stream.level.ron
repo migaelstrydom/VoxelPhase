@@ -1,0 +1,89 @@
+// Room W4 — turn a stream (docs/GAME_DESIGN.md, Water).
+//
+// The player starts on the floor of a closed pit 13 m deep. The exit is an
+// island hanging in the pit, 6.5 m over its floor. Beside the pit, a stream
+// springs from a cliff and runs north in a channel to the room's edge, its
+// bed 6.5 m over the pit's floor. Where the stream passes the pit, a gap in
+// the 2 m of earth between them is filled by a metre of sand. Blast it from the pit at the height of the stream: the
+// stream turns into the pit, the pit fills to its bed, and the player swims
+// up to the island.
+//
+// A hole lower in the wall has earth behind it and lets nothing through.
+// The stream never runs out, so the pit fills however long the hole takes.
+//
+// The goal's point is 3 m over the island.
+//
+//               N (+z)
+//   ┌────┬────┬───┬───────────────┬──────┐
+//   │    │ ▼  │   │               │      │  ground at 15
+//   │    │ s  │   │               │      │  z = 28
+//   │    │ t  ├──▐│  pit, floor 2 │      │  gap z 17–25, sand at x 14–15
+//   │    │ r   ══▐│     ┌──┐      │      │  island top 8.5
+//   │    │ e  ├──▐│     │◎ │      │      │
+//   │    │ a  │   │     └──┘      │      │
+//   │    │ m  │   │   ☺           │      │  z = 14
+//   │    │ ↑  │   └───────────────┘      │
+//   │    │ spring, bed 8.5               │
+//   └────┴────┴──────────────────────────┘
+//    x 0  9    13  15            29      40
+Level(
+    name: "W4 Turn the Stream",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 42.0)),
+                base_height: 15.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The pit.
+                    Plateau(min: (15.0, 14.0), max: (29.0, 28.0), height: 2.0),
+                    // The stream's channel, from the cliff at z = 2 to the
+                    // room's north edge. 2 m of earth stand between it and
+                    // the pit.
+                    Plateau(min: (9.0, 2.0), max: (13.0, 48.0), height: 8.5),
+                    // The gap in that earth that the sand fills, down to the
+                    // channel's bed.
+                    Plateau(min: (13.0, 17.0), max: (15.0, 25.0), height: 8.5),
+                ],
+
+                volumes: [
+                    // The sand wall on the gap's pit side, a metre past each
+                    // end of it, bedded into the pit's floor.
+                    Platform(center: (14.5, 15.0, 21.0), half_extents: (0.5, 5.0), thickness: 13.5, material: Sand),
+                    // The island, hanging in the pit.
+                    Platform(center: (22.0, 8.5, 21.0), half_extents: (2.0, 2.0), thickness: 1.0),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (22.0, 11.5, 21.0), radius: 1.5, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (22.0, 3.0, 16.0),
+
+    water: Some((
+        bodies: [
+            Spring(position: (11.0, 9.5, 1.8), direction: (0.0, 0.0, 1.5), discharge: 10.0),
+            // Where the channel runs off the room's edge.
+            Sink(min: (8.0, -8.0, 36.0), max: (14.0, 12.0, 48.0)),
+        ],
+    )),
+)

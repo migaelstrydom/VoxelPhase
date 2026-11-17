@@ -1,0 +1,68 @@
+// Room O10 — drop a crate where it is wanted (docs/GAME_DESIGN.md, Objects).
+//
+// The player starts on a wide island of rock with a hole in it. 12 m down,
+// out of sight under it, is a lower island, and beside that, hanging 4.5 m
+// over it, the exit: past a jump. Push the crate on the upper island down the
+// hole, follow it, and push it under the exit's lip to climb from.
+//
+// The upper island is 4 m of rock: digging a way straight down onto the exit
+// costs far more grenades than the hole.
+//
+// The goal's point is 2 m over the exit island.
+//
+//   side view, looking north
+//     ▣  ☺
+//   ════○══════════════════════  upper, rock, 12–16, hole at x 14
+//
+//                  ┌─────┐  exit, top 8.5, x 24–29
+//   ════════════════════════   lower, top 4, x 10–30
+//   x 8                     32      floor far below at -6
+Level(
+    name: "O10 Crate Down the Hole",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    // The upper island: grass over rock.
+                    Platform(center: (20.0, 16.0, 20.0), half_extents: (12.0, 12.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 15.0, 20.0), half_extents: (12.0, 12.0), thickness: 3.0, material: Rock),
+                    // The hole.
+                    Shaft(center: (14.0, 20.0), from_y: 11.0, to_y: 17.0, radius: 1.5),
+                    // The lower island.
+                    Platform(center: (20.0, 4.0, 20.0), half_extents: (10.0, 8.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 3.0, 20.0), half_extents: (10.0, 8.0), thickness: 1.5, material: Dirt),
+                    // The exit, hanging over the lower island's east end.
+                    Platform(center: (26.5, 8.5, 20.0), half_extents: (2.5, 3.0), thickness: 1.0, material: Grass),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Crate(pos: (18.0, 16.8, 20.0), size: 0.8),
+                Goal(pos: (26.5, 10.5, 20.0), radius: 1.5, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (21.0, 17.0, 20.0),
+)

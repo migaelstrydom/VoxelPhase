@@ -1,0 +1,60 @@
+// Room B1 — up a lip (docs/GAME_DESIGN.md, Body): the first climb.
+//
+// Two islands side by side, the far one 3 m higher: its face is a lip a full
+// jump catches. Jump, catch it, climb.
+//
+// The goal's point is 2 m over the upper island, so a jump from below does
+// not count.
+//
+//   side view, looking west
+//                    ◎
+//              ┌──────────┐  top 13
+//   ☺          │  upper   │
+//   ───────────┤          │  top 10
+//    lower     │          │
+//   z 4      z 16       z 28     floor far below at -6
+Level(
+    name: "B1 Up a Lip",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 32.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    // The lower island, where the player starts.
+                    Platform(center: (20.0, 10.0, 10.0), half_extents: (6.0, 6.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 10.0), half_extents: (6.0, 6.0), thickness: 2.0, material: Dirt),
+                    // The upper island, its face at z = 16, run down past the
+                    // lower one's underside.
+                    Platform(center: (20.0, 13.0, 22.0), half_extents: (6.0, 6.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 12.0, 22.0), half_extents: (6.0, 6.0), thickness: 5.0, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (20.0, 15.0, 24.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (20.0, 11.0, 7.0),
+)

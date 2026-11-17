@@ -1,0 +1,57 @@
+// Room E6 — through the hill (docs/GAME_DESIGN.md, Earth).
+//
+// A strip of island only 2 m thick carries a dirt hill 6 m long and 7 m
+// tall, past both its edges. Tunnel through the hill. A grenade thrown at
+// the hill's foot craters the thin floor as much as the hill, and a few of
+// them hole it through to the sky: the tunnel has to be cut a metre up the
+// hill's face, in the thick ground, and the floor left alone.
+//
+//   side view, looking west
+//                ┌──────┐   top 16
+//                │ hill │
+//   ☺            │      │            ◎
+//   ═════════════╧══════╧═════════════  strip 8–10
+//   z 4        z 18    z 24         z 36     floor far below at -6
+Level(
+    name: "E6 Through the Hill",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    // The strip: a metre of grass over a metre of dirt.
+                    Platform(center: (20.0, 10.0, 20.0), half_extents: (4.0, 16.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 20.0), half_extents: (4.0, 16.0), thickness: 1.0, material: Dirt),
+                    // The hill, bedded half a metre into the strip.
+                    Platform(center: (20.0, 16.0, 21.0), half_extents: (4.5, 3.0), thickness: 6.5, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (20.0, 10.0, 33.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (20.0, 11.0, 6.0),
+)

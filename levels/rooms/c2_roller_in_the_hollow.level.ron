@@ -1,0 +1,63 @@
+// Room C2 — strand a roller (docs/GAME_DESIGN.md, Creatures).
+//
+// The way on crosses a hollow 3 m deep in a strip of island, and a roller
+// lives in the hollow. It charges what it sees, and the hollow's sides are
+// open to the sky: a hit throws the player off the island. Crater the
+// hollow's floor in its path: a roller in a hole cannot climb out.
+//
+// The hollow's walls are lips a jump catches.
+//
+//   side view, looking west
+//   ☺                                  ◎
+//   ══════════╗              ╔══════════  top 10
+//             ║    ●         ║
+//             ╚══════════════╝            hollow, top 7
+//   z 4     z 14           z 26      z 36    floor far below at -6
+Level(
+    name: "C2 Roller in the Hollow",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    // The near and far ends, run down to the hollow's
+                    // underside so that its walls are earth.
+                    Platform(center: (20.0, 10.0, 9.0), half_extents: (8.0, 5.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 9.0), half_extents: (8.0, 5.0), thickness: 4.0, material: Dirt),
+                    Platform(center: (20.0, 10.0, 31.0), half_extents: (8.0, 5.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 31.0), half_extents: (8.0, 5.0), thickness: 4.0, material: Dirt),
+                    // The hollow's floor.
+                    Platform(center: (20.0, 7.0, 20.0), half_extents: (8.0, 6.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 6.0, 20.0), half_extents: (8.0, 6.0), thickness: 1.0, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Roller(pos: (20.0, 22.0)),
+                Goal(pos: (20.0, 10.0, 33.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (20.0, 11.0, 6.0),
+)
