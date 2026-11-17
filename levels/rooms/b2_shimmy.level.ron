@@ -2,9 +2,10 @@
 //
 // A corridor between two walls, its floor broken by a chasm 12 m long: past
 // any jump. The west wall is 3 m high, a lip a full jump catches, with a roof
-// half a metre in from its edge 0.6 m over its top: room to hang from, none to
-// stand on. Jump, catch the lip, shimmy north along it past the chasm, and
-// drop to the floor beyond.
+// flush with its edge 0.6 m over its top: room to hang from, none to stand on
+// or climb into. The chasm runs behind the wall too, so a tunnel blasted
+// through the wall comes out over it. Jump, catch the lip, shimmy north along
+// it past the chasm, and drop to the floor beyond.
 //
 //               N (+z)
 //   ┌────────┬─────────────────┬───────┐
@@ -37,16 +38,16 @@ Level(
                 features: [
                     // The east wall, too tall to climb.
                     Plateau(min: (20.0, 0.0), max: (32.0, 32.0), height: 14.0),
-                    // The chasm.
-                    Plateau(min: (10.0, 10.0), max: (20.0, 22.0), height: -6.0),
+                    // The chasm, on both sides of the west wall.
+                    Plateau(min: (0.0, 10.0), max: (20.0, 22.0), height: -6.0),
                 ],
 
                 volumes: [
                     // The west wall: its face at x = 10, its top 3 m over the
                     // floor, from the chasm's floor up.
                     Platform(center: (8.0, 5.0, 16.0), half_extents: (2.0, 16.0), thickness: 11.5),
-                    // The roof over it, half a metre in from its lip.
-                    Platform(center: (7.75, 6.6, 16.0), half_extents: (1.75, 16.0), thickness: 1.0),
+                    // The roof over it, flush with its lip.
+                    Platform(center: (8.0, 6.6, 16.0), half_extents: (2.0, 16.0), thickness: 1.0),
                 ],
             ),
 
