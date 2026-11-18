@@ -21,11 +21,11 @@
 // query's surface (src/water/waves.rs, src/water/query.rs).
 layout(location = 0) in vec2 inXz;
 layout(location = 1) in vec2 inWater;  // (surface, depth)
-layout(location = 2) in vec2 inFlow;   // depth-averaged velocity, m/s
-layout(location = 3) in vec2 inFace;   // a falling sheet's facing; zero on the surface
-layout(location = 4) in vec4 inSheet;  // a falling sheet's (drop below its lip, whole fall, side, along)
+layout(location = 2) in vec2 inFlow;   // depth-averaged velocity, m/s; on falling water, where it left its lip
+layout(location = 3) in vec2 inFace;   // the way falling water flies, level; zero on the surface
+layout(location = 4) in vec4 inSheet;  // falling water's (drop below its lip, whole fall, side, thickness)
 layout(location = 5) in vec3 inNormal; // falling water's face normal; up on the surface
-layout(location = 6) in float inFray;  // 1 at an end of a fall, 0 where it joins the sheet beside it
+layout(location = 6) in float inFray;  // how far an end of a fall frays out; 0 where it runs on or is closed
 
 layout(push_constant) uniform PushConstants {
     mat4 view;
@@ -45,14 +45,14 @@ layout(location = 7) out vec4 fragSwell;
 layout(location = 8) flat out int fragMasked;
 layout(location = 9) out vec4 fragSheet;
 layout(location = 10) out float fragFray;
+layout(location = 11) out vec2 fragFace;
 
 // Depth at which the surface is cut, m: the shoreline's contour. Thinner
 // water would lie on its floor and fight it for depth.
 const float SHORE_DEPTH = 0.005;
-// How far each sheet reaches past the ends of its edge, m, to overlap the
-// sheets beside it, so neighbours leaning out each their own way leave no
-// gap between them; the fragment shader frays the ends of a fall out.
-const float SHEET_OVERLAP = 0.2;
+// How far a fall's frayed end reaches out past the end of its lip, m, for the
+// fragment shader to fray away to nothing.
+const float FRAY_REACH = 0.25;
 
 void main() {
     float surface = inWater.x;
@@ -67,8 +67,8 @@ void main() {
     // A skirt or lip reaches past its chunk's tile: it takes the ripples at
     // the tile's edge, where they come to rest.
     float ripple = layer >= 0 ? rippleHeightAt(layer, clamp(inXz - origin, vec2(0.0), vec2(extent))) : 0.0;
-    vec2 edge = vec2(-inFace.y, inFace.x);
-    vec2 xz = inXz + edge * inSheet.z * SHEET_OVERLAP;
+    vec2 square = vec2(-inFace.y, inFace.x);
+    vec2 xz = inXz + square * inSheet.z * inFray * FRAY_REACH;
     vec3 position = vec3(xz.x, surface + swell.x + ripple, xz.y);
     gl_Position = pc.proj * pc.view * vec4(position, 1.0);
     fragNormal = inSheet.y > 0.0 ? inNormal : vec3(0.0, 1.0, 0.0);
@@ -77,8 +77,9 @@ void main() {
     fragLayer = layer;
     fragTileOrigin = origin;
     fragMasked = 0;
-    fragSheet = vec4(inSheet.xy, inSheet.w + inSheet.z * SHEET_OVERLAP, inSheet.z);
+    fragSheet = inSheet;
     fragFray = inFray;
+    fragFace = inFace;
     fragFlow = inFlow;
     fragWetDepth = depth;
     fragWetRange = vec2(SHORE_DEPTH, 1.0e9);

@@ -1,31 +1,26 @@
 //! The falling water in the field this frame, and what it strikes.
 //!
 //! ```text
-//!   faces of awake chunks ──┐  a face pouring from water that `falls` to
-//!   boundary faces ─────────┼─▶ the water past it, or off the map: a sheet
-//!   springs and pumps ──────┘   a lip long; a spring or pump: its jet
+//!   the field's falls ──────┐  each a sheet a lip long, from its lip along
+//!   springs and pumps ──────┴─▶ its arc to where it comes down; a spring
+//!                               or pump: its jet
 //!                                  │
 //!   strikes(centre, radius) ◀──────┘ each stream crossing the sphere: its
 //!                                    velocity there and the area it strikes
 //! ```
 //!
-//! Each sheet is one face's worth of lip, carrying the face's own discharge,
-//! so a fall is as many streams as faces it pours over, and a fall down a
-//! stepped cliff a stream for every step.
+//! Each sheet is one fall (`field::Fall`): one face's worth of lip, carrying
+//! the face's own discharge along the arc the field found for it, so what
+//! strikes a body is the water that is drawn and that lands.
 
-use nalgebra::{Point3, Vector2, Vector3};
+use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
-use crate::water::field::{Axis, WaterField};
-use crate::water::geometry::{SpanIndex, SpanRef, Step, COLUMN_SIZE};
+use crate::water::field::WaterField;
+use crate::water::geometry::{SpanIndex, COLUMN_SIZE};
 
-use super::lip::{falls, ledge_reach, off_map, thrown};
 use super::path::FallPath;
-
-/// Least flow over an edge, per metre of it, that is a falling stream,
-/// m²/s.
-const MIN_POUR: f32 = 0.005;
 
 /// How much of the momentum it carries falling water gives up to what it
 /// strikes: it stops along its path and runs off sideways, so nearly all.
@@ -80,6 +75,9 @@ struct Stream {
     /// mouth, or off the map.
     from: Option<SpanIndex>,
     into: Option<SpanIndex>,
+    /// When its water meets the world, s after it leaves: the end of its
+    /// path, or sooner where a wall stands in its way.
+    lands: f32,
     min: Point3<f32>,
     max: Point3<f32>,
 }
@@ -97,8 +95,17 @@ impl Stream {
             path,
             from,
             into,
+            lands: path.duration(),
             min,
             max,
+        }
+    }
+
+    /// The same stream, meeting the world as it passes height `y`.
+    fn landing_at(self, y: f32) -> Self {
+        Self {
+            lands: self.path.time_at(y),
+            ..self
         }
     }
 
@@ -148,50 +155,18 @@ impl FallingWater {
     /// Every stream of falling water in `field`.
     pub fn build(field: &WaterField) -> Self {
         let mut streams = Vec::new();
-        let cells = field.cells();
-        for (slot, chunk) in cells.chunks.iter().enumerate() {
-            if !chunk.awake {
-                continue;
-            }
-            for face in &chunk.faces {
-                if face.q.abs() < MIN_POUR {
-                    continue;
-                }
-                let own = SpanIndex {
-                    slot: slot as u32,
-                    flat: face.a,
-                };
-                let (upper, lower, sign) = if face.q > 0.0 {
-                    (own, face.b, 1.0)
-                } else {
-                    (face.b, own, -1.0)
-                };
-                if let Some(path) = sheet(field, upper, lower, face.axis, sign, face.q.abs()) {
-                    streams.push(Stream::new(path, Some(upper), Some(lower)));
-                }
-            }
-            for edge in &chunk.boundary {
-                if edge.q < MIN_POUR {
-                    continue;
-                }
-                let upper = SpanIndex {
-                    slot: slot as u32,
-                    flat: edge.cell,
-                };
-                let level = cells.surface(upper);
-                let below = off_map(level, edge.outside.map(f64::from));
-                if !falls(level, cells.bed(upper) as f64, below) {
-                    continue;
-                }
-                let face = axis_vector(edge.axis) * edge.outward;
-                let lip = lip_point(field, upper, face, 0.0, level as f32);
-                let fall = (level - below) as f32;
-                let throw = thrown(face, field.velocity(upper), fall);
-                let half_length = 0.5 * COLUMN_SIZE;
-                let path = FallPath::sheet(lip, face, throw, fall, half_length, edge.q);
-                streams.push(Stream::new(path, Some(upper), None));
-            }
+        for fall in field.falls().iter() {
+            let path = FallPath::sheet(
+                fall.lip,
+                fall.face(),
+                fall.throw(),
+                fall.height(),
+                0.5 * COLUMN_SIZE,
+                fall.pour,
+            );
+            streams.push(Stream::new(path, Some(fall.from), fall.into).landing_at(fall.landing.y));
         }
+        let cells = field.cells();
         for jet in field.jets() {
             let level = cells.surface(jet.landing) as f32;
             if let Some(path) = FallPath::jet(jet.origin, jet.velocity, jet.discharge, level) {
@@ -222,7 +197,7 @@ impl FallingWater {
             .zip(&self.onward)
             .map(|(stream, &onward)| {
                 let path = &stream.path;
-                let slab = path.at(path.duration());
+                let slab = path.at(stream.lands);
                 Landing {
                     at: slab.centre + slab.over * slab.half_thickness,
                     velocity: slab.velocity,
@@ -243,92 +218,10 @@ impl FallingWater {
     }
 }
 
-/// The sheet pouring from cell `upper` to `lower` over the face between
-/// them on `axis`, facing `sign` along it, carrying `per_metre` m²/s, if
-/// the water falls there.
-fn sheet(
-    field: &WaterField,
-    upper: SpanIndex,
-    lower: SpanIndex,
-    axis: Axis,
-    sign: f32,
-    per_metre: f32,
-) -> Option<FallPath> {
-    let cells = field.cells();
-    let (level, below) = (cells.surface(upper), cells.surface(lower));
-    if !falls(level, cells.bed(upper) as f64, below) {
-        return None;
-    }
-    let face = axis_vector(axis) * sign;
-    let step = Step {
-        di: face.x as i32,
-        dk: face.y as i32,
-    };
-    // Where the lower column's own floor carries the ledge on, the water
-    // leaves where the ledge really ends: the mean over the edge's two ends.
-    let lower_span = field.graph().span(span_ref(field, lower));
-    let ledge = 0.5 * (cells.bed(upper) + lower_span.bed);
-    let reach = edge_end_sides(step)
-        .iter()
-        .map(|&sides| ledge_reach(step, sides, &lower_span.quarters, ledge))
-        .sum::<f32>()
-        * 0.5;
-    let lip = lip_point(field, upper, face, reach, level as f32);
-    let fall = (level - below) as f32;
-    let throw = thrown(face, field.velocity(upper), fall);
-    Some(FallPath::sheet(
-        lip,
-        face,
-        throw,
-        fall,
-        0.5 * COLUMN_SIZE,
-        per_metre,
-    ))
-}
-
-/// The middle of the edge of cell `at`'s column facing `face`, moved out
-/// `reach` columns, at height `level`.
-fn lip_point(
-    field: &WaterField,
-    at: SpanIndex,
-    face: Vector2<f32>,
-    reach: f32,
-    level: f32,
-) -> Point3<f32> {
-    let column = span_ref(field, at).column;
-    let (cx, cz) = column.centre();
-    let middle = Vector2::new(cx, cz) + face * ((0.5 + reach) * COLUMN_SIZE);
-    Point3::new(middle.x, level, middle.y)
-}
-
-/// The span a cell is.
-fn span_ref(field: &WaterField, at: SpanIndex) -> SpanRef {
-    let chunk = &field.cells().chunks[at.slot as usize];
-    let (local, ordinal) = chunk.column_of(at.flat as usize);
-    SpanRef::key(chunk.coord.column(local), ordinal)
-}
-
-/// The unit vector along `axis`, x and z.
-fn axis_vector(axis: Axis) -> Vector2<f32> {
-    match axis {
-        Axis::X => Vector2::x(),
-        Axis::Z => Vector2::y(),
-    }
-}
-
-/// The two ends of a column's edge across `step`, as the sides of the
-/// neighbouring column they lie on.
-fn edge_end_sides(step: Step) -> [(i32, i32); 2] {
-    match (step.di, step.dk) {
-        (1, _) => [(-1, -1), (-1, 1)],
-        (-1, _) => [(1, -1), (1, 1)],
-        (_, 1) => [(-1, -1), (1, -1)],
-        _ => [(-1, 1), (1, 1)],
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use nalgebra::Vector2;
+
     use super::*;
 
     fn curtain() -> Stream {

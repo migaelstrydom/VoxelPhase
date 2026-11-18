@@ -87,7 +87,7 @@ impl FineVertex {
 }
 
 /// A vertex of a river surface: the water's own surface there, its depth,
-/// its flow, and on a falling sheet the way the sheet faces.
+/// its flow, and on falling water what its curtain is drawn by.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RiverVertex {
@@ -98,24 +98,28 @@ pub struct RiverVertex {
     /// above it. The draw cuts the surface below its shore depth, so a shore
     /// is a contour, not the edge of a column.
     pub depth: f32,
-    /// Depth-averaged velocity, m/s, x and z.
+    /// Depth-averaged velocity, m/s, x and z. On falling water, where the
+    /// water at this vertex left its lip, x and z: its streaks hang from
+    /// there, whichever way it was thrown.
     pub flow: Vector2<f32>,
-    /// On a sheet of water falling over an edge, the way it faces: out over
-    /// the edge, x and z. Zero on the surface, which faces up.
+    /// On falling water, the way it flies, level and unit. Zero on the
+    /// surface, which faces up.
     pub face: Vector2<f32>,
-    /// On a falling sheet, (how far this vertex hangs below the lip, the
-    /// sheet's whole fall at this end, m; which end of the sheet's edge it
-    /// is on, -1 or 1, pointing away from the other; where along the edge it
-    /// hangs from, m): (0, fall, side, along) at the lip and (fall, fall,
-    /// side, along) at the foot, wherever the foot is thrown. Zero on the
-    /// surface.
+    /// On falling water, (how far this vertex has fallen below its lip, the
+    /// whole fall of its strand, m; which side of its curtain's middle it is
+    /// on, -1 or 1 at the ends of a fall's lip, along the level direction
+    /// square to its flight, and 0 between; how thick the water is here,
+    /// m): (0, fall, side, thickness) at the lip and (fall, fall, side,
+    /// thickness) at the foot. On the foam where it lands, the first is its
+    /// fall and 1 more and where across the foam the vertex lies, from -1
+    /// behind the foot to 1 at its outer edge. Zero on the surface.
     pub sheet: Vector4<f32>,
-    /// On falling water, the way its face faces: a sheet or jet is drawn as
-    /// a body with a top face and an under face (`nappe.rs`). Up on the
-    /// surface.
+    /// On falling water, the way its face faces: it is drawn as a body with
+    /// a top face and an under face (`curtain.rs`). Up on the surface.
     pub normal: Vector3<f32>,
-    /// On falling water, 1 at an end of a fall, which frays out, and 0 at
-    /// an end that joins the sheet beside it. Zero on the surface.
+    /// On falling water, how far an end of a fall frays out into strands:
+    /// 1 at the free end of a thin fall, 0 at the closed end of a thick one
+    /// and wherever its curtain runs on into the next. Zero on the surface.
     pub fray: f32,
 }
 

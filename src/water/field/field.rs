@@ -6,6 +6,10 @@
 //!        └────────────────┘                 └── carry ─────┤
 //!   Sources ── pour ──▶                                    ▼
 //!   Sinks   ◀─ drain ──                         FieldSolver (awake chunks)
+//!                                                          │
+//!                              Falls ◀── found again ──────┘
+//!                    (each falling face's arc and landing: what the next
+//!                     step pours where, and what is drawn and strikes)
 //! ```
 //!
 //! The water is the only state: depths in cells, discharges on faces. An
@@ -26,6 +30,7 @@ use super::activity;
 use super::cells::{FieldCells, CELL_AREA};
 use super::currents;
 use super::faces::{lay_faces, link_faces, SeaBoundary};
+use super::falls::{Fall, Falls};
 use super::fill::{fill_fed, fill_pool, fill_sea, pool_seed, SpillLevels};
 use super::fronts::{self, Front};
 use super::pumps::{Jet, PumpId, PumpPlacement, Pumps};
@@ -100,6 +105,8 @@ pub struct WaterField {
     sinks: Vec<Sink>,
     pumps: Pumps,
     sea: Option<SeaBoundary>,
+    /// The water going over edges as it stood after the last step or edit.
+    falls: Falls,
     ledger: FieldLedger,
     frame: FieldFrame,
     /// Carrying time of an edit since the last step, reported with it.
@@ -202,6 +209,7 @@ impl WaterField {
             sinks,
             pumps: Pumps::default(),
             sea,
+            falls: Falls::default(),
             ledger,
             frame: FieldFrame::default(),
             edit_time: None,
@@ -313,6 +321,7 @@ impl WaterField {
         moving.sort_unstable();
         moving.dedup();
         currents::refresh(&mut self.cells, &moving);
+        self.falls.find(&self.graph, &mut self.cells);
         self.frame = FieldFrame {
             stats,
             awake,
@@ -339,6 +348,7 @@ impl WaterField {
             sink.relay(&self.graph, &self.cells);
         }
         self.pumps.retrace(&self.graph, &self.cells);
+        self.falls.find(&self.graph, &mut self.cells);
         self.edit_time = Some(started.elapsed());
     }
 
@@ -363,6 +373,23 @@ impl WaterField {
     /// it, or what may lie within `near`'s range of its point.
     pub fn fronts(&self, near: Option<(Point3<f32>, f32)>) -> impl Iterator<Item = Front> + '_ {
         fronts::fronts(&self.cells, near)
+    }
+
+    /// The water going over edges, as it stood after the last step or edit.
+    pub fn falls(&self) -> &Falls {
+        &self.falls
+    }
+
+    /// The fall from `cell` over its edge in `direction` (an index into
+    /// `ORTHOGONAL`), if its water falls there.
+    pub fn fall(&self, cell: SpanIndex, direction: usize) -> Option<&Fall> {
+        self.falls.get(cell, direction)
+    }
+
+    /// The fall whose lip runs on from `fall`'s at its end `end`, and which
+    /// of that fall's ends meets it there (`Falls::beside`).
+    pub fn fall_beside(&self, fall: &Fall, end: usize) -> Option<(&Fall, usize)> {
+        self.falls.beside(&self.graph, &self.cells, fall, end)
     }
 
     /// Depth-averaged velocity in a cell, m/s, x and z.

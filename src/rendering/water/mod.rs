@@ -1,10 +1,10 @@
 mod chop_tiles;
+mod curtain;
 mod divide;
 mod field_mesher;
 mod field_sources;
 mod footprint;
 mod jet;
-mod nappe;
 mod ocean_ring;
 mod pipeline;
 mod renderer;

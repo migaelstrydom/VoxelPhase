@@ -6,8 +6,8 @@
 //! ```text
 //!   origin ●──╮   row 0          each row: a ring of JET_RING vertices round
 //!              ╲                 the arc, an ellipse square to the flight;
-//!               ╲  row k         the sheet shader sees (drop, fall, 0, along)
-//!                ╲               as on any sheet, `along` across the flight
+//!               ╲  row k         the sheet shader sees (drop, fall, 0,
+//!                ╲               thickness) as on any falling water
 //!   landing ~~~~~~●~~  row JET_ROWS, at the landing cell's surface
 //! ```
 //!
@@ -22,7 +22,7 @@ use nalgebra::{Vector2, Vector3, Vector4};
 use crate::water::falling::{FallPath, GRAVITY};
 use crate::water::field::Jet as FieldJet;
 
-use super::nappe::{PLUNGE_LIFT, PLUNGE_START};
+use super::curtain::PLUNGE_LIFT;
 use super::vertex::RiverVertex;
 
 /// Rows of vertices along a jet's arc, after the first. Fixed, so a jet
@@ -46,8 +46,6 @@ pub(super) struct Jet {
     path: FallPath,
     /// The way it flies, level.
     face: Vector2<f32>,
-    /// Its flow, level, as every vertex carries it.
-    flow: Vector2<f32>,
     /// How fast it rises as it comes out, m/s; negative if thrown down.
     rising: f32,
 }
@@ -61,7 +59,6 @@ impl Jet {
         Some(Self {
             path,
             face: flow.try_normalize(1.0e-4).unwrap_or_else(Vector2::x),
-            flow,
             rising: jet.velocity.y,
         })
     }
@@ -99,18 +96,18 @@ impl Jet {
         let point = slab.centre + offset;
         let origin = self.path.origin();
         let edge = Vector2::new(slab.across.x, slab.across.z);
-        let mouth = Vector2::new(origin.x, origin.z).dot(&edge);
         RiverVertex {
             xz: Vector2::new(point.x, point.z),
             surface: point.y,
             depth: (2.0 * slab.half_thickness).min(MAX_DEPTH),
-            flow: self.flow,
+            // Where its streaks hang from: across its mouth.
+            flow: Vector2::new(origin.x, origin.z) + edge * (cos * slab.half_length),
             face: self.face,
             sheet: Vector4::new(
                 self.travelled(time),
                 self.travel(),
                 0.0,
-                mouth + cos * slab.half_length,
+                2.0 * slab.half_thickness,
             ),
             normal,
             fray: 0.0,
@@ -120,12 +117,13 @@ impl Jet {
     /// A vertex of the foam where the jet lands, lying on the water: its
     /// middle for `corner` 0, else corner `corner` of `PLUNGE_CORNERS` round
     /// it, as far out as the jet is wide and `PLUNGE_MARGIN` more. Its drop
-    /// is its fall plus how far out it is as a share of that, past the foot.
+    /// is its fall and 1 more, and how far out it is as a share of its
+    /// reach: past the foot, as a curtain's foam is.
     pub fn plunge(&self, corner: u32) -> RiverVertex {
         let slab = self.path.at(self.path.duration());
         let landed = slab.centre + slab.over * slab.half_thickness;
         let (share, offset) = if corner == 0 {
-            (PLUNGE_START, Vector2::zeros())
+            (0.0, Vector2::zeros())
         } else {
             let angle = TAU * (corner - 1) as f32 / PLUNGE_CORNERS as f32;
             let (sin, cos) = angle.sin_cos();
@@ -138,9 +136,9 @@ impl Jet {
             xz: Vector2::new(landed.x, landed.z) + offset,
             surface: landed.y + PLUNGE_LIFT,
             depth: (2.0 * slab.half_thickness).min(MAX_DEPTH),
-            flow: self.flow,
+            flow: Vector2::new(landed.x, landed.z),
             face: self.face,
-            sheet: Vector4::new(fall + share, fall, 0.0, 0.0),
+            sheet: Vector4::new(fall + 1.0 + share, fall, 0.0, 2.0 * slab.half_thickness),
             normal: Vector3::y(),
             fray: 0.0,
         }

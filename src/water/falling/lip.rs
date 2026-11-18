@@ -12,6 +12,12 @@ pub const GRAVITY: f32 = 9.81;
 /// it falls rather than slopes: steeper than 45° across a column.
 const FALL: f64 = 0.5;
 
+/// Least height, m, the floor the water leaves must stand over the water or
+/// the ground below for there to be an edge to go over. Over less, a deep
+/// front running out over ground a hand lower would be taken for a fall on
+/// one column and a slope on the next.
+const LEDGE: f64 = 0.2;
+
 /// How far water falling into the void past the map's edge is taken to
 /// fall, m.
 const VOID_DROP: f64 = 6.0;
@@ -20,18 +26,19 @@ const VOID_DROP: f64 = 6.0;
 /// even a trickle clears the face it falls down.
 const LIP_SPEED: f32 = 0.8;
 
-/// The furthest water is thrown out from its lip by the time it lands, m.
-const MAX_THROW: f32 = 1.6;
+/// The fastest water is taken to leave a lip, m/s.
+const MAX_LAUNCH: f32 = 14.0;
 
 /// Whether water at `upper` on a bed at `bed` goes over an edge to water at
-/// `lower`, falling between them rather than sloping: a step over `FALL`
-/// where the upper water's own floor stands above the lower water, which a
-/// slope between them would run through. However high the step, water whose
-/// floor lies below the water beside it has no edge to go over: it is a
-/// front running out over a floor, as where a breach floods a tunnel, and
-/// slopes down to the water ahead of it.
+/// `lower` (the ground itself, where that is dry), falling between them
+/// rather than sloping: a step over `FALL` where the upper water's own floor
+/// stands a `LEDGE` above the lower water, which a slope between them would
+/// run through. However high the step, water whose floor lies below the
+/// water beside it has no edge to go over: it is a front running out over a
+/// floor, as where a breach floods a tunnel, and slopes down to the water
+/// ahead of it.
 pub fn falls(upper: f64, bed: f64, lower: f64) -> bool {
-    upper - lower > FALL && bed > lower
+    upper - lower > FALL && bed - lower > LEDGE
 }
 
 /// The water a surface at `level` falls to off the map's edge: the sea's
@@ -40,27 +47,49 @@ pub fn off_map(level: f64, outside: Option<f64>) -> f64 {
     outside.unwrap_or(level - VOID_DROP)
 }
 
-/// How far out from its lip water going over an edge facing `face` lands,
-/// leaving it with the lip's `flow` and falling `fall` metres in
-/// sqrt(2 fall / g) seconds: it leans out clear of rock that leans out below
-/// the lip.
-///
-/// It is thrown the way its water moves, which a lip's corner shares with
-/// the edges beside it: a lip running across the lattice is a staircase of
-/// edges facing two ways, and thrown each its own way their water would
-/// cross. The face only keeps it going out.
-pub fn thrown(face: Vector2<f32>, flow: Vector2<f32>, fall: f32) -> Vector2<f32> {
-    if fall <= 0.0 {
-        return Vector2::zeros();
-    }
-    let velocity = flow + face * (LIP_SPEED - flow.dot(&face)).max(0.0) * 0.5;
+/// The level velocity water leaves a lip with, going out over an edge
+/// facing `face` at `out` m/s (its discharge over its depth there) from
+/// water moving at `flow`: out over the edge at that speed, and along the
+/// lip as the water behind it drifts, no faster than it goes out. A trickle
+/// is pushed out towards `LIP_SPEED`, so that it leans clear of rock that
+/// leans out below the lip.
+pub fn launch(face: Vector2<f32>, out: f32, flow: Vector2<f32>) -> Vector2<f32> {
+    let out = out.max(0.0);
+    let out = out + (LIP_SPEED - out).max(0.0) * 0.5;
+    let edge = Vector2::new(-face.y, face.x);
+    let velocity = face * out + edge * flow.dot(&edge).clamp(-out, out);
     let speed = velocity.norm();
-    let direction = if speed > 1.0e-4 {
-        velocity / speed
+    if speed > MAX_LAUNCH {
+        velocity * (MAX_LAUNCH / speed)
     } else {
-        face
-    };
-    direction * (speed * (2.0 * fall / GRAVITY).sqrt()).min(MAX_THROW)
+        velocity
+    }
+}
+
+/// How long water takes to fall `fall` metres from rest, s.
+pub fn fall_time(fall: f32) -> f32 {
+    (2.0 * fall.max(0.0) / GRAVITY).sqrt()
+}
+
+/// The two ends of a column's edge across `step`, as the sides of the
+/// neighbouring column they lie on.
+pub fn edge_ends(step: Step) -> [(i32, i32); 2] {
+    match (step.di, step.dk) {
+        (1, _) => [(-1, -1), (-1, 1)],
+        (-1, _) => [(1, -1), (1, 1)],
+        (_, 1) => [(-1, -1), (1, -1)],
+        _ => [(-1, 1), (1, 1)],
+    }
+}
+
+/// The step along a column's edge across `step` towards its end on the
+/// neighbouring column's `sides` (`edge_ends`).
+pub fn along_edge(step: Step, (sx, sz): (i32, i32)) -> Step {
+    if step.di != 0 {
+        Step { di: 0, dk: sz }
+    } else {
+        Step { di: sx, dk: 0 }
+    }
 }
 
 /// How far past the edge into the lower column across `step` its floor
@@ -91,5 +120,21 @@ mod tests {
     fn a_front_on_a_floor_below_the_water_ahead_slopes_however_high() {
         // A breach's water 1.4 m deep beside a film on the same floor.
         assert!(!falls(0.65, -0.75, -0.74));
+    }
+
+    #[test]
+    fn deep_water_over_ground_a_hand_lower_slopes() {
+        assert!(!falls(3.6, 3.0, 2.95));
+    }
+
+    #[test]
+    fn a_trickle_is_pushed_out_and_a_torrent_leaves_as_it_runs() {
+        let face = Vector2::x();
+        let trickle = launch(face, 0.0, Vector2::zeros());
+        assert!((trickle - face * 0.5 * LIP_SPEED).norm() < 1.0e-6);
+        let torrent = launch(face, 4.0, Vector2::new(3.0, 1.5));
+        assert!((torrent - Vector2::new(4.0, 1.5)).norm() < 1.0e-6);
+        let spilling = launch(face, 1.0, Vector2::new(0.0, 3.0));
+        assert!((spilling - Vector2::new(1.0, 1.0)).norm() < 1.0e-6);
     }
 }

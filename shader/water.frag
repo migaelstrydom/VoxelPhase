@@ -30,30 +30,29 @@ const vec3  SSS_COLOR = vec3(0.15, 0.5, 0.4);
 const float FLOW_PERIOD = 2.0;
 // Steepest a ripple may tilt the normal: past this the surface is noise.
 const float MAX_RIPPLE_SLOPE = 1.0;
-// How fast a falling sheet's two layers of streaks run down it, m/s.
+// How fast falling water's two layers of streaks run down it, m/s.
 const float SHEET_FALL_SPEED = 4.0;
 const float SHEET_FALL_SPEED_FINE = 6.5;
-// How far a sheet falls clear and glassy before it is white water, m.
-const float SHEET_GLASS_DROP = 1.2;
-// How far above its foot a sheet frays out into the pool, and how far below
-// its lip it frays in, m: a sheet's ends are edges in mid-air wherever the
-// fall steps down a column at a time.
-const float SHEET_FOOT_FADE = 0.9;
-const float SHEET_LIP_FADE = 0.25;
+// How far water falls clear and glassy before it is white water, m.
+const float SHEET_GLASS_DROP = 0.8;
+// How far above its foot falling water breaks up into the spray it lands in,
+// m.
+const float SHEET_FOOT_FADE = 0.7;
 // How thick falling glass is when it is two-thirds opaque, m.
 const float SHEET_GLASS_THICKNESS = 0.15;
 // How far light wraps round a falling curtain past its terminator: white
 // water scatters it, so its shadowed side is only dimmer.
 const float SHEET_WRAP = 0.4;
-// Gravity, m/s².
-const float GRAVITY = 9.81;
+// How far the ropes of white water stand out of a curtain, as the slope
+// their streaks tilt its face by.
+const float SHEET_RELIEF = 0.9;
 // Most a patch of foam where falling water lands covers what is under it.
 const float PLUNGE_OPACITY = 0.9;
-// Pour depth at which a sheet is a full curtain, not a few strands, m.
+// Pour depth at which falling water is a full curtain, not a few strands, m.
 const float SHEET_FULL_POUR = 0.12;
-// Share of a sheet's half-width that overlaps its neighbour, to fade: its
-// `SHEET_OVERLAP` past the end of half a column's edge.
-const float SHEET_OVERLAP_SHARE = 0.2 / 0.45;
+// Share of the way from a fall's middle out to its frayed end past which it
+// frays away.
+const float FRAY_SHARE = 0.5;
 
 // --- Soft edges ---
 // Length of view ray through the water over which a surface fades in where
@@ -118,11 +117,16 @@ layout(location = 7) in vec4 fragSwell;
 // Whether this is a tile's own fine grid, which covers the whole tile and is
 // masked to its body's columns.
 layout(location = 8) flat in int fragMasked;
-// On a falling sheet: how far below its lip and its whole fall, m; where
-// along its edge it hangs from, m; and across the sheet, -1 to 1 between the
-// ends of its widened edge. Zero on a surface.
+// On falling water: how far below its lip and its whole fall, m; which side
+// of its curtain's middle, -1 to 1 between the ends of a fall's lip; and how
+// thick the water is, m. On the foam where it lands the first is its fall
+// and 1 more and where across the foam, -1 behind its foot to 1 at its outer
+// edge. Zero on a surface. There `fragFlow` is where its water left its lip,
+// `fragFace` the way it flies, level, and `fragFray` how far an end of the
+// fall frays out.
 layout(location = 9) in vec4 fragSheet;
 layout(location = 10) in float fragFray;
+layout(location = 11) in vec2 fragFace;
 
 // The scene beyond the water, copied before the water is drawn (sampled at
 // offset UVs for refraction)
@@ -276,34 +280,75 @@ vec2 refractedLookup(vec2 screenUV, vec3 N, float opticalDepth) {
     return clamp(screenUV + offset, vec2(0.001), vec2(0.999));
 }
 
-// A sheet of water falling over an edge: clear glass where it leaves the
-// lip, white water in streaks as it falls and takes in air, thinning out
-// into mist over the pool at its foot. Blended over what is drawn, by alpha.
+// The streaks of falling water whose water left its lip at `lip`, flying the
+// way `facing` does, at height `y`: a coarse layer and a fine one, each
+// falling at its own speed. They hang from the lip, so they run straight down
+// a curtain however it is thrown, and are laid along whichever of the world's
+// axes the curtain runs along (both, faded into each other, for one running
+// between them), so they run on from each fall to the next round any lip.
+vec2 sheetStreaks(vec2 lip, vec2 facing, float y, float time) {
+    vec2 weight = facing * facing;
+    weight /= max(weight.x + weight.y, 1.0e-4);
+    // How far along the lip one pixel covers: seen edge on, a curtain's
+    // streaks are finer than its pixels, and are left out before they alias.
+    vec2 grain = fwidth(lip);
+    vec2 streaks = vec2(0.0);
+    for (int axis = 0; axis < 2; axis++) {
+        // A curtain facing along x runs along z, and the other way about.
+        float share = axis == 0 ? weight.x : weight.y;
+        if (share < 0.03) {
+            continue;
+        }
+        float along = axis == 0 ? lip.y : lip.x + 31.7;
+        float pixel = axis == 0 ? grain.y : grain.x;
+        vec2 laid = vec2(
+            fbm(vec2(along * 6.0, (y + time * SHEET_FALL_SPEED) * 0.35)),
+            fbm(vec2(along * 14.0 + 3.1, (y + time * SHEET_FALL_SPEED_FINE) * 0.7))) / 1.5;
+        vec2 blurred = smoothstep(vec2(0.25), vec2(0.6), pixel * vec2(6.0, 14.0));
+        streaks += share * mix(laid, vec2(0.5), blurred);
+    }
+    return streaks;
+}
+
+// The face normal `N` tilted by the slope of a height `h` laid over the
+// surface, from its screen-space derivatives (Mikkelsen 2010): relief with
+// no second look at the height.
+vec3 embossed(vec3 N, float h, float scale) {
+    vec3 across = dFdx(fragWorldPos);
+    vec3 down = dFdy(fragWorldPos);
+    vec3 r1 = cross(down, N);
+    vec3 r2 = cross(N, across);
+    float area = dot(across, r1);
+    vec3 slope = sign(area) * (dFdx(h) * r1 + dFdy(h) * r2);
+    return normalize(abs(area) * N - scale * slope);
+}
+
+// Water falling over an edge, a body with a top face and an under face:
+// clear glass where it leaves the lip, as deep as it is thick; white water in
+// ropes as it falls and takes in air; breaking up over the pool at its foot.
+// Blended over what is drawn, by alpha.
 vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     float drop = max(fragSheet.x, 0.0);
     float fall = max(fragSheet.y, 1.0e-3);
+    float thickness = max(fragSheet.w, 0.0);
+    float across = abs(fragSheet.z);
     // The face seen: the pipeline culls the one turned away.
     vec3 face = normalize(fragNormal);
-    // Along the edge, as it hangs from its lip and the same on every quad of
-    // it, so the streaks fall straight and run on from one to the next.
-    float along = fragSheet.z;
-    float y = fragWorldPos.y;
-    float coarse = fbm(vec2(along * 6.0, (y + time * SHEET_FALL_SPEED) * 0.35)) / 1.5;
-    float fine = fbm(vec2(along * 14.0 + 3.1, (y + time * SHEET_FALL_SPEED_FINE) * 0.7)) / 1.5;
-    float strands = 0.6 * coarse + 0.4 * fine;
+    vec2 facing = dot(fragFace, fragFace) > 1.0e-6 ? normalize(fragFace) : vec2(1.0, 0.0);
+    vec2 streaks = sheetStreaks(fragFlow, facing, fragWorldPos.y, time);
+    float coarse = streaks.x;
+    float strands = 0.6 * streaks.x + 0.4 * streaks.y;
 
     float aerated = smoothstep(0.0, SHEET_GLASS_DROP, drop);
     float pour = smoothstep(0.0, SHEET_FULL_POUR, fragWetDepth);
-
-    // How thick the tongue is here: the flow over its lip keeps its rate as
-    // it speeds up, so it thins as it falls (`nappe.rs`), from about 1 m/s
-    // off the lip. Thick glass is deep green and hides what is behind it.
-    float thickness = fragWetDepth * inversesqrt(1.0 + 2.0 * GRAVITY * drop);
+    // Thick glass is deep green and hides what is behind it.
     float body = 1.0 - exp(-thickness / SHEET_GLASS_THICKNESS);
 
     // Lit by its own shape, so the curl over the lip and the round of the
-    // curtain show; the streaks and the noise only ruffle it.
-    vec3 sheetN = normalize(face + vec3(0.0, 0.25 * (strands - 0.5), 0.0) + 0.35 * vec3(noiseN.x, 0.0, noiseN.z));
+    // curtain show; its ropes stand out of it as it turns white, and the
+    // noise ruffles it.
+    vec3 sheetN = embossed(face, strands, SHEET_RELIEF * aerated);
+    sheetN = normalize(sheetN + 0.35 * vec3(noiseN.x, 0.0, noiseN.z));
     float wrapped = clamp((dot(sheetN, L) + SHEET_WRAP) / (1.0 + SHEET_WRAP), 0.0, 1.0);
     float skyward = 0.5 + 0.5 * sheetN.y;
     vec3 H = normalize(L + V);
@@ -313,46 +358,52 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     vec3 tint = mix(vec3(0.10, 0.30, 0.32), vec3(0.03, 0.15, 0.17), body);
     vec3 glass = mix(tint, sky, 0.1 + 0.6 * fresnel)
         + vec3(1.0, 0.95, 0.8) * pow(NdotH, 96.0) * 0.6;
-    vec3 white = vec3(0.92, 0.96, 1.0) * (0.42 + 0.45 * wrapped + 0.15 * skyward + 0.2 * strands)
+    // White water is brightest on its ropes and bluer in the hollows between.
+    vec3 white = mix(vec3(0.62, 0.78, 0.9), vec3(0.94, 0.97, 1.0), smoothstep(0.25, 0.7, strands))
+        * (0.5 + 0.42 * wrapped + 0.15 * skyward)
         + vec3(1.0, 0.95, 0.8) * pow(NdotH, 24.0) * 0.15;
     vec3 color = mix(glass, white, aerated * (0.6 + 0.4 * strands));
 
     // Glass is clear where it is thin and deep where it is thick; white
-    // water is strands with air between them, sparser where little pours.
-    float glassAlpha = mix(0.25, 0.75, body) + 0.25 * fresnel;
-    float strandAlpha = smoothstep(0.62 - 0.3 * pour, 0.82 - 0.25 * pour, strands + 0.12 * aerated);
-    float alpha = mix(glassAlpha * mix(0.4, 1.0, pour), 0.92 * strandAlpha, aerated);
-    // It frays in below its lip and out over the white water at its foot.
+    // water is ropes with air between them, closing up where much pours and
+    // where the body is thick.
+    float glassAlpha = (mix(0.25, 0.8, body) + 0.25 * fresnel) * mix(0.4, 1.0, pour);
+    float full = max(pour, body);
+    float strandAlpha = smoothstep(0.62 - 0.4 * full, 0.82 - 0.35 * full, strands + 0.12 * aerated);
+    float alpha = mix(glassAlpha, mix(0.92, 0.98, body) * strandAlpha, aerated);
+    // It breaks up over the white water at its foot.
     alpha *= smoothstep(0.0, SHEET_FOOT_FADE * (0.5 + coarse), fall - drop);
-    alpha *= smoothstep(0.0, SHEET_LIP_FADE * (0.5 + coarse), drop);
-    // The ends of a fall fray out; where a sheet joins the next it runs on.
-    float across = abs(fragSheet.w) + (coarse - 0.5) * SHEET_OVERLAP_SHARE;
-    alpha *= 1.0 - fragFray * smoothstep(1.0 - SHEET_OVERLAP_SHARE, 1.0, across);
+    // A frayed end thins out into strands and is gone.
+    float frayed = across + (coarse - 0.5) * FRAY_SHARE;
+    alpha *= 1.0 - fragFray * smoothstep(1.0 - FRAY_SHARE, 1.0, frayed);
     // Where it runs against rock, it fades into it rather than cutting it.
     alpha *= smoothstep(0.0, 0.12, behindDepth);
     return vec4(color, alpha);
 }
 
-// Foam churned up where falling water lands, lying on the water out from
-// the foot: `fragSheet.x` past the fall by the share of its reach. White and
-// boiling under the fall, breaking into patches and thinning out to nothing
-// at its edge.
+// Foam churned up where falling water lands, lying on the water round its
+// foot: `fragSheet.x` past the fall by 1 and where across the patch it lies,
+// from -1 behind the foot, under the fall, to 1 at its outer edge. White and
+// boiling at the foot, breaking into patches and thinning out to nothing at
+// its edges.
 vec4 shadePlunge(vec3 L, float time) {
-    float share = clamp(fragSheet.x - fragSheet.y, 0.0, 1.0);
+    float outward = abs(fragSheet.x - fragSheet.y - 1.0);
     vec2 xz = fragWorldPos.xz;
-    vec2 drift = vec2(0.31, -0.27) * time;
-    float patches = fbm(xz * 2.3 + drift) / 1.5;
-    float bubbles = foamLace(xz * 6.0 + drift * 1.5, time * 1.6, 0.35);
-    // Solid under the fall, in patches further out, gone before its edge.
-    float churn = 1.0 - share;
-    float cover = smoothstep(0.15, 0.6, 0.8 * patches + 0.7 * churn - 0.3);
-    cover *= 1.0 - smoothstep(0.7, 0.95, share);
+    // The foam is carried out from the foot as it breaks up.
+    vec2 drift = fragFace * (0.6 * time) + vec2(0.31, -0.27) * time;
+    float billows = fbm(xz * 1.7 - drift) / 1.5;
+    float froth = fbm(xz * 5.5 - drift * 1.8 + 3.7) / 1.5;
+    // Solid at the foot, in billows further out, gone before its edge, which
+    // the billows carry in and out.
+    float churn = 1.0 - outward;
+    float cover = smoothstep(0.0, 0.5, 1.15 * churn + 0.9 * (billows - 0.5) - 0.1);
+    cover *= 1.0 - smoothstep(0.55, 1.0, outward + 0.4 * (billows - 0.5));
     float pour = smoothstep(0.0, SHEET_FULL_POUR, fragWetDepth);
-    float alpha = cover * pour * (0.75 + 0.25 * bubbles) * PLUNGE_OPACITY;
-    // The ends of a fall fray out here too.
-    float across = abs(fragSheet.w) + (patches - 0.5) * SHEET_OVERLAP_SHARE;
-    alpha *= 1.0 - fragFray * smoothstep(1.0 - SHEET_OVERLAP_SHARE, 1.0, across);
-    vec3 color = vec3(0.92, 0.96, 1.0) * (0.78 + 0.22 * max(L.y, 0.0) + 0.1 * bubbles);
+    float alpha = cover * pour * mix(0.7, 1.0, froth) * PLUNGE_OPACITY;
+    // The ends of a fall's foam thin out too.
+    float frayed = abs(fragSheet.z) + (billows - 0.5) * FRAY_SHARE;
+    alpha *= 1.0 - fragFray * smoothstep(1.0 - FRAY_SHARE, 1.0, frayed);
+    vec3 color = vec3(0.92, 0.96, 1.0) * (0.74 + 0.2 * max(L.y, 0.0) + 0.16 * froth);
     return vec4(color, alpha);
 }
 
@@ -428,7 +479,9 @@ void main() {
     // Running water carries its detail downstream: the chop and foam are
     // carried with the flow, in two phases that start over in turn.
     vec2 worldXZ = fragWorldPos.xz;
-    float speed = length(fragFlow);
+    // Falling water carries where it left its lip in place of a flow.
+    vec2 flow = sheet ? vec2(0.0) : fragFlow;
+    float speed = length(flow);
     float phases[2] = float[2](fract(time / FLOW_PERIOD), fract(time / FLOW_PERIOD + 0.5));
     float firstWeight = 1.0 - abs(1.0 - 2.0 * phases[0]);
     // Faster water runs rougher, and the wind gusts and lulls in patches.
@@ -442,9 +495,9 @@ void main() {
     float lace = 0.0;
     // Foam is drawn out along the current where it runs white, and lies as
     // it falls where the water is slow.
-    vec2 downstream = speed > 1.0e-3 ? fragFlow / speed : vec2(1.0, 0.0);
+    vec2 downstream = speed > 1.0e-3 ? flow / speed : vec2(1.0, 0.0);
     float streaked = smoothstep(0.6 * WHITE_WATER_SPEED.x, WHITE_WATER_SPEED.x, speed);
-    vec2 carrying = fragFlow * min(1.0, MAX_CARRY_SPEED / max(speed, 1.0e-3));
+    vec2 carrying = flow * min(1.0, MAX_CARRY_SPEED / max(speed, 1.0e-3));
     // Lace is dear and only shows where water runs fast or thins out to an
     // edge; open water goes without.
     bool foamy = !sheet && (speed > WHITE_WATER_SPEED.x || nearEdge);

@@ -9,7 +9,8 @@
 //!
 //! A front is where the surface ends against nothing: no bank rises to meet
 //! it, so whatever draws the water has only its cells' edges to end it on.
-//! It is also where a surge breaks, so it is where whitewater belongs.
+//! It is also where a surge breaks, so it is where whitewater belongs. A
+//! face whose water falls (`super::falls`) is no front.
 
 use nalgebra::{Point3, Vector2, Vector3};
 
@@ -75,6 +76,11 @@ pub fn fronts(
                 let q = face.q.abs();
                 let (behind, ahead) = (cells.depth(from), cells.depth(to));
                 if q < CALM_DISCHARGE || behind <= WET_DEPTH || ahead > WET_DEPTH {
+                    return None;
+                }
+                // Water going over an edge is a fall, not a front: the dry
+                // cell across is the foot of a cliff its arc clears.
+                if face.flight.is_some() {
                     return None;
                 }
                 let (x, z) = centre(cells, a);
@@ -166,6 +172,7 @@ mod tests {
             q,
             behind: None,
             ahead: None,
+            flight: None,
         });
         cells
     }
@@ -213,6 +220,7 @@ mod tests {
             q: 0.1,
             behind: None,
             ahead: None,
+            flight: None,
         });
         link_faces(&mut cells, &[0]);
         let front = fronts(&cells, None).next().expect("a front");

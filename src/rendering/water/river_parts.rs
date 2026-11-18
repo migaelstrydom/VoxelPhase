@@ -194,10 +194,9 @@ mod in_a_level {
     /// the versions' tolerance, below which a surface is not read again.
     const MATCH: f32 = 2.0e-3;
 
-    /// Farthest a sheet's foot read again may lie from one built afresh, m.
-    /// It is thrown out by its flow and the square root of its fall, which
-    /// turns the surface's tolerance into several times that over a short
-    /// fall.
+    /// Farthest a curtain's vertex read again may lie from one built afresh,
+    /// m. Both are drawn along the same fall's arc from the surface they hang
+    /// from, which may stand the surface's tolerance apart.
     const THROWN_MATCH: f32 = 1.0e-2;
 
     /// After a dam on water_park is blasted and its water runs, every
@@ -215,14 +214,21 @@ mod in_a_level {
         let ditch: Vec<_> = (0..10)
             .map(|i| Point3::new(42.0, 5.0, 82.0 + 1.5 * i as f32))
             .collect();
-        let parts = assert_refreshes_match("levels/thin_ice.level.ron", &ditch, 600, None);
-        let brinks = parts
-            .parts
-            .values()
-            .flat_map(|p| &p.mesh.sources.vertices)
-            .filter(|v| matches!(v, VertexSource::Brink { .. }))
+        let (parts, water) = assert_refreshes_match("levels/thin_ice.level.ron", &ditch, 600, None);
+        let off_the_map: Vec<_> = (water.field().falls().iter())
+            .filter(|fall| fall.into.is_none())
+            .map(|fall| (fall.from, fall.direction))
+            .collect();
+        assert!(!off_the_map.is_empty(), "no water falls off the map");
+        let drawn = (parts.parts.values())
+            .flat_map(|p| &p.mesh.sources.curtains)
+            .filter(|curtain| off_the_map.contains(&curtain.fall))
             .count();
-        assert!(brinks > 0, "no water falls off the map");
+        assert_eq!(
+            drawn,
+            off_the_map.len(),
+            "a fall off the map has no curtain"
+        );
     }
 
     /// Blast `blasts` into `level` at frame 30 and run it for `frames`,
@@ -234,7 +240,7 @@ mod in_a_level {
         blasts: &[Point3<f32>],
         frames: usize,
         budget: Option<usize>,
-    ) -> RiverParts {
+    ) -> (RiverParts, WaterWorld) {
         let level = load_level(Path::new(level)).unwrap();
         let mut terrain = build_terrain(&level);
         let mut water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
@@ -290,7 +296,7 @@ mod in_a_level {
             compared += 1;
         }
         assert!(compared > 0);
-        parts
+        (parts, water)
     }
 
     /// Farthest apart two surfaces may stand where they meet on a chunk's

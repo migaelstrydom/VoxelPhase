@@ -5,6 +5,7 @@ mod activity;
 mod cells;
 mod currents;
 mod faces;
+mod falls;
 mod field;
 mod fill;
 mod fronts;
@@ -15,7 +16,8 @@ mod sources;
 mod versions;
 
 pub use cells::{FieldCells, FieldChunk, CELL_AREA};
-pub use faces::{past_edge, Axis, BoundaryFace, Face, SeaBoundary};
+pub use faces::{past_edge, Axis, BoundaryFace, Face, Flight, SeaBoundary};
+pub use falls::{Fall, Falls};
 pub use field::{FieldFrame, FieldLedger, WaterField, WET_DEPTH};
 pub use fill::{pool_seed, SpillLevels};
 pub use fronts::Front;

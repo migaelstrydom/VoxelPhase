@@ -8,10 +8,14 @@
 //! ```
 //!
 //! Volume moves only across faces, and each face moves the same amount out
-//! of one cell as into the other, so water is conserved exactly up to
+//! of one cell as into another, so water is conserved exactly up to
 //! rounding. A cell never gives more than it holds, nor takes more than it
 //! has room for under its ceiling: its outflows, or its inflows, are scaled
 //! down together when they would.
+//!
+//! The cell that takes a face's water is the one across it, unless the
+//! water falls there (`Face::flight`): then it is the cell its arc comes
+//! down in, and the cell at the foot of the cliff gets none of it.
 
 use super::cells::{FieldCells, CELL_AREA};
 use super::faces::{Face, FaceRef};
@@ -98,8 +102,9 @@ pub struct FieldSolver {
     /// Chunks stepped this frame: the awake ones and those owning faces into
     /// them.
     stepped: Vec<usize>,
-    /// Chunks with a cell at either end of a stepped face: the stepped ones
-    /// and their +x and +z neighbours.
+    /// Chunks with a cell a stepped face gives to or takes from: the
+    /// stepped ones, their +x and +z neighbours, and those their falling
+    /// water lands in.
     touched: Vec<usize>,
     /// Per stepped chunk, per face: its discharge and flow depth at the
     /// start of the substep, so every face's update reads its neighbours'
@@ -165,6 +170,16 @@ impl FieldSolver {
             &mut self.take,
         ] {
             buffer.resize_with(count, Vec::new);
+        }
+        // Falling water lands wherever its arc takes it.
+        for &slot in &self.stepped {
+            for face in &cells.chunks[slot].faces {
+                let landing = face.flight.and_then(|flight| flight.into);
+                if let Some(s) = landing.map(|c| c.slot as usize).filter(|&s| !marked[s]) {
+                    marked[s] = true;
+                    self.touched.push(s);
+                }
+            }
         }
         self.is_stepped.clear();
         self.is_stepped.resize(count, false);
@@ -347,13 +362,11 @@ impl FieldSolver {
             let chunk = &cells.chunks[slot];
             for face in &chunk.faces {
                 let v = volume(face.q);
-                let a = (slot, face.a as usize);
-                let b = (face.b.slot as usize, face.b.flat as usize);
-                if v > 0.0 {
-                    visit(self, Some(a), Some(b), v);
-                } else if v < 0.0 {
-                    visit(self, Some(b), Some(a), -v);
+                if v == 0.0 {
+                    continue;
                 }
+                let (giver, taker) = ends(slot, face, v > 0.0);
+                visit(self, Some(giver), taker, v.abs());
             }
             for face in &chunk.boundary {
                 let v = volume(face.q);
@@ -373,31 +386,33 @@ impl FieldSolver {
     }
 
     /// Move water across every stepped face, as limited. Returns the volume
-    /// let out through boundary faces.
+    /// that left the field: through boundary faces, and on arcs that came
+    /// down outside the world.
     fn move_water(&self, cells: &mut FieldCells, dt: f32) -> f64 {
         let mut boundary_out = 0.0;
         for &slot in &self.stepped {
             let mut faces = std::mem::take(&mut cells.chunks[slot].faces);
             for face in &mut faces {
-                let mut v = (face.q * DX * dt) as f64;
+                let mut v = (face.q.abs() * DX * dt) as f64;
                 if v == 0.0 {
                     continue;
                 }
-                let a = (slot, face.a as usize);
-                let b = (face.b.slot as usize, face.b.flat as usize);
-                let s = if v > 0.0 {
-                    self.share(Some(a), Some(b))
-                } else {
-                    self.share(Some(b), Some(a))
-                };
+                let (giver, taker) = ends(slot, face, face.q > 0.0);
+                let s = self.share(Some(giver), taker);
                 if s < 1.0 {
                     v *= s;
                     face.q *= s as f32;
                 }
-                cells.chunks[slot].depth[face.a as usize] -= v / CELL_AREA;
-                *cells.depth_mut(face.b) += v / CELL_AREA;
-                wake_on_flow(cells, slot, v);
-                wake_on_flow(cells, face.b.slot as usize, v);
+                cells.chunks[giver.0].depth[giver.1] -= v / CELL_AREA;
+                wake_on_flow(cells, giver.0, v);
+                match taker {
+                    Some((slot, flat)) => {
+                        cells.chunks[slot].depth[flat] += v / CELL_AREA;
+                        wake_on_flow(cells, slot, v);
+                    }
+                    // Its arc left the world.
+                    None => boundary_out += v,
+                }
             }
             cells.chunks[slot].faces = faces;
             let mut boundary = std::mem::take(&mut cells.chunks[slot].boundary);
@@ -420,6 +435,19 @@ impl FieldSolver {
         }
         boundary_out
     }
+}
+
+/// The cells a face in chunk `slot` moves water between when it flows from
+/// its owner to the cell across (`forward`) or back, as (slot, flat): the
+/// giver, and the taker, none where the water leaves the world.
+fn ends(slot: usize, face: &Face, forward: bool) -> ((usize, usize), Option<(usize, usize)>) {
+    let owner = SpanIndex {
+        slot: slot as u32,
+        flat: face.a,
+    };
+    let at = |c: SpanIndex| (c.slot as usize, c.flat as usize);
+    let giver = if forward { owner } else { face.b };
+    (at(giver), face.taker(owner, forward).map(at))
 }
 
 /// Depth a flux must change a sleeping chunk's cell by to wake the chunk, m.

@@ -8,6 +8,7 @@
 //!     versions  SurfaceVersions  per chunk: moves when its surface visibly does
 //!     falling   FallingWater     the streams in the air this frame
 //!     jets      Vec<Jet>         the jets the versions last took, to move them when a jet does
+//!     falls     Vec<Vec<Fall>>   the falls the versions last took, likewise
 //!     clock     f64              seconds simulated: the shaders' and swell's clock
 //! ```
 //!
@@ -24,7 +25,8 @@ use crate::terrain::TerrainWorld;
 
 use super::coupling::Disturbances;
 use super::falling::FallingWater;
-use super::field::{DrawnDepths, Jet, PumpId, PumpPlacement, SurfaceVersions, WaterField};
+use super::field::{DrawnDepths, Fall, Jet, PumpId, PumpPlacement, SurfaceVersions, WaterField};
+use super::geometry::{SpanChunkCoord, ORTHOGONAL};
 use super::query::WaterQuery;
 use super::waves::SurfaceWaves;
 
@@ -51,6 +53,8 @@ pub struct WaterWorld {
     falling: FallingWater,
     /// The field's jets as the versions last took them.
     jets: Vec<Jet>,
+    /// Each chunk's falls as the versions last took them, by slot.
+    falls: Vec<Vec<Fall>>,
     /// Seconds simulated: the clock the drawn currents run on.
     clock: f64,
     /// Simulated seconds the level's opening settle ran, and what it cost.
@@ -71,6 +75,9 @@ impl WaterWorld {
             versions: SurfaceVersions::new(field.cells()),
             falling: FallingWater::build(&field),
             jets: field.jets().collect(),
+            falls: (0..field.cells().chunks.len())
+                .map(|slot| field.falls().of_slot(slot).to_vec())
+                .collect(),
             waves: SurfaceWaves::new(config, &field),
             field,
             clock: 0.0,
@@ -86,6 +93,7 @@ impl WaterWorld {
         self.field.on_terrain_update(terrain);
         let cells = self.field.cells();
         self.versions.update(cells, 0..cells.chunks.len());
+        self.note_falls();
         self.falling = FallingWater::build(&self.field);
         self.waves.measure_exposure(&self.field);
     }
@@ -104,6 +112,7 @@ impl WaterWorld {
         moving.dedup();
         self.versions.update(self.field.cells(), moving);
         self.note_jets();
+        self.note_falls();
         self.falling = FallingWater::build(&self.field);
         self.waves.step(&self.field, dt);
         self.clock += dt as f64;
@@ -146,6 +155,46 @@ impl WaterWorld {
             }
         }
         self.jets = now;
+    }
+
+    /// Move the version of every chunk whose falls have started, stopped or
+    /// changed enough to be seen: a curtain is drawn with the surface it
+    /// hangs from, along an arc that moves with the water's speed while the
+    /// depths its version is taken from stand still. So does the version of
+    /// each chunk beside it that holds falls, whose curtains may run on into
+    /// its own. The falls kept are those last drawn, so a change too small
+    /// to see on any one frame is still drawn once it adds up.
+    fn note_falls(&mut self) {
+        let cells = self.field.cells();
+        let count = cells.chunks.len();
+        self.falls.resize_with(count, Vec::new);
+        let mut moved = Vec::new();
+        for slot in 0..count {
+            let now = self.field.falls().of_slot(slot);
+            let drawn = &mut self.falls[slot];
+            let alike =
+                now.len() == drawn.len() && now.iter().zip(&*drawn).all(|(a, b)| a.drawn_alike(b));
+            if !alike {
+                drawn.clear();
+                drawn.extend_from_slice(now);
+                moved.push(slot);
+            }
+        }
+        for slot in moved {
+            self.versions.touch(slot);
+            let coord = cells.chunks[slot].coord;
+            let beside = ORTHOGONAL.iter().filter_map(|step| {
+                cells.slot_of(SpanChunkCoord {
+                    x: coord.x + step.di,
+                    z: coord.z + step.dk,
+                })
+            });
+            for near in beside {
+                if !self.falls[near].is_empty() {
+                    self.versions.touch(near);
+                }
+            }
+        }
     }
 
     /// Stir the ripples with every disturbance the coupler collected.

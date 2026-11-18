@@ -36,6 +36,32 @@ pub struct Face {
     pub behind: Option<FaceRef>,
     /// The face out of `b` on the same axis, if there is one.
     pub ahead: Option<FaceRef>,
+    /// Where its water goes instead of into the cell across it, while it
+    /// falls (`super::falls`).
+    pub flight: Option<Flight>,
+}
+
+/// Where the water over a face goes while it falls rather than runs on into
+/// the cell across: through the air, to the cell its arc comes down in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Flight {
+    /// Whether the water falls from the face's owning cell, `a`; from `b`
+    /// otherwise. Water going the other way runs across as on any face.
+    pub from_owner: bool,
+    /// The cell it lands in; none where it leaves the world.
+    pub into: Option<SpanIndex>,
+}
+
+impl Face {
+    /// The cell that takes water moving across the face from `a` to `b`
+    /// (`forward`) or back: the cell across, or where it lands while it
+    /// falls that way. None where it leaves the world.
+    pub fn taker(&self, owner: SpanIndex, forward: bool) -> Option<SpanIndex> {
+        match self.flight {
+            Some(flight) if flight.from_owner == forward => flight.into,
+            _ => Some(if forward { self.b } else { owner }),
+        }
+    }
 }
 
 /// A face, by its owning chunk's slot and its place in that chunk's list.
@@ -132,6 +158,7 @@ pub fn lay_faces(chunk: &mut FieldChunk, graph: &SpanGraph, sea: Option<SeaBound
                     q: 0.0,
                     behind: None,
                     ahead: None,
+                    flight: None,
                 });
             }
         }

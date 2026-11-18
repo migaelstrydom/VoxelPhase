@@ -17,13 +17,13 @@
 use nalgebra::Vector2;
 use smallvec::SmallVec;
 
-use crate::water::falling::{falls, off_map, thrown};
+use crate::water::falling::falls;
 use crate::water::field::{DrawnDepths, FieldCells, Jet as FieldJet, WaterField};
 use crate::water::geometry::{SpanGraph, SpanIndex, SpanRef, ORTHOGONAL};
 
+use super::curtain::Curtain;
 use super::field_mesher::skirt_vertex;
 use super::jet::Jet;
-use super::nappe::{plunge, Face, Nappe, NAPPE_ROWS};
 use super::river_mesh::RiverMesh;
 use super::scene::Refreshed;
 use super::vertex::RiverVertex;
@@ -115,29 +115,24 @@ impl DrawnCells<'_> {
     }
 }
 
-/// Least flow over an edge, per metre of it, that a falling sheet draws as
-/// full, m²/s: a sheet is as deep as the water pours over its edge, so the
-/// draw cuts it where it only trickles.
-const FULL_POUR: f64 = 1.0;
-
-/// The foot of a sheet falling `fall` from `lip`, thrown out from it,
-/// on its top face; notes the fall on the lip.
-pub(super) fn foot(lip: &mut RiverVertex, fall: f32) -> RiverVertex {
-    lip.sheet.y = fall;
-    Nappe::new(*lip, thrown(lip.face, lip.flow, fall), fall).vertex(NAPPE_ROWS, Face::Top)
+/// The surface vertex midway between `from` and `to`.
+pub(super) fn midway(from: RiverVertex, to: &RiverVertex) -> RiverVertex {
+    RiverVertex {
+        xz: 0.5 * (from.xz + to.xz),
+        surface: 0.5 * (from.surface + to.surface),
+        depth: 0.5 * (from.depth + to.depth),
+        flow: 0.5 * (from.flow + to.flow),
+        ..from
+    }
 }
 
-/// How deep a sheet falling from cell `own` over the edge facing `face` is
-/// drawn: the water's depth there by its speed out over the edge, over
-/// `FULL_POUR`.
-pub(super) fn pour(
-    field: &WaterField,
-    cells: &DrawnCells,
-    own: SpanIndex,
-    face: Vector2<f32>,
-) -> f32 {
-    let out = field.velocity(own).dot(&face).max(0.0) as f64;
-    (cells.depth(own) * out / FULL_POUR) as f32
+/// Where a curtain hangs from: the place and height of each of the surface
+/// vertices `hung` along its lip.
+pub(super) fn hung_from(vertices: &[RiverVertex], hung: [u32; 3]) -> [(Vector2<f32>, f32); 3] {
+    hung.map(|v| {
+        let vertex = &vertices[v as usize];
+        (vertex.xz, vertex.surface)
+    })
 }
 
 /// One cell meeting at a corner, as the corner sees it.
@@ -278,27 +273,12 @@ pub(super) enum VertexSource {
         past: f32,
         dry: SmallVec<[SpanIndex; 4]>,
     },
-    /// A falling sheet's top: vertex `from`'s corner, drawn as deep as the
-    /// wet cell `own` pours over the sheet's edge.
-    Lip { from: u32, own: SpanIndex },
-    /// A falling sheet's foot: the lower cell's corner below the sheet's
-    /// top, vertex `from`, whose depth and flow it takes. The cells are the
-    /// corner's, the lower cell's first. The sheet stands while the wet cell
-    /// `own` it falls from `falls` to the lower one.
-    Foot {
-        from: u32,
-        cells: SmallVec<[SpanIndex; 4]>,
-        shape: Shape,
-        own: SpanIndex,
-    },
-    /// The foot of a sheet falling off the map's edge: vertex `from`, the
-    /// sheet's top, lowered to the water `outside` (`off_map`). The sheet
-    /// stands while the wet cell `own` it falls from `falls` to it.
-    Brink {
-        from: u32,
-        own: SpanIndex,
-        outside: Option<f64>,
-    },
+    /// Midway between two vertices of the same surface, `of`: the middle of
+    /// a lip, or of a corner cut off between two lips.
+    Between { of: [u32; 2] },
+    /// A vertex of a fall's curtain, read with the rest of its curtain
+    /// (`SurfaceSources::curtains`).
+    Curtain,
     /// Vertex `around` of row `row` of jet `source` of those landing in the
     /// surface's chunk (`SurfaceSources::jets`), along its arc down to the
     /// water in the cell `landing`. The jet stands while it flies that arc.
@@ -308,15 +288,6 @@ pub(super) enum VertexSource {
         row: u32,
         around: u32,
     },
-    /// A point on `face` of a falling sheet's body, on row `row` down from
-    /// its lip, vertex `lip`, to its foot, vertex `foot`, both on its top
-    /// face (`Nappe::between`).
-    Nappe {
-        lip: u32,
-        foot: u32,
-        row: u32,
-        face: Face,
-    },
     /// Corner `corner` of the foam where jet `source` of those landing in
     /// the surface's chunk lands in the cell `landing` (`Jet::plunge`). It
     /// stands while the jet flies that arc.
@@ -325,9 +296,21 @@ pub(super) enum VertexSource {
         landing: SpanIndex,
         corner: u32,
     },
-    /// A corner of the foam where a sheet lands, `share` of its reach out
-    /// from its foot, vertex `foot`, below its lip, vertex `lip` (`plunge`).
-    Plunge { lip: u32, foot: u32, share: f32 },
+}
+
+/// One fall's curtain in a built surface: a run of vertices read again
+/// together from the fall, while it and the falls it runs on into stand.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct CurtainSource {
+    /// The fall it is drawn for, by its cell and direction.
+    pub fall: (SpanIndex, u8),
+    /// The fall its lip runs on into at each end, if any.
+    pub beside: [Option<(SpanIndex, u8)>; 2],
+    /// The surface vertices it hangs from, at its lip's two ends and its
+    /// middle; none where the water it leaves has no surface.
+    pub hung: Option<[u32; 3]>,
+    /// Its first vertex.
+    pub first: u32,
 }
 
 /// A built surface's vertex sources, and what else must hold for its shape
@@ -340,10 +323,11 @@ pub struct SurfaceSources {
     pub(super) layouts: SmallVec<[(u32, u32); 9]>,
     pub(super) slot: u32,
     pub(super) drawn: Vec<bool>,
-    /// Pairs of wet cells, the first falling to the second, that a fall is
-    /// drawn on past (`FieldScene::passed`): the shape holds while each
-    /// still falls.
-    pub(super) passes: Vec<(SpanIndex, SpanIndex)>,
+    /// Its falls' curtains.
+    pub(super) curtains: Vec<CurtainSource>,
+    /// The falls leaving its chunk's cells when it was built, by cell and
+    /// direction: its shape holds while they are the falls leaving them.
+    pub(super) falls: Vec<(u32, u8)>,
     /// The update whose drawn depths the surface was last read from.
     pub(super) read: u64,
     /// The jets landing in its chunk when it was built, in the field's
@@ -363,13 +347,6 @@ impl SurfaceSources {
     /// Note the slot of a cell a vertex reads.
     pub(super) fn reads(&mut self, cells: &FieldCells, at: SpanIndex) {
         self.reads_slot(cells, at.slot);
-    }
-
-    /// Note that wet cell `upper` falls to `lower`, which the shape takes.
-    pub(super) fn passes(&mut self, cells: &FieldCells, upper: SpanIndex, lower: SpanIndex) {
-        self.reads(cells, upper);
-        self.reads(cells, lower);
-        self.passes.push((upper, lower));
     }
 
     /// Note a slot whose layout a vertex depends on.
@@ -408,15 +385,12 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                     flat: flat as u32,
                 }) == was
             }));
-    held &= sources.passes.iter().all(|&(upper, lower)| {
-        cells.drawn(upper)
-            && cells.drawn(lower)
-            && falls(
-                cells.surface(upper),
-                cells.bed(upper) as f64,
-                cells.surface(lower),
-            )
-    });
+    held &= field
+        .falls()
+        .of_slot(slot as usize)
+        .iter()
+        .map(|f| (f.from.flat, f.direction))
+        .eq(sources.falls.iter().copied());
     // The jets landing in its chunk must be the ones it was built with,
     // flying the arcs they flew, for its jet vertices to be theirs.
     let jets = landing_jets(field, slot);
@@ -462,32 +436,15 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 vertex.depth = from.depth;
                 vertex.flow = from.flow;
             }
-            &VertexSource::Lip { from, own } => {
-                let source = mesh.vertices[from as usize];
+            &VertexSource::Between { of: [a, b] } => {
+                let from = mesh.vertices[a as usize];
+                let between = midway(from, &mesh.vertices[b as usize]);
                 let vertex = &mut mesh.vertices[v];
-                let pour = pour(field, cells, own, vertex.face);
-                vertex.surface = source.surface;
-                vertex.depth = source.depth.min(pour);
-                vertex.flow = source.flow;
+                vertex.surface = between.surface;
+                vertex.depth = between.depth;
+                vertex.flow = between.flow;
             }
-            VertexSource::Foot {
-                from,
-                cells: at,
-                shape,
-                own,
-            } => {
-                let meetings: SmallVec<[Meeting; 4]> =
-                    at.iter().map(|&c| Meeting::of(cells, c)).collect();
-                let source = Meeting::of(cells, *own);
-                let (Some(lower), Some(upper)) = (meetings[0].surface, source.surface) else {
-                    held = false;
-                    continue;
-                };
-                let (corner, now) = gather(&meetings, lower);
-                held &= now == *shape && falls(upper, source.bed, lower);
-                let fall = mesh.vertices[*from as usize].surface - corner.height as f32;
-                mesh.vertices[v] = foot(&mut mesh.vertices[*from as usize], fall);
-            }
+            VertexSource::Curtain => {}
             &VertexSource::Jet {
                 source,
                 landing,
@@ -502,27 +459,6 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                     None => held = false,
                 }
             }
-            &VertexSource::Brink { from, own, outside } => {
-                let source = Meeting::of(cells, own);
-                let Some(upper) = source.surface else {
-                    held = false;
-                    continue;
-                };
-                held &= falls(upper, source.bed, off_map(upper, outside));
-                let top = mesh.vertices[from as usize].surface;
-                let fall = top - off_map(top as f64, outside) as f32;
-                mesh.vertices[v] = foot(&mut mesh.vertices[from as usize], fall);
-            }
-            &VertexSource::Nappe {
-                lip,
-                foot,
-                row,
-                face,
-            } => {
-                let lip = mesh.vertices[lip as usize];
-                mesh.vertices[v] =
-                    Nappe::between(lip, &mesh.vertices[foot as usize]).vertex(row, face);
-            }
             &VertexSource::JetPlunge {
                 source,
                 landing,
@@ -536,11 +472,25 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                     None => held = false,
                 }
             }
-            &VertexSource::Plunge { lip, foot, share } => {
-                let lip = mesh.vertices[lip as usize];
-                mesh.vertices[v] = plunge(lip, &mesh.vertices[foot as usize], share);
-            }
         }
+    }
+    // Each curtain again from its fall, once the surface it hangs from has
+    // been read.
+    for curtain in &sources.curtains {
+        let Some(fall) = field.fall(curtain.fall.0, curtain.fall.1 as usize) else {
+            held = false;
+            continue;
+        };
+        let beside = [0, 1].map(|end| field.fall_beside(fall, end));
+        if beside.map(|b| b.map(|(other, _)| (other.from, other.direction))) != curtain.beside {
+            held = false;
+            continue;
+        }
+        let top = curtain.hung.map(|hung| hung_from(&mesh.vertices, hung));
+        let vertices =
+            Curtain::new(fall, beside.map(|b| b.map(|(other, _)| other)), top).vertices();
+        let first = curtain.first as usize;
+        mesh.vertices[first..first + vertices.len()].copy_from_slice(&vertices);
     }
     // A surface that lost its shape reads every cell again until built.
     if held {
