@@ -11,6 +11,9 @@
 // A hole lower in the wall has earth behind it and lets nothing through.
 // The stream never runs out, so the pit fills however long the hole takes.
 //
+// A piper on the east rim lobs a grenade at the player every few seconds
+// while the pit fills: something to dodge. Its misses crater the pit too.
+//
 // The goal's point is 3 m over the island.
 //
 //               N (+z)
@@ -66,6 +69,7 @@ Level(
 
             anchors: [],
             objects: [
+                Piper(pos: (33.0, 21.0)),
                 Goal(pos: (22.0, 11.5, 21.0), radius: 1.5, required_gems: 0),
             ],
         ),

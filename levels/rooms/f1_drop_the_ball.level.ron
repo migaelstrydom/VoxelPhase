@@ -1,11 +1,13 @@
 // Room F1 — drop the ball (docs/GAME_DESIGN.md, Finding out).
 //
 // The player starts on a wide island with two holes in it and a ball beside
-// each. Under one hole, 5 m down and out of sight under the island, is a
-// small island with the exit; under the other is nothing. Walking off the
+// each. Under one hole, a metre under the island's underside, is a small
+// island of rock with the exit; under the other is nothing. Walking off the
 // edge falls past the small island, which lies 8 m in from every edge. Drop a
-// ball down each hole: one bounces back up into sight, and the other is
-// gone. Jump down the first.
+// ball down each hole: one bounces on the rock and comes to rest in sight at
+// the bottom of the hole, and the other is gone. Jump down the first.
+//
+// The small island is rock because grass and dirt take a ball's bounce.
 //
 //               N (+z)
 //   ┌───────────────────────────────┐
@@ -13,7 +15,7 @@
 //   │          x 8–32               │
 //   │       ○ ●            ● ○      │  holes at x 16 and 24, z 20
 //   │      ┌─────┐                  │  balls beside them
-//   │      │lower│  under, top 9    │
+//   │      │lower│  under, top 10.5 │
 //   │      └─────┘                  │
 //   │              ☺                │  z = 8
 //   └───────────────────────────────┘
@@ -41,11 +43,12 @@ Level(
                     Platform(center: (20.0, 14.0, 20.0), half_extents: (12.0, 12.0), thickness: 1.0, material: Grass),
                     Platform(center: (20.0, 13.0, 20.0), half_extents: (12.0, 12.0), thickness: 1.5, material: Dirt),
                     // The holes.
-                    Shaft(center: (16.0, 20.0), from_y: 11.0, to_y: 15.0, radius: 1.2),
-                    Shaft(center: (24.0, 20.0), from_y: 11.0, to_y: 15.0, radius: 1.2),
-                    // The lower island, under the west hole.
-                    Platform(center: (16.0, 9.0, 20.0), half_extents: (4.0, 4.0), thickness: 1.0, material: Grass),
-                    Platform(center: (16.0, 8.0, 20.0), half_extents: (4.0, 4.0), thickness: 1.0, material: Dirt),
+                    Shaft(center: (16.0, 20.0), from_y: 11.25, to_y: 15.0, radius: 1.2),
+                    Shaft(center: (24.0, 20.0), from_y: 11.25, to_y: 15.0, radius: 1.2),
+                    // The lower island, under the west hole, a metre under the
+                    // upper one.
+                    Platform(center: (16.0, 10.5, 20.0), half_extents: (4.0, 4.0), thickness: 1.0, material: Rock),
+                    Platform(center: (16.0, 9.5, 20.0), half_extents: (4.0, 4.0), thickness: 1.0, material: Dirt),
                 ],
             ),
 
@@ -53,7 +56,7 @@ Level(
             objects: [
                 BeachBall(pos: (13.8, 14.52, 20.0)),
                 BeachBall(pos: (26.2, 14.52, 20.0)),
-                Goal(pos: (16.0, 9.0, 20.0), radius: 2.5, required_gems: 0),
+                Goal(pos: (16.0, 10.5, 20.0), radius: 2.5, required_gems: 0),
             ],
         ),
     ],

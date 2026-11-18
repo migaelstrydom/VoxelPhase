@@ -3,7 +3,8 @@
 //
 // The exit is on a small island hanging beside a strip of island, its top
 // 4.5 m over the strip: past a jump. A block of ice 2 m tall stands at the
-// strip's south end, by its east edge. Pushed north, it slides past the exit
+// strip's south end, by its east edge. The strip is rock, which ice slides
+// on (grass, dirt and sand hold it). Pushed north, it slides past the exit
 // and off the strip's far end. Crater the strip under the exit first: the
 // block drops into the crater and stops, its top 3 m under the exit's lip.
 //
@@ -17,7 +18,7 @@
 //         │           │ └───┘ z 21–27
 //         │           │
 //         │         ▣ │       ice, 2 m, at z 8
-//         │     ☺     │       strip, top 10
+//         │     ☺     │       strip, rock, top 10
 //         └───────────┘       z = 4
 //         x 14       26       floor far below at -6
 Level(
@@ -40,8 +41,8 @@ Level(
                 features: [],
 
                 volumes: [
-                    // The strip.
-                    Platform(center: (20.0, 10.0, 20.0), half_extents: (6.0, 16.0), thickness: 1.0, material: Grass),
+                    // The strip: rock over dirt.
+                    Platform(center: (20.0, 10.0, 20.0), half_extents: (6.0, 16.0), thickness: 1.0, material: Rock),
                     Platform(center: (20.0, 9.0, 20.0), half_extents: (6.0, 16.0), thickness: 2.0, material: Dirt),
                     // The exit island, half a metre off the strip's east edge.
                     Platform(center: (28.5, 14.5, 24.0), half_extents: (2.0, 3.0), thickness: 1.0, material: Grass),
