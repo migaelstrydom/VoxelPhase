@@ -66,3 +66,12 @@ opt-level = 2
 inherits = "release"
 lto = "fat"
 codegen-units = 1
+
+# Tests and tool runs while editing: `--profile quick`, output in target/quick/.
+# Release without incremental recompiles the whole crate after any edit (39 s
+# binaries, 49 s test harness, measured 2026-11-18); incremental takes that to
+# 12 s and 6 s, and the unit suite runs no slower. Perf benches stay on
+# --release, whose fewer codegen units are what ships.
+[profile.quick]
+inherits = "release"
+incremental = true
