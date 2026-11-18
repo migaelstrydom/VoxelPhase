@@ -47,7 +47,7 @@ const float SHEET_WRAP = 0.4;
 // their streaks tilt its face by.
 const float SHEET_RELIEF = 0.9;
 // Most a patch of foam where falling water lands covers what is under it.
-const float PLUNGE_OPACITY = 0.9;
+const float PLUNGE_OPACITY = 0.8;
 // Pour depth at which falling water is a full curtain, not a few strands, m.
 const float SHEET_FULL_POUR = 0.12;
 // Share of the way from a fall's middle out to its frayed end past which it
@@ -347,9 +347,10 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     float body = 1.0 - exp(-thickness / SHEET_GLASS_THICKNESS);
 
     // Lit by its own shape, so the curl over the lip and the round of the
-    // curtain show; its ropes stand out of it as it turns white, and the
+    // curtain show; its ropes stand out of it as it turns white (the coarse
+    // ones: the fine layer's would comb its highlights into hairs), and the
     // noise ruffles it.
-    vec3 sheetN = embossed(face, strands, SHEET_RELIEF * aerated);
+    vec3 sheetN = embossed(face, coarse, SHEET_RELIEF * aerated);
     sheetN = normalize(sheetN + 0.35 * vec3(noiseN.x, 0.0, noiseN.z));
     float wrapped = clamp((dot(sheetN, L) + SHEET_WRAP) / (1.0 + SHEET_WRAP), 0.0, 1.0);
     float skyward = 0.5 + 0.5 * sheetN.y;
@@ -398,10 +399,10 @@ vec4 shadePlunge(vec3 L, float time) {
     // Solid at the foot, in billows further out, gone before its edge, which
     // the billows carry in and out.
     float churn = 1.0 - outward;
-    float cover = smoothstep(0.0, 0.5, 1.15 * churn + 0.9 * (billows - 0.5) - 0.1);
-    cover *= 1.0 - smoothstep(0.55, 1.0, outward + 0.4 * (billows - 0.5));
+    float cover = smoothstep(0.0, 0.6, 0.9 * churn + 1.3 * (billows - 0.5) - 0.05);
+    cover *= 1.0 - smoothstep(0.45, 0.95, outward + 0.5 * (billows - 0.5));
     float pour = smoothstep(0.0, SHEET_FULL_POUR, fragWetDepth);
-    float alpha = cover * pour * mix(0.7, 1.0, froth) * PLUNGE_OPACITY;
+    float alpha = cover * pour * mix(0.55, 1.0, froth) * PLUNGE_OPACITY;
     // The ends of a fall's foam thin out too.
     float frayed = abs(fragSheet.z) + (billows - 0.5) * FRAY_SHARE;
     alpha *= 1.0 - fragFray * smoothstep(1.0 - FRAY_SHARE, 1.0, frayed);
