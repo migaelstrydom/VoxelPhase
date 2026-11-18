@@ -13,6 +13,8 @@
 //! cargo run --release --bin render_perf -- --timeline --csv /tmp/render.csv
 //! cargo run --release --bin render_perf -- --snapshot /tmp/shot.png   # check the framing
 //! cargo run --release --bin render_perf -- --eye 12,6,17 --look 12,1,29
+//! cargo run --release --bin render_perf -- --level levels/rooms/w4_turn_the_stream.level.ron \
+//!     --throw 21,3.5,23.5:-9,12,0 --eye 24,7,11 --look 17,3,25   # a blast on a wall's face
 //! ```
 //!
 //! Always measure a release build. There is no vsync offscreen, so the fence
@@ -21,7 +23,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
 use voxel_phase::level::load_level;
 use voxel_phase::render_perf::{
@@ -29,6 +31,7 @@ use voxel_phase::render_perf::{
 };
 
 const USAGE: &str = "usage: render_perf [--level <level.ron>] [--at X,Z] [--drop-at S]
+                   [--throw X,Y,Z:VX,VY,VZ]
                    [--eye X,Y,Z] [--look X,Y,Z] [--width W] [--height H]
                    [--seconds S] [--fps F] [--worst N] [--timeline] [--window S]
                    [--csv <out.csv>] [--snapshot <out.png>]";
@@ -132,6 +135,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--level" => parsed.level = PathBuf::from(value("--level")?),
             "--at" => parsed.scenario.site = parse_pair(&value("--at")?)?,
             "--drop-at" => parsed.scenario.drop_at = parse_number(&value("--drop-at")?)?,
+            "--throw" => parsed.scenario.thrown = Some(parse_throw(&value("--throw")?)?),
             "--eye" => parsed.scenario.eye = Some(parse_point(&value("--eye")?)?),
             "--look" => parsed.scenario.look = Some(parse_point(&value("--look")?)?),
             "--width" => parsed.config.width = parse_number(&value("--width")?)?,
@@ -161,6 +165,14 @@ fn parse_pair(text: &str) -> Result<(f32, f32), String> {
         .split_once(',')
         .ok_or(format!("expected X,Z, got {text}"))?;
     Ok((parse_number(x)?, parse_number(z)?))
+}
+
+/// A throw, as where from and how fast: `X,Y,Z:VX,VY,VZ`.
+fn parse_throw(text: &str) -> Result<(Point3<f32>, Vector3<f32>), String> {
+    let (from, velocity) = text
+        .split_once(':')
+        .ok_or(format!("expected X,Y,Z:VX,VY,VZ, got {text}"))?;
+    Ok((parse_point(from)?, parse_point(velocity)?.coords))
 }
 
 fn parse_point(text: &str) -> Result<Point3<f32>, String> {

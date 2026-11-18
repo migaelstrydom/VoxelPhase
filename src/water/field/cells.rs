@@ -13,7 +13,7 @@ use crate::water::geometry::{
     COLUMN_SIZE,
 };
 
-use super::faces::{BoundaryFace, Face};
+use super::faces::{BoundaryFace, Face, Flight};
 
 /// Plan area of one cell, m².
 pub const CELL_AREA: f64 = (COLUMN_SIZE * COLUMN_SIZE) as f64;
@@ -112,6 +112,9 @@ impl FieldChunk {
 #[derive(Debug, Clone)]
 pub struct FieldCells {
     pub chunks: Vec<FieldChunk>,
+    /// Where the water of each falling face lands (`Face::flight` counts
+    /// into these), as the falls were last found.
+    pub flights: Vec<Flight>,
     /// Per slot: how many times its chunk's cells have been laid out again,
     /// after which a `SpanIndex` into it means a different cell.
     generations: Vec<u32>,
@@ -134,6 +137,7 @@ impl FieldCells {
         Self {
             generations: vec![0; chunks.len()],
             chunks,
+            flights: Vec::new(),
             origin,
             width,
         }

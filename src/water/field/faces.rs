@@ -10,6 +10,7 @@ use crate::water::geometry::{
 };
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use super::cells::{FieldCells, FieldChunk};
 
@@ -37,31 +38,21 @@ pub struct Face {
     /// The face out of `b` on the same axis, if there is one.
     pub ahead: Option<FaceRef>,
     /// Where its water goes instead of into the cell across it, while it
-    /// falls (`super::falls`).
-    pub flight: Option<Flight>,
+    /// falls (`super::falls`): an index into `FieldCells::flights`.
+    pub flight: Option<u32>,
 }
 
 /// Where the water over a face goes while it falls rather than runs on into
-/// the cell across: through the air, to the cell its arc comes down in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// the cell across: through the air, to where its arc comes down.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Flight {
     /// Whether the water falls from the face's owning cell, `a`; from `b`
     /// otherwise. Water going the other way runs across as on any face.
     pub from_owner: bool,
-    /// The cell it lands in; none where it leaves the world.
-    pub into: Option<SpanIndex>,
-}
-
-impl Face {
-    /// The cell that takes water moving across the face from `a` to `b`
-    /// (`forward`) or back: the cell across, or where it lands while it
-    /// falls that way. None where it leaves the world.
-    pub fn taker(&self, owner: SpanIndex, forward: bool) -> Option<SpanIndex> {
-        match self.flight {
-            Some(flight) if flight.from_owner == forward => flight.into,
-            _ => Some(if forward { self.b } else { owner }),
-        }
-    }
+    /// The cells it lands in, each taking an equal share: the cell its arc
+    /// comes down in, and for a thick stream those along the length of
+    /// ground it comes down over. Empty where it leaves the world.
+    pub into: SmallVec<[SpanIndex; 4]>,
 }
 
 /// A face, by its owning chunk's slot and its place in that chunk's list.

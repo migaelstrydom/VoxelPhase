@@ -115,6 +115,28 @@ impl DrawnCells<'_> {
     }
 }
 
+/// Whether a cell's surface is drawn: where it has one (`DrawnCells::drawn`),
+/// unless its water bursts out of it as a jet, which comes from the middle
+/// of the hole it fills, under where a surface would lie.
+pub(super) fn surfaced(field: &WaterField, cells: &DrawnCells, at: SpanIndex) -> bool {
+    cells.drawn(at)
+        && !(0..ORTHOGONAL.len())
+            .any(|direction| field.fall(at, direction).is_some_and(|fall| fall.driven))
+}
+
+/// The falls leaving the cells of chunk `slot`, as a surface's shape takes
+/// them: by cell and direction, and whether each is driven.
+pub(super) fn falls_of(
+    field: &WaterField,
+    slot: u32,
+) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
+    field
+        .falls()
+        .of_slot(slot as usize)
+        .iter()
+        .map(|fall| (fall.from.flat, fall.direction, fall.driven))
+}
+
 /// The surface vertex midway between `from` and `to`.
 pub(super) fn midway(from: RiverVertex, to: &RiverVertex) -> RiverVertex {
     RiverVertex {
@@ -325,9 +347,9 @@ pub struct SurfaceSources {
     pub(super) drawn: Vec<bool>,
     /// Its falls' curtains.
     pub(super) curtains: Vec<CurtainSource>,
-    /// The falls leaving its chunk's cells when it was built, by cell and
-    /// direction: its shape holds while they are the falls leaving them.
-    pub(super) falls: Vec<(u32, u8)>,
+    /// The falls leaving its chunk's cells when it was built (`falls_of`):
+    /// its shape holds while they are the falls leaving them.
+    pub(super) falls: Vec<(u32, u8, bool)>,
     /// The update whose drawn depths the surface was last read from.
     pub(super) read: u64,
     /// The jets landing in its chunk when it was built, in the field's
@@ -380,17 +402,13 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
             .iter()
             .any(|&(s, _)| cells.replaced_since(s, read))
             || sources.drawn.iter().enumerate().all(|(flat, &was)| {
-                cells.drawn(SpanIndex {
+                let at = SpanIndex {
                     slot,
                     flat: flat as u32,
-                }) == was
+                };
+                surfaced(field, cells, at) == was
             }));
-    held &= field
-        .falls()
-        .of_slot(slot as usize)
-        .iter()
-        .map(|f| (f.from.flat, f.direction))
-        .eq(sources.falls.iter().copied());
+    held &= falls_of(field, slot).eq(sources.falls.iter().copied());
     // The jets landing in its chunk must be the ones it was built with,
     // flying the arcs they flew, for its jet vertices to be theirs.
     let jets = landing_jets(field, slot);

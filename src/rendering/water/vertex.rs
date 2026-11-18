@@ -121,6 +121,10 @@ pub struct RiverVertex {
     /// 1 at the free end of a thin fall, 0 at the closed end of a thick one
     /// and wherever its curtain runs on into the next. Zero on the surface.
     pub fray: f32,
+    /// On falling water, how much air it has taken in as it leaves its lip:
+    /// 0 for water sliding glassy over a brink, 1 for water bursting white
+    /// out of a hole. Zero on the surface.
+    pub air: f32,
 }
 
 impl RiverVertex {
@@ -132,7 +136,7 @@ impl RiverVertex {
         }
     }
 
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 7] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 8] {
         let f = std::mem::size_of::<f32>() as u32;
         [
             vk::VertexInputAttributeDescription {
@@ -160,7 +164,7 @@ impl RiverVertex {
                 format: vk::Format::R32G32_SFLOAT,
                 offset: 6 * f,
             },
-            // (drop below the lip, whole fall, side, along)
+            // (drop below the lip, whole fall, side, thickness)
             vk::VertexInputAttributeDescription {
                 location: 4,
                 binding: 0,
@@ -178,6 +182,12 @@ impl RiverVertex {
                 binding: 0,
                 format: vk::Format::R32_SFLOAT,
                 offset: 15 * f,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 7,
+                binding: 0,
+                format: vk::Format::R32_SFLOAT,
+                offset: 16 * f,
             },
         ]
     }

@@ -111,8 +111,12 @@ impl<'a, 'b> GameHarness<'a, 'b> {
         }
     }
 
-    /// Put a live grenade at `position`, at rest, fuse lit.
-    pub fn drop_grenade(&mut self, position: Point3<f32>) -> EngineResult<Entity> {
+    /// Put a live grenade at `position`, moving at `velocity`, fuse lit.
+    pub fn throw_grenade(
+        &mut self,
+        position: Point3<f32>,
+        velocity: Vector3<f32>,
+    ) -> EngineResult<Entity> {
         let model = self
             .world
             .read_resource::<GrenadeModelResource>()
@@ -128,7 +132,7 @@ impl<'a, 'b> GameHarness<'a, 'b> {
             &config,
             model,
             position,
-            Vector3::zeros(),
+            velocity,
         ))
     }
 

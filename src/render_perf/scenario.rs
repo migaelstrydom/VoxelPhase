@@ -22,6 +22,11 @@ pub struct GrenadeBlast {
     pub drop_at: f32,
     /// Height above the terrain surface the grenade starts at.
     pub lift: f32,
+    /// Where the grenade is thrown from and the velocity it is thrown at,
+    /// in place of being dropped at the site: for a blast on a wall's face,
+    /// which nothing dropped comes to rest on. The site still places the
+    /// default camera.
+    pub thrown: Option<(Point3<f32>, Vector3<f32>)>,
     /// Where the camera stands. `None` puts it at `default_eye_offset` from
     /// the site.
     pub eye: Option<Point3<f32>>,
@@ -56,6 +61,7 @@ impl Default for GrenadeBlast {
             site: (12.0, 29.0),
             drop_at: 1.0,
             lift: 0.3,
+            thrown: None,
             eye: None,
             look: None,
         }

@@ -61,6 +61,16 @@ const MAX_THICKNESS: f32 = 2.0;
 /// fraying out into strands and is the closed end of a body, m.
 const FRAYING_DEPTH: (f32, f32) = (0.1, 0.35);
 
+/// Speeds water leaves a lip at over which it goes from sliding glassy over
+/// the brink to breaking white as it leaves, m/s, and how white the fastest
+/// leaves short of a jet's.
+const AIRY_SPEED: (f32, f32) = (2.0, 6.0);
+const FASTEST_AIR: f32 = 0.8;
+
+/// How far back into the hole it bursts out of a jet's body is drawn, m, so
+/// it is seen to come from inside.
+const JET_SET_BACK: f32 = 0.6;
+
 /// Least flow over an edge, per metre of it, that a curtain draws as full,
 /// m²/s: a curtain is drawn as deep as the water pours over its edge, so
 /// the draw cuts it where it only trickles.
@@ -79,6 +89,11 @@ struct Tongue {
     /// What it carries per metre of lip, m²/s, and how thick it leaves.
     pour: f32,
     depth: f32,
+    /// How much air it has taken in as it leaves, 0 to 1.
+    air: f32,
+    /// How far back from its lip its body starts, m: a jet's, inside the
+    /// hole it bursts out of.
+    set_back: f32,
 }
 
 /// A strand's water at one moment of its fall.
@@ -99,6 +114,15 @@ impl Tongue {
         } else {
             Vector2::zeros()
         };
+        let (air, set_back) = if fall.driven {
+            (1.0, JET_SET_BACK)
+        } else {
+            let speed = fall.velocity.norm();
+            (
+                FASTEST_AIR * smoothstep(AIRY_SPEED.0, AIRY_SPEED.1, speed),
+                0.0,
+            )
+        };
         Self {
             lip: fall.lip,
             level,
@@ -106,6 +130,8 @@ impl Tongue {
             duration,
             pour: fall.pour,
             depth: fall.depth,
+            air,
+            set_back,
         }
     }
 
@@ -201,6 +227,7 @@ impl Strand {
             sheet: Vector4::new(drop, self.mean(|t| t.fall), self.side, section.thickness),
             normal: Vector3::y(),
             fray: self.fray,
+            air: self.mean(|t| t.air),
         }
     }
 
@@ -216,6 +243,10 @@ impl Strand {
             .unwrap_or_else(Vector3::y);
         let at = match (row, self.hung) {
             (0, Some((xz, height))) => Point3::new(xz.x, height, xz.y),
+            (0, None) => {
+                let back = out * self.mean(|t| t.set_back);
+                section.top - Vector3::new(back.x, 0.0, back.y)
+            }
             _ => section.top,
         };
         (at, normal, section)
@@ -478,6 +509,7 @@ mod tests {
             velocity: Vector2::new(2.0, 0.0),
             depth: 0.4,
             pour: 0.8,
+            driven: false,
             foot: Point3::new(2.0 + 2.0 * duration, 6.0, z),
             landing: Point3::new(2.0 + 2.0 * duration, 6.0, z),
             into: None,

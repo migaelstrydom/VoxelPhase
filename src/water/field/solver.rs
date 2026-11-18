@@ -14,8 +14,10 @@
 //! down together when they would.
 //!
 //! The cell that takes a face's water is the one across it, unless the
-//! water falls there (`Face::flight`): then it is the cell its arc comes
+//! water falls there (`Face::flight`): then it is the cells its arc comes
 //! down in, and the cell at the foot of the cliff gets none of it.
+
+use smallvec::SmallVec;
 
 use super::cells::{FieldCells, CELL_AREA};
 use super::faces::{Face, FaceRef};
@@ -172,13 +174,11 @@ impl FieldSolver {
             buffer.resize_with(count, Vec::new);
         }
         // Falling water lands wherever its arc takes it.
-        for &slot in &self.stepped {
-            for face in &cells.chunks[slot].faces {
-                let landing = face.flight.and_then(|flight| flight.into);
-                if let Some(s) = landing.map(|c| c.slot as usize).filter(|&s| !marked[s]) {
-                    marked[s] = true;
-                    self.touched.push(s);
-                }
+        for landing in cells.flights.iter().flat_map(|flight| &flight.into) {
+            let slot = landing.slot as usize;
+            if !marked[slot] {
+                marked[slot] = true;
+                self.touched.push(slot);
             }
         }
         self.is_stepped.clear();
@@ -365,8 +365,11 @@ impl FieldSolver {
                 if v == 0.0 {
                     continue;
                 }
-                let (giver, taker) = ends(slot, face, v > 0.0);
-                visit(self, Some(giver), taker, v.abs());
+                let (giver, takers) = ends(cells, slot, face, v > 0.0);
+                let each = v.abs() / takers.len() as f64;
+                for taker in takers {
+                    visit(self, Some(giver), taker, each);
+                }
             }
             for face in &chunk.boundary {
                 let v = volume(face.q);
@@ -393,26 +396,30 @@ impl FieldSolver {
         for &slot in &self.stepped {
             let mut faces = std::mem::take(&mut cells.chunks[slot].faces);
             for face in &mut faces {
-                let mut v = (face.q.abs() * DX * dt) as f64;
+                let v = (face.q.abs() * DX * dt) as f64;
                 if v == 0.0 {
                     continue;
                 }
-                let (giver, taker) = ends(slot, face, face.q > 0.0);
-                let s = self.share(Some(giver), taker);
-                if s < 1.0 {
-                    v *= s;
-                    face.q *= s as f32;
-                }
-                cells.chunks[giver.0].depth[giver.1] -= v / CELL_AREA;
-                wake_on_flow(cells, giver.0, v);
-                match taker {
-                    Some((slot, flat)) => {
-                        cells.chunks[slot].depth[flat] += v / CELL_AREA;
-                        wake_on_flow(cells, slot, v);
+                let (giver, takers) = ends(cells, slot, face, face.q > 0.0);
+                let each = v / takers.len() as f64;
+                let mut moved = 0.0;
+                for taker in takers {
+                    let part = each * self.share(Some(giver), taker);
+                    match taker {
+                        Some((slot, flat)) => {
+                            cells.chunks[slot].depth[flat] += part / CELL_AREA;
+                            wake_on_flow(cells, slot, part);
+                        }
+                        // Its arc left the world.
+                        None => boundary_out += part,
                     }
-                    // Its arc left the world.
-                    None => boundary_out += v,
+                    moved += part;
                 }
+                if moved < v {
+                    face.q *= (moved / v) as f32;
+                }
+                cells.chunks[giver.0].depth[giver.1] -= moved / CELL_AREA;
+                wake_on_flow(cells, giver.0, moved);
             }
             cells.chunks[slot].faces = faces;
             let mut boundary = std::mem::take(&mut cells.chunks[slot].boundary);
@@ -439,15 +446,35 @@ impl FieldSolver {
 
 /// The cells a face in chunk `slot` moves water between when it flows from
 /// its owner to the cell across (`forward`) or back, as (slot, flat): the
-/// giver, and the taker, none where the water leaves the world.
-fn ends(slot: usize, face: &Face, forward: bool) -> ((usize, usize), Option<(usize, usize)>) {
+/// giver, and the takers, each of an equal share: the cell across, or while
+/// the water falls that way the cells it lands in. A taker is none where
+/// the water leaves the world.
+fn ends(
+    cells: &FieldCells,
+    slot: usize,
+    face: &Face,
+    forward: bool,
+) -> ((usize, usize), SmallVec<[Option<(usize, usize)>; 4]>) {
+    let at = |c: SpanIndex| (c.slot as usize, c.flat as usize);
     let owner = SpanIndex {
         slot: slot as u32,
         flat: face.a,
     };
-    let at = |c: SpanIndex| (c.slot as usize, c.flat as usize);
-    let giver = if forward { owner } else { face.b };
-    (at(giver), face.taker(owner, forward).map(at))
+    let (giver, across) = if forward {
+        (owner, face.b)
+    } else {
+        (face.b, owner)
+    };
+    let flight = face
+        .flight
+        .map(|index| &cells.flights[index as usize])
+        .filter(|flight| flight.from_owner == forward);
+    let takers = match flight {
+        None => smallvec::smallvec![Some(at(across))],
+        Some(flight) if flight.into.is_empty() => smallvec::smallvec![None],
+        Some(flight) => flight.into.iter().map(|&c| Some(at(c))).collect(),
+    };
+    (at(giver), takers)
 }
 
 /// Depth a flux must change a sleeping chunk's cell by to wake the chunk, m.

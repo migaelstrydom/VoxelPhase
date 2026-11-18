@@ -36,6 +36,10 @@ pub(super) const JET_RING: u32 = 10;
 pub(super) const PLUNGE_CORNERS: u32 = 8;
 const PLUNGE_MARGIN: f32 = 0.6;
 
+/// How much air a spring's or pump's jet has taken in as it comes out: it
+/// turns white a little sooner than water sliding over a brink.
+const JET_AIR: f32 = 0.3;
+
 /// Deepest a jet is drawn, m. A sheet's depth is how much of a curtain it
 /// is; a jet's is its own thickness, so a small jet is as solid as a big
 /// one.
@@ -111,6 +115,7 @@ impl Jet {
             ),
             normal,
             fray: 0.0,
+            air: JET_AIR,
         }
     }
 
@@ -141,6 +146,7 @@ impl Jet {
             sheet: Vector4::new(fall + 1.0 + share, fall, 0.0, 2.0 * slab.half_thickness),
             normal: Vector3::y(),
             fray: 0.0,
+            air: JET_AIR,
         }
     }
 }

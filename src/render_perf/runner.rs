@@ -68,8 +68,11 @@ pub fn run(
     for _ in 0..frame_count {
         if grenade.is_none() && harness.sim_time() >= scenario.drop_at {
             dropped_at = harness.sim_time();
-            let position = surface + nalgebra::Vector3::y() * scenario.lift;
-            grenade = Some(harness.drop_grenade(position)?);
+            let (position, velocity) = scenario.thrown.unwrap_or((
+                surface + nalgebra::Vector3::y() * scenario.lift,
+                nalgebra::Vector3::zeros(),
+            ));
+            grenade = Some(harness.throw_grenade(position, velocity)?);
         }
 
         let sample = harness.step();

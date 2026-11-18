@@ -36,6 +36,7 @@ layout(location = 7) out vec4 fragSwell;
 layout(location = 8) flat out int fragMasked;
 layout(location = 9) out vec4 fragSheet;
 layout(location = 11) out vec2 fragFace;
+layout(location = 12) out float fragAir;
 layout(location = 10) out float fragFray;
 
 
@@ -104,6 +105,7 @@ void main() {
     fragMasked = 1;
     fragSheet = vec4(0.0);
     fragFace = vec2(0.0);
+    fragAir = 0.0;
     fragFray = 0.0;
     fragTileOrigin = origin;
     fragFlow = vec2(0.0);

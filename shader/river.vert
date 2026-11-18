@@ -26,6 +26,7 @@ layout(location = 3) in vec2 inFace;   // the way falling water flies, level; ze
 layout(location = 4) in vec4 inSheet;  // falling water's (drop below its lip, whole fall, side, thickness)
 layout(location = 5) in vec3 inNormal; // falling water's face normal; up on the surface
 layout(location = 6) in float inFray;  // how far an end of a fall frays out; 0 where it runs on or is closed
+layout(location = 7) in float inAir;   // how much air falling water has taken in as it leaves its lip
 
 layout(push_constant) uniform PushConstants {
     mat4 view;
@@ -46,6 +47,7 @@ layout(location = 8) flat out int fragMasked;
 layout(location = 9) out vec4 fragSheet;
 layout(location = 10) out float fragFray;
 layout(location = 11) out vec2 fragFace;
+layout(location = 12) out float fragAir;
 
 // Depth at which the surface is cut, m: the shoreline's contour. Thinner
 // water would lie on its floor and fight it for depth.
@@ -80,6 +82,7 @@ void main() {
     fragSheet = inSheet;
     fragFray = inFray;
     fragFace = inFace;
+    fragAir = inAir;
     fragFlow = inFlow;
     fragWetDepth = depth;
     fragWetRange = vec2(SHORE_DEPTH, 1.0e9);

@@ -122,11 +122,12 @@ layout(location = 8) flat in int fragMasked;
 // thick the water is, m. On the foam where it lands the first is its fall
 // and 1 more and where across the foam, -1 behind its foot to 1 at its outer
 // edge. Zero on a surface. There `fragFlow` is where its water left its lip,
-// `fragFace` the way it flies, level, and `fragFray` how far an end of the
-// fall frays out.
+// `fragFace` the way it flies, level, `fragFray` how far an end of the fall
+// frays out, and `fragAir` how much air it had taken in as it left its lip.
 layout(location = 9) in vec4 fragSheet;
 layout(location = 10) in float fragFray;
 layout(location = 11) in vec2 fragFace;
+layout(location = 12) in float fragAir;
 
 // The scene beyond the water, copied before the water is drawn (sampled at
 // offset UVs for refraction)
@@ -339,7 +340,8 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     float coarse = streaks.x;
     float strands = 0.6 * streaks.x + 0.4 * streaks.y;
 
-    float aerated = smoothstep(0.0, SHEET_GLASS_DROP, drop);
+    // It takes in air as it falls; a jet bursts out white already.
+    float aerated = 1.0 - (1.0 - clamp(fragAir, 0.0, 1.0)) * (1.0 - smoothstep(0.0, SHEET_GLASS_DROP, drop));
     float pour = smoothstep(0.0, SHEET_FULL_POUR, fragWetDepth);
     // Thick glass is deep green and hides what is behind it.
     float body = 1.0 - exp(-thickness / SHEET_GLASS_THICKNESS);
@@ -367,7 +369,7 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     // Glass is clear where it is thin and deep where it is thick; white
     // water is ropes with air between them, closing up where much pours and
     // where the body is thick.
-    float glassAlpha = (mix(0.25, 0.8, body) + 0.25 * fresnel) * mix(0.4, 1.0, pour);
+    float glassAlpha = min(mix(0.25, 0.96, body) + 0.25 * fresnel, 1.0) * mix(0.4, 1.0, pour);
     float full = max(pour, body);
     float strandAlpha = smoothstep(0.62 - 0.4 * full, 0.82 - 0.35 * full, strands + 0.12 * aerated);
     float alpha = mix(glassAlpha, mix(0.92, 0.98, body) * strandAlpha, aerated);

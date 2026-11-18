@@ -531,6 +531,7 @@ fn lay_cell(
             sheet: Vector4::zeros(),
             normal: Vector3::y(),
             fray: 0.0,
+            air: 0.0,
         });
         mesh.sources.vertices.push(source);
     }
@@ -758,7 +759,7 @@ impl WaterScene for FieldScene<'_> {
         // Its own layout, which an empty surface reads nothing else to note.
         mesh.sources.reads(self.field.cells(), at(0));
         mesh.sources.drawn = (0..chunk.depth.len())
-            .map(|flat| drawn.drawn(at(flat)))
+            .map(|flat| field_sources::surfaced(self.field, &drawn, at(flat)))
             .collect();
         for (flat, (local, ordinal)) in chunk.cell_columns().enumerate() {
             if !mesh.sources.drawn[flat] {
@@ -774,7 +775,7 @@ impl WaterScene for FieldScene<'_> {
                 self.curtain(&mut mesh, fall, None);
             }
         }
-        mesh.sources.falls = falls.iter().map(|f| (f.from.flat, f.direction)).collect();
+        mesh.sources.falls = field_sources::falls_of(self.field, slot as u32).collect();
         mesh.sources.jets = landing_jets(self.field, slot as u32);
         for index in 0..mesh.sources.jets.len() {
             self.jet(&mut mesh, index);
