@@ -92,6 +92,13 @@ const vec2 LIFTED_GAP = vec2(0.05, 0.12);
 const float FOAMY_DEPTH = 0.6;
 // Speeds over which running water turns to lace of white water, m/s.
 const vec2 WHITE_WATER_SPEED = vec2(1.2, 3.5);
+// How far white water's lace is drawn out along the current.
+const float LACE_STRETCH = 3.0;
+// Fastest the flow carries the noise and foam, m/s. A pattern carried by a
+// flow that differs from pixel to pixel is sheared by the difference times
+// the period; past this speed water reads as fast by its streaks, and the
+// shear would only tear them.
+const float MAX_CARRY_SPEED = 1.5;
 
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec3 fragWorldPos;
@@ -217,6 +224,34 @@ float foamLace(vec2 p, float time, float width) {
         }
     }
     return 1.0 - smoothstep(0.0, width, sqrt(second) - sqrt(nearest));
+}
+
+// Lace drawn out along the current. A frame turned to the flow at every
+// pixel would carry the pattern round the world's origin wherever the flow
+// turns, and stretch it from there wherever it speeds up: over a breach it
+// drew a map's contours. So the streaks are laid in fixed frames an eighth
+// of a turn apart, all at one stretch, and the two nearest the flow fade
+// into each other.
+float streakedLace(vec2 p, vec2 downstream, float time) {
+    const float EIGHTH = 0.78539816;
+    // The flow's bearing in eighths of a turn; a streak has no head or tail,
+    // so half a turn on is the same frame.
+    float bearing = mod(atan(downstream.y, downstream.x) / EIGHTH, 4.0);
+    float first = floor(bearing);
+    float blend = smoothstep(0.25, 0.75, bearing - first);
+    float lace = 0.0;
+    for (int k = 0; k < 2; k++) {
+        float weight = k == 0 ? 1.0 - blend : blend;
+        if (weight <= 0.0) {
+            continue;
+        }
+        float frame = mod(first + float(k), 4.0);
+        float angle = frame * EIGHTH;
+        vec2 along = vec2(cos(angle), sin(angle));
+        vec2 laid = vec2(dot(p, along) / LACE_STRETCH, dot(p, vec2(-along.y, along.x)));
+        lace += weight * foamLace(laid + 5.7 * frame, time, 0.4);
+    }
+    return lace;
 }
 
 // Sample a normal perturbation from procedural noise at a given position.
@@ -405,19 +440,18 @@ void main() {
     vec3 noiseN1 = vec3(0.0);
     float whiteNoise = 0.0;
     float lace = 0.0;
-    // Foam is drawn out along the current: its cells are laid in the flow's
-    // frame, stretched downstream as the water runs faster.
+    // Foam is drawn out along the current where it runs white, and lies as
+    // it falls where the water is slow.
     vec2 downstream = speed > 1.0e-3 ? fragFlow / speed : vec2(1.0, 0.0);
-    float stretch = 1.0 + min(speed, 3.0);
-    mat2 alongFlow = mat2(downstream.x / stretch, -downstream.y,
-                          downstream.y / stretch, downstream.x);
+    float streaked = smoothstep(0.6 * WHITE_WATER_SPEED.x, WHITE_WATER_SPEED.x, speed);
+    vec2 carrying = fragFlow * min(1.0, MAX_CARRY_SPEED / max(speed, 1.0e-3));
     // Lace is dear and only shows where water runs fast or thins out to an
     // edge; open water goes without.
     bool foamy = !sheet && (speed > WHITE_WATER_SPEED.x || nearEdge);
     for (int p = 0; p < 2; p++) {
         // Each phase starts over at its own offset, so the restart is not
         // seen as the same pattern coming back.
-        vec2 carried = -fragFlow * phases[p] * FLOW_PERIOD + vec2(0.5 * float(p), 0.37 * float(p));
+        vec2 carried = -carrying * phases[p] * FLOW_PERIOD + vec2(0.5 * float(p), 0.37 * float(p));
         float weight = p == 0 ? firstWeight : 1.0 - firstWeight;
         if (sheet) {
             noiseN1 += weight * proceduralNormal(worldXZ + carried + vec2(time * 0.3, time * 0.2), 0.5, 0.07 + 0.015 * min(speed, 2.0));
@@ -425,12 +459,18 @@ void main() {
             // No offset of its own: the waves already differ from one restart
             // to the next, and as the current dies away both phases must come
             // to the still water's chop, or a seam shows where it stops.
-            vec2 drifted = worldXZ - fragFlow * phases[p] * FLOW_PERIOD;
+            vec2 drifted = worldXZ - carrying * phases[p] * FLOW_PERIOD;
             chopSlope += weight * chopSlopeAt(drifted, roughness, peak, footprint);
         }
         whiteNoise += weight * fbm(worldXZ * 2.0 + carried * 2.0);
         if (foamy) {
-            lace += weight * foamLace(alongFlow * (worldXZ + carried) * 2.2, time, 0.4);
+            vec2 laid = (worldXZ + carried) * 2.2;
+            if (streaked < 1.0) {
+                lace += weight * (1.0 - streaked) * foamLace(laid, time, 0.4);
+            }
+            if (streaked > 0.0) {
+                lace += weight * streaked * streakedLace(laid, downstream, time);
+            }
         }
     }
 
