@@ -321,7 +321,8 @@ impl WaterField {
         moving.sort_unstable();
         moving.dedup();
         currents::refresh(&mut self.cells, &moving);
-        self.falls.find(&self.graph, &mut self.cells);
+        self.falls
+            .find(&self.graph, &mut self.cells, Some(self.solver.brinks()));
         self.frame = FieldFrame {
             stats,
             awake,
@@ -348,7 +349,7 @@ impl WaterField {
             sink.relay(&self.graph, &self.cells);
         }
         self.pumps.retrace(&self.graph, &self.cells);
-        self.falls.find(&self.graph, &mut self.cells);
+        self.falls.find(&self.graph, &mut self.cells, None);
         self.edit_time = Some(started.elapsed());
     }
 

@@ -2,7 +2,8 @@
 //!
 //! ```text
 //!   WaterField::fronts ──▶ weight each by how far its water stands over
-//!                          the floor it runs on to, none past SPRAY_RANGE
+//!                          the floor it runs on to (by its square: a film
+//!                          flecks, a surge foams), none past SPRAY_RANGE
 //!                          from the eye
 //!                      ──▶ spend this frame's share of the budget on fronts
 //!                          drawn by weight: spume riding the front over its
@@ -32,9 +33,9 @@ const DROPLETS_PER_SECOND: f32 = 800.0;
 const LEAST_HEIGHT: f32 = 0.1;
 const FULL_HEIGHT: f32 = 0.6;
 
-/// Summed heights at which the fronts take the whole budget, m: a tunnel's
+/// Summed weights at which the fronts take the whole budget: a tunnel's
 /// width of half-metre surge, both edges and up its walls.
-const FULL_WEIGHT: f32 = 12.0;
+const FULL_WEIGHT: f32 = 15.0;
 
 /// Share of the way from the water running out up to the surge's crest at
 /// which the surface is drawn over a front's face.
@@ -81,10 +82,10 @@ impl FrontSpray {
         let fronts: Vec<(Front, f32)> = field
             .fronts(eye.map(|e| (e, SPRAY_RANGE)))
             .filter(|f| eye.is_none_or(|e| (f.top - e).norm() < SPRAY_RANGE))
-            .map(|f| (f, (f.crest - f.foot).min(FULL_HEIGHT)))
-            .filter(|&(_, height)| height > LEAST_HEIGHT)
+            .map(|f| (f, weight(f.crest - f.foot)))
+            .filter(|&(_, weight)| weight > 0.0)
             .collect();
-        let total: f32 = fronts.iter().map(|&(_, height)| height).sum();
+        let total: f32 = fronts.iter().map(|&(_, weight)| weight).sum();
         let share = share(total, FULL_WEIGHT);
         let mut rng = rand::thread_rng();
         self.spume.spend(&fronts, share, dt, &mut rng, |f, rng| {
@@ -94,6 +95,15 @@ impl FrontSpray {
             pool.spawn(droplet(f, rng))
         });
     }
+}
+
+/// How much of the spray a front standing `height` over the floor ahead
+/// takes: none under `LEAST_HEIGHT`, all a front can from `FULL_HEIGHT`, and
+/// by the square of the way between, so that a hand's depth of water
+/// spreading over a floor only flecks while a surge foams.
+fn weight(height: f32) -> f32 {
+    let share = ((height - LEAST_HEIGHT) / (FULL_HEIGHT - LEAST_HEIGHT)).clamp(0.0, 1.0);
+    share * share
 }
 
 /// Somewhere over the front's edge: along its face, out over the floor

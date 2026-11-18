@@ -46,6 +46,8 @@ pub struct Face {
 /// the cell across: through the air, to where its arc comes down.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Flight {
+    /// The face whose water it is.
+    pub face: FaceRef,
     /// Whether the water falls from the face's owning cell, `a`; from `b`
     /// otherwise. Water going the other way runs across as on any face.
     pub from_owner: bool,

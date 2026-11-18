@@ -26,6 +26,11 @@ use crate::water::geometry::{SpanIndex, COLUMN_SIZE};
 /// Gravity, m/s².
 const G: f32 = 9.81;
 
+/// Least step between two cells' surfaces at which their face is noted as
+/// a brink, m: a little under the least water falls across
+/// (`falls::LEAST_STEP`), since the water moves on before falls are found.
+pub(super) const BRINK_STEP: f32 = 0.2;
+
 /// Face width and the distance between cell centres, m.
 const DX: f32 = COLUMN_SIZE;
 
@@ -114,6 +119,9 @@ pub struct FieldSolver {
     previous: Vec<Vec<(f32, f32)>>,
     /// Per chunk: whether it is stepped this frame.
     is_stepped: Vec<bool>,
+    /// The faces whose cells' surfaces stood a step apart as the last
+    /// substep began: the only ones water may be falling over.
+    brinks: Vec<FaceRef>,
 }
 
 impl FieldSolver {
@@ -240,9 +248,12 @@ impl FieldSolver {
             );
         }
         let mut count = 0;
+        let mut brinks = std::mem::take(&mut self.brinks);
+        brinks.clear();
         for &slot in &self.stepped {
             let mut faces = std::mem::take(&mut cells.chunks[slot].faces);
-            for (face, &(_, depth)) in faces.iter_mut().zip(&self.previous[slot]) {
+            let stepped = faces.iter_mut().zip(&self.previous[slot]);
+            for (index, (face, &(_, depth))) in stepped.enumerate() {
                 let a = SpanIndex {
                     slot: slot as u32,
                     flat: face.a,
@@ -251,8 +262,14 @@ impl FieldSolver {
                     0.0
                 } else {
                     let blended = self.blended(cells, face, depth);
-                    let slope = (cells.surface(face.b) - cells.surface(a)) as f32 / DX;
-                    inertial(blended, depth, slope, dt, &p)
+                    let step = (cells.surface(face.b) - cells.surface(a)) as f32;
+                    if step.abs() >= BRINK_STEP {
+                        brinks.push(FaceRef {
+                            slot: slot as u32,
+                            index: index as u32,
+                        });
+                    }
+                    inertial(blended, depth, step / DX, dt, &p)
                 };
             }
             count += faces.len() as u64;
@@ -265,7 +282,14 @@ impl FieldSolver {
                 chunk.boundary[i].q = boundary_discharge(bed, surface, face.outside, &p);
             }
         }
+        self.brinks = brinks;
         count
+    }
+
+    /// The faces whose cells' surfaces stood `BRINK_STEP` apart as the last
+    /// substep began.
+    pub fn brinks(&self) -> &[FaceRef] {
+        &self.brinks
     }
 
     /// A face's discharge at the start of the substep, blended with the mean
@@ -365,10 +389,18 @@ impl FieldSolver {
                 if v == 0.0 {
                     continue;
                 }
-                let (giver, takers) = ends(cells, slot, face, v > 0.0);
-                let each = v.abs() / takers.len() as f64;
-                for taker in takers {
-                    visit(self, Some(giver), taker, each);
+                let at = |c: SpanIndex| (c.slot as usize, c.flat as usize);
+                match ends(cells, slot, face, v > 0.0) {
+                    (giver, Takers::Across(taker)) => {
+                        visit(self, Some(giver), Some(taker), v.abs());
+                    }
+                    (giver, Takers::Landing([])) => visit(self, Some(giver), None, v.abs()),
+                    (giver, Takers::Landing(into)) => {
+                        let each = v.abs() / into.len() as f64;
+                        for &cell in into {
+                            visit(self, Some(giver), Some(at(cell)), each);
+                        }
+                    }
                 }
             }
             for face in &chunk.boundary {
@@ -401,20 +433,33 @@ impl FieldSolver {
                     continue;
                 }
                 let (giver, takers) = ends(cells, slot, face, face.q > 0.0);
-                let each = v / takers.len() as f64;
-                let mut moved = 0.0;
-                for taker in takers {
-                    let part = each * self.share(Some(giver), taker);
-                    match taker {
-                        Some((slot, flat)) => {
-                            cells.chunks[slot].depth[flat] += part / CELL_AREA;
-                            wake_on_flow(cells, slot, part);
-                        }
-                        // Its arc left the world.
-                        None => boundary_out += part,
+                let moved = match takers {
+                    Takers::Across(taker) => {
+                        let part = v * self.share(Some(giver), Some(taker));
+                        cells.chunks[taker.0].depth[taker.1] += part / CELL_AREA;
+                        wake_on_flow(cells, taker.0, part);
+                        part
                     }
-                    moved += part;
-                }
+                    Takers::Landing([]) => {
+                        // Its arc left the world.
+                        let part = v * self.share(Some(giver), None);
+                        boundary_out += part;
+                        part
+                    }
+                    Takers::Landing(into) => {
+                        let into: SmallVec<[SpanIndex; 4]> = SmallVec::from_slice(into);
+                        let each = v / into.len() as f64;
+                        let mut moved = 0.0;
+                        for cell in into {
+                            let taker = (cell.slot as usize, cell.flat as usize);
+                            let part = each * self.share(Some(giver), Some(taker));
+                            cells.chunks[taker.0].depth[taker.1] += part / CELL_AREA;
+                            wake_on_flow(cells, taker.0, part);
+                            moved += part;
+                        }
+                        moved
+                    }
+                };
                 if moved < v {
                     face.q *= (moved / v) as f32;
                 }
@@ -444,17 +489,24 @@ impl FieldSolver {
     }
 }
 
+/// The cells that take the water a face moves.
+enum Takers<'a> {
+    /// The cell across the face, as (slot, flat).
+    Across((usize, usize)),
+    /// While it falls: the cells it lands in, each taking an equal share;
+    /// none where it leaves the world.
+    Landing(&'a [SpanIndex]),
+}
+
 /// The cells a face in chunk `slot` moves water between when it flows from
-/// its owner to the cell across (`forward`) or back, as (slot, flat): the
-/// giver, and the takers, each of an equal share: the cell across, or while
-/// the water falls that way the cells it lands in. A taker is none where
-/// the water leaves the world.
-fn ends(
-    cells: &FieldCells,
+/// its owner to the cell across (`forward`) or back: the giver, as (slot,
+/// flat), and the takers.
+fn ends<'a>(
+    cells: &'a FieldCells,
     slot: usize,
     face: &Face,
     forward: bool,
-) -> ((usize, usize), SmallVec<[Option<(usize, usize)>; 4]>) {
+) -> ((usize, usize), Takers<'a>) {
     let at = |c: SpanIndex| (c.slot as usize, c.flat as usize);
     let owner = SpanIndex {
         slot: slot as u32,
@@ -470,9 +522,8 @@ fn ends(
         .map(|index| &cells.flights[index as usize])
         .filter(|flight| flight.from_owner == forward);
     let takers = match flight {
-        None => smallvec::smallvec![Some(at(across))],
-        Some(flight) if flight.into.is_empty() => smallvec::smallvec![None],
-        Some(flight) => flight.into.iter().map(|&c| Some(at(c))).collect(),
+        None => Takers::Across(at(across)),
+        Some(flight) => Takers::Landing(&flight.into),
     };
     (at(giver), takers)
 }

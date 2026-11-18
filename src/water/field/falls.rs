@@ -34,11 +34,15 @@ use crate::water::geometry::{
 };
 
 use super::cells::FieldCells;
-use super::faces::{Axis, Face, Flight};
+use super::faces::{Axis, Face, FaceRef, Flight};
 use super::field::WET_DEPTH;
 
 /// Least flow over an edge, per metre of it, that is a fall, m²/s.
 const MIN_POUR: f32 = 0.005;
+
+/// Least step between two cells' surfaces that water can fall or burst
+/// across, m: under both `falls`' step and a jet's clearance.
+const LEAST_STEP: f64 = 0.25;
 
 /// Least depth a face's discharge is divided by for the speed its water
 /// leaves at, m, so a film's trickle is not launched as a torrent.
@@ -148,9 +152,6 @@ pub struct Falls {
     chunks: Vec<Vec<Fall>>,
     /// Per chunk slot, for each of its falls: what it falls over.
     edges: Vec<Vec<Edge>>,
-    /// Per chunk slot: whether its faces were looked over last time, so
-    /// their flights are cleared when it sleeps.
-    watched: Vec<bool>,
 }
 
 /// What a fall goes over.
@@ -256,66 +257,91 @@ impl Falls {
     }
 
     /// Find every fall again as the water stands, and give each face its
-    /// flight. A sleeping chunk's faces carry nothing: its flights are
-    /// cleared as it falls asleep, so none outlives the cells it names.
+    /// flight. Only an awake chunk's faces carry water, and every flight is
+    /// found afresh, so none outlives the cells it names.
     ///
     /// Each fall's velocity is first taken from its own water, then evened
     /// out along its lip with the falls it runs on into: a cell's velocity
     /// at a brink is the mean of a few faces, and thrown each its own way
     /// the falls of one lip would cross in the air. Only then is each
     /// followed down.
-    pub(super) fn find(&mut self, graph: &SpanGraph, cells: &mut FieldCells) {
+    ///
+    /// `brinks` are the faces to look at: those the solver found a step
+    /// across as it last stepped. None looks at every awake chunk's faces,
+    /// as after an edit, when the solver has not seen the ground as it is.
+    pub(super) fn find(
+        &mut self,
+        graph: &SpanGraph,
+        cells: &mut FieldCells,
+        brinks: Option<&[FaceRef]>,
+    ) {
         let count = cells.chunks.len();
-        self.watched.resize(count, false);
-        cells.flights.clear();
+        // Last time's flights are over. A face laid again since has none.
+        let mut flights = std::mem::take(&mut cells.flights);
+        for flight in flights.drain(..) {
+            let chunk = cells.chunks.get_mut(flight.face.slot as usize);
+            if let Some(face) = chunk.and_then(|c| c.faces.get_mut(flight.face.index as usize)) {
+                face.flight = None;
+            }
+        }
+        cells.flights = flights;
         let mut found: Vec<Vec<(Fall, Edge)>> = vec![Vec::new(); count];
+        let every: Vec<FaceRef>;
+        let brinks = match brinks {
+            Some(brinks) => brinks,
+            None => {
+                every = (cells.chunks.iter().enumerate())
+                    .filter(|(_, chunk)| chunk.awake)
+                    .flat_map(|(slot, chunk)| {
+                        (0..chunk.faces.len() as u32).map(move |index| FaceRef {
+                            slot: slot as u32,
+                            index,
+                        })
+                    })
+                    .collect();
+                &every
+            }
+        };
+        for &FaceRef { slot, index } in brinks {
+            let chunk = &cells.chunks[slot as usize];
+            let Some(face) = chunk.faces.get(index as usize).filter(|_| chunk.awake) else {
+                continue;
+            };
+            // Water falls only where it pours between surfaces a step apart.
+            let step = chunk.surface(face.a as usize) - cells.surface(face.b);
+            if face.q.abs() < MIN_POUR || step.abs() < LEAST_STEP {
+                continue;
+            }
+            let owner = SpanIndex { slot, flat: face.a };
+            let (upper, lower, sign) = if face.q > 0.0 {
+                (owner, face.b, 1.0)
+            } else {
+                (face.b, owner, -1.0)
+            };
+            let direction = direction_of(face.axis, sign);
+            let head = driving_head(cells, upper, face, face.q > 0.0);
+            let pour = face.q.abs();
+            let Some(fall) = over_face(graph, cells, upper, lower, direction, pour, head) else {
+                continue;
+            };
+            let edge = Edge::Face {
+                slot,
+                index,
+                below: lower,
+            };
+            // Two spans across one edge: the cell's water falls to one.
+            let list = &mut found[upper.slot as usize];
+            let same = |f: &Fall| f.from == upper && f.direction == fall.direction;
+            match list.iter_mut().find(|(f, _)| same(f)) {
+                Some(held) if held.0.pour >= fall.pour => {}
+                Some(held) => *held = (fall, edge),
+                None => list.push((fall, edge)),
+            }
+        }
         for slot in 0..count {
-            let awake = cells.chunks[slot].awake;
-            if !awake && !self.watched[slot] {
-                continue;
-            }
-            self.watched[slot] = awake;
-            cells.chunks[slot]
-                .faces
-                .iter_mut()
-                .for_each(|face| face.flight = None);
-            if !awake {
-                continue;
-            }
             let chunk = &cells.chunks[slot];
-            for (index, face) in chunk.faces.iter().enumerate() {
-                if face.q.abs() < MIN_POUR {
-                    continue;
-                }
-                let owner = SpanIndex {
-                    slot: slot as u32,
-                    flat: face.a,
-                };
-                let (upper, lower, sign) = if face.q > 0.0 {
-                    (owner, face.b, 1.0)
-                } else {
-                    (face.b, owner, -1.0)
-                };
-                let direction = direction_of(face.axis, sign);
-                let head = driving_head(cells, upper, face, face.q > 0.0);
-                let pour = face.q.abs();
-                let Some(fall) = over_face(graph, cells, upper, lower, direction, pour, head)
-                else {
-                    continue;
-                };
-                let edge = Edge::Face {
-                    slot: slot as u32,
-                    index: index as u32,
-                    below: lower,
-                };
-                // Two spans across one edge: the cell's water falls to one.
-                let list = &mut found[upper.slot as usize];
-                let same = |f: &Fall| f.from == upper && f.direction == fall.direction;
-                match list.iter_mut().find(|(f, _)| same(f)) {
-                    Some(held) if held.0.pour >= fall.pour => {}
-                    Some(held) => *held = (fall, edge),
-                    None => list.push((fall, edge)),
-                }
+            if !chunk.awake {
+                continue;
             }
             for edge in &chunk.boundary {
                 let from = SpanIndex {
@@ -384,7 +410,11 @@ impl Falls {
                         let face = &mut cells.chunks[slot as usize].faces[index as usize];
                         face.flight = Some(flight);
                         let from_owner = fall.from.slot == slot && fall.from.flat == face.a;
-                        cells.flights.push(Flight { from_owner, into });
+                        cells.flights.push(Flight {
+                            face: FaceRef { slot, index },
+                            from_owner,
+                            into,
+                        });
                     }
                     Edge::Map { level } => {
                         let out = fall.velocity * fall_time(fall.lip.y - level);
@@ -846,7 +876,7 @@ mod tests {
         *cells.depth_mut(cell(3, 5)) = 0.5;
         pour(&mut cells, 3, 5, 1.0);
         let mut found = Falls::default();
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         let fall = *found.get(cell(3, 5), 0).expect("it falls to +x");
         // 1 m²/s over 0.5 m is 2 m/s; 4.5 m takes √(2·4.5/g) s.
         let flight = fall_time(4.5);
@@ -877,7 +907,7 @@ mod tests {
         *cells.depth_mut(cell(3, 5)) = 2.0;
         pour(&mut cells, 3, 5, 8.0);
         let mut found = Falls::default();
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         let fall = *found.get(cell(3, 5), 0).expect("it falls");
         let face = (cells.chunks[0].faces.iter())
             .find(|f| f.a == cell(3, 5).flat && f.axis == Axis::X)
@@ -909,7 +939,7 @@ mod tests {
         }
         pour(&mut cells, 3, 5, 1.0);
         let mut found = Falls::default();
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         let fall = found.get(cell(3, 5), 0).expect("it falls");
         assert!((fall.foot.y - 1.5).abs() < 1.0e-5);
         assert!((fall.foot.x - (2.0 + 2.0 * fall_time(3.0))).abs() < 1.0e-2);
@@ -923,7 +953,7 @@ mod tests {
         *cells.depth_mut(cell(3, 5)) = 0.5;
         pour(&mut cells, 3, 5, 1.0);
         let mut found = Falls::default();
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         let fall = found.get(cell(3, 5), 0).expect("it falls");
         assert_eq!(fall.into, Some(cell(5, 5)));
         // It strikes the wall 1 m out, 0.5 s on, and its arc runs on behind
@@ -940,13 +970,13 @@ mod tests {
         *cells.depth_mut(cell(3, 5)) = 0.5;
         pour(&mut cells, 3, 5, 1.0);
         let mut found = Falls::default();
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         assert!(found.is_empty(), "deep water over a low step slopes");
 
         let (graph, mut cells) = cliff();
         *cells.depth_mut(cell(3, 5)) = 0.5;
         pour(&mut cells, 3, 5, 0.5 * MIN_POUR);
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         assert!(found.is_empty(), "a seep is no fall");
     }
 
@@ -958,7 +988,7 @@ mod tests {
             pour(&mut cells, 3, k, 1.0);
         }
         let mut found = Falls::default();
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         let middle = *found.get(cell(3, 6), 0).unwrap();
         // The +x edge's ends lie towards −z, then +z.
         let (before, meets) = found.beside(&graph, &cells, &middle, 0).unwrap();
@@ -992,7 +1022,7 @@ mod tests {
             }
         }
         let mut found = Falls::default();
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         let east = *found.get(cell(3, 5), 0).expect("over its +x edge");
         let north = *found.get(cell(3, 5), 1).expect("over its +z edge");
         // The +x edge's end towards +z meets the +z edge's end towards +x.
@@ -1037,7 +1067,7 @@ mod tests {
     fn water_driven_through_a_hole_bursts_out_as_a_jet_at_the_speed_of_its_head() {
         let (graph, mut cells) = holed_dam(4.0);
         let mut found = Falls::default();
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         let jet = *found.get(cell(4, 5), 0).expect("it bursts out of the hole");
         assert!(jet.driven);
         // 3.25 m of head over the middle of the opening.
@@ -1060,7 +1090,7 @@ mod tests {
         }
         *cells.depth_mut(cell(4, 5)) = 0.6;
         let mut found = Falls::default();
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         let fall = *found.get(cell(4, 5), 0).expect("it pours out");
         assert!(!fall.driven);
         assert!(
@@ -1075,9 +1105,9 @@ mod tests {
         *cells.depth_mut(cell(3, 5)) = 0.5;
         pour(&mut cells, 3, 5, 1.0);
         let mut found = Falls::default();
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         cells.chunks[0].awake = false;
-        found.find(&graph, &mut cells);
+        found.find(&graph, &mut cells, None);
         assert!(found.is_empty());
         assert!(cells.chunks[0].faces.iter().all(|f| f.flight.is_none()));
         assert!(cells.flights.is_empty());

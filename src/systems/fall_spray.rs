@@ -23,8 +23,8 @@ use crate::particles::{ColourRamp, Particle, ParticlePool};
 use crate::water::falling::{FallingWater, Landing};
 
 /// Droplets and puffs of mist spawned a second, over every fall at once.
-const DROPLETS_PER_SECOND: f32 = 240.0;
-const MIST_PER_SECOND: f32 = 40.0;
+const DROPLETS_PER_SECOND: f32 = 360.0;
+const MIST_PER_SECOND: f32 = 30.0;
 
 /// The least power a landing must have to throw spray, m³/s · (m/s)²: a
 /// trickle lands without any.
@@ -110,23 +110,25 @@ fn droplet(landing: &Landing, rng: &mut impl Rng) -> Particle {
     .with_dynamics(1.0, 0.6)
 }
 
-/// A puff of mist rising slowly off the foam and spreading as it fades.
+/// A puff of mist rising slowly off the foam and spreading as it fades:
+/// thin, so that a big fall's many puffs make a haze over its foot and not a
+/// white ball in front of it.
 fn mist(landing: &Landing, rng: &mut impl Rng) -> Particle {
     let angle = rng.gen_range(0.0..std::f32::consts::TAU);
     let drift = Vector3::new(angle.cos(), 0.0, angle.sin()) * rng.gen_range(0.2..0.8);
     let ramp = ColourRamp::fade(
-        Vector4::new(0.85, 0.92, 1.0, 0.28),
+        Vector4::new(0.85, 0.92, 1.0, 0.14),
         Vector4::new(0.9, 0.95, 1.0, 0.0),
     );
     let mut puff = Particle::new(
         along(landing, rng) + Vector3::y() * 0.2,
-        drift + Vector3::y() * rng.gen_range(0.4..1.2),
-        rng.gen_range(0.4..0.8),
+        drift + Vector3::y() * rng.gen_range(0.3..0.9),
+        rng.gen_range(0.3..0.6),
         rng.gen_range(1.5..2.5),
         ramp,
     )
     .with_dynamics(-0.02, 1.2);
-    puff.growth = 2.5;
+    puff.growth = 2.0;
     puff.billow = 1.0;
     puff.angle = rng.gen_range(0.0..std::f32::consts::TAU);
     puff.seed = rng.gen_range(0.0..1.0);
