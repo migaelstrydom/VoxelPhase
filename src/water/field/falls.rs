@@ -338,8 +338,7 @@ impl Falls {
                 None => list.push((fall, edge)),
             }
         }
-        for slot in 0..count {
-            let chunk = &cells.chunks[slot];
+        for (slot, (chunk, list)) in cells.chunks.iter().zip(&mut found).enumerate() {
             if !chunk.awake {
                 continue;
             }
@@ -349,9 +348,7 @@ impl Falls {
                     flat: edge.cell,
                 };
                 let direction = direction_of(edge.axis, edge.outward);
-                if let Some(found_off) = off_edge(cells, from, direction, edge.q, edge.outside) {
-                    found[slot].push(found_off);
-                }
+                list.extend(off_edge(cells, from, direction, edge.q, edge.outside));
             }
         }
         self.chunks.resize_with(count, Vec::new);

@@ -59,7 +59,7 @@ const MAX_THICKNESS: f32 = 2.0;
 
 /// Depths of water going over a lip over which a fall's free end stops
 /// fraying out into strands and is the closed end of a body, m.
-const FRAYING_DEPTH: (f32, f32) = (0.1, 0.35);
+const FRAYING_DEPTH: (f32, f32) = (0.15, 0.8);
 
 /// Speeds water leaves a lip at over which it goes from sliding glassy over
 /// the brink to breaking white as it leaves, m/s, and how white the fastest

@@ -670,6 +670,9 @@ mod tests {
         /// this has a new one, and a level with fewer has had one fixed, and
         /// its count here is lowered to match.
         const KNOWN_DRIFTS: &[(&str, usize)] = &[
+            // The cherry floating in the fall's pool: the fall lands out in
+            // the pool, and the current it sets up turns the cherry.
+            ("island_sea.level.ron", 1),
             ("skyway.level.ron", 4),
             ("stack_yard.level.ron", 1),
             ("subsidence.level.ron", 4),

@@ -43,7 +43,7 @@ The water writes scene radiance like everything else in the pass; the resolve
 tonemaps it with the rest of the scene.
 
 Surfaces replace the pixel and write depth; they composite with the copy
-themselves (refraction, absorption, their soft edges). Falling sheets and
+themselves (refraction, absorption, their soft edges). Falls' curtains and
 jets are drawn after every surface by a second pipeline that blends by alpha
 and writes no depth (`Composite` in `pipeline.rs`), so a curtain of strands
 shows the pool it falls into, which the copy does not hold. It culls back
@@ -88,31 +88,43 @@ at most eight a frame in the game (stalest first; the offline viewers lift
 the cap). The surfaces are then joined for upload. Past the map's open edges
 the sea is the ocean ring.
 
-A falling sheet's vertices carry `sheet` = (drop below the lip, whole fall,
-side, along the edge), the `normal` of their face, and `fray`. Its foot is
-thrown out from the lip (`water::falling::thrown`, the rule the physics'
-falling streams use too): the way the lip's water
-moves, as far as it flies while it falls, so the sheet leans clear of rock
-that leans out below the lip; a staircase of sheets down a diagonal lip is
-thrown one way, not each its own.
+Where the field's water falls (`water::field::Fall`: one per face it goes
+over, with the velocity it leaves at and the arc it flies down to where it
+lands), the mesher hangs a curtain from the cell's edge (`curtain.rs`). The
+field decides where water falls and where it comes down, and pours it there;
+the mesher only draws it.
 
-Between lip and foot the sheet is a tongue of water (`nappe.rs`): its top
-face follows the ballistic curve from the lip's surface to the foot in
-`NAPPE_ROWS` rows, curling over the brink; its under face lies below it by
-the water's thickness, the lip's pour depth at first, thinning as the water
-speeds up. Each face's rows are refreshed from the lip and foot.
+```
+        end 0      middle      end 1       three strands down each fall: its
+   lip ───●──────────●──────────●───       own arc from the middle of its lip,
+          ┃╲         ┃╲         ┃╲         and at each end the mean of its arc
+          ┃ ╲        ┃ ╲        ┃ ╲        and the arc of the fall its lip runs
+   foot ~~┃~~●~~~~~~~┃~~●~~~~~~~┃~~●~~     on into (`WaterField::fall_beside`)
+```
 
-A cell on a cliff's face that water falls on to and pours straight on from,
-as where a leaning cliff crosses a column, is a step the fall runs over
-(`FieldScene::passed`): it is not drawn, and the sheet above falls on past
-it to the water it lands in, so a fall is one curtain, not a staircase of
-short ones with films on the ledges between. The surface's shape holds while
-each step passed still falls (`SurfaceSources::passes`).
+Two falls side by side share the strand between them, straight on or round a
+corner, so the falls of one lip are one watertight body, and a lip running
+across the lattice (a staircase of edges facing two ways) is a straight
+curtain from its second row. Its first row hangs from the surface: the middle
+of each edge, the cell's corners, and where the water goes over both edges at
+a corner, the middle of the cut that takes the corner off (`lay_cell`).
+Where the lower column's own floor carries the ledge on, the surface is
+carried out over it to where the water really leaves.
 
-`river.vert` widens each sheet past the ends of its edge so it overlaps its
-neighbours. A sheet's end frays out only where it ends the fall (`fray` = 1):
-where another sheet falls over an edge meeting at that corner, it runs on
-into it (`FieldScene::frays`).
+Each strand's top face follows its arc in `CURTAIN_ROWS` rows; its under face
+lies below by the water's thickness, the flow over the lip by its speed,
+thinning as it falls. A free end is closed by a cap between the two faces,
+so thick water is seen to be thick from its side, and frays out instead
+where the water is thin (`fray`). Water driven out of a hole (`Fall::driven`)
+is a jet: its body starts back inside the hole, it is white from the lip
+(`air`), and the cell it bursts from draws no surface. A wall in an arc's way
+is left to hide the rest of it.
+
+A curtain's vertices carry `sheet` = (drop below the lip, whole fall, side,
+thickness), the `normal` of their face, where their water left its lip (in
+`flow`) and the way it flies (in `face`). A curtain is read again as a whole
+from its fall (`SurfaceSources::curtains`); the surface's shape holds while
+its chunk's falls and the falls they run on into are the same.
 
 A source's jet (`jet.rs`) is a tube of `JET_ROWS` rings of `JET_RING`
 vertices round its path (`water::falling::FallPath`, the jet the physics
@@ -334,29 +346,35 @@ steepens (`FROTHING_SLOPE`): a beach froths, a wall does not.
 ### 6. Foam
 
 Foam is froth: patches of noise carrying a lace of drifting cells
-(`foamLace`), laid in the flow's frame and stretched downstream. It frills
+(`foamLace`), carried by the flow. Where water runs white the lace is drawn
+out along the current (`streakedLace`): in fixed frames an eighth of a turn
+apart, the two nearest the flow faded into each other, because a frame turned
+to the flow at each pixel shears the pattern wherever the flow turns. It frills
 the edge where water thins over a beach or an advancing front (measured on
 the ground, so it never outlines a wall), and covers water running faster
 than `WHITE_WATER_SPEED`. It is worked out only where it can show.
 
 ### 7. Falling water
 
-A sheet (`shadeSheet`) is clear glass for its first `SHEET_GLASS_DROP` below
-the lip, then white water in two layers of streaks falling at their own
-speeds, with air between them, sparser where little pours. Its glass is
-deeper and less clear where the tongue is thick (`SHEET_GLASS_THICKNESS`),
-its thickness taken from the pour depth and the drop as the mesh takes it.
-It is lit by its face's normal, wrapped (`SHEET_WRAP`), so the curl over the
-brink and the round of the curtain show. It frays in below its lip and out
-over its foot, frays out at the ends of a fall and fades where it runs
-against rock.
+Falling water (`shadeSheet`) is clear glass as it leaves the lip, as deep
+and as opaque as it is thick, turning to white water over `SHEET_GLASS_DROP`
+(at once, where it left its lip already white: `air`): two layers of streaks
+falling at their own speeds, with air between them, sparser where little
+pours. The streaks hang from where the water left its lip and are laid along
+whichever of the world's axes the curtain runs along (both, faded into each
+other, between them), so they run straight down however the curtain is thrown
+and on from each fall to the next round any lip. Their slope tilts the face
+they lie on (`embossed`), so the ropes of white water stand out of the
+curtain; seen edge on they are left out before they alias. It is lit by its
+face's normal, wrapped (`SHEET_WRAP`), breaks up over its foot, frays out at
+the frayed ends of a fall and fades where it runs against rock.
 
-Where falling water lands, a patch of foam lies on the water out from its
-foot (`nappe::plunge`, `Jet::plunge`): a quad per sheet, a fan under a jet.
-Its vertices' drop is past their fall by the share of the patch's reach,
-which is how the shader tells foam (`shadePlunge`) from the fall itself:
-solid under the fall, breaking into patches, gone before its edge. Spray and
-mist are particles, thrown where streams land in water that stays
+Where falling water lands, a patch of foam lies on the water round its foot
+(`curtain::Strand::plunge`, `Jet::plunge`): from behind the foot, under the
+fall, to out past it. Its vertices' drop is past their fall by 1 and where
+across the patch they lie, which is how the shader tells foam (`shadePlunge`)
+from the fall itself: solid at the foot, in billows further out, gone before
+its edge. Spray and mist are particles, thrown where the falls land
 (`systems/fall_spray.rs`), on a fixed budget shared by every fall.
 
 ---
@@ -387,7 +405,7 @@ src/rendering/water/
     field_sources.rs -- where each vertex of the field's surface reads its water
     river_parts.rs  -- river surfaces read again or rebuilt when their version moves
     ocean_ring.rs   -- the sea past the map's open edges
-    nappe.rs        -- a falling sheet's body: top and under faces, lip to foot
+    curtain.rs      -- a fall's curtain: strands, top and under faces, caps, foam
     jet.rs          -- a source's jet, drawn as a tube of falling water
     divide.rs       -- which side of the water a blended surface lies on
     footprint.rs    -- the screen rectangle the water can read

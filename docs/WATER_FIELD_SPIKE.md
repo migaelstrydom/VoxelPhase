@@ -63,6 +63,22 @@ below its old height.
 - **Limits.** A cell never gives more than it holds, nor takes more than fits
   under its ceiling, so a cave fills to its roof and no further. A face never runs
   faster than Froude 1, which stands in for critical flow over an edge.
+- **Falls** (`falls.rs`). Water going over an edge flies. After each step the
+  field finds its falls: every face pouring from water that `falls` to what lies
+  across it (a step over 0.5 m off a floor standing 0.2 m or more above the water
+  or the dry ground below), with the velocity it leaves at (its discharge over
+  its depth, and the drift of the water behind it, evened out along the lip) and
+  its arc followed column by column down to the water, the ground or the wall it
+  meets. The solver pours a falling face's water into the cells it lands in
+  (`Face::flight`), not the cell at the foot of the cliff: a breach's torrent
+  lands metres out, a thick stream over the length of ground between where its
+  underside and its top come down, and a ledge the arc clears stays dry. The
+  solver notes the faces with a step across them as it steps, so levels without
+  falls pay nothing. Water in a roofed cell with open water standing over its
+  roof behind it is *driven*: it bursts out as a jet from the middle of the
+  opening at the speed its head gives it (Torricelli), thinner than the opening
+  by as much. What draws a fall, what it strikes and where it sprays all read
+  the same `Fall`.
 - **Edges.** The void takes a free overfall. The sea is a radiating (Flather)
   edge, so waves leave the map. A closed edge of a map with a sea is a wall below
   sea level and void above it.
@@ -147,10 +163,13 @@ pipeline, with no new shader:
   water's bed stands above the lower water, which a slope would cut through.
   Water whose bed lies below the water beside it slopes down to it however
   high the step: a front running out over a floor has no edge to fall over;
-- a sheet down any edge where one falls to the next, as deep as the water pours
-  over it, hung out at the lip where the lower column's own floor carries the
-  ledge on (each span keeps a bed per quarter of its square for this);
-- a sheet off the map's edge where a cell's water leaves through it: down to
+- a curtain for each of the field's falls (section 4), hung from the cell's
+  edge along the fall's arc down to where it lands, out at the lip where the
+  lower column's own floor carries the ledge on (each span keeps a bed per
+  quarter of its square for this). A fall's curtain shares its end strands
+  with the falls its lip runs on into, so a lip's falls are one body
+  (`rendering/water/curtain.rs`);
+- a curtain off the map's edge where a cell's water leaves through it: down to
   the sea's level past an open edge, or 6 m into the void where there is no
   sea (the same `falls` rule, so water level with the sea draws none);
 - a shore patch half a column into each dry column beside a wet cell, and a
@@ -172,9 +191,10 @@ Looked at and fixed:
 
 Open:
 
-- **Falls are curtains.** A cliff's curtain is ragged where neighbouring edges
-  hold different heights. A real fall needs a sheet built from the lip's flow,
-  as the network's `FallMesher` builds.
+- **A hole run full passes what Froude 1 lets it.** Water does not flow under
+  pressure in the solver, so a breach low in a dam drains its lake at about
+  two thirds of the rate its head would drive. Its jet is drawn and thrown at
+  the head's speed, and is thinner for it.
 - **The mesh is rebuilt on every draw.** Fine offline, not in the game. The
   ripple tiles already draw a displaced grid from a storage buffer, and the field
   wants the same: per-chunk heights uploaded when awake.
@@ -261,6 +281,5 @@ canyon floor, now holds it: 1756 m³.
 - grenades do not ripple the water, only bodies moving in it;
 - the GPU heightfield path for drawing;
 - parallel stepping (chunks are independent within a substep's phases);
-- fall sheets;
 - blended surfaces divided by the field's water (only the sea's ring is in
   `WaterDivide`, so what stands in a lake counts as this side of it).

@@ -13,7 +13,7 @@
 //! ```
 //!
 //! Each frame: carry the water over any terrain edit, step the field, find
-//! its falling water, then step the ripples over it.
+//! its falling water, stir the ripples where it lands, then step the ripples.
 
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use crate::debug::DebugLog;
 use crate::level::{Settle, WaterConfig};
 use crate::terrain::TerrainWorld;
 
-use super::coupling::Disturbances;
+use super::coupling::{Disturbance, Disturbances};
 use super::falling::FallingWater;
 use super::field::{DrawnDepths, Fall, Jet, PumpId, PumpPlacement, SurfaceVersions, WaterField};
 use super::geometry::{SpanChunkCoord, ORTHOGONAL};
@@ -43,6 +43,16 @@ const SETTLE_LIMIT: f32 = 30.0;
 /// Longest frame the field steps in one go, s: a hitch is not a flood.
 const LONGEST_FRAME: f32 = 0.1;
 
+/// The least power a fall must land with to stir the water it lands in,
+/// m³/s · (m/s)², and the power at which it stirs it hardest.
+const STIR_LEAST_POWER: f32 = 2.0;
+const STIR_FULL_POWER: f32 = 200.0;
+
+/// The hardest a landing fall kicks the surface up or down in a frame, m/s,
+/// and how far past its ends its kick reaches, m.
+const STIR_SPEED: f32 = 0.8;
+const STIR_MARGIN: f32 = 0.3;
+
 /// All of a level's water.
 pub struct WaterWorld {
     field: WaterField,
@@ -55,6 +65,8 @@ pub struct WaterWorld {
     jets: Vec<Jet>,
     /// Each chunk's falls as the versions last took them, by slot.
     falls: Vec<Vec<Fall>>,
+    /// The state of the generator that draws each landing's kick.
+    stir: u32,
     /// Seconds simulated: the clock the drawn currents run on.
     clock: f64,
     /// Simulated seconds the level's opening settle ran, and what it cost.
@@ -79,6 +91,7 @@ impl WaterWorld {
                 .map(|slot| field.falls().of_slot(slot).to_vec())
                 .collect(),
             waves: SurfaceWaves::new(config, &field),
+            stir: 0x9E37_79B9,
             field,
             clock: 0.0,
             opened: (settled, started.elapsed()),
@@ -114,6 +127,7 @@ impl WaterWorld {
         self.note_jets();
         self.note_falls();
         self.falling = FallingWater::build(&self.field);
+        self.stir_landings();
         self.waves.step(&self.field, dt);
         self.clock += dt as f64;
     }
@@ -194,6 +208,32 @@ impl WaterWorld {
                     self.versions.touch(near);
                 }
             }
+        }
+    }
+
+    /// Stir the ripples where falls land in water that stays: each landing
+    /// kicks the surface up or down at random, harder the more power it
+    /// lands with, so rings run out from under a fall for as long as it
+    /// falls. The kicks are drawn from the world's own generator, so a run
+    /// repeats.
+    fn stir_landings(&mut self) {
+        let mut pending = Vec::new();
+        for landing in self.falling.landings().filter(|landing| !landing.onward) {
+            let power = landing.discharge * landing.velocity.norm_squared();
+            if power < STIR_LEAST_POWER {
+                continue;
+            }
+            // Xorshift: enough for a splash.
+            self.stir ^= self.stir << 13;
+            self.stir ^= self.stir >> 17;
+            self.stir ^= self.stir << 5;
+            let unit = (self.stir >> 8) as f32 / (1u32 << 23) as f32 - 1.0;
+            let kick = unit * STIR_SPEED * (power / STIR_FULL_POWER).min(1.0).sqrt();
+            let radius = landing.half_length + STIR_MARGIN;
+            pending.push((landing.at, radius, Disturbance::Velocity(kick)));
+        }
+        if !pending.is_empty() {
+            self.waves.apply(&self.field, &Disturbances { pending });
         }
     }
 
