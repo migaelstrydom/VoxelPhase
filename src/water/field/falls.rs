@@ -56,9 +56,10 @@ const LONGEST_CONDUIT: usize = 8;
 /// roof to drive its water out as a jet.
 const PRESSED_HEAD: f32 = 0.05;
 
-/// Least height, m, the middle of a hole's opening must stand over the
-/// water or ground outside for its water to burst out as a jet, and the
-/// least opening that does.
+/// Least height, m, the top of a jet must stand over the water or ground
+/// outside for the hole's water to burst out as one, and the least opening
+/// that does. A hole half drowned by the water it has let out still throws
+/// the top of its jet out over it.
 const JET_CLEARANCE: f32 = 0.25;
 const JET_OPENING: f32 = 0.1;
 
@@ -522,7 +523,7 @@ struct Leaving {
 /// Driven by open water standing at `head` over its roof, it is a jet out
 /// of the opening between the two cells: from the opening's middle, at the
 /// speed its head gives it there, as thick as carries its flow at that
-/// speed. It need only come out clear of what lies outside. Otherwise it
+/// speed. Its top need only come out clear of what lies outside. Otherwise it
 /// goes over as it runs: off the top of its own water, where that `falls`.
 fn leaving(
     cells: &FieldCells,
@@ -542,12 +543,13 @@ fn leaving(
         let floor = cells.bed(upper).max(cells.bed(lower));
         let opening = (level as f32).min(cells.ceiling(upper)) - floor;
         let middle = floor + 0.5 * opening;
-        if opening >= JET_OPENING && middle - below as f32 >= JET_CLEARANCE {
-            let driven = JET_SPEED_SHARE * (2.0 * GRAVITY * (head - middle).max(0.0)).sqrt();
-            let speed = driven.max(running);
-            let thickness = (pour / speed).min(opening);
+        let driven = JET_SPEED_SHARE * (2.0 * GRAVITY * (head - middle).max(0.0)).sqrt();
+        let speed = driven.max(running);
+        let thickness = (pour / speed).min(opening);
+        let top = middle + 0.5 * thickness;
+        if opening >= JET_OPENING && top - below as f32 >= JET_CLEARANCE {
             return Some(Leaving {
-                top: middle + 0.5 * thickness,
+                top,
                 depth: thickness,
                 velocity: launch(face, speed, Vector2::zeros()),
                 driven: true,
@@ -1077,6 +1079,24 @@ mod tests {
         assert!((jet.lip.y - (1.75 + 0.5 * jet.depth)).abs() < 1.0e-4);
         assert!(jet.foot.x > 2.5 + 3.0, "thrown well clear: {:?}", jet.foot);
         assert_eq!(found.len(), 1, "nothing falls inside the hole");
+    }
+
+    #[test]
+    fn a_hole_half_drowned_by_its_own_water_still_throws_the_top_of_its_jet() {
+        let (graph, mut cells) = holed_dam(4.0);
+        // The jet's middle is at 1.75 m and its top a quarter metre higher.
+        for i in 5..CHUNK_COLUMNS {
+            *cells.depth_mut(cell(i, 5)) = 1.7;
+        }
+        let mut found = Falls::default();
+        found.find(&graph, &mut cells, None);
+        let jet = *found.get(cell(4, 5), 0).expect("its top clears the water");
+        assert!(jet.driven && jet.lip.y > 1.95);
+        for i in 5..CHUNK_COLUMNS {
+            *cells.depth_mut(cell(i, 5)) = 1.9;
+        }
+        found.find(&graph, &mut cells, None);
+        assert!(found.is_empty(), "drowned, it runs on under the water");
     }
 
     #[test]
