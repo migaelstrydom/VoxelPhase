@@ -27,9 +27,7 @@ use crate::glass::{GlassCrackSystem, SheetShareSystem};
 use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
 use crate::meadow::MeadowSystem;
-use crate::objective::{
-    BrazierSystem, GoalSystem, HoverSystem, ObjectiveHudSystem, ProgressSystem,
-};
+use crate::objective::{BrazierSystem, GoalSystem, HoverSystem, ProgressSystem};
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::plants::PlantShareSystem;
 use crate::platform::MovingPlatformSystem;
@@ -206,8 +204,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(CollectionSystem, "collection", &["physics_sync"])
         // The objective, in the order it is decided: the clock runs, solids
         // bob into reach and are taken, the goal reads the resulting count,
-        // the brazier answers it (or is found knocked over), and the HUD
-        // draws whatever all of them left behind.
+        // and the brazier answers it (or is found knocked over).
         .with(ProgressSystem, "objective_progress", &["physics_sync"])
         .with(HoverSystem, "hover", &["physics_sync"])
         .with(
@@ -216,11 +213,6 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["collection", "objective_progress", "physics_sync"],
         )
         .with(BrazierSystem, "brazier", &["goal"])
-        .with(
-            ObjectiveHudSystem,
-            "objective_hud",
-            &["goal", "brazier", "objective_progress"],
-        )
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
         .with(TrampolineBedSystem, "trampoline_bed", &["physics_sync"])
         .with(FoliageLandingSystem, "foliage_landing", &["physics_sync"])

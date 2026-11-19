@@ -1,15 +1,14 @@
-//! The level's objective state, and the readout of it.
+//! The level's objective state.
 
 use specs::{Read, System, Write};
 
-use crate::debug::DebugLines;
 use crate::time::Time;
 
 /// How far through the level's objective the player is.
 ///
 /// One resource rather than a component so that every writer — the collector,
-/// the goal, the clock — is talking about the same run, and the HUD has one
-/// place to read.
+/// the goal, the clock — is talking about the same run. Nothing of it is
+/// shown in words: the brazier's flame is the news that the level is won.
 #[derive(Debug, Default)]
 pub struct LevelProgress {
     /// Solids taken so far.
@@ -85,41 +84,6 @@ impl<'a> System<'a> for ProgressSystem {
     }
 }
 
-/// Announces on screen that the level is complete, with the run time, or
-/// that it is lost and must be restarted.
-///
-/// The solid count and running clock are tracked in [`LevelProgress`] but
-/// not shown: the overlay is kept to the frame rate while the level plays.
-pub struct ObjectiveHudSystem;
-
-impl<'a> System<'a> for ObjectiveHudSystem {
-    type SystemData = (Read<'a, LevelProgress>, Write<'a, DebugLines>);
-
-    fn run(&mut self, (progress, mut debug): Self::SystemData) {
-        if let Some(at) = progress.completed {
-            debug.add(HUD_COMPLETE_KEY, format_clock(at));
-        } else if progress.lost {
-            debug.add(HUD_LOST_KEY, HUD_LOST_HINT.to_string());
-        }
-    }
-}
-
-/// Shown only once the goal has been reached. Leading punctuation sorts it
-/// above the alphabetical diagnostics that share the overlay.
-pub const HUD_COMPLETE_KEY: &str = "!! LEVEL COMPLETE";
-
-/// Shown once the level can no longer be won, and what to do about it.
-pub const HUD_LOST_KEY: &str = "!! LEVEL LOST";
-const HUD_LOST_HINT: &str = "R to restart";
-
-/// Seconds as `m:ss.t` — the shape a run time is read in.
-pub fn format_clock(seconds: f32) -> String {
-    let seconds = seconds.max(0.0);
-    let minutes = (seconds / 60.0).floor();
-    let rest = seconds - minutes * 60.0;
-    format!("{minutes:.0}:{rest:04.1}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,8 +110,8 @@ mod tests {
         assert_eq!(progress.solids_outstanding(), 0);
     }
 
-    /// The finish time is the first one. A player standing in the goal must not
-    /// see the clock they finished on creep upward.
+    /// The finish time is the first one: standing on in the goal does not
+    /// move it.
     #[test]
     fn completion_keeps_the_first_time() {
         let mut progress = LevelProgress::default();
@@ -171,12 +135,5 @@ mod tests {
         assert!(won.complete());
         won.forfeit();
         assert!(!won.lost);
-    }
-
-    #[test]
-    fn the_clock_reads_as_minutes_and_seconds() {
-        assert_eq!(format_clock(0.0), "0:00.0");
-        assert_eq!(format_clock(9.21), "0:09.2");
-        assert_eq!(format_clock(102.34), "1:42.3");
     }
 }

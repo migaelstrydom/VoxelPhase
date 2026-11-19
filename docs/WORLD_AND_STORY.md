@@ -70,6 +70,7 @@ shallow bowl of coals, ring handles on its lip. Reached, its embers glow
 and a fire burns in the bowl. It is a heavy body, not a static one: walking
 into it does not tip it, but a blast does, and tipped past about 40° its
 coals are spilled and it can never be lit, so the level must be restarted.
+Nothing says so in words; the spilled brazier is the news.
 Until the lantern exists, arriving is enough to light it.
 
 ### The hero

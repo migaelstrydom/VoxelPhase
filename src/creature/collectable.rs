@@ -151,7 +151,6 @@ impl<'a> System<'a> for CollectionSystem {
                 }
                 Reward::Solid => {
                     progress.take_solid();
-                    debug.add("Caught", "solid".to_string());
                     lazy.create_entity(&entities)
                         .with(Position(at))
                         .with(solid_glint())

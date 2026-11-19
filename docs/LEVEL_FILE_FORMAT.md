@@ -745,11 +745,11 @@ Brazier(pos: (8.0, 0.0, -8.0), radius: 2.5),
 ```
 
 Arriving at the brazier with every solid the level holds lights it and
-finishes the level; the HUD shows `LEVEL COMPLETE` with the finish time.
-Arriving early does nothing. A level with no solids (a challenge room) is
+finishes the level. Arriving early does nothing. Nothing is said in words:
+the flame is the news. A level with no solids (a challenge room) is
 finished by arriving. The brazier is a heavy body (700 kg, so walking into
 it does not tip it, but a grenade does): knocked over, it can no longer be
-lit, and the HUD shows `LEVEL LOST` until the level is restarted. Stand it
+lit, and the level must be restarted. Stand it
 clear of anything dropped onto its place, and on ground level enough that
 `level_check` finds it at rest.
 
