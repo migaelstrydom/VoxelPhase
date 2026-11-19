@@ -413,8 +413,9 @@ impl WaterField {
     }
 
     /// The chunks whose foam has changed by more than can be seen since
-    /// this was last asked, by slot.
-    pub fn take_foam_moved(&mut self) -> Vec<usize> {
+    /// this was last asked, by slot, and whether each one's change reaches
+    /// the cells along its border.
+    pub fn take_foam_moved(&mut self) -> Vec<(usize, bool)> {
         self.foam.take_moved()
     }
 

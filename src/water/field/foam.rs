@@ -17,7 +17,9 @@
 //! what draws the water reads it.
 
 use crate::water::falling::GRAVITY;
-use crate::water::geometry::{SpanChunkCoord, SpanIndex, COLUMN_SIZE};
+use crate::water::geometry::{
+    SpanChunkCoord, SpanIndex, CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE,
+};
 
 use super::activity::CALM_DISCHARGE;
 use super::cells::FieldCells;
@@ -102,8 +104,9 @@ pub struct Foam {
     /// Per chunk slot: whether this step reads or writes its cells' foam.
     stirred: Vec<bool>,
     /// The chunks whose foam has changed by more than can be seen since
-    /// they were last taken (`take_moved`).
-    moved: Vec<usize>,
+    /// they were last taken (`take_moved`), and whether each one's border
+    /// cells hold or held any, which the chunks round it draw too.
+    moved: Vec<(usize, bool)>,
 }
 
 impl Foam {
@@ -173,8 +176,19 @@ impl Foam {
             let seen = shown.len() != chunk.foam.len()
                 || (shown.iter().zip(&chunk.foam)).any(|(a, b)| (a - b).abs() > SEEN);
             if seen {
+                let shared = (0..COLUMNS_PER_CHUNK)
+                    .filter(|&local| on_border(local))
+                    .any(|local| {
+                        let cells =
+                            chunk.offsets[local] as usize..chunk.offsets[local + 1] as usize;
+                        let held = |foam: &[f32]| {
+                            foam.get(cells.clone())
+                                .is_some_and(|f| f.iter().any(|&f| f > 0.0))
+                        };
+                        held(&chunk.foam) || held(shown)
+                    });
                 shown.clone_from(&chunk.foam);
-                self.moved.push(slot);
+                self.moved.push((slot, shared));
             }
         }
     }
@@ -284,13 +298,26 @@ impl Foam {
     }
 
     /// The chunks whose foam has changed by more than can be seen since
-    /// this was last asked, by slot.
-    pub fn take_moved(&mut self) -> Vec<usize> {
+    /// this was last asked, by slot, and whether each one's change reaches
+    /// the cells along its border, which the chunks round it draw too.
+    pub fn take_moved(&mut self) -> Vec<(usize, bool)> {
         let mut moved = std::mem::take(&mut self.moved);
-        moved.sort_unstable();
-        moved.dedup();
+        // A chunk moved more than once is shared if it ever was.
+        moved.sort_unstable_by_key(|&(slot, shared)| (slot, !shared));
+        moved.dedup_by_key(|&mut (slot, _)| slot);
         moved
     }
+}
+
+/// Whether the column at chunk-local index `local` lies along its chunk's
+/// border.
+fn on_border(local: usize) -> bool {
+    let last = CHUNK_COLUMNS as usize - 1;
+    let (i, k) = (
+        local % CHUNK_COLUMNS as usize,
+        local / CHUNK_COLUMNS as usize,
+    );
+    i == 0 || k == 0 || i == last || k == last
 }
 
 /// Whether the water through `face`, running the way `forward` says, goes
@@ -316,7 +343,6 @@ mod tests {
     use super::*;
     use crate::water::field::faces::Axis;
     use crate::water::field::testing::{basin, cell, open};
-    use crate::water::geometry::CHUNK_COLUMNS;
 
     /// A walled basin of still water 1 m deep.
     fn pond() -> FieldCells {
@@ -363,7 +389,7 @@ mod tests {
         }
         assert!(foam(&cells, at) > 1.2, "{}", foam(&cells, at));
         assert_eq!(foam(&cells, cell(9, 9)), 0.0);
-        assert_eq!(field.take_moved(), vec![0]);
+        assert_eq!(field.take_moved(), vec![(0, false)], "far from its border");
         for _ in 0..(4.0 * FOAM_LIFE * 60.0) as usize {
             field.step(&mut cells, &[], &[], 1.0 / 60.0);
         }

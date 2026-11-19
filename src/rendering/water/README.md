@@ -117,12 +117,21 @@ thinning as it falls. A free end is closed by a cap between the two faces,
 so thick water is seen to be thick from its side, and frays out instead
 where the water is thin (`fray`). Water driven out of a hole (`Fall::driven`)
 is a jet: its body starts back inside the hole, it is white from the lip
-(`air`), and the cell it bursts from draws no surface. A wall in an arc's way
-is left to hide the rest of it.
+(`air`), and the cell it bursts from draws no surface, nor lifts the corners
+of the cells beside it towards its roof (`DrawnCells::drawn`). A wall in an
+arc's way is left to hide the rest of it.
+
+A fall has a life (`Fall::age`, `Fall::spent`): new, its water has fallen
+only as far as its age lets it; once it stops pouring, what is in the air
+goes on down. Its vertices carry when it began and when it stopped, on the
+water's clock (`life`), and the draw shows only the stretch between its first
+water and its last, torn at both ends. A spent fall's curtain hangs from its
+own arc, since the surface it left is no longer shaped by it. Nothing is read
+again as a fall ages: the clock does it.
 
 A curtain's vertices carry `sheet` = (drop below the lip, whole fall, side,
 thickness), the `normal` of their face, where their water left its lip (in
-`flow`) and the way it flies (in `face`). A curtain is read again as a whole
+`flow`), the way it flies (in `face`) and its fall's `life`. A curtain is read again as a whole
 from its fall (`SurfaceSources::curtains`); the surface's shape holds while
 its chunk's falls and the falls they run on into are the same.
 
@@ -353,6 +362,17 @@ to the flow at each pixel shears the pattern wherever the flow turns. It frills
 the edge where water thins over a beach or an advancing front (measured on
 the ground, so it never outlines a wall), and covers water running faster
 than `WHITE_WATER_SPEED`. It is worked out only where it can show.
+
+The field also keeps foam of its own (`water::field::foam`): made where falls
+land, where fast water runs into slower and at a surge's front, carried with
+the water and fading over a few seconds. Each corner of the surface carries
+its cells' (in `air`, which on a curtain is the air in the falling water),
+and the shader lays it as billows that close up where it is thick
+(`RIDING_FOAM_FULL`) and break into patches as it thins, laced inside, over
+water turned pale by the air churned into it (`AERATED_COLOR`). It moves with
+the current because the billows' noise is carried by the flow, like the lace.
+A chunk whose foam changed by more than can be seen has its version moved,
+with those round it (`WaterWorld::note_foam`).
 
 ### 7. Falling water
 

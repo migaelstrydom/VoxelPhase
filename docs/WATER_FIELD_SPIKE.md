@@ -63,22 +63,50 @@ below its old height.
 - **Limits.** A cell never gives more than it holds, nor takes more than fits
   under its ceiling, so a cave fills to its roof and no further. A face never runs
   faster than Froude 1, which stands in for critical flow over an edge.
+- **Conduits** (`conduits.rs`). Water pressed against a roof has no surface
+  slope for the flow law to read: two full cells stand level whatever pushes on
+  them, so left to it a drowned tunnel passes nothing and two ponds joined
+  under water never come level. A straight run of faces through full cells,
+  from one cell with a free surface to another, is a conduit: its water moves
+  as one column by the head between its ends against the loss at its mouth
+  (Torricelli with a discharge coefficient of 0.8), and every face of it
+  carries the same discharge. Its low end counts as no lower than the middle
+  of the mouth there, so a hole that opens on air runs by the head over its
+  middle. The solver notes the faces whose water stands against their roofs,
+  and conduits are found again from those after each step. A tunnel that bends
+  or ends blind is left to the flow law.
 - **Falls** (`falls.rs`). Water going over an edge flies. After each step the
   field finds its falls: every face pouring from water that `falls` to what lies
   across it (a step over 0.5 m off a floor standing 0.2 m or more above the water
   or the dry ground below), with the velocity it leaves at (its discharge over
   its depth, and the drift of the water behind it, evened out along the lip) and
   its arc followed column by column down to the water, the ground or the wall it
-  meets. The solver pours a falling face's water into the cells it lands in
-  (`Face::flight`), not the cell at the foot of the cliff: a breach's torrent
-  lands metres out, a thick stream over the length of ground between where its
-  underside and its top come down, and a ledge the arc clears stays dry. The
-  solver notes the faces with a step across them as it steps, so levels without
-  falls pay nothing. Water in a roofed cell with open water standing over its
-  roof behind it is *driven*: it bursts out as a jet from the middle of the
-  opening at the speed its head gives it (Torricelli), thinner than the opening
-  by as much. What draws a fall, what it strikes and where it sprays all read
-  the same `Fall`.
+  meets. The solver sends a falling face's water into the air
+  (`Face::flight`), not into the cell at the foot of the cliff, and the fall
+  brings it down in the cells it lands in once the first of it has had time to
+  get there: a breach's torrent lands metres out, a thick stream over the
+  length of ground between where its underside and its top come down, and a
+  ledge the arc clears stays dry. The water in the air is part of the field's
+  volume. A fall has a life: found again where it was, it is the same fall,
+  older; no longer found, it is *spent* and kept until the last of its water is
+  down. So a new fall's curtain runs down from its lip, nothing lands or sprays
+  before its water does, and one that stops falls away from the top. Landing
+  water pushes the faces beyond where it lands the way it flies
+  (`FieldCells::pushes`), to a metre a second at most and no harder than a 1 in
+  20 slope would push back: the scheme carries no momentum downstream, so more
+  would only heap the pool at the fall's foot. The solver notes the faces with a
+  step across them as it steps, so levels without falls pay nothing. Water in a
+  roofed cell with open water standing over its roof behind it is *driven*: it
+  bursts out as a jet from the middle of the opening at the speed its head
+  gives it, thinner than the opening by as much. What draws a fall, what it
+  strikes and where it sprays all read the same `Fall`.
+- **Foam** (`foam.rs`). One number per cell, read only by what draws the
+  water. It is made where water loses speed all at once: where a fall lands (by
+  the power it lands with), where fast water runs into slower (the solver notes
+  the faces running at 0.5 m/s or more, and only those are asked), and at the
+  front of a surge over dry ground. It is carried cell to cell by the faces'
+  discharges and fades to a third in 2.5 s. Only chunks that hold foam, or have
+  something making it, are touched.
 - **Edges.** The void takes a free overfall. The sea is a radiating (Flather)
   edge, so waves leave the map. A closed edge of a map with a sea is a wall below
   sea level and void above it.
@@ -169,6 +197,12 @@ pipeline, with no new shader:
   quarter of its square for this). A fall's curtain shares its end strands
   with the falls its lip runs on into, so a lip's falls are one body
   (`rendering/water/curtain.rs`);
+- a curtain shows only the stretch of its fall that holds water: each vertex
+  carries when its fall began and when it stopped pouring, on the water's
+  clock, and the draw cuts it ahead of its first water and behind its last;
+- the foam riding each cell (section 2), carried on its corners in the
+  attribute a curtain uses for the air in it, and drawn as billows laced
+  inside over water turned pale by that air;
 - a curtain off the map's edge where a cell's water leaves through it: down to
   the sea's level past an open edge, or 6 m into the void where there is no
   sea (the same `falls` rule, so water level with the sea draws none);
@@ -191,10 +225,6 @@ Looked at and fixed:
 
 Open:
 
-- **A hole run full passes what Froude 1 lets it.** Water does not flow under
-  pressure in the solver, so a breach low in a dam drains its lake at about
-  two thirds of the rate its head would drive. Its jet is drawn and thrown at
-  the head's speed, and is thinner for it.
 - **The mesh is rebuilt on every draw.** Fine offline, not in the game. The
   ripple tiles already draw a displaced grid from a storage buffer, and the field
   wants the same: per-chunk heights uploaded when awake.
@@ -207,7 +237,14 @@ Open:
 
 - **Supercritical flow is capped at Froude 1.** A 5 m dam break's front runs
   4.5 m/s instead of about 14 m/s. The scheme is unstable above 1 without a
-  better limiter or a Riemann-solver scheme.
+  better limiter or a Riemann-solver scheme. It is also why a fall's water
+  cannot run away from its foot as a fast thin sheet: on a shallow floor it
+  piles up there until it is deep enough to leave at Froude 1, and a narrow
+  channel below a hole run full backs up to the hole.
+- **Only a straight tunnel runs under pressure.** A conduit is one run of full
+  cells along one axis. Round a bend, or through a flooded cave wider than a
+  run, the water moves by the flow law alone, which passes at most Froude 1
+  over the opening and nothing between two full cells.
 - **The still drag is a gameplay term, not physics.** It is tuned so a
   centimetre's slosh dies in tens of seconds while rivers and sheets keep their
   speed.

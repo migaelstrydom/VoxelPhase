@@ -132,11 +132,11 @@ pub struct FieldSolver {
     /// The faces whose cells' surfaces stood a step apart as the last
     /// substep began: the only ones water may be falling over.
     brinks: Vec<FaceRef>,
-    /// The faces whose water stood against their roofs as the last substep
-    /// began: every conduit runs through at least one.
+    /// The faces whose water stood against their roofs as the last step
+    /// ended: every conduit runs through at least one.
     pressed: Vec<FaceRef>,
-    /// The faces whose water ran at `BREAKING_SPEED` or more after the last
-    /// substep: the only ones whose water may be breaking into foam.
+    /// The faces whose water ran at `BREAKING_SPEED` or more as the last
+    /// step ended: the only ones whose water may be breaking into foam.
     fast: Vec<FaceRef>,
 }
 
@@ -236,6 +236,7 @@ impl FieldSolver {
             self.limit_outflows(cells, h);
             stats.boundary_out += self.move_water(cells, h);
         }
+        self.note_faces(cells);
         stats.substeps = substeps;
         stats
     }
@@ -261,11 +262,7 @@ impl FieldSolver {
         }
         let mut count = 0;
         let mut brinks = std::mem::take(&mut self.brinks);
-        let mut pressed = std::mem::take(&mut self.pressed);
-        let mut fast = std::mem::take(&mut self.fast);
         brinks.clear();
-        pressed.clear();
-        fast.clear();
         for &slot in &self.stepped {
             let mut faces = std::mem::take(&mut cells.chunks[slot].faces);
             let stepped = faces.iter_mut().zip(&self.previous[slot]);
@@ -279,24 +276,16 @@ impl FieldSolver {
                     slot: slot as u32,
                     flat: face.a,
                 };
-                let at = FaceRef {
-                    slot: slot as u32,
-                    index: index as u32,
-                };
-                let (here, there) = (cells.surface(a) as f32, cells.surface(face.b) as f32);
-                let step = there - here;
+                let step = (cells.surface(face.b) - cells.surface(a)) as f32;
                 if step.abs() >= BRINK_STEP {
-                    brinks.push(at);
-                }
-                if face.roof.is_finite() && here.max(there) >= face.roof - PRESSED_SLACK {
-                    pressed.push(at);
+                    brinks.push(FaceRef {
+                        slot: slot as u32,
+                        index: index as u32,
+                    });
                 }
                 if !in_conduit {
                     let blended = self.blended(cells, face, depth);
                     face.q = inertial(blended, depth, step / DX, dt, &p);
-                    if face.q.abs() >= BREAKING_SPEED * depth.max(MEASURED_DEPTH) {
-                        fast.push(at);
-                    }
                 }
             }
             count += faces.len() as u64;
@@ -310,10 +299,46 @@ impl FieldSolver {
             }
         }
         self.brinks = brinks;
-        self.pressed = pressed;
-        self.fast = fast;
         self.drive_conduits(cells, dt);
         count
+    }
+
+    /// Note, as the step ends, the stepped faces whose water stands against
+    /// their roofs and those whose water runs fast. Kept out of the momentum
+    /// update's own loop, which it slows by a quarter.
+    fn note_faces(&mut self, cells: &FieldCells) {
+        self.pressed.clear();
+        self.fast.clear();
+        for &slot in &self.stepped {
+            let chunk = &cells.chunks[slot];
+            let faces = chunk.faces.iter().zip(&self.previous[slot]);
+            for (index, (face, &(_, depth))) in faces.enumerate() {
+                let at = FaceRef {
+                    slot: slot as u32,
+                    index: index as u32,
+                };
+                if face.roof.is_finite() {
+                    let level = chunk.surface(face.a as usize).max(cells.surface(face.b));
+                    if level as f32 >= face.roof - PRESSED_SLACK {
+                        self.pressed.push(at);
+                    }
+                }
+                let running = face.conduit.is_none()
+                    && face.q.abs() >= BREAKING_SPEED * depth.max(MEASURED_DEPTH);
+                if running {
+                    self.fast.push(at);
+                }
+            }
+        }
+        // A conduit's water runs into whatever stands where it comes out.
+        for conduit in &cells.conduits {
+            let face = |at: FaceRef| cells.chunks[at.slot as usize].faces[at.index as usize].q;
+            let (first, last) = (conduit.faces[0], conduit.faces[conduit.faces.len() - 1]);
+            let q = face(first);
+            if q.abs() >= BREAKING_SPEED * conduit.throat {
+                self.fast.push(if q > 0.0 { last } else { first });
+            }
+        }
     }
 
     /// Have landing water shove the faces beside it (`FieldCells::pushes`),
@@ -351,7 +376,7 @@ impl FieldSolver {
     /// Move each conduit's water as one column: every face of it takes the
     /// discharge its head drives (`Conduit::driven`), from the mean of what
     /// they carried.
-    fn drive_conduits(&mut self, cells: &mut FieldCells, dt: f32) {
+    fn drive_conduits(&self, cells: &mut FieldCells, dt: f32) {
         let conduits = std::mem::take(&mut cells.conduits);
         for conduit in &conduits {
             let face = |at: &FaceRef| cells.chunks[at.slot as usize].faces[at.index as usize].q;
@@ -361,11 +386,6 @@ impl FieldSolver {
             let q = conduit.driven(q, levels, held, dt);
             for at in &conduit.faces {
                 cells.chunks[at.slot as usize].faces[at.index as usize].q = q;
-            }
-            // Where it comes out, it runs into whatever stands there.
-            if q.abs() >= BREAKING_SPEED * conduit.throat {
-                let out = if q > 0.0 { conduit.faces.len() - 1 } else { 0 };
-                self.fast.push(conduit.faces[out]);
             }
         }
         cells.conduits = conduits;
@@ -377,14 +397,14 @@ impl FieldSolver {
         &self.brinks
     }
 
-    /// The faces whose water stood against their roofs as the last substep
-    /// began.
+    /// The faces whose water stood against their roofs as the last step
+    /// ended.
     pub fn pressed(&self) -> &[FaceRef] {
         &self.pressed
     }
 
-    /// The faces whose water ran at `foam::BREAKING_SPEED` or more after the
-    /// last substep.
+    /// The faces whose water ran at `foam::BREAKING_SPEED` or more as the
+    /// last step ended.
     pub fn fast(&self) -> &[FaceRef] {
         &self.fast
     }

@@ -213,21 +213,23 @@ impl WaterWorld {
     }
 
     /// Move the version of every chunk whose foam has changed by more than
-    /// can be seen, and of the chunks round it, whose surfaces read its
-    /// cells along their shared edges.
+    /// can be seen, and where the change reaches its border, of the chunks
+    /// round it, whose surfaces read its cells along their shared edges.
     fn note_foam(&mut self) {
-        for slot in self.field.take_foam_moved() {
+        for (slot, shared) in self.field.take_foam_moved() {
+            self.versions.touch(slot);
+            if !shared {
+                continue;
+            }
             let cells = self.field.cells();
             let coord = cells.chunks[slot].coord;
-            for dz in -1..=1 {
-                for dx in -1..=1 {
-                    let near = SpanChunkCoord {
-                        x: coord.x + dx,
-                        z: coord.z + dz,
-                    };
-                    if let Some(near) = cells.slot_of(near) {
-                        self.versions.touch(near);
-                    }
+            for (dx, dz) in (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| (dx, dz))) {
+                let near = SpanChunkCoord {
+                    x: coord.x + dx,
+                    z: coord.z + dz,
+                };
+                if let Some(near) = cells.slot_of(near).filter(|&near| near != slot) {
+                    self.versions.touch(near);
                 }
             }
         }

@@ -169,7 +169,7 @@ fn dissolve(cells: &mut FieldCells) {
 }
 
 /// Find the field's conduits again as its water stands. `pressed` are the
-/// faces to look from: those whose water stood against their roofs as the
+/// faces to look from: those whose water stood against their roofs when the
 /// solver last stepped. Every conduit has at least one.
 pub(super) fn find(cells: &mut FieldCells, pressed: &[FaceRef]) {
     dissolve(cells);
