@@ -17,7 +17,10 @@
 //! Water leaves a lip at the speed it runs over it. Out of a hole, where
 //! open water stands over the hole's roof behind it, it bursts out at the
 //! speed that head gives it (Torricelli), from the middle of the opening and
-//! thinner than the opening by as much: a jet, though the same `Fall`.
+//! thinner than the opening by as much: a jet, though the same `Fall`. So
+//! does deep water through a slot down in its side. A jet that comes out
+//! under the water outside does not fly, and is kept only to be seen
+//! filling its hole while the hole's top stands clear (`Fall::drowned`).
 //!
 //! Water going over an edge flies. It does not arrive in the cell at the
 //! foot of the cliff and run on from there: a breach's torrent lands metres
@@ -342,7 +345,8 @@ impl Falls {
     /// (`edge_ends`), and which of that fall's ends meets it there: the two
     /// are one curtain. None where the fall ends, and where more lips meet
     /// at that corner than two falls can share. A pouring fall and a spent
-    /// one are not one curtain: the spent one is on its way down.
+    /// one are not one curtain: the spent one is on its way down. Nor are a
+    /// jet that flies and one drowned at its hole's mouth.
     pub fn beside(
         &self,
         graph: &SpanGraph,

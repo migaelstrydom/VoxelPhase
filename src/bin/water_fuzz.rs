@@ -23,6 +23,7 @@
 //! cargo run --release --bin water_fuzz -- levels/test_arena.level.ron --seeds 20 --blasts 12
 //! ```
 
+use std::cell::Cell;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -37,6 +38,10 @@ use voxel_phase::rendering::water::{indexed_within, worst_stray, RiverParts};
 use voxel_phase::terrain::{BlastConfig, TerrainWorld};
 use voxel_phase::water::field::WET_DEPTH;
 use voxel_phase::water::WaterWorld;
+
+/// While the water is left to rest, the drawn mesh is audited every this
+/// many frames.
+const RESTING_AUDIT: usize = 30;
 
 /// Where the last panic came from, for the seed's report.
 static PANICKED_AT: Mutex<Option<String>> = Mutex::new(None);
@@ -151,6 +156,8 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
     let mut time = 0.0;
     let mut rivers = RiverParts::default();
 
+    let resting = Cell::new(false);
+    let mut frames = 0usize;
     let mut frame = |terrain: &mut TerrainWorld,
                      water: &mut WaterWorld,
                      rng: &mut StdRng,
@@ -168,8 +175,11 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
             ));
         }
         // A surface waiting its turn to be built again is drawn as the
-        // water stood, which is no fault of how it is drawn.
-        if rivers.lag().0 == 0 {
+        // water stood, which is no fault of how it is drawn. Every vertex
+        // is asked about, which is slow: while the water is left to rest,
+        // only every so many frames.
+        frames += 1;
+        if rivers.lag().0 == 0 && (!resting.get() || frames % RESTING_AUDIT == 0) {
             if let Some(stray) = worst_stray(rivers.mesh(), water) {
                 findings.push(format!(
                     "t {time:.2}: a {:?} vertex at ({:.1}, {:.1}, {:.1}) is drawn {:.2} m over \
@@ -208,6 +218,7 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
         }
     }
 
+    resting.set(true);
     let frames = (REST * 60.0) as usize;
     let mut before = (0.0, 0.0);
     for left in (0..frames).rev() {
