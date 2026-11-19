@@ -58,10 +58,12 @@ const float FRAY_SHARE = 0.5;
 // billows' range its patches' edges fade.
 const float RIDING_FOAM_FULL = 1.2;
 const float RIDING_FOAM_EDGE = 0.4;
+// Depths of water over which it comes to carry its foam, m.
+const vec2 RIDING_FOAM_DEPTH = vec2(0.03, 0.2);
 // Water churned full of air under its foam: its colour, and how far the
 // water under the thickest foam is turned to it.
 const vec3 AERATED_COLOR = vec3(0.62, 0.86, 0.88);
-const float AERATED_SHARE = 0.55;
+const float AERATED_SHARE = 0.4;
 // Gravity, m/s²: how long falling water has taken to drop as far as it has.
 const float FALL_GRAVITY = 9.81;
 // How far the head and the tail of a fall's water are torn up and down it, s
@@ -543,7 +545,10 @@ void main() {
     vec2 carrying = flow * min(1.0, MAX_CARRY_SPEED / max(speed, 1.0e-3));
     // Lace is dear and only shows where water runs fast or thins out to an
     // edge; open water goes without.
-    float riding = sheet ? 0.0 : clamp(fragAir, 0.0, 1.0);
+    // A film has no foam to carry: it is what is left when the foam's water
+    // has run out from under it.
+    float riding = sheet ? 0.0
+        : clamp(fragAir, 0.0, 1.0) * smoothstep(RIDING_FOAM_DEPTH.x, RIDING_FOAM_DEPTH.y, wetDepth);
     bool foamy = !sheet && (speed > WHITE_WATER_SPEED.x || nearEdge || riding > 0.02);
     for (int p = 0; p < 2; p++) {
         // Each phase starts over at its own offset, so the restart is not
@@ -697,7 +702,7 @@ void main() {
     // Laced inside where it is thin, never the lace's net on its own, and
     // closing up where it lies thick.
     float thick = smoothstep(0.5, 1.0, riding);
-    float ridingFoam = cover * mix(0.3 + 0.7 * lace, 0.75 + 0.25 * lace, thick);
+    float ridingFoam = cover * mix(0.3 + 0.7 * lace, 0.5 + 0.4 * lace, thick);
     vec3 foamColor = vec3(0.9, 0.95, 1.0) * (0.8 + 0.2 * NdotL);
     color = mix(color, AERATED_COLOR * (0.55 + 0.45 * NdotL), AERATED_SHARE * smoothstep(0.1, 1.0, riding));
     float foamFactor = max(max(edgeFoam, whiteWater), ridingFoam);

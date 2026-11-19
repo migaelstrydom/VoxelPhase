@@ -25,7 +25,6 @@ pub use faces::{past_edge, Axis, BoundaryFace, Face, Flight, Push, SeaBoundary};
 pub use falls::{Fall, Falls};
 pub use field::{FieldFrame, FieldLedger, WaterField, WET_DEPTH};
 pub use fill::{pool_seed, SpillLevels};
-pub use foam::MAX_FOAM;
 pub use fronts::Front;
 pub use pumps::{Jet, PumpId, PumpPlacement};
 pub use solver::{FlowParams, StepStats};

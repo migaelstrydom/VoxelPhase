@@ -32,7 +32,7 @@ const FOAM_LIFE: f32 = 2.5;
 
 /// The most foam a cell holds. Over 1 it lies thicker than covers the
 /// water, and takes that much longer to thin.
-pub const MAX_FOAM: f32 = 1.5;
+const MAX_FOAM: f32 = 1.5;
 
 /// How fast whatever makes foam raises a cell's towards what it makes, 1/s.
 const MAKING_RATE: f32 = 6.0;
@@ -58,7 +58,7 @@ const LANDING_POWER: (f32, f32) = (1.0, 30.0);
 /// Slowest water that breaks into foam where it is slowed, m/s, and the
 /// speed it must lose from one face to the next to make any, and the most.
 const JUMP_SPEED: f32 = 1.0;
-const JUMP_DROP: (f32, f32) = (0.4, 2.0);
+const JUMP_DROP: (f32, f32) = (0.6, 3.0);
 
 /// Least depth of the water a jump runs into, m.
 const JUMP_DEPTH: f64 = 0.1;
@@ -68,9 +68,12 @@ const JUMP_DEPTH: f64 = 0.1;
 pub(super) const BREAKING_SPEED: f32 = 0.5;
 
 /// Heights of a surge running out over dry ground, m, and its speeds, m/s,
-/// from which its front makes foam and at which it makes the most.
-const FRONT_HEIGHT: (f32, f32) = (0.1, 0.6);
+/// from which its front makes foam and at which it makes the most; and the
+/// most it makes, as a share of what a cell holds: a front is spray more
+/// than foam, and its edge is its cells' own.
+const FRONT_HEIGHT: (f32, f32) = (0.2, 0.8);
 const FRONT_SPEED: (f32, f32) = (BREAKING_SPEED, 2.0);
+const FRONT_FOAM: f32 = 0.5;
 
 fn ramp((from, to): (f32, f32), x: f32) -> f32 {
     ((x - from) / (to - from)).clamp(0.0, 1.0)
@@ -254,7 +257,7 @@ impl Foam {
         let speed = face.q.abs() / flow_depth(cells, owner, face).max(MEASURED_DEPTH);
         let ahead = cells.depth(taker);
         if ahead <= WET_DEPTH {
-            let made = ramp(FRONT_HEIGHT, held as f32) * ramp(FRONT_SPEED, speed);
+            let made = FRONT_FOAM * ramp(FRONT_HEIGHT, held as f32) * ramp(FRONT_SPEED, speed);
             self.make(cells, giver, made);
         } else if speed > JUMP_SPEED && ahead >= JUMP_DEPTH {
             let next = if forward { face.ahead } else { face.behind };
@@ -458,6 +461,6 @@ mod tests {
         run(&mut cells, 7, 5, 2.0);
         let fast = fast_faces(&cells);
         field.step(&mut cells, &[], &fast, 0.1);
-        assert!(foam(&cells, cell(7, 5)) > 0.3);
+        assert!(foam(&cells, cell(7, 5)) > 0.15);
     }
 }
