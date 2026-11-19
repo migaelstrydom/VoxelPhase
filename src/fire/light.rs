@@ -5,10 +5,12 @@
 //! and lighting are related.
 
 use nalgebra::Vector3;
-use specs::{Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, WriteStorage};
+use specs::{
+    Component, DenseVecStorage, Entities, Join, LendJoin, Read, ReadStorage, System, WriteStorage,
+};
 
 use crate::components::RigidBodyComponent;
-use crate::fire::components::OnFire;
+use crate::fire::components::{FireSeat, OnFire};
 use crate::lighting::PointLight;
 use crate::rendering::colour::Colour;
 use crate::systems::PhysicsResource;
@@ -70,6 +72,7 @@ impl<'a> System<'a> for FireLightSystem {
     type SystemData = (
         Entities<'a>,
         ReadStorage<'a, OnFire>,
+        ReadStorage<'a, FireSeat>,
         ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, PointLight>,
         WriteStorage<'a, FireLight>,
@@ -78,21 +81,25 @@ impl<'a> System<'a> for FireLightSystem {
 
     fn run(
         &mut self,
-        (entities, on_fires, bodies, mut lights, mut fire_lights, physics): Self::SystemData,
+        (entities, on_fires, seats, bodies, mut lights, mut fire_lights, physics): Self::SystemData,
     ) {
-        for (entity, on_fire) in (&entities, &on_fires).join() {
-            let range = bodies
-                .get(entity)
-                .and_then(|rb| body_light_range(physics.as_deref(), rb))
-                .unwrap_or(DEFAULT_RANGE);
+        for (entity, on_fire, seat) in (&entities, &on_fires, (&seats).maybe()).join() {
+            let range = match seat {
+                Some(seat) => seat.light_range(),
+                None => bodies
+                    .get(entity)
+                    .and_then(|rb| body_light_range(physics.as_deref(), rb))
+                    .unwrap_or(DEFAULT_RANGE),
+            };
+            let offset = seat.map_or(Vector3::new(0.0, FLAME_CENTRE_HEIGHT, 0.0), |seat| {
+                seat.light_offset()
+            });
 
-            let light =
-                lights.entry(entity).ok().map(|entry| {
-                    entry.or_insert_with(|| {
-                        PointLight::new(FIRE_COLOUR, BASE_INTENSITY, range)
-                            .with_offset(Vector3::new(0.0, FLAME_CENTRE_HEIGHT, 0.0))
-                    })
-                });
+            let light = lights.entry(entity).ok().map(|entry| {
+                entry.or_insert_with(|| {
+                    PointLight::new(FIRE_COLOUR, BASE_INTENSITY, range).with_offset(offset)
+                })
+            });
 
             if light.is_some() {
                 fire_lights.insert(entity, FireLight).ok();
@@ -153,6 +160,7 @@ mod tests {
         // glow). The `FireLight` marker must be required for removal.
         let mut world = World::new();
         world.register::<OnFire>();
+        world.register::<FireSeat>();
         world.register::<PointLight>();
         world.register::<FireLight>();
         world.register::<RigidBodyComponent>();

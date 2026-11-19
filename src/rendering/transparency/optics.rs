@@ -72,7 +72,6 @@ impl Transparency {
     };
 
     /// A surface at the given head-on opacity and refractive index.
-    #[allow(dead_code)]
     pub const fn new(opacity: f32, ior: f32) -> Self {
         Self { opacity, ior }
     }

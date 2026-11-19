@@ -34,15 +34,17 @@ use crate::app::creatures::{
     MusselDef, PeeperDef, PiperDef, RollerDef, StalkerDef, TurtleDef,
 };
 use crate::app::spawnables::{
-    BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, CypressDef,
-    DodecahedronDef, DolosDef, DominoDef, FencePostDef, FountainDef, FramedWindowDef, FruitDef,
-    FruitKind, GemDef, GlassSheetDef, GlazedOrbDef, GlowingOrbDef, GoalDef, HeavyCrateDef,
-    HexPrismDef, HoneycombWallDef, HouseDef, HoverSledDef, IceBoxDef, IceWallDef, IcosahedronDef,
-    IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef, OctahedronDef,
-    PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PumpDef, PyramidDef, RockDef, SeesawDef,
-    ShrubDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef,
-    TrampolineDef, TreeDef, TrilithonDef, VoussoirArchDef, BARREL_RADIUS, BEACH_BALL_RADIUS,
+    BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, BrazierDef, CapsuleDef, CrateDef,
+    CypressDef, DodecahedronDef, DolosDef, DominoDef, FencePostDef, FountainDef, FramedWindowDef,
+    FruitDef, FruitKind, GlassSheetDef, GlazedOrbDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef,
+    HoneycombWallDef, HouseDef, HoverSledDef, IceBoxDef, IceWallDef, IcosahedronDef, IglooDef,
+    JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef, OctahedronDef,
+    PendulumDef, PlankBridgeDef, PlankDef, PlatonicSolidDef, PlayWheelDef, PumpDef, PyramidDef,
+    RockDef, SeesawDef, ShrubDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef,
+    TetrahedronDef, TowerDef, TrampolineDef, TreeDef, TrilithonDef, VoussoirArchDef, BARREL_RADIUS,
+    BEACH_BALL_RADIUS,
 };
+use crate::geometry::PlatonicSolid;
 use crate::platform::{DeckSuspension, RouteLoop};
 
 /// Top-level level description.
@@ -923,24 +925,24 @@ pub enum LevelObject {
         #[serde(default)]
         glow: Option<f32>,
     },
-    /// A gem the player collects. Hangs where it is authored; nothing can move
-    /// it, and catching it counts towards the level's objective.
-    Gem {
+    /// One of the Platonic solids the player takes. Hangs where it is
+    /// authored; nothing can move it. Every one in the level must be taken
+    /// before its goal can be reached.
+    Solid {
+        /// Where its middle hangs.
         pos: (f32, f32, f32),
-        /// Body and glow tint. Defaults to warm gold.
-        #[serde(default)]
-        colour: Option<(f32, f32, f32)>,
+        /// Which of the five.
+        kind: PlatonicSolid,
     },
-    /// The beacon that ends the level.
-    Goal {
-        /// Ground point at the foot of the beacon.
+    /// The bronze tripod brazier that ends the level: lit by arriving at it
+    /// with every solid taken. A heavy body like any other, and knocked
+    /// over, it can no longer be lit.
+    Brazier {
+        /// Ground point under the middle of its three feet.
         pos: (f32, f32, f32),
         /// Horizontal distance from `pos` that counts as arriving.
-        #[serde(default = "GoalDef::default_radius")]
+        #[serde(default = "BrazierDef::default_radius")]
         radius: f32,
-        /// Gems that must be caught before the goal opens.
-        #[serde(default)]
-        required_gems: u32,
     },
     /// Raw box with full control over dimensions, appearance, and physics.
     Box {
@@ -1830,8 +1832,8 @@ impl LevelObject {
             LevelObject::Fruit { pos, .. } => ("Fruit", point(pos)),
             LevelObject::GlazedOrb { pos, .. } => ("GlazedOrb", point(pos)),
             LevelObject::GlowingOrb { pos, .. } => ("GlowingOrb", point(pos)),
-            LevelObject::Gem { pos, .. } => ("Gem", point(pos)),
-            LevelObject::Goal { pos, .. } => ("Goal", point(pos)),
+            LevelObject::Solid { pos, .. } => ("Solid", point(pos)),
+            LevelObject::Brazier { pos, .. } => ("Brazier", point(pos)),
             LevelObject::Box { pos, .. } => ("Box", point(pos)),
             LevelObject::Plank { pos, .. } => ("Plank", point(pos)),
             LevelObject::Crate { pos, .. } => ("Crate", point(pos)),
@@ -1961,10 +1963,10 @@ impl LevelObject {
             LevelObject::GlowingOrb { .. } => Point,
             // Hangs in the air and is never stood on; what it covers is the
             // point it was authored at.
-            LevelObject::Gem { .. } => Point,
-            // The plinth is the part that touches the ground.
-            LevelObject::Goal { radius, .. } => Disc {
-                radius: radius * 0.55,
+            LevelObject::Solid { .. } => Point,
+            // It stands on its three feet.
+            LevelObject::Brazier { .. } => Disc {
+                radius: BrazierDef::FOOTPRINT_RADIUS,
             },
             LevelObject::Capsule { radius, .. } => Disc { radius: *radius },
             LevelObject::Tetrahedron { size, .. } => Disc { radius: *size },
@@ -2264,8 +2266,8 @@ impl LevelObject {
             | LevelObject::Fruit { .. }
             | LevelObject::GlazedOrb { .. }
             | LevelObject::GlowingOrb { .. }
-            | LevelObject::Gem { .. }
-            | LevelObject::Goal { .. }
+            | LevelObject::Solid { .. }
+            | LevelObject::Brazier { .. }
             | LevelObject::Crate { .. }
             | LevelObject::HeavyCrate { .. }
             | LevelObject::Capsule { .. }
@@ -2360,8 +2362,8 @@ impl LevelObject {
             LevelObject::Fruit { pos, .. } => p3(pos),
             LevelObject::GlazedOrb { pos, .. } => p3(pos),
             LevelObject::GlowingOrb { pos, .. } => p3(pos),
-            LevelObject::Gem { pos, .. } => p3(pos),
-            LevelObject::Goal { pos, .. } => p3(pos),
+            LevelObject::Solid { pos, .. } => p3(pos),
+            LevelObject::Brazier { pos, .. } => p3(pos),
             LevelObject::Box { pos, yaw, .. } => {
                 p3(pos);
                 *yaw += turn;
@@ -2542,19 +2544,14 @@ impl LevelObject {
                 glow: *glow,
             }),
 
-            LevelObject::Gem { pos, colour } => Box::new(GemDef {
+            LevelObject::Solid { pos, kind } => Box::new(PlatonicSolidDef {
                 pos: *pos,
-                colour: *colour,
+                kind: *kind,
             }),
 
-            LevelObject::Goal {
-                pos,
-                radius,
-                required_gems,
-            } => Box::new(GoalDef {
+            LevelObject::Brazier { pos, radius } => Box::new(BrazierDef {
                 pos: *pos,
                 radius: *radius,
-                required_gems: *required_gems,
             }),
 
             LevelObject::Box {
@@ -3618,92 +3615,58 @@ mod orientation_tests {
 mod objective_tests {
     use super::*;
 
-    /// The gem's only required field is where it hangs.
     #[test]
-    fn a_gem_parses_with_only_a_position() {
-        let object: LevelObject =
-            ron::from_str("Gem(pos: (1.0, 2.0, 3.0))").expect("Gem should parse");
+    fn a_solid_parses_with_its_position_and_kind() {
+        let object: LevelObject = ron::from_str("Solid(pos: (1.0, 2.0, 3.0), kind: Dodecahedron)")
+            .expect("Solid should parse");
 
-        let LevelObject::Gem { pos, colour } = object else {
-            panic!("expected a Gem");
+        let LevelObject::Solid { pos, kind } = object else {
+            panic!("expected a Solid");
         };
         assert_eq!(pos, (1.0, 2.0, 3.0));
-        assert_eq!(colour, None, "an unauthored gem takes the default colour");
+        assert_eq!(kind, PlatonicSolid::Dodecahedron);
     }
 
     #[test]
-    fn a_gem_carries_an_authored_colour() {
+    fn a_brazier_falls_back_to_its_default_radius() {
         let object: LevelObject =
-            ron::from_str("Gem(pos: (0.0, 1.0, 0.0), colour: Some((0.2, 0.6, 1.0)))")
-                .expect("Gem should parse");
+            ron::from_str("Brazier(pos: (4.0, 0.5, -2.0))").expect("Brazier should parse");
 
-        let LevelObject::Gem { colour, .. } = object else {
-            panic!("expected a Gem");
-        };
-        assert_eq!(colour, Some((0.2, 0.6, 1.0)));
-    }
-
-    /// A goal with nothing but a position is a plain finish line: default
-    /// radius, no gems demanded.
-    #[test]
-    fn a_goal_falls_back_to_its_defaults() {
-        let object: LevelObject =
-            ron::from_str("Goal(pos: (4.0, 0.5, -2.0))").expect("Goal should parse");
-
-        let LevelObject::Goal {
-            pos,
-            radius,
-            required_gems,
-        } = object
-        else {
-            panic!("expected a Goal");
+        let LevelObject::Brazier { pos, radius } = object else {
+            panic!("expected a Brazier");
         };
         assert_eq!(pos, (4.0, 0.5, -2.0));
-        assert_eq!(radius, GoalDef::default_radius());
-        assert_eq!(required_gems, 0);
-    }
-
-    #[test]
-    fn a_goal_carries_its_gem_requirement() {
-        let object: LevelObject = ron::from_str("Goal(pos: (0.0, 0.0, 0.0), required_gems: 3)")
-            .expect("Goal should parse");
-
-        let LevelObject::Goal { required_gems, .. } = object else {
-            panic!("expected a Goal");
-        };
-        assert_eq!(required_gems, 3);
+        assert_eq!(radius, BrazierDef::default_radius());
     }
 
     /// Both are yaw-invariant: a quarter turn of their segment changes nothing
-    /// about how they look or where they are collected from.
+    /// about how they look or where they are reached from.
     #[test]
     fn the_objective_objects_are_symmetric() {
-        let gem = LevelObject::Gem {
+        let solid = LevelObject::Solid {
             pos: (0.0, 0.0, 0.0),
-            colour: None,
+            kind: PlatonicSolid::Cube,
         };
-        let goal = LevelObject::Goal {
+        let brazier = LevelObject::Brazier {
             pos: (0.0, 0.0, 0.0),
             radius: 2.0,
-            required_gems: 0,
         };
 
-        assert_eq!(gem.orientability(), Orientable::Symmetric);
-        assert_eq!(goal.orientability(), Orientable::Symmetric);
+        assert_eq!(solid.orientability(), Orientable::Symmetric);
+        assert_eq!(brazier.orientability(), Orientable::Symmetric);
     }
 
-    /// A goal moves with its segment like anything else.
+    /// A brazier moves with its segment like anything else.
     #[test]
-    fn a_goal_is_lifted_into_world_coordinates() {
+    fn a_brazier_is_lifted_into_world_coordinates() {
         let frame = SegmentFrame::new(Point3::new(50.0, 0.0, -10.0), 0);
-        let mut goal = LevelObject::Goal {
+        let mut brazier = LevelObject::Brazier {
             pos: (2.0, 1.0, 3.0),
             radius: 2.0,
-            required_gems: 1,
         };
-        goal.place_in(&frame);
+        brazier.place_in(&frame);
 
-        let LevelObject::Goal { pos, .. } = goal else {
+        let LevelObject::Brazier { pos, .. } = brazier else {
             unreachable!()
         };
         let expected = frame.to_world(Point3::new(2.0, 1.0, 3.0));

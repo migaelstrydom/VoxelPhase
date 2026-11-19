@@ -27,7 +27,9 @@ use crate::glass::{GlassCrackSystem, SheetShareSystem};
 use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
 use crate::meadow::MeadowSystem;
-use crate::objective::{GemMotionSystem, GoalSystem, ObjectiveHudSystem, ProgressSystem};
+use crate::objective::{
+    BrazierSystem, GoalSystem, HoverSystem, ObjectiveHudSystem, ProgressSystem,
+};
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::plants::PlantShareSystem;
 use crate::platform::MovingPlatformSystem;
@@ -202,20 +204,22 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // Catching happens on this frame's synced positions, so a critter
         // caught at a sprint is caught where the player saw it.
         .with(CollectionSystem, "collection", &["physics_sync"])
-        // The objective, in the order it is decided: the clock runs, gems bob
-        // into reach and are caught, the goal reads the resulting count, and
-        // the HUD draws whatever all three left behind.
+        // The objective, in the order it is decided: the clock runs, solids
+        // bob into reach and are taken, the goal reads the resulting count,
+        // the brazier answers it (or is found knocked over), and the HUD
+        // draws whatever all of them left behind.
         .with(ProgressSystem, "objective_progress", &["physics_sync"])
-        .with(GemMotionSystem, "gem_motion", &["physics_sync"])
+        .with(HoverSystem, "hover", &["physics_sync"])
         .with(
             GoalSystem,
             "goal",
             &["collection", "objective_progress", "physics_sync"],
         )
+        .with(BrazierSystem, "brazier", &["goal"])
         .with(
             ObjectiveHudSystem,
             "objective_hud",
-            &["goal", "objective_progress"],
+            &["goal", "brazier", "objective_progress"],
         )
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
         .with(TrampolineBedSystem, "trampoline_bed", &["physics_sync"])

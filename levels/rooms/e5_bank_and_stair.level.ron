@@ -57,7 +57,7 @@ Level(
 
             anchors: [],
             objects: [
-                Goal(pos: (16.0, 10.0, 27.0), radius: 2.0, required_gems: 0),
+                Brazier(pos: (16.0, 10.0, 27.0), radius: 2.0),
             ],
         ),
     ],

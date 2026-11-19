@@ -31,8 +31,11 @@ icosahedron and dodecahedron. They glow and float. **All five must be
 collected to complete a level.** Then the hero reaches the level's Greek
 temple.
 
-In code, the solids replace the gem collectible (`src/objective/`): the
-temple is a `Goal` with `required_gems: 5`.
+In code (`src/objective/`, `app/spawnables/platonic_solid.rs`), a solid
+is a `Solid(pos, kind)` in a level: a glowing heart inside honeyed crystal,
+its edges a frame of gold, as Leonardo drew the solids for Pacioli. A
+`Goal` asks for every solid the level holds. Until the temple is built,
+full levels end at a brazier too.
 
 Collectibles where only some are needed may come later. None exist yet.
 
@@ -47,7 +50,8 @@ outside the room's physics:
   the level. Arriving there before all five solids are in does nothing.
 - The temple is as breakable as everything else. If the hero breaks it, or
   lets it be broken (a breached dam washing it away), the level can no
-  longer be won and must be restarted. Actions have consequences.
+  longer be won and must be restarted. Actions have consequences. In code
+  a goal can be *ruined*; a level whose goals are all ruined is lost.
 - A brazier is lit by arriving; it does nothing to the room.
 
 So the temple is not an exception to the rule: nothing it does is a
@@ -58,8 +62,15 @@ mechanism a puzzle could use.
 Besides full levels there are challenge rooms with a single goal: a bronze
 tripod brazier, somewhere the room makes hard to reach. The hero lights it
 with his lantern, and that completes the room. An unlit bowl on a ledge reads
-as the goal without words, and its flare reads as success. The prototype
-rooms in `levels/rooms/` mark it with a bare `Goal` for now.
+as the goal without words, and its flare reads as success.
+
+The brazier is built (`app/spawnables/brazier.rs`, `objective/brazier.rs`):
+a Roman bronze tripod on lion's paws, its legs curling into volutes over a
+shallow bowl of coals, ring handles on its lip. Reached, its embers glow
+and a fire burns in the bowl. It is a heavy body, not a static one: walking
+into it does not tip it, but a blast does, and tipped past about 40° its
+coals are spilled and it can never be lit, so the level must be restarted.
+Until the lantern exists, arriving is enough to light it.
 
 ### The hero
 

@@ -56,7 +56,7 @@ Level(
             objects: [
                 BeachBall(pos: (13.8, 14.52, 20.0)),
                 BeachBall(pos: (26.2, 14.52, 20.0)),
-                Goal(pos: (16.0, 10.5, 20.0), radius: 2.5, required_gems: 0),
+                Brazier(pos: (16.0, 10.5, 20.0), radius: 2.5),
             ],
         ),
     ],

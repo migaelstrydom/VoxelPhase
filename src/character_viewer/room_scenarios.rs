@@ -34,6 +34,8 @@ pub fn catalogue() -> Vec<Scenario> {
         b2_shimmy(),
         m2_cut_and_ride(),
         o2_raft(),
+        o1_brazier(),
+        o1_brazier_blast(),
     ]
 }
 
@@ -131,6 +133,49 @@ fn o1_push() -> Scenario {
             .then(Beat::jump(0.9).towards(NORTH).named("to the lip"))
             .then(Beat::walk(2.0).towards(NORTH).named("pull up")),
         camera: CameraRig::side().with_distance(12.0).with_elevation(20.0),
+        judged: Judged::Motion,
+    }
+}
+
+/// O1, from the top of its cliff: walk on into the brazier. It is heavy
+/// enough that the walker leans on it and it stays standing. (The pilot's
+/// body is not the `Player`, so the brazier is not lit here.)
+fn o1_brazier() -> Scenario {
+    Scenario {
+        name: "room_o1_brazier",
+        summary: "Room O1: walk into the brazier on the clifftop and lean on it; it stands",
+        level: O1,
+        start: (16.0, 21.0),
+        yaw: 0.0,
+        script: Script::new()
+            .then(Beat::stand(0.5))
+            .then(Beat::walk(3.5).towards(NORTH).named("into the brazier"))
+            .then(Beat::stand(3.0).named("leaning")),
+        camera: CameraRig::three_quarter()
+            .with_distance(5.0)
+            .with_elevation(25.0)
+            .watching(Point3::new(16.0, 7.3, 26.0)),
+        judged: Judged::Motion,
+    }
+}
+
+/// O1, from the top of its cliff: a grenade thrown at the brazier from
+/// 5 m knocks it over, and the level is lost.
+fn o1_brazier_blast() -> Scenario {
+    Scenario {
+        name: "room_o1_brazier_blast",
+        summary: "Room O1: throw a grenade at the brazier on the clifftop and knock it over",
+        level: O1,
+        start: (16.0, 21.0),
+        yaw: 0.0,
+        script: Script::new()
+            .then(Beat::stand(0.5))
+            .then(Beat::stand(4.0).throwing_at(NORTH).named("throw"))
+            .then(Beat::stand(2.0).named("settle")),
+        camera: CameraRig::three_quarter()
+            .with_distance(7.0)
+            .with_elevation(25.0)
+            .watching(Point3::new(16.0, 7.3, 24.0)),
         judged: Judged::Motion,
     }
 }

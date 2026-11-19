@@ -45,7 +45,7 @@ Level(
             objects: [
                 Mussel(pos: (19.0, 20.0)),
                 Stalker(pos: (20.0, 32.0)),
-                Goal(pos: (20.0, 10.0, 36.5), radius: 1.5, required_gems: 0),
+                Brazier(pos: (20.0, 10.0, 36.5), radius: 1.5),
             ],
         ),
     ],

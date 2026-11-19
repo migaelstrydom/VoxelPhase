@@ -70,7 +70,7 @@ Level(
             anchors: [],
             objects: [
                 Piper(pos: (33.0, 21.0)),
-                Goal(pos: (22.0, 11.5, 21.0), radius: 1.5, required_gems: 0),
+                Brazier(pos: (22.0, 11.5, 21.0), radius: 1.5),
             ],
         ),
     ],

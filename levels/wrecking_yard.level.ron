@@ -10,12 +10,12 @@
 //                    ┌────────────── rim, 8 m up ───────────────┐
 //   spawn ─▶ ramp ─▶ │ crate stair   ▒moat▒   pyramid            │
 //                    │ pit + tunnel  ▒bridge▒ rock bunker (grenade)│
-//                    │ toys          ▒stones▒ GOAL under the arch  │
+//                    │ toys          ▒stones▒ BRAZIER under arch   │
 //                    └───────────────────────────────────────────┘
 //
-// Five gems, four ways to get one: climb something loose, blow a hole in
-// something solid, go down a hole and out the flooded end, and wade. The goal
-// wants four, so one demolition can fail and the run still finishes.
+// Five solids, four ways to get one: climb something loose, blow a hole in
+// something solid, go down a hole and out the flooded end, and wade. The
+// brazier wants all five, so every demolition has to come off.
 Level(
     name: "Wrecking Yard",
 
@@ -68,7 +68,7 @@ Level(
                     Tunnel(center: (88.0, 40.0), direction: (1.0, 0.0), length: 5.0, radius: 1.6, depth: 5.6),
 
                     // ── The pit, and the flooded way out of it. ─────────────
-                    // Six metres straight down to a gem. The bore runs east
+                    // Six metres straight down to a solid. The bore runs east
                     // from the pit floor into the moat bed; you leave through
                     // the water and climb the north terraces.
                     Shaft(center: (40.0, 88.0), from_y: -2.0, to_y: 4.0, radius: 3.0, ledge: None, material: Rock),
@@ -91,16 +91,16 @@ Level(
                 PlankBridge(pos: (64.0, 4.02, 64.0), length: 12.0, plank_count: 12, yaw: 90.0),
 
                 // ── West half ──────────────────────────────────────────────
-                // A stair of loose crates up to a gem. Quick before something
+                // A stair of loose crates up to a solid. Quick before something
                 // heavy comes through it.
                 // Metre cubes (`size` is a half-extent), so each step is 1 m.
                 Stack(base: (46.0, 4.0, 44.0), items: [Crate(size: 0.5)]),
                 Stack(base: (47.1, 4.0, 44.0), items: [Crate(size: 0.5), Crate(size: 0.5)]),
                 Stack(base: (48.2, 4.0, 44.0), items: [Crate(size: 0.5), Crate(size: 0.5), Crate(size: 0.5)]),
-                Gem(pos: (49.4, 7.9, 44.0), colour: Some((1.0, 0.8, 0.3))),
+                Solid(pos: (49.4, 7.9, 44.0), kind: Tetrahedron),
 
-                // The pit gem, lit so you can see the bottom from the rim.
-                Gem(pos: (40.0, -1.3, 88.0), colour: Some((1.0, 0.5, 0.8))),
+                // The pit solid, lit so you can see the bottom from the rim.
+                Solid(pos: (40.0, -1.3, 88.0), kind: Cube),
                 Dropped(GlowingOrb(pos: (40.0, -1.0, 90.0), colour: Some((1.0, 0.5, 0.8)), glow: Some(2.4))),
                 Dropped(GlowingOrb(pos: (50.0, -1.4, 88.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.0))),
                 Dropped(GlowingOrb(pos: (58.0, -1.4, 88.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.0))),
@@ -121,16 +121,16 @@ Level(
 
                 // ── The moat ───────────────────────────────────────────────
                 // Wade in from the north terraces. Glows through the water.
-                Gem(pos: (64.0, 0.7, 52.0), colour: Some((0.5, 0.9, 1.0))),
+                Solid(pos: (64.0, 0.7, 52.0), kind: Octahedron),
 
                 // ── East half ──────────────────────────────────────────────
-                // Five courses of sandstone, a metre a step, gem on the cap.
+                // Five courses of sandstone, a metre a step, a solid on the cap.
                 Pyramid(base: (86.0, 4.0, 86.0), block_half_extents: (1.0, 0.5, 1.0), base_width: 5),
-                Gem(pos: (86.0, 10.0, 86.0), colour: Some((1.0, 0.8, 0.3))),
+                Solid(pos: (86.0, 10.0, 86.0), kind: Icosahedron),
 
                 // Inside the bunker. The knob is solid rock all round; the
                 // east and west faces are two and a half metres thick on the axis.
-                Gem(pos: (88.0, 5.2, 40.0), colour: Some((0.4, 1.0, 0.6))),
+                Solid(pos: (88.0, 5.2, 40.0), kind: Dodecahedron),
                 GlowingOrb(pos: (89.0, 4.6, 40.0), colour: Some((0.4, 1.0, 0.6)), glow: Some(2.0)),
 
                 // More in the way.
@@ -143,7 +143,7 @@ Level(
 
                 // ── The finish ─────────────────────────────────────────────
                 VoussoirArch(base: (98.0, 4.0, 64.0)),
-                Goal(pos: (98.0, 4.0, 64.0), required_gems: 4),
+                Brazier(pos: (98.0, 4.0, 64.0)),
 
                 // ── The weather ────────────────────────────────────────────
                 Roller(pos: (84.0, 64.0)),

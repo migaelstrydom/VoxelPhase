@@ -65,7 +65,7 @@ Level(
             anchors: [],
             objects: [
                 Stalker(pos: (20.0, 20.0)),
-                Goal(pos: (20.0, 10.0, 28.0), radius: 1.5, required_gems: 0),
+                Brazier(pos: (20.0, 10.0, 28.0), radius: 1.5),
             ],
         ),
     ],

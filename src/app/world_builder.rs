@@ -25,7 +25,7 @@ use crate::damage::{DamageConfig, DamageQueue, Dead, Health, LastVelocity, Ragdo
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::explosion::Explosion;
-use crate::fire::components::{Flammable, OnFire};
+use crate::fire::components::{FireSeat, Flammable, OnFire};
 use crate::fire::light::FireLight;
 use crate::foliage::Foliage;
 use crate::force_field::ForceFieldVisual;
@@ -34,7 +34,7 @@ use crate::glass::BrittleSheet;
 use crate::input::{GameplayActions, InputState};
 use crate::lighting::{ActiveLights, PointLight};
 use crate::model::PartLooks;
-use crate::objective::{GemMotion, Goal, LevelProgress};
+use crate::objective::{Brazier, Goal, Hover, LevelProgress};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
 use crate::physics::PhysicsImpulseQueue;
 use crate::plants::PlantPiece;
@@ -112,8 +112,9 @@ impl WorldBuilder {
         world.register::<CritterAnimator>();
         world.register::<StiltAnimator>();
         world.register::<Collectable>();
-        world.register::<GemMotion>();
+        world.register::<Hover>();
         world.register::<Goal>();
+        world.register::<Brazier>();
         world.register::<FollowTarget>();
         world.register::<SensorSet>();
         world.register::<ContactCandidates>();
@@ -134,6 +135,7 @@ impl WorldBuilder {
         world.register::<ParticleEmitter>();
         world.register::<Flammable>();
         world.register::<OnFire>();
+        world.register::<FireSeat>();
         world.register::<CompoundFracture>();
         world.register::<PartLooks>();
         world.register::<BrittleSheet>();

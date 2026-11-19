@@ -48,7 +48,7 @@ Level(
             anchors: [],
             objects: [
                 BellCarrier(pos: (20.0, 25.0)),
-                Goal(pos: (20.0, 10.0, 35.0), radius: 2.0, required_gems: 0),
+                Brazier(pos: (20.0, 10.0, 35.0), radius: 2.0),
             ],
         ),
     ],

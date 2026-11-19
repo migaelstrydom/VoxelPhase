@@ -69,7 +69,7 @@ Level(
             anchors: [],
             objects: [
                 Crate(pos: (16.0, 5.05, 20.0), size: 1.0),
-                Goal(pos: (16.0, 17.0, 23.6), radius: 1.5, required_gems: 0),
+                Brazier(pos: (16.0, 17.0, 23.6), radius: 1.5),
             ],
         ),
     ],

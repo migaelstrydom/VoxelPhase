@@ -6,7 +6,7 @@
 //
 //   canyon floor ─▶ slab hops ─▶ catwalk ─▶ shuttle across the river
 //       ─▶ north ledge ─▶ stair ─▶ leap to the spire ─▶ helical ledge inside
-//       ─▶ the rim ─▶ lift ─▶ sky island ─▶ GOAL
+//       ─▶ the rim ─▶ lift ─▶ sky island ─▶ BRAZIER
 //
 // Two segments. The canyon is landscape at 1 m voxels. The spire is a separate
 // 0.5 m segment because a helical ledge two and a half metres wide needs the
@@ -71,7 +71,7 @@ Level(
 
                     // A rock hanging over the river, off the shuttle's route.
                     // The shuttle passes a metre from it, two below it: jump
-                    // when you are alongside, or ride on and leave the gem.
+                    // when you are alongside, or ride on and leave the solid.
                     Island(center: (48.0, 11.4, 34.0), half_extents: (2.0, 1.0, 2.0), edge_noise: 0.3),
 
                     // The river is a lake held between the canyon's ends:
@@ -80,7 +80,7 @@ Level(
                     Platform(center: (1.0, 4.0, 32.0),  half_extents: (1.0, 6.0), thickness: 4.0),
                     Platform(center: (94.0, 4.0, 32.0), half_extents: (1.0, 6.0), thickness: 4.0),
 
-                    // A stone in the river with a gem on it. A wade.
+                    // A stone in the river with a solid on it. A wade.
                     Platform(center: (60.0, 3.4, 32.0), half_extents: (1.0, 1.0), thickness: 3.0),
                 ],
             ),
@@ -102,10 +102,10 @@ Level(
                     speed: 3.0,
                 ),
 
-                // Gems on the way up.
-                Gem(pos: (60.0, 4.2, 32.0),  colour: Some((0.5, 0.9, 1.0))),
-                Gem(pos: (48.0, 13.2, 34.0), colour: Some((1.0, 0.5, 0.8))),
-                Gem(pos: (72.0, 18.8, 20.0), colour: Some((1.0, 0.8, 0.3))),
+                // Solids on the way up.
+                Solid(pos: (60.0, 4.2, 32.0), kind: Tetrahedron),
+                Solid(pos: (48.0, 13.2, 34.0), kind: Cube),
+                Solid(pos: (72.0, 18.8, 20.0), kind: Octahedron),
 
                 // Ground floor life. Both are terrain-anchored, so both live on
                 // the heightfield rather than on any of the built ledges.
@@ -187,7 +187,7 @@ Level(
                 GlowingOrb(pos: (24.0, 34.0, 24.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(2.6)),
 
                 // On the rim.
-                Gem(pos: (24.0, 46.8, 33.5), colour: Some((1.0, 0.8, 0.3))),
+                Solid(pos: (24.0, 46.8, 33.5), kind: Icosahedron),
                 Trampoline(pos: (17.6, 46.0, 17.6), radius: 1.5),
 
                 // The lift: rests on the rim's east side, climbs to half a
@@ -199,8 +199,8 @@ Level(
                 ),
 
                 // On the island.
-                Gem(pos: (43.0, 53.2, 41.0), colour: Some((0.5, 0.9, 1.0))),
-                Goal(pos: (40.0, 52.4, 38.0), required_gems: 3),
+                Solid(pos: (43.0, 53.2, 41.0), kind: Dodecahedron),
+                Brazier(pos: (40.0, 52.05, 38.0)),
             ],
         ),
     ],

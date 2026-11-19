@@ -62,7 +62,7 @@ Level(
                     base: (15.0, 10.0, 28.25),
                     items: [Crate(size: 0.6), Crate(size: 0.6), Crate(size: 0.6)],
                 ),
-                Goal(pos: (31.0, 10.0, 32.0), radius: 2.0, required_gems: 0),
+                Brazier(pos: (31.0, 10.0, 32.0), radius: 2.0),
             ],
         ),
     ],

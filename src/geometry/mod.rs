@@ -11,6 +11,7 @@ mod ellipsoid_rings;
 mod fissured_shell;
 mod heart;
 mod icosphere;
+mod platonic;
 mod sphere;
 mod tube;
 
@@ -26,6 +27,7 @@ pub use fissured_shell::{
 };
 pub use heart::{generate_heart, HeartSpec};
 pub use icosphere::{generate_geodesic, generate_icosphere, Icosphere};
+pub use platonic::{PlatonicSolid, Polyhedron};
 pub use sphere::{
     generate_magic_sphere_vertices, generate_sphere_indices, generate_sphere_vertices,
     MagicSphereConfig,

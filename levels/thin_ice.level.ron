@@ -6,7 +6,7 @@
 // across the tarn is a chain of loose floes, and every landing moves the floor.
 //
 //   west beach ─▶ floes ─▶ igloo island ─▶ causeway ─▶ east beach ─▶ stair ─▶ shelf
-//      spawn      (drift)   gems, critter   ice wall                 peepers   GOAL
+//      spawn      (drift) solids, critter   ice wall                 peepers   BRAZIER
 //
 // Rules the geometry obeys:
 //   * Nowhere is the player trapped. Every shore is terraced in ≤ 1.6 m steps
@@ -66,7 +66,7 @@ Level(
                     // these do not, so the crossing always has a way to reset.
                     Platform(center: (43.0, 5.5, 48.0), half_extents: (1.2, 1.2), thickness: 3.0),
                     Platform(center: (56.0, 5.5, 48.0), half_extents: (1.2, 1.2), thickness: 3.0),
-                    // The rock the off-route gem sits on.
+                    // The rock the off-route solid sits on.
                     Platform(center: (44.0, 5.6, 34.0), half_extents: (1.2, 1.2), thickness: 3.0),
 
                     // The way up to the shelf: seven risers of a metre, which
@@ -91,10 +91,10 @@ Level(
                 Dropped(IceBox(pos: (48.0, 5.3, 46.5), half_extents: (1.5, 0.6, 1.5), yaw: 20.0)),
                 Dropped(IceBox(pos: (52.0, 5.3, 49.5), half_extents: (1.5, 0.6, 1.5), yaw: -5.0)),
 
-                // The off-route pair, north-west, toward the gem rock.
+                // The off-route pair, north-west, toward the rock with the solid on it.
                 Dropped(IceBox(pos: (36.0, 5.3, 41.0), half_extents: (1.5, 0.6, 1.5), yaw: 30.0)),
                 Dropped(IceBox(pos: (40.0, 5.3, 37.5), half_extents: (1.5, 0.6, 1.5), yaw: -25.0)),
-                Gem(pos: (44.0, 6.4, 34.0), colour: Some((0.5, 0.9, 1.0))),
+                Solid(pos: (44.0, 6.4, 34.0), kind: Tetrahedron),
 
                 // Something to watch sink and not sink: a beach ball floats
                 // high, a crate floats low, a heavy crate does not float at
@@ -108,13 +108,13 @@ Level(
                 Igloo(pos: (65.0, 6.0, 55.0), yaw: 180.0),
                 Igloo(pos: (76.0, 6.0, 56.0), radius: 3.0, yaw: -90.0),
 
-                // One gem is indoors; the door tells you which house.
-                Gem(pos: (64.0, 6.8, 41.0), colour: Some((1.0, 0.8, 0.3))),
+                // One solid is indoors; the door tells you which house.
+                Solid(pos: (64.0, 6.8, 41.0), kind: Cube),
 
-                // One gem is on the big dome, higher than a standing jump.
+                // One solid is on the big dome, higher than a standing jump.
                 // The crates beside it get you onto the ice, and the ice does
                 // the rest — you take it on the way down.
-                Gem(pos: (76.0, 10.3, 56.0), colour: Some((1.0, 0.8, 0.3))),
+                Solid(pos: (76.0, 10.3, 56.0), kind: Octahedron),
                 Stack(base: (72.3, 6.0, 56.0), items: [Crate(size: 0.7), Crate(size: 0.7)]),
 
                 // Loose ice around the village, for kicking into the tarn.
@@ -128,7 +128,7 @@ Level(
 
                 // Sunk in the tarn north of the island, seen glowing through
                 // the water. A wade from the island's north terrace.
-                Gem(pos: (70.0, 3.7, 72.0), colour: Some((0.5, 0.9, 1.0))),
+                Solid(pos: (70.0, 3.7, 72.0), kind: Icosahedron),
 
                 // ── The causeway ───────────────────────────────────────────
                 // A wall of ice bricks across the only dry way east. Loose:
@@ -140,10 +140,10 @@ Level(
                 // behind them is not kind to anything on stilts.
                 Peeper(pos: (118.0, 40.0)),
                 Peeper(pos: (120.0, 58.0)),
-                Gem(pos: (124.0, 14.7, 34.0), colour: Some((1.0, 0.5, 0.8))),
+                Solid(pos: (124.0, 14.7, 34.0), kind: Dodecahedron),
 
                 Dropped(Trilithon(pos: (121.0, 15.0, 48.0), yaw: 90.0)),
-                Goal(pos: (121.0, 14.0, 48.0), required_gems: 3),
+                Brazier(pos: (123.5, 14.0, 48.0)),
             ],
         ),
     ],

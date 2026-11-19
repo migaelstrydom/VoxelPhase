@@ -153,7 +153,7 @@ low sits in the ground. An object gets its height in one of three ways:
 
 | Placement | Written as | Height |
 |-----------|------------|--------|
-| **Authored** | `Crate(pos: (x, y, z), ..)` | Exactly as written. Right for what is meant to hang (a gem, a lamp) or to start somewhere particular. |
+| **Authored** | `Crate(pos: (x, y, z), ..)` | Exactly as written. Right for what is meant to hang (a solid, a lamp) or to start somewhere particular. |
 | **Anchored** | `Rock(pos: (x, z))`, `Menhir`, `Pump`, `Fountain`, `FencePost`, creatures, mechanisms | The spawnable reads the terrain surface itself. |
 | **Dropped** | `Dropped(Crate(pos: (x, y, z), ..))` | Falls straight down from `(x, y, z)` until it touches something. |
 
@@ -729,27 +729,32 @@ BeachBall uses its own fixed physics params (density=1.0, restitution=0.6) since
 
 ## Objectives
 
-A level can ask something of the player. Two objects carry it; `src/objective/`
-holds the state and the HUD.
+A level can ask something of the player (`docs/WORLD_AND_STORY.md`). Two
+objects carry it; `src/objective/` holds the state and the HUD.
 
 ```ron
-// Hangs where authored, bobs and spins, no physics. Caught by touch.
-Gem(pos: (4.0, 1.0, -3.0)),
-Gem(pos: (6.0, 1.0, -4.5), colour: Some((0.4, 0.85, 1.0))),
+// One of the five Platonic solids: Tetrahedron, Cube, Octahedron,
+// Icosahedron, Dodecahedron. Hangs where authored, bobs, turns and glows; no
+// physics. Taken by touch. A full level holds all five.
+Solid(pos: (4.0, 1.0, -3.0), kind: Tetrahedron),
+Solid(pos: (6.0, 1.0, -4.5), kind: Cube),
 
-// A plinth, a ring of posts and a beacon column. `pos` is the ground point
-// at the foot of the beacon; `radius` (default 2.0) is how close the player
-// has to come, and `required_gems` (default 0) how many gems must already be
-// caught for arriving to count.
-Goal(pos: (8.0, 0.0, -8.0), radius: 2.5, required_gems: 2),
+// A bronze tripod brazier. `pos` is the ground point under the middle of
+// its feet; `radius` (default 2.0) is how close the player has to come.
+Brazier(pos: (8.0, 0.0, -8.0), radius: 2.5),
 ```
 
-The HUD shows `need n more gems` while standing in a goal that has not opened,
-and `LEVEL COMPLETE` with the finish time. The gem count and elapsed time are
-tracked but not shown while the level plays. The count is not validated against the
-level: a goal that wants more gems than the level places is unfinishable.
+Arriving at the brazier with every solid the level holds lights it and
+finishes the level; the HUD shows `LEVEL COMPLETE` with the finish time.
+Arriving early does nothing. A level with no solids (a challenge room) is
+finished by arriving. The brazier is a heavy body (700 kg, so walking into
+it does not tip it, but a grenade does): knocked over, it can no longer be
+lit, and the HUD shows `LEVEL LOST` until the level is restarted. Stand it
+clear of anything dropped onto its place, and on ground level enough that
+`level_check` finds it at rest.
 
-Demo levels built on this: `thin_ice`, `wrecking_yard`, `skyway`.
+Demo levels built on this: `thin_ice`, `wrecking_yard`, `skyway`,
+`test_arena`; every room in `levels/rooms/` ends at a brazier.
 
 ## Integration with App::new()
 

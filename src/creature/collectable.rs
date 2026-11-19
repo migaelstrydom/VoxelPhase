@@ -5,15 +5,17 @@
 //! range check the player has to aim — because what makes it a chase is
 //! that the creature is faster to turn than you are.
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 use specs::{
-    Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, Write, WriteStorage,
+    Builder, Component, DenseVecStorage, Entities, Join, LazyUpdate, Read, ReadStorage, System,
+    Write, WriteStorage,
 };
 
 use crate::components::Position;
 use crate::damage::Health;
 use crate::debug::DebugLines;
 use crate::objective::LevelProgress;
+use crate::particles::{Palette, ParticleEffectType, ParticleEmitter};
 use crate::player::Player;
 use crate::time::Time;
 
@@ -22,8 +24,8 @@ use crate::time::Time;
 pub enum Reward {
     /// Hit points, restored to the catcher.
     Heart { value: f32 },
-    /// One step towards the level's objective.
-    Gem,
+    /// One of the level's Platonic solids.
+    Solid,
 }
 
 /// Something the player collects by touching it.
@@ -52,17 +54,38 @@ impl Collectable {
         }
     }
 
-    /// An objective gem, catchable from `reach` metres.
+    /// One of the level's solids, taken from `reach` metres.
     ///
-    /// Armed immediately: a gem does not move, so there is no chase to spoil
-    /// and nothing to gain by making the player wait.
-    pub fn gem(reach: f32) -> Self {
+    /// Armed immediately: a solid does not move, so there is no chase to
+    /// spoil and nothing to gain by making the player wait.
+    pub fn solid(reach: f32) -> Self {
         Self {
             reach,
-            reward: Reward::Gem,
+            reward: Reward::Solid,
             arming_delay: 0.0,
         }
     }
+}
+
+/// Sparks shed by a solid as it is taken, in its gold.
+const GLINT_COLOURS: [Vector3<f32>; 2] =
+    [Vector3::new(2.6, 1.9, 0.9), Vector3::new(2.2, 1.3, 0.45)];
+/// How many, how far they are thrown (as a scale on the glitter's own),
+/// and how long the emitter lives once it has thrown them, s.
+const GLINT_SPARKS: u32 = 48;
+const GLINT_SCALE: f32 = 2.2;
+const GLINT_LIFETIME: f32 = 0.1;
+
+/// The burst of gold a solid goes out in when it is taken.
+fn solid_glint() -> ParticleEmitter {
+    ParticleEmitter::new(ParticleEffectType::ShardGlitter)
+        .with_palette(Palette::mixed(&[
+            (GLINT_COLOURS[0], 1.0),
+            (GLINT_COLOURS[1], 1.0),
+        ]))
+        .with_scale(GLINT_SCALE)
+        .with_burst(GLINT_SPARKS)
+        .with_lifetime(GLINT_LIFETIME)
 }
 
 /// Hands collectables to the player who runs into them.
@@ -82,6 +105,7 @@ impl<'a> System<'a> for CollectionSystem {
         WriteStorage<'a, Health>,
         Write<'a, LevelProgress>,
         Write<'a, DebugLines>,
+        Read<'a, LazyUpdate>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -94,6 +118,7 @@ impl<'a> System<'a> for CollectionSystem {
             mut healths,
             mut progress,
             mut debug,
+            lazy,
         ) = data;
         let dt = time.delta_seconds();
 
@@ -112,11 +137,11 @@ impl<'a> System<'a> for CollectionSystem {
                 continue;
             }
             if (Point3::from(position.0) - player_position).magnitude() <= collectable.reach {
-                caught.push((entity, collectable.reward));
+                caught.push((entity, collectable.reward, position.0));
             }
         }
 
-        for (entity, reward) in caught {
+        for (entity, reward, at) in caught {
             match reward {
                 Reward::Heart { value } => {
                     if let Some(health) = healths.get_mut(player) {
@@ -124,9 +149,13 @@ impl<'a> System<'a> for CollectionSystem {
                         debug.add("Caught", format!("heart +{value:.0}"));
                     }
                 }
-                Reward::Gem => {
-                    progress.collect_gem();
-                    debug.add("Caught", "gem".to_string());
+                Reward::Solid => {
+                    progress.take_solid();
+                    debug.add("Caught", "solid".to_string());
+                    lazy.create_entity(&entities)
+                        .with(Position(at))
+                        .with(solid_glint())
+                        .build();
                 }
             }
             let _ = entities.delete(entity);

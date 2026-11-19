@@ -7,7 +7,7 @@ use crate::components::{
 };
 use crate::core::error::{EngineError, EngineResult};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
-use crate::fire::components::OnFire;
+use crate::fire::components::{FireSeat, OnFire};
 use crate::force_field::{ring_draws, ring_model, ColumnMesh, ForceFieldVisual};
 use crate::hud::{Hud, HudContext};
 use crate::lighting::ActiveLights;
@@ -229,7 +229,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, Renderable>,
         WriteStorage<'a, CameraComponent>,
         RebuiltMeshes<'a>,
-        ReadStorage<'a, OnFire>,
+        (ReadStorage<'a, OnFire>, ReadStorage<'a, FireSeat>),
         ReadStorage<'a, RigidBodyComponent>,
         ReadExpect<'a, super::PhysicsResource>,
         Read<'a, FrameStart>,
@@ -258,7 +258,7 @@ impl<'a> System<'a> for RenderSystem {
             renderables,
             mut camera_components,
             mut rebuilt,
-            on_fires,
+            (on_fires, fire_seats),
             rigid_bodies,
             physics_resource,
             frame_start,
@@ -305,8 +305,16 @@ impl<'a> System<'a> for RenderSystem {
             for (entity, on_fire, pos, rb) in
                 (&entities, &on_fires, &positions, &rigid_bodies).join()
             {
-                let scale = fire_volume_scale(physics_world, rb);
-                let volume_to_world = fire_volume_to_world(&pos.0, &scale);
+                let volume_to_world = match fire_seats.get(entity) {
+                    Some(seat) => {
+                        let turned = orientations.get(entity).map(|o| o.0).unwrap_or_default();
+                        fire_volume_to_world(&seat.world_base(pos.0, turned), &seat.size)
+                    }
+                    None => {
+                        let scale = fire_volume_scale(physics_world, rb);
+                        fire_volume_to_world(&pos.0, &scale)
+                    }
+                };
                 match renderer.active_fires.iter_mut().find(|(e, _)| *e == entity) {
                     Some((_, fire)) => {
                         fire.fuel_remaining = on_fire.fuel_remaining;

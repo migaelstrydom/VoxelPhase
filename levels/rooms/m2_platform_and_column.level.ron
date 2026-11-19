@@ -62,7 +62,7 @@ Level(
                     // it off its track.
                     density: 300.0,
                 ),
-                Goal(pos: (16.0, 10.0, 33.0), radius: 2.0, required_gems: 0),
+                Brazier(pos: (16.0, 10.0, 33.0), radius: 2.0),
             ],
         ),
     ],
