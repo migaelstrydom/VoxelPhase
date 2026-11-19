@@ -53,6 +53,14 @@ const float SHEET_FULL_POUR = 0.12;
 // Share of the way from a fall's middle out to its frayed end past which it
 // frays away.
 const float FRAY_SHARE = 0.5;
+// Gravity, m/s²: how long falling water has taken to drop as far as it has.
+const float FALL_GRAVITY = 9.81;
+// How far the head and the tail of a fall's water are torn up and down it, s
+// of falling, and over how long of it each fades in.
+const float FLYING_RAGGED = 0.16;
+const float FLYING_EDGE = 0.03;
+// How long behind its head a new fall's water is still broken white, s.
+const float FLYING_HEAD = 0.3;
 
 // --- Soft edges ---
 // Length of view ray through the water over which a surface fades in where
@@ -128,6 +136,10 @@ layout(location = 9) in vec4 fragSheet;
 layout(location = 10) in float fragFray;
 layout(location = 11) in vec2 fragFace;
 layout(location = 12) in float fragAir;
+// On falling water, how long ago its fall began and how long ago it stopped
+// pouring, s (negative while it pours): only the stretch of it its water
+// has reached, and has not yet left, is drawn.
+layout(location = 13) in vec2 fragLife;
 
 // The scene beyond the water, copied before the water is drawn (sampled at
 // offset UVs for refraction)
@@ -324,6 +336,18 @@ vec3 embossed(vec3 N, float h, float scale) {
     return normalize(abs(area) * N - scale * slope);
 }
 
+// How much of a fall's water is there `seconds` into its fall, 0 to 1: none
+// ahead of its first water, which has fallen only as long as the fall has
+// run, and none behind its last, which left the lip when it stopped. Each
+// end is `ragged` (-0.5 to 0.5) by a share of a second, so the water's head
+// and tail are torn, not cut.
+float flying(float seconds, float ragged) {
+    float torn = ragged * FLYING_RAGGED;
+    float head = fragLife.x - seconds + torn;
+    float tail = seconds - fragLife.y + torn;
+    return smoothstep(0.0, FLYING_EDGE, head) * smoothstep(0.0, FLYING_EDGE, tail);
+}
+
 // Water falling over an edge, a body with a top face and an under face:
 // clear glass where it leaves the lip, as deep as it is thick; white water in
 // ropes as it falls and takes in air; breaking up over the pool at its foot.
@@ -340,8 +364,12 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     float coarse = streaks.x;
     float strands = 0.6 * streaks.x + 0.4 * streaks.y;
 
-    // It takes in air as it falls; a jet bursts out white already.
-    float aerated = 1.0 - (1.0 - clamp(fragAir, 0.0, 1.0)) * (1.0 - smoothstep(0.0, SHEET_GLASS_DROP, drop));
+    // It takes in air as it falls; a jet bursts out white already, and so
+    // does the head of water that has only just begun to fall.
+    float seconds = sqrt(2.0 * drop / FALL_GRAVITY);
+    float head = 1.0 - smoothstep(0.0, FLYING_HEAD, fragLife.x - seconds);
+    float air = max(clamp(fragAir, 0.0, 1.0), head);
+    float aerated = 1.0 - (1.0 - air) * (1.0 - smoothstep(0.0, SHEET_GLASS_DROP, drop));
     float pour = smoothstep(0.0, SHEET_FULL_POUR, fragWetDepth);
     // Thick glass is deep green and hides what is behind it.
     float body = 1.0 - exp(-thickness / SHEET_GLASS_THICKNESS);
@@ -381,6 +409,7 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     alpha *= 1.0 - fragFray * smoothstep(1.0 - FRAY_SHARE, 1.0, frayed);
     // Where it runs against rock, it fades into it rather than cutting it.
     alpha *= smoothstep(0.0, 0.12, behindDepth);
+    alpha *= flying(seconds, strands - 0.5);
     return vec4(color, alpha);
 }
 
@@ -406,6 +435,8 @@ vec4 shadePlunge(vec3 L, float time) {
     // The ends of a fall's foam thin out too.
     float frayed = abs(fragSheet.z) + (billows - 0.5) * FRAY_SHARE;
     alpha *= 1.0 - fragFray * smoothstep(1.0 - FRAY_SHARE, 1.0, frayed);
+    // There is foam only while water is landing.
+    alpha *= flying(sqrt(2.0 * fragSheet.y / FALL_GRAVITY), billows - 0.5);
     vec3 color = vec3(0.92, 0.96, 1.0) * (0.74 + 0.2 * max(L.y, 0.0) + 0.16 * froth);
     return vec4(color, alpha);
 }

@@ -228,6 +228,7 @@ impl Strand {
             normal: Vector3::y(),
             fray: self.fray,
             air: self.mean(|t| t.air),
+            life: RiverVertex::ALWAYS,
         }
     }
 
@@ -320,16 +321,20 @@ pub(super) struct Curtain {
     /// The strands at its lip's two ends (`edge_ends`) and, between them,
     /// its middle.
     strands: [Strand; 3],
+    /// When its fall began and stopped pouring (`RiverVertex::life`).
+    life: Vector2<f32>,
 }
 
 impl Curtain {
-    /// The curtain of `fall`, running on at each end of its lip into the
-    /// fall `beside` it there, if any, and hung along its lip from the
-    /// surface at `hung`: at its two ends and, between them, its middle.
+    /// The curtain of `fall` as the water's clock stands at `clock`,
+    /// running on at each end of its lip into the fall `beside` it there,
+    /// if any, and hung along its lip from the surface at `hung`: at its
+    /// two ends and, between them, its middle.
     pub fn new(
         fall: &Fall,
         beside: [Option<&Fall>; 2],
         hung: Option<[(Vector2<f32>, f32); 3]>,
+        clock: f32,
     ) -> Self {
         let own = Tongue::of(fall);
         let (step, face) = (fall.step(), fall.face());
@@ -375,8 +380,12 @@ impl Curtain {
             free: false,
             hung: hung.map(|h| h[1]),
         };
+        let stopped = fall
+            .spent
+            .map_or(RiverVertex::ALWAYS.y, |spent| clock - spent);
         Self {
             strands: [end(0), middle, end(1)],
+            life: Vector2::new(clock - fall.age, stopped),
         }
     }
 
@@ -412,6 +421,9 @@ impl Curtain {
                     out.push(strand.body(row, Face::CapUnder));
                 }
             }
+        }
+        for vertex in &mut out {
+            vertex.life = self.life;
         }
         out
     }
@@ -513,6 +525,9 @@ mod tests {
             foot: Point3::new(2.0 + 2.0 * duration, 6.0, z),
             landing: Point3::new(2.0 + 2.0 * duration, 6.0, z),
             into: None,
+            age: 60.0,
+            spent: None,
+            aloft: 0.0,
         }
     }
 
@@ -522,7 +537,7 @@ mod tests {
 
     #[test]
     fn its_top_runs_from_its_lip_to_its_foot() {
-        let curtain = Curtain::new(&fall(0.25), [None, None], None);
+        let curtain = Curtain::new(&fall(0.25), [None, None], None, 0.0);
         let vertices = curtain.vertices();
         let rows = CURTAIN_ROWS as usize + 1;
         let middle = &vertices[rows..2 * rows];
@@ -542,12 +557,12 @@ mod tests {
     fn a_free_end_hangs_from_the_end_of_its_lip_and_a_shared_one_from_between_two_falls() {
         let (near, far) = (fall(0.25), fall(0.75));
         // The +x edge's ends lie towards −z, then +z.
-        let curtain = Curtain::new(&near, [None, Some(&far)], None);
+        let curtain = Curtain::new(&near, [None, Some(&far)], None, 0.0);
         let vertices = curtain.vertices();
         let rows = CURTAIN_ROWS as usize + 1;
         assert!((vertices[0].xz - Vector2::new(2.0, 0.0)).norm() < 1e-5);
         assert!((vertices[2 * rows].xz - Vector2::new(2.0, 0.5)).norm() < 1e-5);
-        let other = Curtain::new(&far, [Some(&near), None], None).vertices();
+        let other = Curtain::new(&far, [Some(&near), None], None, 0.0).vertices();
         for row in 0..rows {
             let (ours, theirs) = (vertices[2 * rows + row], other[row]);
             assert_eq!((ours.xz, ours.surface), (theirs.xz, theirs.surface));
@@ -558,7 +573,7 @@ mod tests {
 
     #[test]
     fn its_under_face_leaves_the_lip_its_depth_down_and_closes_in_as_it_falls() {
-        let curtain = Curtain::new(&fall(0.25), [None, None], None);
+        let curtain = Curtain::new(&fall(0.25), [None, None], None, 0.0);
         let vertices = curtain.vertices();
         let rows = CURTAIN_ROWS as usize + 1;
         let gap = |row: usize| {
@@ -574,7 +589,7 @@ mod tests {
     #[test]
     fn its_triangles_face_their_normals() {
         let mut mesh = RiverMesh::default();
-        let curtain = Curtain::new(&fall(0.25), [None, None], None);
+        let curtain = Curtain::new(&fall(0.25), [None, None], None, 0.0);
         mesh.vertices = curtain.vertices();
         Curtain::join(&mut mesh, 0, [true, true]);
         assert!(!mesh.sheet_indices.is_empty());
@@ -590,7 +605,7 @@ mod tests {
 
     #[test]
     fn its_foam_lies_on_the_water_round_its_foot_and_reads_as_past_the_fall() {
-        let curtain = Curtain::new(&fall(0.25), [None, None], None);
+        let curtain = Curtain::new(&fall(0.25), [None, None], None, 0.0);
         let vertices = curtain.vertices();
         let rows = CURTAIN_ROWS as usize + 1;
         let foam = &vertices[6 * rows..6 * rows + 9];

@@ -9,10 +9,8 @@ use crate::water::geometry::{
     saddle, Column, SpanChunkCoord, SpanGraph, SpanIndex, SpanRef, Step, ORTHOGONAL,
 };
 
-use rustc_hash::{FxHashMap, FxHashSet};
-use smallvec::SmallVec;
-
 use super::cells::{FieldCells, FieldChunk};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Horizontal axis a face is normal to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,19 +44,27 @@ pub struct Face {
     pub conduit: Option<u32>,
 }
 
-/// Where the water over a face goes while it falls rather than runs on into
-/// the cell across: through the air, to where its arc comes down.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The water over a face while it falls rather than runs on into the cell
+/// across: it goes into the air, and its fall (`super::falls`) brings it
+/// down where and when its arc does.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Flight {
     /// The face whose water it is.
     pub face: FaceRef,
     /// Whether the water falls from the face's owning cell, `a`; from `b`
     /// otherwise. Water going the other way runs across as on any face.
     pub from_owner: bool,
-    /// The cells it lands in, each taking an equal share: the cell its arc
-    /// comes down in, and for a thick stream those along the length of
-    /// ground it comes down over. Empty where it leaves the world.
-    pub into: SmallVec<[SpanIndex; 4]>,
+    /// What has gone over the face since its fall last took it, m³.
+    pub aloft: f64,
+}
+
+/// The momentum falling water lands with, on a face beside where it lands.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Push {
+    pub face: FaceRef,
+    /// How fast it raises the face's discharge, m²/s²; positive from the
+    /// face's `a` to its `b`.
+    pub rate: f32,
 }
 
 /// A face, by its owning chunk's slot and its place in that chunk's list.

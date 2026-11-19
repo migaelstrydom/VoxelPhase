@@ -14,7 +14,7 @@ use crate::water::geometry::{
 };
 
 use super::conduits::Conduit;
-use super::faces::{BoundaryFace, Face, Flight};
+use super::faces::{BoundaryFace, Face, Flight, Push};
 
 /// Plan area of one cell, m².
 pub const CELL_AREA: f64 = (COLUMN_SIZE * COLUMN_SIZE) as f64;
@@ -113,9 +113,11 @@ impl FieldChunk {
 #[derive(Debug, Clone)]
 pub struct FieldCells {
     pub chunks: Vec<FieldChunk>,
-    /// Where the water of each falling face lands (`Face::flight` counts
-    /// into these), as the falls were last found.
+    /// The water each falling face has sent into the air (`Face::flight`
+    /// counts into these), as the falls were last found.
     pub flights: Vec<Flight>,
+    /// The momentum falling water lands with, as the falls were last found.
+    pub pushes: Vec<Push>,
     /// The runs of faces whose water moves as one column under a roof
     /// (`Face::conduit` counts into these), as they were last found.
     pub conduits: Vec<Conduit>,
@@ -142,6 +144,7 @@ impl FieldCells {
             generations: vec![0; chunks.len()],
             chunks,
             flights: Vec::new(),
+            pushes: Vec::new(),
             conduits: Vec::new(),
             origin,
             width,

@@ -125,9 +125,17 @@ pub struct RiverVertex {
     /// 0 for water sliding glassy over a brink, 1 for water bursting white
     /// out of a hole. Zero on the surface.
     pub air: f32,
+    /// On falling water, when on the water's clock its fall began and when
+    /// it stopped pouring, s: the draw shows only as much of it as holds
+    /// water (`Fall::flying`). `ALWAYS` on the surface and on a fall that
+    /// has not stopped.
+    pub life: Vector2<f32>,
 }
 
 impl RiverVertex {
+    /// The life of water that has always been there and has not stopped.
+    pub const ALWAYS: Vector2<f32> = Vector2::new(-1.0e9, 1.0e9);
+
     pub fn binding_description() -> vk::VertexInputBindingDescription {
         vk::VertexInputBindingDescription {
             binding: 0,
@@ -136,7 +144,7 @@ impl RiverVertex {
         }
     }
 
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 8] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 9] {
         let f = std::mem::size_of::<f32>() as u32;
         [
             vk::VertexInputAttributeDescription {
@@ -188,6 +196,12 @@ impl RiverVertex {
                 binding: 0,
                 format: vk::Format::R32_SFLOAT,
                 offset: 16 * f,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 8,
+                binding: 0,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: 17 * f,
             },
         ]
     }

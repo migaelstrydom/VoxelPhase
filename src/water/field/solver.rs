@@ -15,10 +15,10 @@
 //! down together when they would.
 //!
 //! The cell that takes a face's water is the one across it, unless the
-//! water falls there (`Face::flight`): then it is the cells its arc comes
-//! down in, and the cell at the foot of the cliff gets none of it.
-
-use smallvec::SmallVec;
+//! water falls there (`Face::flight`): then it goes into the air, the cell
+//! at the foot of the cliff gets none of it, and its fall brings it down
+//! where its arc does (`falls`), with the momentum it lands with
+//! (`FieldCells::pushes`).
 
 use super::cells::{FieldCells, CELL_AREA};
 use super::faces::{Face, FaceRef};
@@ -116,8 +116,7 @@ pub struct FieldSolver {
     /// them.
     stepped: Vec<usize>,
     /// Chunks with a cell a stepped face gives to or takes from: the
-    /// stepped ones, their +x and +z neighbours, and those their falling
-    /// water lands in.
+    /// stepped ones and their +x and +z neighbours.
     touched: Vec<usize>,
     /// Per stepped chunk, per face: its discharge and the depth it carries
     /// it at (`carried`) at the start of the substep, so every face's
@@ -190,14 +189,6 @@ impl FieldSolver {
         ] {
             buffer.resize_with(count, Vec::new);
         }
-        // Falling water lands wherever its arc takes it.
-        for landing in cells.flights.iter().flat_map(|flight| &flight.into) {
-            let slot = landing.slot as usize;
-            if !marked[slot] {
-                marked[slot] = true;
-                self.touched.push(slot);
-            }
-        }
         self.is_stepped.clear();
         self.is_stepped.resize(count, false);
         for &slot in &self.stepped {
@@ -243,6 +234,14 @@ impl FieldSolver {
     /// The momentum update on every stepped face, and on every conduit.
     fn update_faces(&mut self, cells: &mut FieldCells, dt: f32) -> u64 {
         let p = self.params;
+        // Landing water shoves the faces beside it before they are read.
+        for i in 0..cells.pushes.len() {
+            let push = cells.pushes[i];
+            let chunk = &mut cells.chunks[push.face.slot as usize];
+            if let Some(face) = chunk.faces.get_mut(push.face.index as usize) {
+                face.q += push.rate * dt;
+            }
+        }
         self.previous.resize_with(cells.chunks.len(), Vec::new);
         for &slot in &self.stepped {
             let previous = &mut self.previous[slot];
@@ -436,18 +435,11 @@ impl FieldSolver {
                 if v == 0.0 {
                     continue;
                 }
-                let at = |c: SpanIndex| (c.slot as usize, c.flat as usize);
                 match ends(cells, slot, face, v > 0.0) {
-                    (giver, Takers::Across(taker)) => {
+                    (giver, Taker::Across(taker)) => {
                         visit(self, Some(giver), Some(taker), v.abs());
                     }
-                    (giver, Takers::Landing([])) => visit(self, Some(giver), None, v.abs()),
-                    (giver, Takers::Landing(into)) => {
-                        let each = v.abs() / into.len() as f64;
-                        for &cell in into {
-                            visit(self, Some(giver), Some(at(cell)), each);
-                        }
-                    }
+                    (giver, Taker::Air(_)) => visit(self, Some(giver), None, v.abs()),
                 }
             }
             for face in &chunk.boundary {
@@ -467,9 +459,9 @@ impl FieldSolver {
         giver.map_or(1.0, |(s, f)| self.give[s][f]) * taker.map_or(1.0, |(s, f)| self.take[s][f])
     }
 
-    /// Move water across every stepped face, as limited. Returns the volume
-    /// that left the field: through boundary faces, and on arcs that came
-    /// down outside the world.
+    /// Move water across every stepped face, as limited: into the cell
+    /// across, or into the air where it falls. Returns the volume that left
+    /// the field through boundary faces.
     fn move_water(&self, cells: &mut FieldCells, dt: f32) -> f64 {
         let mut boundary_out = 0.0;
         for &slot in &self.stepped {
@@ -479,32 +471,18 @@ impl FieldSolver {
                 if v == 0.0 {
                     continue;
                 }
-                let (giver, takers) = ends(cells, slot, face, face.q > 0.0);
-                let moved = match takers {
-                    Takers::Across(taker) => {
+                let (giver, taker) = ends(cells, slot, face, face.q > 0.0);
+                let moved = match taker {
+                    Taker::Across(taker) => {
                         let part = v * self.share(Some(giver), Some(taker));
                         cells.chunks[taker.0].depth[taker.1] += part / CELL_AREA;
                         wake_on_flow(cells, taker.0, part);
                         part
                     }
-                    Takers::Landing([]) => {
-                        // Its arc left the world.
+                    Taker::Air(flight) => {
                         let part = v * self.share(Some(giver), None);
-                        boundary_out += part;
+                        cells.flights[flight as usize].aloft += part;
                         part
-                    }
-                    Takers::Landing(into) => {
-                        let into: SmallVec<[SpanIndex; 4]> = SmallVec::from_slice(into);
-                        let each = v / into.len() as f64;
-                        let mut moved = 0.0;
-                        for cell in into {
-                            let taker = (cell.slot as usize, cell.flat as usize);
-                            let part = each * self.share(Some(giver), Some(taker));
-                            cells.chunks[taker.0].depth[taker.1] += part / CELL_AREA;
-                            wake_on_flow(cells, taker.0, part);
-                            moved += part;
-                        }
-                        moved
                     }
                 };
                 if moved < v {
@@ -536,24 +514,18 @@ impl FieldSolver {
     }
 }
 
-/// The cells that take the water a face moves.
-enum Takers<'a> {
+/// What takes the water a face moves.
+enum Taker {
     /// The cell across the face, as (slot, flat).
     Across((usize, usize)),
-    /// While it falls: the cells it lands in, each taking an equal share;
-    /// none where it leaves the world.
-    Landing(&'a [SpanIndex]),
+    /// The air, while it falls: its flight, by index.
+    Air(u32),
 }
 
-/// The cells a face in chunk `slot` moves water between when it flows from
-/// its owner to the cell across (`forward`) or back: the giver, as (slot,
-/// flat), and the takers.
-fn ends<'a>(
-    cells: &'a FieldCells,
-    slot: usize,
-    face: &Face,
-    forward: bool,
-) -> ((usize, usize), Takers<'a>) {
+/// What a face in chunk `slot` moves water between when it flows from its
+/// owner to the cell across (`forward`) or back: the giver, as (slot,
+/// flat), and the taker.
+fn ends(cells: &FieldCells, slot: usize, face: &Face, forward: bool) -> ((usize, usize), Taker) {
     let at = |c: SpanIndex| (c.slot as usize, c.flat as usize);
     let owner = SpanIndex {
         slot: slot as u32,
@@ -566,13 +538,12 @@ fn ends<'a>(
     };
     let flight = face
         .flight
-        .map(|index| &cells.flights[index as usize])
-        .filter(|flight| flight.from_owner == forward);
-    let takers = match flight {
-        None => Takers::Across(at(across)),
-        Some(flight) => Takers::Landing(&flight.into),
+        .filter(|&index| cells.flights[index as usize].from_owner == forward);
+    let taker = match flight {
+        None => Taker::Across(at(across)),
+        Some(flight) => Taker::Air(flight),
     };
-    (at(giver), takers)
+    (at(giver), taker)
 }
 
 /// Depth a flux must change a sleeping chunk's cell by to wake the chunk, m.

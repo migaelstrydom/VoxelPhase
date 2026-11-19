@@ -20,7 +20,7 @@ mod versions;
 
 pub use cells::{FieldCells, FieldChunk, CELL_AREA};
 pub use conduits::Conduit;
-pub use faces::{past_edge, Axis, BoundaryFace, Face, Flight, SeaBoundary};
+pub use faces::{past_edge, Axis, BoundaryFace, Face, Flight, Push, SeaBoundary};
 pub use falls::{Fall, Falls};
 pub use field::{FieldFrame, FieldLedger, WaterField, WET_DEPTH};
 pub use fill::{pool_seed, SpillLevels};

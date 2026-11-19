@@ -78,6 +78,10 @@ struct Stream {
     /// When its water meets the world, s after it leaves: the end of its
     /// path, or sooner where a wall stands in its way.
     lands: f32,
+    /// The stretch of its path that holds water, as s after leaving: all
+    /// of it, but for a fall just begun, whose water has not yet got far,
+    /// or one spent, whose last water has left the lip behind.
+    flying: (f32, f32),
     min: Point3<f32>,
     max: Point3<f32>,
 }
@@ -96,9 +100,21 @@ impl Stream {
             from,
             into,
             lands: path.duration(),
+            flying: (0.0, f32::INFINITY),
             min,
             max,
         }
+    }
+
+    /// The same stream, holding water only over `flying` (s after leaving).
+    fn flying(self, flying: (f32, f32)) -> Self {
+        Self { flying, ..self }
+    }
+
+    /// Whether its water is meeting the world now.
+    fn landing(&self) -> bool {
+        const NEAR: f32 = 1.0e-3;
+        self.flying.0 <= self.lands + NEAR && self.lands <= self.flying.1 + NEAR
     }
 
     /// The same stream, meeting the world as it passes height `y`.
@@ -119,7 +135,11 @@ impl Stream {
         if (0..3).any(|axis| low[axis] > self.max[axis] || high[axis] < self.min[axis]) {
             return None;
         }
-        let slab = self.path.at(self.path.time_at(centre.y));
+        let passing = self.path.time_at(centre.y);
+        if passing < self.flying.0 || passing > self.flying.1 {
+            return None;
+        }
+        let slab = self.path.at(passing);
         let half_side = 0.5 * std::f32::consts::PI.sqrt() * radius;
         let offset = centre - slab.centre;
         let tangent = slab.velocity.try_normalize(1.0e-6)?;
@@ -164,7 +184,10 @@ impl FallingWater {
                 0.5 * COLUMN_SIZE,
                 fall.pour,
             );
-            streams.push(Stream::new(path, Some(fall.from), fall.into).landing_at(fall.landing.y));
+            let stream = Stream::new(path, Some(fall.from), fall.into)
+                .landing_at(fall.landing.y)
+                .flying(fall.flying());
+            streams.push(stream);
         }
         let cells = field.cells();
         for jet in field.jets() {
@@ -190,11 +213,12 @@ impl FallingWater {
         self.streams.is_empty()
     }
 
-    /// Where each stream lands.
+    /// Where each stream whose water is coming down now lands.
     pub fn landings(&self) -> impl Iterator<Item = Landing> + '_ {
         self.streams
             .iter()
             .zip(&self.onward)
+            .filter(|(stream, _)| stream.landing())
             .map(|(stream, &onward)| {
                 let path = &stream.path;
                 let slab = path.at(stream.lands);

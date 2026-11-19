@@ -9,7 +9,8 @@
 //!                                                          │
 //!                              Falls ◀── found again ──────┘
 //!                    (each falling face's arc and landing: what the next
-//!                     step pours where, and what is drawn and strikes)
+//!                     step sends into the air, what comes down where, and
+//!                     what is drawn and strikes)
 //! ```
 //!
 //! The water is the only state: depths in cells, discharges on faces. An
@@ -323,8 +324,8 @@ impl WaterField {
         moving.dedup();
         currents::refresh(&mut self.cells, &moving);
         conduits::find(&mut self.cells, self.solver.pressed());
-        self.falls
-            .find(&self.graph, &mut self.cells, Some(self.solver.brinks()));
+        let brinks = Some(self.solver.brinks());
+        self.ledger.sunk += self.falls.find(&self.graph, &mut self.cells, brinks, dt);
         self.frame = FieldFrame {
             stats,
             awake,
@@ -352,7 +353,7 @@ impl WaterField {
         }
         self.pumps.retrace(&self.graph, &self.cells);
         conduits::forget(&mut self.cells);
-        self.falls.find(&self.graph, &mut self.cells, None);
+        self.ledger.sunk += self.falls.find(&self.graph, &mut self.cells, None, 0.0);
         self.edit_time = Some(started.elapsed());
     }
 
@@ -401,8 +402,9 @@ impl WaterField {
         self.cells.chunks[cell.slot as usize].velocity[cell.flat as usize]
     }
 
+    /// Water held, m³: in its cells, and in the air over its falls.
     pub fn volume(&self) -> f64 {
-        self.cells.volume()
+        self.cells.volume() + self.falls.aloft()
     }
 
     /// The shallowest cell and whether every depth and discharge is finite:

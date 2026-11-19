@@ -51,6 +51,8 @@ pub struct DrawnCells<'a> {
     pub depths: DrawnDepths<'a>,
     /// The water going over edges: a cell a jet bursts from has no surface.
     pub falls: &'a Falls,
+    /// The water's clock, s: what a fall's age is counted back from.
+    pub clock: f32,
 }
 
 impl DrawnCells<'_> {
@@ -132,16 +134,20 @@ impl DrawnCells<'_> {
 }
 
 /// The falls leaving the cells of chunk `slot`, as a surface's shape takes
-/// them: by cell and direction, and whether each is driven.
+/// them: by cell and direction, whether each is driven, and whether it is
+/// spent.
 pub(super) fn falls_of(
     field: &WaterField,
     slot: u32,
-) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
-    field
-        .falls()
-        .of_slot(slot as usize)
-        .iter()
-        .map(|fall| (fall.from.flat, fall.direction, fall.driven))
+) -> impl Iterator<Item = (u32, u8, bool, bool)> + '_ {
+    (field.falls().of_slot(slot as usize).iter()).map(|fall| {
+        (
+            fall.from.flat,
+            fall.direction,
+            fall.driven,
+            fall.spent.is_some(),
+        )
+    })
 }
 
 /// The surface vertex midway between `from` and `to`.
@@ -356,7 +362,7 @@ pub struct SurfaceSources {
     pub(super) curtains: Vec<CurtainSource>,
     /// The falls leaving its chunk's cells when it was built (`falls_of`):
     /// its shape holds while they are the falls leaving them.
-    pub(super) falls: Vec<(u32, u8, bool)>,
+    pub(super) falls: Vec<(u32, u8, bool, bool)>,
     /// The update whose drawn depths the surface was last read from.
     pub(super) read: u64,
     /// The jets landing in its chunk when it was built, in the field's
@@ -512,8 +518,8 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
             continue;
         }
         let top = curtain.hung.map(|hung| hung_from(&mesh.vertices, hung));
-        let vertices =
-            Curtain::new(fall, beside.map(|b| b.map(|(other, _)| other)), top).vertices();
+        let beside = beside.map(|b| b.map(|(other, _)| other));
+        let vertices = Curtain::new(fall, beside, top, cells.clock).vertices();
         let first = curtain.first as usize;
         mesh.vertices[first..first + vertices.len()].copy_from_slice(&vertices);
     }

@@ -110,6 +110,7 @@ impl<'a> FieldScene<'a> {
             graph: self.field.graph(),
             depths: self.depths,
             falls: self.field.falls(),
+            clock: self.clock,
         }
     }
 
@@ -191,7 +192,10 @@ impl<'a> FieldScene<'a> {
         }
         let over = [0, 1, 2, 3].map(|direction| self.field.fall(at, direction).copied());
         let first = mesh.vertices.len() as u32;
-        let lips = lay_cell(mesh, column, built, over.map(|fall| fall.is_some()));
+        // Only water still going over an edge shapes the surface there: a
+        // spent fall's curtain hangs from where its water left.
+        let pouring = over.map(|fall| fall.is_some_and(|fall| fall.spent.is_none()));
+        let lips = lay_cell(mesh, column, built, pouring);
         for (fall, lip) in over.iter().zip(lips) {
             if let Some(fall) = fall {
                 self.curtain(mesh, fall, lip);
@@ -213,7 +217,8 @@ impl<'a> FieldScene<'a> {
         }
         let hung = lip.map(|lip| carried_out(mesh, fall, &beside, lip));
         let top = hung.map(|hung| field_sources::hung_from(&mesh.vertices, hung));
-        let curtain = Curtain::new(fall, beside.map(|b| b.map(|(other, _)| other)), top);
+        let others = beside.map(|b| b.map(|(other, _)| other));
+        let curtain = Curtain::new(fall, others, top, self.clock);
         let first = mesh.vertices.len() as u32;
         let vertices = curtain.vertices();
         mesh.sources
@@ -533,6 +538,7 @@ fn lay_cell(
             normal: Vector3::y(),
             fray: 0.0,
             air: 0.0,
+            life: RiverVertex::ALWAYS,
         });
         mesh.sources.vertices.push(source);
     }

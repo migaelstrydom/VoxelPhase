@@ -116,6 +116,7 @@ impl Jet {
             normal,
             fray: 0.0,
             air: JET_AIR,
+            life: RiverVertex::ALWAYS,
         }
     }
 
@@ -147,6 +148,7 @@ impl Jet {
             normal: Vector3::y(),
             fray: 0.0,
             air: JET_AIR,
+            life: RiverVertex::ALWAYS,
         }
     }
 }
