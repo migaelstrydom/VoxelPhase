@@ -104,6 +104,10 @@ const SAME_LIP: f32 = 0.5 * COLUMN_SIZE;
 /// chunk, m.
 const WAKE_DEPTH: f64 = 1.0e-5;
 
+/// How far under the roof of the cell it comes out into an arc starts, at
+/// the highest, m.
+const UNDER_ROOF: f32 = 0.01;
+
 /// How many cells out from where it lands a spent fall's last water looks
 /// for room.
 const SPILL_REACH: usize = 48;
@@ -562,44 +566,45 @@ impl Falls {
 
     /// Even each fall's velocity out with those of the falls its lip runs
     /// on into: half its own, a quarter each of theirs, its own again where
-    /// its lip ends. Jets side by side even out how thick they are and how
-    /// high their tops stand as well: each hole's water is driven its own
+    /// its lip ends. Jets side by side even out how thick they are, how
+    /// high their tops stand and how much of their holes they fill as well: each hole's water is driven its own
     /// way, by the flow law or as a column run full, and drawn each at its
     /// own height a row of them is a row of teeth. A spent fall's water is
     /// already in the air, and keeps what it left with.
     fn even_out(&mut self, graph: &SpanGraph, cells: &FieldCells) {
-        let evened: Vec<Vec<(Vector2<f32>, f32, f32)>> = self
+        let evened: Vec<Vec<(Vector2<f32>, [f32; 3])>> = self
             .chunks
             .iter()
             .map(|list| {
                 list.iter()
                     .map(|fall| {
-                        let own = (fall.velocity, fall.lip.y, fall.depth);
+                        let shape = |fall: &Fall| [fall.lip.y, fall.depth, fall.opening];
+                        let own = (fall.velocity, shape(fall));
                         if fall.spent.is_some() {
                             return own;
                         }
                         let beside = |end: usize| match self.beside(graph, cells, fall, end) {
                             Some((other, _)) if fall.driven && other.driven => {
-                                (other.velocity, other.lip.y, other.depth)
+                                (other.velocity, shape(other))
                             }
-                            Some((other, _)) => (other.velocity, own.1, own.2),
+                            Some((other, _)) => (other.velocity, own.1),
                             None => own,
                         };
                         let (a, b) = (beside(0), beside(1));
                         (
                             0.5 * own.0 + 0.25 * (a.0 + b.0),
-                            0.5 * own.1 + 0.25 * (a.1 + b.1),
-                            0.5 * own.2 + 0.25 * (a.2 + b.2),
+                            std::array::from_fn(|i| 0.5 * own.1[i] + 0.25 * (a.1[i] + b.1[i])),
                         )
                     })
                     .collect()
             })
             .collect();
         for (list, evened) in self.chunks.iter_mut().zip(evened) {
-            for (fall, (velocity, top, depth)) in list.iter_mut().zip(evened) {
+            for (fall, (velocity, [top, depth, opening])) in list.iter_mut().zip(evened) {
                 fall.velocity = velocity;
                 fall.lip.y = top;
                 fall.depth = depth;
+                fall.opening = opening;
             }
         }
     }
@@ -1339,6 +1344,10 @@ fn land(
     below: SpanIndex,
     columns: usize,
 ) -> Landed {
+    // A jet's top, evened with the jets beside it, may stand at or over
+    // the roof of the cell it comes out into, and a height in the roof is
+    // answered with the ground over it: a wall met at once.
+    let lip = Point3::new(lip.x, lip.y.min(cells.ceiling(below) - UNDER_ROOF), lip.z);
     let start = Vector2::new(lip.x, lip.z) + face * NUDGE;
     let height = |t: f32| lip.y - 0.5 * GRAVITY * t * t;
     let at = |t: f32, y: f32| {
