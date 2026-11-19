@@ -1,0 +1,67 @@
+// Room W11 — a lifter made from water (docs/GAME_DESIGN.md, Second batch: "A
+// spring's jet holds a ball up").
+//
+// A spring in the island's floor shoots straight up, 10 m, and the exit is a
+// small island hanging 7 m over the floor beside it: past any jump. Step into
+// the jet and be carried up beside the exit.
+//
+// A check more than a puzzle: does a jet lift the player, and can the player
+// steer off its top? A cap over the spring cannot make it a puzzle: a jet
+// passes through whatever hangs over it and lands on its top.
+//
+// The goal's point is 2 m over the exit island.
+//
+//   side view, looking north
+//                  ┌────┐  exit, top 17, x 21.5–25.5
+//            ↑     └────┘
+//            ↑
+//   ═════════╧═════════════  island, top 10, spring at x 20
+//   x 10    20          30      floor far below at -6
+Level(
+    name: "W11 Jet Lift",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    Platform(center: (20.0, 10.0, 20.0), half_extents: (10.0, 8.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 20.0), half_extents: (10.0, 8.0), thickness: 2.0, material: Dirt),
+                    // The exit.
+                    Platform(center: (23.5, 17.0, 20.0), half_extents: (2.0, 2.0), thickness: 1.0, material: Grass),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (23.5, 19.0, 20.0), radius: 1.5, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (14.0, 11.0, 14.0),
+
+    water: Some((
+        bodies: [
+            Spring(position: (20.0, 10.2, 20.0), direction: (0.0, 14.0, 0.0), discharge: 0.5),
+        ],
+    )),
+)

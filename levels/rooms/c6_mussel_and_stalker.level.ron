@@ -1,0 +1,60 @@
+// Room C6 — draw a stalker across a mussel (docs/GAME_DESIGN.md, Creatures).
+//
+// A strip of island 6 m wide leads to the exit, and a stalker guards its far
+// end: its beak reaches well past its body, and a peck throws the player off
+// the strip. Halfway along, a mussel lies open on the path with room to pass
+// it on one side. It shuts on whatever steps between its valves and holds it
+// a while. Go past the mussel, let the stalker see you, and fall back past
+// the mussel: the stalker, following, walks into it and is held.
+//
+//               N (+z)
+//         ┌─────┐
+//         │  ◎  │  z = 38
+//         │  ⚲  │  stalker at z 32
+//         │     │
+//         │ ◖◗  │  mussel at z 20, west of the middle
+//         │     │
+//         │  ☺  │  strip, x 17–23, top 10
+//         └─────┘  z = 2       floor far below at -6
+Level(
+    name: "C6 Mussel and Stalker",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    Platform(center: (20.0, 10.0, 20.0), half_extents: (3.0, 18.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 20.0), half_extents: (3.0, 18.0), thickness: 2.0, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Mussel(pos: (19.0, 20.0)),
+                Stalker(pos: (20.0, 32.0)),
+                Goal(pos: (20.0, 10.0, 36.5), radius: 1.5, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (20.0, 11.0, 4.0),
+)

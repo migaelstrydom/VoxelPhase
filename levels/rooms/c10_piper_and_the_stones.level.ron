@@ -1,0 +1,71 @@
+// Room C10 — the clock is a piper (docs/GAME_DESIGN.md, Third batch: "A piper
+// is slowly bombing the platforms the crossing needs").
+//
+// The way to the exit is four stepping stones, small islands a jump apart. A
+// piper on a pillar beside them lobs a grenade at the player every few
+// seconds, and what its grenades hit they take: a stone is one hit. Cross
+// before the stones are gone, or kill the piper first (it takes a couple of
+// grenades).
+//
+//               N (+z)
+//         ┌───────────┐
+//         │     ◎     │  far island, z 34–40
+//         └───────────┘
+//             ▪          stones, 2 m square, at z 14, 19, 24, 29
+//             ▪                  ┌─┐
+//             ▪                  │♪│ piper's pillar, x 32–36, top 14
+//             ▪                  └─┘
+//         ┌───────────┐
+//         │     ☺     │  near island, z 2–10
+//         └───────────┘   top 10, floor far below at -6
+Level(
+    name: "C10 Piper and the Stones",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    Platform(center: (20.0, 10.0, 6.0), half_extents: (6.0, 4.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 6.0), half_extents: (6.0, 4.0), thickness: 2.0, material: Dirt),
+                    Platform(center: (20.0, 10.0, 37.0), half_extents: (6.0, 3.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 37.0), half_extents: (6.0, 3.0), thickness: 2.0, material: Dirt),
+                    // The stones.
+                    Platform(center: (20.0, 10.0, 14.0), half_extents: (1.0, 1.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 10.0, 19.0), half_extents: (1.0, 1.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 10.0, 24.0), half_extents: (1.0, 1.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 10.0, 29.0), half_extents: (1.0, 1.0), thickness: 1.0, material: Grass),
+                    // The piper's pillar.
+                    Platform(center: (34.0, 14.0, 22.0), half_extents: (2.0, 2.0), thickness: 1.0, material: Grass),
+                    Platform(center: (34.0, 13.0, 22.0), half_extents: (2.0, 2.0), thickness: 3.0, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Piper(pos: (34.0, 22.0)),
+                Goal(pos: (20.0, 10.0, 37.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (20.0, 11.0, 4.0),
+)

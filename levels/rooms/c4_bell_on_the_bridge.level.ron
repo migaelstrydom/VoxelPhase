@@ -1,0 +1,63 @@
+// Room C4 — a bell-carrier on the bridge (docs/GAME_DESIGN.md, Creatures).
+//
+// The exit is across a bridge of earth 2 m wide and 12 m long, and a
+// bell-carrier stands on it. Nothing hurts it: a blast rings its bell and
+// shoves it, and it comes on, slow and heavy, and there is no room to pass it
+// on the bridge. It is dealt with by where it is made to walk: shove it off
+// with a blast, dig the bridge out from under it, or draw it off the bridge
+// onto the wide island and go round it.
+//
+//               N (+z)
+//         ┌───────────┐
+//         │     ◎     │  far island, z 30–38
+//         └────┬─┬────┘
+//              │🔔│       bridge, x 19–21, z 18–30
+//         ┌────┴─┴────┐
+//         │           │  near island, z 2–18, 16 m wide
+//         │     ☺     │
+//         └───────────┘   all top 10, floor far below at -6
+Level(
+    name: "C4 Bell on the Bridge",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    Platform(center: (20.0, 10.0, 10.0), half_extents: (8.0, 8.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 10.0), half_extents: (8.0, 8.0), thickness: 2.0, material: Dirt),
+                    Platform(center: (20.0, 10.0, 34.0), half_extents: (6.0, 4.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 34.0), half_extents: (6.0, 4.0), thickness: 2.0, material: Dirt),
+                    // The bridge, run half a metre into each island.
+                    Platform(center: (20.0, 10.0, 24.0), half_extents: (1.0, 6.5), thickness: 1.5, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                BellCarrier(pos: (20.0, 25.0)),
+                Goal(pos: (20.0, 10.0, 35.0), radius: 2.0, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (20.0, 11.0, 5.0),
+)

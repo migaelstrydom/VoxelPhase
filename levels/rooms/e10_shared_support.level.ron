@@ -1,0 +1,60 @@
+// Room E10 — the exit is held up by what blocks the way (docs/GAME_DESIGN.md,
+// Second batch: "Take only as much as leaves it standing").
+//
+// A dirt bank 5 m tall stands across a strip of island, as in E1. The exit is
+// a slab jutting from the bank's far face, 3 m over the strip: a lip a jump
+// catches, with room to walk under it. The bank is all that holds the slab
+// up. Blast the bank away and the slab goes with it, into the sky. Tunnel
+// through low and narrow, leave the bank's top standing, and climb the slab
+// from the far side.
+//
+//   side view, looking west
+//                 ┌──┐
+//                 │  ├──────┐  slab, 12–13, z 21–27, exit ◎ on it
+//   ☺             │  │
+//   ══════════════╧══╧══════════════  strip, top 10
+//   z 4         z 19 21            z 36     floor far below at -6
+Level(
+    name: "E10 Shared Support",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [],
+
+                volumes: [
+                    Platform(center: (20.0, 10.0, 20.0), half_extents: (3.0, 16.0), thickness: 1.0, material: Grass),
+                    Platform(center: (20.0, 9.0, 20.0), half_extents: (3.0, 16.0), thickness: 2.0, material: Dirt),
+                    // The bank, half a metre past each edge of the strip.
+                    Platform(center: (20.0, 15.0, 20.0), half_extents: (3.5, 1.0), thickness: 5.5, material: Dirt),
+                    // The slab, run half a metre into the bank.
+                    Platform(center: (20.0, 13.0, 24.25), half_extents: (3.0, 3.25), thickness: 1.0, material: Dirt),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Goal(pos: (20.0, 15.0, 25.0), radius: 1.5, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (20.0, 11.0, 6.0),
+)

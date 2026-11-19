@@ -1,0 +1,86 @@
+// Room C11 — wash a creature away (docs/GAME_DESIGN.md, Third batch: "A
+// creature stands in a dry channel below a dam").
+//
+// A ridge runs north from the player's ledge to the exit, and a
+// stalker stands on it: there is no passing its beak. At the ridge's north
+// end a reservoir on a terrace is held by a sand dam whose foot is level with
+// the ridge. Throw over the stalker and hole the dam low: the water comes
+// down the ridge as a flood, between the curbs along its edges that make it a
+// channel 3 m wide, and carries the stalker off its south end. Stand on the
+// ledge while it passes.
+//
+// The ridge and terrace are terrain standing on the floor far below.
+//
+//               N (+z)
+//         ┌───────────────┐
+//         │  reservoir    │  terrace, top 16, z 30–40; basin floor 11,
+//         │   15          │    water at 15
+//         └─────┤▒├───────┘  gap at x 19–21, sand dam at z 31–32
+//               │◎│          exit at z 28
+//               │⚲│          stalker at z 20
+//               │ │          ridge, x 17.5–22.5, top 10, curbs to 11
+//               │ ├──┐
+//               │ │☺ │       ledge, x 22.5–27, z 2–8, top 12
+//               └─┴──┘       floor far below at -6
+Level(
+    name: "C11 Washed Off",
+
+    segments: [
+        (
+            name: "room",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (40.0, 24.0, 40.0)),
+                base_height: -6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The ridge.
+                    Plateau(min: (17.5, 0.0), max: (22.5, 30.0), height: 10.0),
+                    // The player's ledge beside its south end.
+                    Plateau(min: (22.5, 2.0), max: (27.0, 8.0), height: 12.0),
+                    // The terrace, its basin, and the gap in its south wall
+                    // down to the ridge.
+                    Plateau(min: (13.0, 30.0), max: (27.0, 40.0), height: 16.0),
+                    Plateau(min: (15.0, 33.0), max: (25.0, 38.0), height: 11.0),
+                    Plateau(min: (19.0, 30.0), max: (21.0, 33.0), height: 10.0),
+                ],
+
+                volumes: [
+                    // The curbs, a metre high and wide, from the ridge's south
+                    // end into the terrace's wall, bedded half a metre.
+                    Platform(center: (18.0, 11.0, 15.5), half_extents: (0.5, 15.5), thickness: 1.5, material: Dirt),
+                    Platform(center: (22.0, 11.0, 15.5), half_extents: (0.5, 15.5), thickness: 1.5, material: Dirt),
+                    // The dam: sand a metre thick across the gap, a metre past
+                    // each side, bedded half a metre below its floor.
+                    Platform(center: (20.0, 16.0, 31.5), half_extents: (2.0, 0.5), thickness: 6.5, material: Sand),
+                ],
+            ),
+
+            anchors: [],
+            objects: [
+                Stalker(pos: (20.0, 20.0)),
+                Goal(pos: (20.0, 10.0, 28.0), radius: 1.5, required_gems: 0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "room", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (25.0, 13.0, 4.0),
+
+    water: Some((
+        bodies: [
+            Pool(seed: (20.0, 36.0), surface_level: 15.0),
+        ],
+    )),
+)
