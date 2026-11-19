@@ -28,9 +28,10 @@ layout(location = 0) out vec4 outColor;
 /// a thick column of light, at its edge almost none, so it has no outline.
 const float CORE_POWER = 1.8;
 /// How the light dies away up the shaft, and the share of it its foot
-/// takes to come on.
+/// takes to come on: a few metres, so it gathers out of the air rather
+/// than starting at a line.
 const float FADE_POWER = 1.4;
-const float FOOT = 0.012;
+const float FOOT = 0.03;
 /// Streaks round the shaft and up it, and how much of the light is in them.
 const float STREAKS_AROUND = 9.0;
 const float STREAK_LENGTH = 2.5;

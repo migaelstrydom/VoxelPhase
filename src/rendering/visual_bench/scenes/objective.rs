@@ -11,12 +11,11 @@ use nalgebra::{Isometry3, Matrix4, Point3, Translation3, UnitQuaternion, Vector3
 
 use crate::app::spawnables::{BrazierDef, PlatonicSolidDef};
 use crate::core::error::EngineResult;
-use crate::fire::components::FireSeat;
 use crate::geometry::PlatonicSolid;
 use crate::light_shaft::ShaftMesh;
 use crate::lighting::{ActiveLight, LightId};
 use crate::model::Model;
-use crate::objective::{Brazier, Goal};
+use crate::objective::BrazierStage;
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId, SurfaceModulation};
 use crate::rendering::visual_bench::scene::{
@@ -126,12 +125,12 @@ impl VisualScene for Objective {
         };
         // The shaft over it, as the brazier's own system aims it.
         let shaft = |lit: bool| {
-            let mut state = Brazier::new(FireSeat {
-                base: Vector3::zeros(),
-                size: Vector3::zeros(),
-            });
-            state.lit = lit;
-            let shaft = BrazierDef::light_shaft(state.shaft(&Goal::new(2.0)));
+            let stage = if lit {
+                BrazierStage::Lit
+            } else {
+                BrazierStage::Ready
+            };
+            let shaft = BrazierDef::light_shaft(stage.shaft());
             ShaftMesh::of([(BRAZIER_AT + shaft.base, &shaft)])
         };
 

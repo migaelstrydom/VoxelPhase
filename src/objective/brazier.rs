@@ -2,20 +2,23 @@
 //! knocking it over.
 //!
 //! ```text
-//!   Goal.reached ──▶ BrazierSystem ──▶ OnFire::everlasting + FireSeat (the
-//!                         │            flame in the bowl), embers glow
-//!   Orientation ──tipped──┘──▶ Goal.ruined: put out, never to be lit
-//!                         │
-//!                         └──▶ LightShaft aim: pale while it waits, gold
-//!                              once lit, gone once spilled
+//!   LevelProgress (every solid taken?) ─┐
+//!   Goal.reached ───────────────────────┼─▶ BrazierStage: Cold, Ready,
+//!   Orientation ──tipped──▶ Goal.ruined ┘   Lit or Spilled
+//!                                                │
+//!          OnFire::everlasting + FireSeat ◀──────┤ (Lit: the flame in
+//!          MaterialModulation (embers)    ◀──────┤  the bowl)
+//!          LightShaft aim                 ◀──────┘
 //! ```
 //!
 //! A brazier is a destination, and says so from across the level without a
-//! word: a shaft of pale light stands up from its bowl into the sky, and its
-//! banked embers breathe a dull red. Lit, the shaft turns to gold. The
-//! brazier is an ordinary heavy body: a blast, a boulder or a flood can
-//! tip it. Tipped past [`Brazier::tip_limit`] its coals are spilled, and
-//! that cannot be undone.
+//! word, once there is somewhere to go: while solids are still to be taken
+//! it stands cold and dark; once the last is taken a shaft of pale light
+//! stands up from its bowl into the sky and its banked embers breathe a dull
+//! red. Reached, it is lit and the shaft turns to gold. The brazier is an
+//! ordinary heavy body: a blast, a boulder or a flood can tip it. Tipped
+//! past [`Brazier::tip_limit`] its coals are spilled, and that cannot be
+//! undone.
 
 use std::f32::consts::TAU;
 
@@ -29,6 +32,7 @@ use crate::rendering::material::SurfaceModulation;
 use crate::time::Time;
 
 use super::goal::Goal;
+use super::progress::LevelProgress;
 
 /// A brazier, on the entity that carries its [`Goal`].
 #[derive(Component, Clone, Copy, Debug)]
@@ -63,29 +67,61 @@ impl Brazier {
         (orientation.0 * Vector3::y()).angle(&Vector3::y()) > self.tip_limit
     }
 
-    /// How its embers glow: in full once lit; banked, breathing slowly,
-    /// while it waits; not at all once spilled.
-    pub fn embers(&self, goal: &Goal) -> SurfaceModulation {
-        let glow = if self.lit {
-            1.0
-        } else if goal.ruined {
-            0.0
+    /// Where it stands, given its `goal` and whether every solid in the
+    /// level has been `gathered`.
+    pub fn stage(&self, goal: &Goal, gathered: bool) -> BrazierStage {
+        if goal.ruined {
+            BrazierStage::Spilled
+        } else if goal.reached {
+            BrazierStage::Lit
+        } else if gathered {
+            BrazierStage::Ready
         } else {
-            let breath = (self.breathing * BREATHS_PER_SECOND * TAU).sin();
-            BANKED * (1.0 + BANKED_BREATH * breath)
+            BrazierStage::Cold
+        }
+    }
+
+    /// How its embers glow at `stage`: banked and breathing slowly while it
+    /// is ready, in full once lit.
+    pub fn embers(&self, stage: BrazierStage) -> SurfaceModulation {
+        let glow = match stage {
+            BrazierStage::Cold | BrazierStage::Spilled => 0.0,
+            BrazierStage::Ready => {
+                let breath = (self.breathing * BREATHS_PER_SECOND * TAU).sin();
+                BANKED * (1.0 + BANKED_BREATH * breath)
+            }
+            BrazierStage::Lit => 1.0,
         };
         SurfaceModulation::emissive(glow)
     }
+}
 
-    /// How its shaft of light looks: pale while it waits, gold once lit,
-    /// gone once spilled.
-    pub fn shaft(&self, goal: &Goal) -> ShaftLook {
-        if self.lit {
-            SHAFT_LIT
-        } else if goal.ruined {
-            ShaftLook::NONE
-        } else {
-            SHAFT_WAITING
+/// Where a brazier stands in its level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BrazierStage {
+    /// Solids are still to be taken: it stands dark, and nothing marks it.
+    Cold,
+    /// Every solid is taken: it waits to be reached, marked by a pale shaft.
+    Ready,
+    /// Reached: it burns, under a gold shaft.
+    Lit,
+    /// Knocked over: its coals are spilled, and it can never be lit.
+    Spilled,
+}
+
+impl BrazierStage {
+    /// Whether a fire burns in its bowl.
+    pub fn burning(self) -> bool {
+        self == BrazierStage::Lit
+    }
+
+    /// How its shaft of light looks: pale while it is ready, gold once lit,
+    /// and gone while it is cold or once it is spilled.
+    pub fn shaft(self) -> ShaftLook {
+        match self {
+            BrazierStage::Cold | BrazierStage::Spilled => ShaftLook::NONE,
+            BrazierStage::Ready => SHAFT_READY,
+            BrazierStage::Lit => SHAFT_LIT,
         }
     }
 }
@@ -96,9 +132,9 @@ const BANKED: f32 = 0.14;
 const BANKED_BREATH: f32 = 0.35;
 const BREATHS_PER_SECOND: f32 = 0.3;
 
-/// The shaft over a brazier that waits: a pale, cool light from the sky,
-/// such as Bosch's blessed rise through.
-const SHAFT_WAITING: ShaftLook = ShaftLook {
+/// The shaft over a brazier ready to be lit: a pale, cool light from the
+/// sky, such as Bosch's blessed rise through.
+const SHAFT_READY: ShaftLook = ShaftLook {
     colour: Vector3::new(0.82, 0.9, 1.0),
     radiance: 0.55,
     presence: 1.0,
@@ -115,13 +151,15 @@ const SHAFT_LIT: ShaftLook = ShaftLook {
 /// side, so one fallen against a wall is not.
 const TIP_LIMIT: f32 = 0.7;
 
-/// Lights braziers whose goal has been reached, and ruins ones knocked over.
+/// Marks braziers once every solid is taken, lights them once their goal is
+/// reached, and ruins ones knocked over.
 pub struct BrazierSystem;
 
 impl<'a> System<'a> for BrazierSystem {
     type SystemData = (
         Entities<'a>,
         Read<'a, Time>,
+        Read<'a, LevelProgress>,
         ReadStorage<'a, Orientation>,
         WriteStorage<'a, Brazier>,
         WriteStorage<'a, Goal>,
@@ -135,6 +173,7 @@ impl<'a> System<'a> for BrazierSystem {
         let (
             entities,
             time,
+            progress,
             orientations,
             mut braziers,
             mut goals,
@@ -144,6 +183,7 @@ impl<'a> System<'a> for BrazierSystem {
             mut shafts,
         ) = data;
         let dt = time.delta_seconds();
+        let gathered = progress.solids_outstanding() == 0;
 
         for (entity, orientation, brazier, goal) in
             (&entities, &orientations, &mut braziers, &mut goals).join()
@@ -153,7 +193,8 @@ impl<'a> System<'a> for BrazierSystem {
             }
             brazier.breathing += dt;
 
-            let burning = goal.reached && !goal.ruined;
+            let stage = brazier.stage(goal, gathered);
+            let burning = stage.burning();
             if burning != brazier.lit {
                 brazier.lit = burning;
                 if burning {
@@ -165,10 +206,10 @@ impl<'a> System<'a> for BrazierSystem {
                 }
             }
             glows
-                .insert(entity, MaterialModulation(brazier.embers(goal)))
+                .insert(entity, MaterialModulation(brazier.embers(stage)))
                 .ok();
             if let Some(shaft) = shafts.get_mut(entity) {
-                shaft.aim = brazier.shaft(goal);
+                shaft.aim = stage.shaft();
             }
         }
     }
@@ -191,6 +232,7 @@ mod tests {
         world.register::<MaterialModulation>();
         world.register::<LightShaft>();
         world.insert(Time::fixed(1.0 / 60.0));
+        world.insert(LevelProgress::default());
         let seat = FireSeat {
             base: Vector3::new(0.0, 0.4, 0.0),
             size: Vector3::new(0.5, 0.8, 0.5),
@@ -265,9 +307,17 @@ mod tests {
     }
 
     #[test]
-    fn its_shaft_waits_pale_burns_gold_and_goes_with_its_coals() {
+    fn its_shaft_comes_with_the_last_solid_turns_gold_and_goes_with_its_coals() {
         let shaft_of =
             |world: &World, entity| world.read_storage::<LightShaft>().get(entity).unwrap().aim;
+        let glow_of = |world: &World, entity| {
+            world
+                .read_storage::<MaterialModulation>()
+                .get(entity)
+                .unwrap()
+                .0
+                .emissive_scale
+        };
         let (mut world, entity) = world_with_brazier(0.0);
         world
             .write_storage::<LightShaft>()
@@ -276,8 +326,15 @@ mod tests {
                 LightShaft::new(Vector3::zeros(), 30.0, (0.3, 1.0), ShaftLook::NONE),
             )
             .unwrap();
+        world.write_resource::<LevelProgress>().add_solid();
         BrazierSystem.run_now(&world);
-        assert_eq!(shaft_of(&world, entity), SHAFT_WAITING);
+        assert_eq!(shaft_of(&world, entity), ShaftLook::NONE);
+        assert_eq!(glow_of(&world, entity), 0.0);
+
+        world.write_resource::<LevelProgress>().take_solid();
+        BrazierSystem.run_now(&world);
+        assert_eq!(shaft_of(&world, entity), SHAFT_READY);
+        assert!(glow_of(&world, entity) > 0.0);
 
         reach(&world, entity);
         BrazierSystem.run_now(&world);

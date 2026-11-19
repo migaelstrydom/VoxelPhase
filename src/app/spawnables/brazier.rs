@@ -14,8 +14,9 @@
 //!                         its lip), Goal + Brazier (`objective`)
 //! ```
 //!
-//! A shaft of light stands from its bowl into the sky, so it is seen as
-//! the place to go from anywhere in a level (`objective::brazier`).
+//! Once every solid is taken, a shaft of light stands over its bowl into
+//! the sky, so it is seen as the place to go from anywhere in a level
+//! (`objective::brazier`).
 //!
 //! It belongs to reason, not to the garden (`docs/VISUAL_DIRECTION.md`):
 //! cast bronze, kept bright, of true proportions, on the model of the
@@ -161,7 +162,11 @@ const FLAME_SIZE: Vector3<f32> = Vector3::new(0.56, 0.85, 0.56);
 /// over anything in a level; it widens and fades as it rises, so it has no
 /// end to be seen.
 const SHAFT_HEIGHT: f32 = 70.0;
-const SHAFT_RADII: (f32, f32) = (0.3, 2.2);
+const SHAFT_RADII: (f32, f32) = (0.35, 2.2);
+/// How far over the flame's base the shaft's foot stands, m: clear above
+/// the tips of the flame, so the fire burns in the open and the shaft
+/// gathers out of the air over it.
+const SHAFT_LIFT: f32 = 1.0;
 
 /// How far below the lip the flame's base sits, m: down among the coals.
 const FLAME_SUNK: f32 = 0.06;
@@ -240,7 +245,8 @@ impl BrazierDef {
     /// The shaft of light over its bowl, from its ground point, looking as
     /// `look`.
     pub fn light_shaft(look: ShaftLook) -> LightShaft {
-        LightShaft::new(Self::flame_base(), SHAFT_HEIGHT, SHAFT_RADII, look)
+        let foot = Self::flame_base() + Vector3::new(0.0, SHAFT_LIFT, 0.0);
+        LightShaft::new(foot, SHAFT_HEIGHT, SHAFT_RADII, look)
     }
 
     /// Where its flame sits, from its ground point.

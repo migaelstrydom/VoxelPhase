@@ -28,7 +28,7 @@ mod goal;
 mod hover;
 mod progress;
 
-pub use brazier::{Brazier, BrazierSystem};
+pub use brazier::{Brazier, BrazierStage, BrazierSystem};
 pub use goal::{Goal, GoalSystem};
 pub use hover::{Hover, HoverSystem};
 pub use progress::{LevelProgress, ProgressSystem};

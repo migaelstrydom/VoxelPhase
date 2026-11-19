@@ -79,11 +79,14 @@ as the goal without words, and its flare reads as success.
 
 The brazier is built (`app/spawnables/brazier.rs`, `objective/brazier.rs`):
 a Roman bronze tripod on lion's paws, its legs curling into volutes over a
-shallow bowl of coals, ring handles on its lip. It is a destination, and
-says so from anywhere in a level without a word: a shaft of pale light
-stands from its bowl into the sky, after Bosch's *Ascent of the Empyrean*,
-and its banked embers breathe a dull red. Reached, its embers glow, a fire
-burns in the bowl and the shaft turns gold; spilled, the shaft goes out. It is a heavy body, not a static one: walking
+shallow bowl of coals, ring handles on its lip. While solids are still to
+be taken it stands cold and dark. Once the last is taken it becomes a
+destination, and says so from anywhere in a level without a word: a shaft
+of pale light stands up into the sky over its bowl, after Bosch's *Ascent
+of the Empyrean*, and its banked embers breathe a dull red. Reached, its
+embers glow, a fire burns in the bowl and the shaft turns gold; the shaft
+gathers out of the air above the flame, so the fire burns in the open.
+Spilled, the shaft goes out. It is a heavy body, not a static one: walking
 into it does not tip it, but a blast does, and tipped past about 40° its
 coals are spilled and it can never be lit, so the level must be restarted.
 Nothing says so in words; the spilled brazier is the news.
