@@ -28,6 +28,7 @@ use crate::water::geometry::{
 
 use super::activity;
 use super::cells::{FieldCells, CELL_AREA};
+use super::conduits;
 use super::currents;
 use super::faces::{lay_faces, link_faces, SeaBoundary};
 use super::falls::{Fall, Falls};
@@ -321,6 +322,7 @@ impl WaterField {
         moving.sort_unstable();
         moving.dedup();
         currents::refresh(&mut self.cells, &moving);
+        conduits::find(&mut self.cells, self.solver.pressed());
         self.falls
             .find(&self.graph, &mut self.cells, Some(self.solver.brinks()));
         self.frame = FieldFrame {
@@ -349,6 +351,7 @@ impl WaterField {
             sink.relay(&self.graph, &self.cells);
         }
         self.pumps.retrace(&self.graph, &self.cells);
+        conduits::forget(&mut self.cells);
         self.falls.find(&self.graph, &mut self.cells, None);
         self.edit_time = Some(started.elapsed());
     }

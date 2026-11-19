@@ -40,6 +40,10 @@ pub struct Face {
     /// Where its water goes instead of into the cell across it, while it
     /// falls (`super::falls`): an index into `FieldCells::flights`.
     pub flight: Option<u32>,
+    /// The conduit it is a face of while its water runs full under its roof
+    /// (`super::conduits`): an index into `FieldCells::conduits`. Its
+    /// discharge is then the conduit's, not the momentum law's.
+    pub conduit: Option<u32>,
 }
 
 /// Where the water over a face goes while it falls rather than runs on into
@@ -152,6 +156,7 @@ pub fn lay_faces(chunk: &mut FieldChunk, graph: &SpanGraph, sea: Option<SeaBound
                     behind: None,
                     ahead: None,
                     flight: None,
+                    conduit: None,
                 });
             }
         }

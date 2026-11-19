@@ -4,6 +4,7 @@
 //! ```text
 //!   faces  q ← (q − g·h_f·dt·∂η/∂x) / (1 + g·dt·n²·|q| / h_f^(7/3))    momentum
 //!          |q| ≤ Fr_max · h_f · √(g·h_f)                             a brink's limit
+//!          q ← its conduit's, where it runs full under a roof        (`conduits`)
 //!   cells  h += dt · Σ q·w / A                                       volume
 //! ```
 //!
@@ -30,6 +31,11 @@ const G: f32 = 9.81;
 /// a brink, m: a little under the least water falls across
 /// (`falls::LEAST_STEP`), since the water moves on before falls are found.
 pub(super) const BRINK_STEP: f32 = 0.2;
+
+/// How near a face's roof the higher of its cells' surfaces must stand for
+/// the face to be noted as pressed, m: as near as a full cell's
+/// (`conduits`).
+const PRESSED_SLACK: f32 = 5.0e-3;
 
 /// Face width and the distance between cell centres, m.
 const DX: f32 = COLUMN_SIZE;
@@ -113,15 +119,18 @@ pub struct FieldSolver {
     /// stepped ones, their +x and +z neighbours, and those their falling
     /// water lands in.
     touched: Vec<usize>,
-    /// Per stepped chunk, per face: its discharge and flow depth at the
-    /// start of the substep, so every face's update reads its neighbours'
-    /// old values.
+    /// Per stepped chunk, per face: its discharge and the depth it carries
+    /// it at (`carried`) at the start of the substep, so every face's
+    /// update reads its neighbours' old values.
     previous: Vec<Vec<(f32, f32)>>,
     /// Per chunk: whether it is stepped this frame.
     is_stepped: Vec<bool>,
     /// The faces whose cells' surfaces stood a step apart as the last
     /// substep began: the only ones water may be falling over.
     brinks: Vec<FaceRef>,
+    /// The faces whose water stood against their roofs as the last substep
+    /// began: every conduit runs through at least one.
+    pressed: Vec<FaceRef>,
 }
 
 impl FieldSolver {
@@ -211,6 +220,8 @@ impl FieldSolver {
     /// needs.
     pub fn step(&mut self, cells: &mut FieldCells, dt: f32) -> StepStats {
         self.choose_chunks(cells, cells.width());
+        self.brinks.clear();
+        self.pressed.clear();
         let mut stats = StepStats {
             chunks: self.stepped.len() as u32,
             ..StepStats::default()
@@ -229,7 +240,7 @@ impl FieldSolver {
         stats
     }
 
-    /// The momentum update on every stepped face.
+    /// The momentum update on every stepped face, and on every conduit.
     fn update_faces(&mut self, cells: &mut FieldCells, dt: f32) -> u64 {
         let p = self.params;
         self.previous.resize_with(cells.chunks.len(), Vec::new);
@@ -244,33 +255,43 @@ impl FieldSolver {
                 cells.chunks[slot]
                     .faces
                     .iter()
-                    .map(|f| (f.q, flow_depth(cells, a(f.a), f))),
+                    .map(|f| carried(cells, a(f.a), f)),
             );
         }
         let mut count = 0;
         let mut brinks = std::mem::take(&mut self.brinks);
+        let mut pressed = std::mem::take(&mut self.pressed);
         brinks.clear();
+        pressed.clear();
         for &slot in &self.stepped {
             let mut faces = std::mem::take(&mut cells.chunks[slot].faces);
             let stepped = faces.iter_mut().zip(&self.previous[slot]);
             for (index, (face, &(_, depth))) in stepped.enumerate() {
+                let in_conduit = face.conduit.is_some();
+                if !in_conduit && depth <= p.dry_depth {
+                    face.q = 0.0;
+                    continue;
+                }
                 let a = SpanIndex {
                     slot: slot as u32,
                     flat: face.a,
                 };
-                face.q = if depth <= p.dry_depth {
-                    0.0
-                } else {
-                    let blended = self.blended(cells, face, depth);
-                    let step = (cells.surface(face.b) - cells.surface(a)) as f32;
-                    if step.abs() >= BRINK_STEP {
-                        brinks.push(FaceRef {
-                            slot: slot as u32,
-                            index: index as u32,
-                        });
-                    }
-                    inertial(blended, depth, step / DX, dt, &p)
+                let at = FaceRef {
+                    slot: slot as u32,
+                    index: index as u32,
                 };
+                let (here, there) = (cells.surface(a) as f32, cells.surface(face.b) as f32);
+                let step = there - here;
+                if step.abs() >= BRINK_STEP {
+                    brinks.push(at);
+                }
+                if face.roof.is_finite() && here.max(there) >= face.roof - PRESSED_SLACK {
+                    pressed.push(at);
+                }
+                if !in_conduit {
+                    let blended = self.blended(cells, face, depth);
+                    face.q = inertial(blended, depth, step / DX, dt, &p);
+                }
             }
             count += faces.len() as u64;
             let chunk = &mut cells.chunks[slot];
@@ -283,13 +304,39 @@ impl FieldSolver {
             }
         }
         self.brinks = brinks;
+        self.pressed = pressed;
+        self.drive_conduits(cells, dt);
         count
+    }
+
+    /// Move each conduit's water as one column: every face of it takes the
+    /// discharge its head drives (`Conduit::driven`), from the mean of what
+    /// they carried.
+    fn drive_conduits(&self, cells: &mut FieldCells, dt: f32) {
+        let conduits = std::mem::take(&mut cells.conduits);
+        for conduit in &conduits {
+            let face = |at: &FaceRef| cells.chunks[at.slot as usize].faces[at.index as usize].q;
+            let q = conduit.faces.iter().map(face).sum::<f32>() / conduit.faces.len() as f32;
+            let levels = conduit.ends.map(|end| cells.surface(end) as f32);
+            let held = friction(q, conduit.throat, dt, &self.params);
+            let q = conduit.driven(q, levels, held, dt);
+            for at in &conduit.faces {
+                cells.chunks[at.slot as usize].faces[at.index as usize].q = q;
+            }
+        }
+        cells.conduits = conduits;
     }
 
     /// The faces whose cells' surfaces stood `BRINK_STEP` apart as the last
     /// substep began.
     pub fn brinks(&self) -> &[FaceRef] {
         &self.brinks
+    }
+
+    /// The faces whose water stood against their roofs as the last substep
+    /// began.
+    pub fn pressed(&self) -> &[FaceRef] {
+        &self.pressed
     }
 
     /// A face's discharge at the start of the substep, blended with the mean
@@ -321,7 +368,7 @@ impl FieldSolver {
                         slot: r.slot,
                         flat: f.a,
                     };
-                    (f.q, flow_depth(cells, a, f))
+                    carried(cells, a, f)
                 };
                 (d > dry).then(|| q * depth / d)
             })
@@ -547,6 +594,19 @@ fn flow_depth(cells: &FieldCells, a: SpanIndex, face: &Face) -> f32 {
     surface.min(face.roof) - floor
 }
 
+/// A face's discharge and the depth it carries it at, as its neighbours on
+/// its axis blend with it: its flow depth, or none in a conduit, whose
+/// water is driven by its ends and stands to the open water beside it as a
+/// wall does.
+fn carried(cells: &FieldCells, a: SpanIndex, face: &Face) -> (f32, f32) {
+    let depth = if face.conduit.is_some() {
+        0.0
+    } else {
+        flow_depth(cells, a, face)
+    };
+    (face.q, depth)
+}
+
 /// The update of a boundary face. To the void, a free overfall. To the sea,
 /// a radiating edge (Flather 1976): the outflow is the long-wave speed times
 /// the surface's height over sea level, so a wave reaching the edge leaves
@@ -572,14 +632,19 @@ fn boundary_discharge(bed: f32, surface: f32, outside: Option<f32>, p: &FlowPara
     }
 }
 
+/// What holds back a discharge `q` flowing `depth` deep over `dt` seconds,
+/// as the share of itself it loses: Manning friction and the still drag.
+fn friction(q: f32, depth: f32, dt: f32, p: &FlowParams) -> f32 {
+    let still = p.still_drag * dt * (-(q.abs() / depth) / p.still_speed).exp() * depth
+        / (depth + p.still_depth);
+    still + G * dt * p.manning_n * p.manning_n * q.abs() / depth.powf(7.0 / 3.0)
+}
+
 /// One face's momentum: gravity down the surface's slope against Manning
 /// friction and the still drag, treated implicitly so they never reverse the
 /// flow, then capped.
 fn inertial(q: f32, depth: f32, slope: f32, dt: f32, p: &FlowParams) -> f32 {
-    let still = p.still_drag * dt * (-(q.abs() / depth) / p.still_speed).exp() * depth
-        / (depth + p.still_depth);
-    let friction = still + G * dt * p.manning_n * p.manning_n * q.abs() / depth.powf(7.0 / 3.0);
-    let q = (q - G * depth * dt * slope) / (1.0 + friction);
+    let q = (q - G * depth * dt * slope) / (1.0 + friction(q, depth, dt, p));
     let limit = p.froude_limit * depth * (G * depth).sqrt();
     q.clamp(-limit, limit)
 }

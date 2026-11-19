@@ -109,6 +109,7 @@ impl<'a> FieldScene<'a> {
             cells: self.field.cells(),
             graph: self.field.graph(),
             depths: self.depths,
+            falls: self.field.falls(),
         }
     }
 
@@ -759,7 +760,7 @@ impl WaterScene for FieldScene<'_> {
         // Its own layout, which an empty surface reads nothing else to note.
         mesh.sources.reads(self.field.cells(), at(0));
         mesh.sources.drawn = (0..chunk.depth.len())
-            .map(|flat| field_sources::surfaced(self.field, &drawn, at(flat)))
+            .map(|flat| drawn.drawn(at(flat)))
             .collect();
         for (flat, (local, ordinal)) in chunk.cell_columns().enumerate() {
             if !mesh.sources.drawn[flat] {

@@ -18,7 +18,7 @@ use nalgebra::Vector2;
 use smallvec::SmallVec;
 
 use crate::water::falling::falls;
-use crate::water::field::{DrawnDepths, FieldCells, Jet as FieldJet, WaterField};
+use crate::water::field::{DrawnDepths, Falls, FieldCells, Jet as FieldJet, WaterField};
 use crate::water::geometry::{SpanGraph, SpanIndex, SpanRef, ORTHOGONAL};
 
 use super::curtain::Curtain;
@@ -49,6 +49,8 @@ pub struct DrawnCells<'a> {
     pub cells: &'a FieldCells,
     pub graph: &'a SpanGraph,
     pub depths: DrawnDepths<'a>,
+    /// The water going over edges: a cell a jet bursts from has no surface.
+    pub falls: &'a Falls,
 }
 
 impl DrawnCells<'_> {
@@ -70,12 +72,26 @@ impl DrawnCells<'_> {
     }
 
     /// Whether a cell has a surface to draw: deep enough, not filled to its
-    /// roof, and not perched.
+    /// roof, not perched, and not bursting out of a hole as a jet, which
+    /// comes from the middle of the hole it fills, under where a surface
+    /// would lie. A cell without one stands to the water beside it as dry
+    /// ground does: it lifts none of their corners towards its roof.
     pub(super) fn drawn(&self, at: SpanIndex) -> bool {
         let depth = self.depth(at);
         depth > DRAWN_DEPTH
             && self.surface(at) < self.cells.ceiling(at) as f64 - ROOF_GAP
             && !self.perched(at)
+            && !self.bursts(at)
+    }
+
+    /// Whether a cell's water bursts out of it as a jet.
+    fn bursts(&self, at: SpanIndex) -> bool {
+        self.cells.ceiling(at).is_finite()
+            && (0..ORTHOGONAL.len()).any(|direction| {
+                self.falls
+                    .get(at, direction)
+                    .is_some_and(|fall| fall.driven)
+            })
     }
 
     /// Whether a cell holds only a film perched on its bed while a
@@ -113,15 +129,6 @@ impl DrawnCells<'_> {
             })
         })
     }
-}
-
-/// Whether a cell's surface is drawn: where it has one (`DrawnCells::drawn`),
-/// unless its water bursts out of it as a jet, which comes from the middle
-/// of the hole it fills, under where a surface would lie.
-pub(super) fn surfaced(field: &WaterField, cells: &DrawnCells, at: SpanIndex) -> bool {
-    cells.drawn(at)
-        && !(0..ORTHOGONAL.len())
-            .any(|direction| field.fall(at, direction).is_some_and(|fall| fall.driven))
 }
 
 /// The falls leaving the cells of chunk `slot`, as a surface's shape takes
@@ -406,7 +413,7 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                     slot,
                     flat: flat as u32,
                 };
-                surfaced(field, cells, at) == was
+                cells.drawn(at) == was
             }));
     held &= falls_of(field, slot).eq(sources.falls.iter().copied());
     // The jets landing in its chunk must be the ones it was built with,

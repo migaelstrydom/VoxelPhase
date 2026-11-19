@@ -13,6 +13,7 @@ use crate::water::geometry::{
     COLUMN_SIZE,
 };
 
+use super::conduits::Conduit;
 use super::faces::{BoundaryFace, Face, Flight};
 
 /// Plan area of one cell, m².
@@ -115,6 +116,9 @@ pub struct FieldCells {
     /// Where the water of each falling face lands (`Face::flight` counts
     /// into these), as the falls were last found.
     pub flights: Vec<Flight>,
+    /// The runs of faces whose water moves as one column under a roof
+    /// (`Face::conduit` counts into these), as they were last found.
+    pub conduits: Vec<Conduit>,
     /// Per slot: how many times its chunk's cells have been laid out again,
     /// after which a `SpanIndex` into it means a different cell.
     generations: Vec<u32>,
@@ -138,6 +142,7 @@ impl FieldCells {
             generations: vec![0; chunks.len()],
             chunks,
             flights: Vec::new(),
+            conduits: Vec::new(),
             origin,
             width,
         }

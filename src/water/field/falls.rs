@@ -813,44 +813,13 @@ fn land(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::water::field::faces::{lay_faces, link_faces};
-    use crate::water::geometry::{
-        Span, SpanChunk, SpanChunkCoord, CHUNK_COLUMNS, COLUMNS_PER_CHUNK,
-    };
-
-    fn open(bed: f32) -> Span {
-        Span {
-            floor_c: bed,
-            bed,
-            quarters: [bed; 4],
-            floor_min: bed,
-            floor_max: bed,
-            ceiling: f32::INFINITY,
-        }
-    }
+    use crate::water::field::testing::{cell, chunk_of, open, roofed};
+    use crate::water::geometry::CHUNK_COLUMNS;
 
     /// One chunk whose floor is `floor(i)` along x, the same on every row,
     /// awake, with faces laid.
     fn terrace(floor: impl Fn(i32) -> f32) -> (SpanGraph, FieldCells) {
-        let coord = SpanChunkCoord { x: 0, z: 0 };
-        let columns: Vec<Vec<Span>> = (0..COLUMNS_PER_CHUNK as i32)
-            .map(|local| vec![open(floor(local % CHUNK_COLUMNS))])
-            .collect();
-        let mut graph = SpanGraph::new(coord, coord);
-        graph.replace_chunk(coord, SpanChunk::from_columns(&columns, 1));
-        let mut cells = FieldCells::build(&graph);
-        lay_faces(&mut cells.chunks[0], &graph, None);
-        link_faces(&mut cells, &[0]);
-        cells.chunks[0].awake = true;
-        (graph, cells)
-    }
-
-    /// The cell of column (i, k) of the one chunk.
-    fn cell(i: i32, k: i32) -> SpanIndex {
-        SpanIndex {
-            slot: 0,
-            flat: (k * CHUNK_COLUMNS + i) as u32,
-        }
+        chunk_of(|i, _| open(floor(i)))
     }
 
     /// Set the discharge of the +x face of cell (i, k).
@@ -1001,19 +970,7 @@ mod tests {
     #[test]
     fn a_fall_runs_on_round_an_outer_corner_into_its_own_cell_s_other_edge() {
         // A pillar one column wide standing 4 m over the floor.
-        let coord = SpanChunkCoord { x: 0, z: 0 };
-        let columns: Vec<Vec<Span>> = (0..COLUMNS_PER_CHUNK as i32)
-            .map(|local| {
-                let (i, k) = (local % CHUNK_COLUMNS, local / CHUNK_COLUMNS);
-                vec![open(if (i, k) == (3, 5) { 4.0 } else { 0.0 })]
-            })
-            .collect();
-        let mut graph = SpanGraph::new(coord, coord);
-        graph.replace_chunk(coord, SpanChunk::from_columns(&columns, 1));
-        let mut cells = FieldCells::build(&graph);
-        lay_faces(&mut cells.chunks[0], &graph, None);
-        link_faces(&mut cells, &[0]);
-        cells.chunks[0].awake = true;
+        let (graph, mut cells) = chunk_of(|i, k| open(if (i, k) == (3, 5) { 4.0 } else { 0.0 }));
         *cells.depth_mut(cell(3, 5)) = 0.5;
         for face in &mut cells.chunks[0].faces {
             if face.a == cell(3, 5).flat {
@@ -1035,22 +992,10 @@ mod tests {
     /// water 5 m deep behind it over a dry floor in front: the hole runs
     /// full, carrying `q` m²/s.
     fn holed_dam(q: f32) -> (SpanGraph, FieldCells) {
-        let coord = SpanChunkCoord { x: 0, z: 0 };
-        let columns: Vec<Vec<Span>> = (0..COLUMNS_PER_CHUNK as i32)
-            .map(|local| match local % CHUNK_COLUMNS {
-                3 | 4 => vec![Span {
-                    ceiling: 2.5,
-                    ..open(1.0)
-                }],
-                _ => vec![open(0.0)],
-            })
-            .collect();
-        let mut graph = SpanGraph::new(coord, coord);
-        graph.replace_chunk(coord, SpanChunk::from_columns(&columns, 1));
-        let mut cells = FieldCells::build(&graph);
-        lay_faces(&mut cells.chunks[0], &graph, None);
-        link_faces(&mut cells, &[0]);
-        cells.chunks[0].awake = true;
+        let (graph, mut cells) = chunk_of(|i, _| match i {
+            3 | 4 => roofed(1.0, 2.5),
+            _ => open(0.0),
+        });
         for i in 0..3 {
             *cells.depth_mut(cell(i, 5)) = 5.0;
         }

@@ -3,6 +3,7 @@
 
 mod activity;
 mod cells;
+mod conduits;
 mod currents;
 mod faces;
 mod falls;
@@ -13,9 +14,12 @@ mod pumps;
 mod remap;
 mod solver;
 mod sources;
+#[cfg(test)]
+mod testing;
 mod versions;
 
 pub use cells::{FieldCells, FieldChunk, CELL_AREA};
+pub use conduits::Conduit;
 pub use faces::{past_edge, Axis, BoundaryFace, Face, Flight, SeaBoundary};
 pub use falls::{Fall, Falls};
 pub use field::{FieldFrame, FieldLedger, WaterField, WET_DEPTH};

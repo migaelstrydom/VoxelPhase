@@ -173,6 +173,7 @@ mod tests {
             behind: None,
             ahead: None,
             flight: None,
+            conduit: None,
         });
         cells
     }
@@ -221,6 +222,7 @@ mod tests {
             behind: None,
             ahead: None,
             flight: None,
+            conduit: None,
         });
         link_faces(&mut cells, &[0]);
         let front = fronts(&cells, None).next().expect("a front");
