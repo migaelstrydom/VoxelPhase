@@ -316,6 +316,16 @@ Open:
   is left is the slosh itself. What is missing is what a real plunge pool
   does with a jet: it takes its water in under the surface and loses its
   energy to turbulence. The scheme can only set water down on top.
+- **A current can run round a pond for ever.** In the raft room (`o2_raft`)
+  some sets of blasts leave a ring of flow over a shelf 0.2 m to 0.5 m deep
+  and back through deeper water, 0.2 to 0.7 m/s, with the surface level to a
+  few centimetres all round it. It was still running as fast ten minutes
+  on, with nothing feeding it (`water_fuzz`: "still running"; 1 seed in 8
+  here, 4 in 16 with the fuzzer as it was before falls flew). A ring has no
+  slope to stop it, only friction, and something is keeping it up. Not
+  traced: a guess is the θ blend, which carries each neighbour's velocity
+  at the face's own depth and so makes discharge where a current passes
+  from shallow water into deep.
 - **Only a straight tunnel runs under pressure.** A conduit is one run of full
   cells along one axis. Round a bend, or through a flooded cave wider than a
   run, the water moves by the flow law alone, which passes at most Froude 1
