@@ -566,8 +566,9 @@ impl Falls {
 
     /// Even each fall's velocity out with those of the falls its lip runs
     /// on into: half its own, a quarter each of theirs, its own again where
-    /// its lip ends. Jets side by side even out how thick they are, how
-    /// high their tops stand and how much of their holes they fill as well: each hole's water is driven its own
+    /// its lip ends. Jets side by side even out how thick they are and how
+    /// high their tops stand as well, and how high they fill their holes
+    /// at the mouth, which only ever comes up to the jets' beside: each hole's water is driven its own
     /// way, by the flow law or as a column run full, and drawn each at its
     /// own height a row of them is a row of teeth. A spent fall's water is
     /// already in the air, and keeps what it left with.
@@ -578,7 +579,7 @@ impl Falls {
             .map(|list| {
                 list.iter()
                     .map(|fall| {
-                        let shape = |fall: &Fall| [fall.lip.y, fall.depth, fall.opening];
+                        let shape = |fall: &Fall| [fall.lip.y, fall.depth, fall.roof()];
                         let own = (fall.velocity, shape(fall));
                         if fall.spent.is_some() {
                             return own;
@@ -600,11 +601,14 @@ impl Falls {
             })
             .collect();
         for (list, evened) in self.chunks.iter_mut().zip(evened) {
-            for (fall, (velocity, [top, depth, opening])) in list.iter_mut().zip(evened) {
+            for (fall, (velocity, [top, depth, roof])) in list.iter_mut().zip(evened) {
+                // The top of its body at the mouth comes up to its
+                // neighbours', and never down from the roof of its own hole.
+                let roof = roof.max(fall.roof());
                 fall.velocity = velocity;
                 fall.lip.y = top;
                 fall.depth = depth;
-                fall.opening = opening;
+                fall.opening = depth + 2.0 * (roof - top).max(0.0);
             }
         }
     }
