@@ -32,8 +32,12 @@ collected to complete a level.** Then the hero reaches the level's Greek
 temple.
 
 In code (`src/objective/`, `app/spawnables/platonic_solid.rs`), a solid
-is a `Solid(pos, kind)` in a level: a glowing heart inside honeyed crystal,
-its edges a frame of gold, as Leonardo drew the solids for Pacioli. A
+is a `Solid(pos, kind)` in a level, drawn as Leonardo drew the solids for
+Pacioli, its edges a frame: a star burning gold inside clear crystal (the
+solid stellated, as Kepler stellated it), a ray of light out through every
+face like a monstrance's, the frame's rods wound with gold wire, a pearl at
+every corner, a beaded armillary ring about it, and motes of light winking
+round it. A
 `Goal` asks for every solid the level holds. Until the temple is built,
 full levels end at a brazier too.
 

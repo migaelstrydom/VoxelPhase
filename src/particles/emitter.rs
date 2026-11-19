@@ -33,6 +33,8 @@ pub enum ParticleEffectType {
     ShardGlitter,
     /// Leaves knocked off a clump of foliage.
     Leaves,
+    /// Motes of light winking in and out about a Platonic solid.
+    Motes,
 }
 
 /// Component for entities that emit particles.

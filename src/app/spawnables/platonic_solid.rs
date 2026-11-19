@@ -2,16 +2,24 @@
 //! take.
 //!
 //! ```text
-//!   PlatonicSolid ──polyhedron──▶ core: the solid small, a light that blooms
-//!                             ├──▶ shell: the solid in honeyed crystal,
-//!                             │    the core seen through it
-//!                             └──▶ frame: a gilt rod down every edge and a
-//!                                  bead at every corner
+//!   PlatonicSolid ──polyhedron──▶ star: the solid small and stellated, as
+//!                             │    Kepler stellated it, burning gold
+//!                             ├──▶ rays: a shaft of white light out
+//!                             │    through the middle of every face
+//!                             ├──▶ shell: the solid in clear crystal that
+//!                             │    flashes along its faces
+//!                             ├──▶ frame: a gilt rod down every edge,
+//!                             │    gold wire twisted round it, and a pearl
+//!                             │    in a gold cup at every corner
+//!                             └──▶ ring: a beaded gilt ring about it, level
+//!                                  as it is held, as an armillary's
+//!   motes (particles): points of light winking in and out about it
 //!   PlatonicSolidDef ──spawn──▶ Hover (no rigid body), Collectable, PointLight
 //! ```
 //!
 //! Drawn as Leonardo drew them for Pacioli's *De divina proportione*, the
-//! edges a frame, here a frame of gold round crystal with a light in it. They belong
+//! edges a frame, here a frame of gold round crystal with a star burning in
+//! it, its rays out through every face like a monstrance's. They belong
 //! to reason, not to the garden (`docs/VISUAL_DIRECTION.md`): true
 //! proportions and crisp edges. A solid has no rigid body. It hangs where
 //! it was authored, hovers, turns and is taken by walking into it; nothing
@@ -19,6 +27,7 @@
 //!
 //! `visual_bench objective` shows all five.
 
+use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
 
 use nalgebra::{UnitQuaternion, Vector2, Vector3, Vector4};
@@ -34,6 +43,7 @@ use crate::geometry::{PlatonicSolid, Polyhedron};
 use crate::lighting::PointLight;
 use crate::model::{MeshPrimitive, Model, ModelPart, Transform};
 use crate::objective::{Hover, LevelProgress};
+use crate::particles::{ParticleEffectType, ParticleEmitter};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{
     Emission, Material, MaterialId, SurfaceFinish, SurfaceModulation,
@@ -46,9 +56,11 @@ use crate::rendering::vertex::Vertex;
 const PALETTE: &str = "platonic_solids";
 
 /// Slots in the palette.
-const CORE: usize = 0;
+const STAR: usize = 0;
 const SHELL: usize = 1;
 const GILT: usize = 2;
+const RAYS: usize = 3;
+const PEARL: usize = 4;
 
 /// How big every solid looks, m: the mean of the radius through its
 /// corners and the radius to its faces. Equal circumradii would make the
@@ -59,54 +71,113 @@ const MEAN_RADIUS: f32 = 0.3;
 /// the radius: enough that every rod stands proud of the faces it divides.
 const SHELL_INSET: f32 = 0.965;
 
-/// How big the light inside is, as a share of the radius.
-const CORE_SCALE: f32 = 0.5;
+/// The star inside: the radius of the solid it is raised on, and how far
+/// out its points reach, as shares of the radius.
+const STAR_BODY: f32 = 0.34;
+const STAR_POINTS: f32 = 0.66;
+
+/// The rays: where each starts and ends, as shares of the radius, and how
+/// thick it is at its root, m. Out past the frame, so they are seen to
+/// come out of the solid.
+const RAY_FROM: f32 = 0.3;
+const RAY_TO: f32 = 1.75;
+const RAY_ROOT: f32 = 0.011;
 
 /// How much of what is behind it the shell hides head on, and how it bends
-/// light: a clouded crystal, which turns to a mirror along its faces.
-const SHELL_OPTICS: Transparency = Transparency::new(0.38, 1.55);
+/// light: clear as rock crystal, and as quick as a diamond to turn into a
+/// mirror away from head on, so its faces flash as it turns.
+const SHELL_OPTICS: Transparency = Transparency::new(0.16, 2.2);
 
-/// Radii of the frame's rods and of the beads at its corners, m.
-const ROD_RADIUS: f32 = 0.0125;
-const BEAD_RADIUS: f32 = 0.024;
+/// Radius of the frame's rods, m.
+const ROD_RADIUS: f32 = 0.0105;
 /// Sides round a rod: round to the eye at any distance a solid is seen.
 const ROD_SIDES: u32 = 12;
+
+/// The wire twisted round each rod: two strands, how thick, how far along
+/// the rod a strand takes to go once round it, m, and stations to a turn.
+const WIRE_RADIUS: f32 = 0.0036;
+const WIRE_PITCH: f32 = 0.06;
+const WIRE_STATIONS: usize = 8;
+
+/// The pearl at each corner, and the gold cup it sits in: its radius, how
+/// far out from the corner its middle sits, m, and the cup's rim.
+const PEARL_RADIUS: f32 = 0.021;
+const PEARL_RISE: f32 = 0.012;
+const CUP_RADIUS: f32 = 0.019;
+const CUP_RIM: f32 = 0.0045;
+
+/// The ring about it: its radius as a share of the radius, how thick it is,
+/// m, and the beads set round it: how far apart, and how big.
+const RING_RADIUS: f32 = 1.22;
+const RING_THICKNESS: f32 = 0.0065;
+const RING_BEAD_SPACING: f32 = 0.045;
+const RING_BEAD_RADIUS: f32 = 0.0095;
+const RING_STATIONS: usize = 72;
+
+/// Motes of light shed about it each second.
+const MOTES_PER_SECOND: f32 = 20.0;
 
 /// How close the player has to get. Comfortably wider than the solid itself:
 /// brushing past one and not taking it reads as a bug.
 const REACH: f32 = 1.2;
 
-/// Warm white light: reason's colour against the garden's.
+/// The star's fire: deep gold, saturated, so the bloom round it is gold
+/// and not white.
+const STAR_LIGHT: Colour = Colour {
+    r: 1.0,
+    g: 0.42,
+    b: 0.05,
+    a: 1.0,
+};
+/// The rays' light: nearly white, a touch of gold.
+const RAY_LIGHT: Colour = Colour {
+    r: 1.0,
+    g: 0.88,
+    b: 0.62,
+    a: 1.0,
+};
+/// What the solid casts on its surroundings.
 const LIGHT: Colour = Colour {
     r: 1.0,
-    g: 0.78,
-    b: 0.45,
+    g: 0.72,
+    b: 0.35,
     a: 1.0,
 };
 
-/// The shell's colour where the sun falls on it: honeyed crystal, deeper
-/// than its light, so each face takes the sun differently.
-const ALABASTER: Colour = Colour {
-    r: 0.6,
-    g: 0.42,
-    b: 0.2,
+/// The crystal's tint where the sun falls on it: pale honey.
+const CRYSTAL: Colour = Colour {
+    r: 0.95,
+    g: 0.82,
+    b: 0.6,
     a: 1.0,
 };
 
-/// The light inside, as luminance: well over the bloom threshold, so a
-/// solid carries a halo and is found at a distance.
-const CORE_GLOW: f32 = 3.2;
+/// The star, as luminance, its points brighter where they turn from the
+/// eye; the rays, brightest of all and thin, so they bloom into shafts.
+/// Both well over the bloom threshold.
+const STAR_GLOW: f32 = 1.45;
+const STAR_RIM_STRENGTH: f32 = 1.8;
+const STAR_RIM_POWER: f32 = 2.0;
+const RAY_GLOW: f32 = 7.0;
 
-/// The shell's own faint glow, the core's light caught in the crystal, so
-/// it reads as lit from within even in shadow.
-const SHELL_GLOW: f32 = 0.35;
-const SHELL_RIM_STRENGTH: f32 = 1.5;
+/// The crystal's own faint glow, the star's light caught in it, brightest
+/// along its silhouette.
+const SHELL_GLOW: f32 = 0.2;
+const SHELL_RIM_STRENGTH: f32 = 3.0;
 const SHELL_RIM_POWER: f32 = 3.0;
 
 /// Gold, as the colour of what it mirrors (linear): a little bright where
 /// the light catches a bead.
 const GOLD: Vector3<f32> = Vector3::new(1.0, 0.62, 0.2);
 const GOLD_BEAD: Vector3<f32> = Vector3::new(1.0, 0.68, 0.26);
+
+/// A pearl's lustre (linear): white with a blush of rose and cream.
+const PEARL_COLOUR: Colour = Colour {
+    r: 0.95,
+    g: 0.9,
+    b: 0.86,
+    a: 1.0,
+};
 
 /// Burnished gold: a mirror, softened.
 const GILT_FINISH: SurfaceFinish = SurfaceFinish {
@@ -116,8 +187,8 @@ const GILT_FINISH: SurfaceFinish = SurfaceFinish {
 
 /// The solid lights its own surroundings, which is what makes one tucked
 /// into a corner findable.
-const LIGHT_INTENSITY: f32 = 0.7;
-const LIGHT_RANGE: f32 = 5.5;
+const LIGHT_INTENSITY: f32 = 1.8;
+const LIGHT_RANGE: f32 = 7.0;
 
 #[derive(Deserialize)]
 pub struct PlatonicSolidDef {
@@ -128,26 +199,38 @@ pub struct PlatonicSolidDef {
 }
 
 impl PlatonicSolidDef {
-    /// The materials of every solid, one to a slot: the light inside, the
-    /// crystal round it, and the frame's gilt.
+    /// The materials of every solid, one to a slot: the star inside, the
+    /// crystal round it, the frame's gilt and the rays.
     pub fn materials() -> Vec<Material> {
         vec![
             Material::coloured(Colour::WHITE).with_emission(Emission {
-                colour: LIGHT,
-                strength: CORE_GLOW,
-                ..Emission::default()
+                colour: STAR_LIGHT,
+                strength: STAR_GLOW,
+                rim_strength: STAR_RIM_STRENGTH,
+                rim_power: STAR_RIM_POWER,
             }),
             Material::coloured(Colour::WHITE)
                 .with_finish(SurfaceFinish::POLISHED)
                 .with_transparency(SHELL_OPTICS)
                 .with_emission(Emission {
-                    colour: LIGHT,
+                    colour: STAR_LIGHT,
                     strength: SHELL_GLOW,
                     rim_strength: SHELL_RIM_STRENGTH,
                     rim_power: SHELL_RIM_POWER,
                 }),
             Material::coloured(Colour::WHITE)
                 .with_finish(GILT_FINISH)
+                .with_reflections(Reflects::Surroundings),
+            Material::coloured(Colour::WHITE).with_emission(Emission {
+                colour: RAY_LIGHT,
+                strength: RAY_GLOW,
+                ..Emission::default()
+            }),
+            Material::coloured(Colour::WHITE)
+                .with_finish(SurfaceFinish {
+                    roughness: 0.14,
+                    metallic: 0.25,
+                })
                 .with_reflections(Reflects::Surroundings),
         ]
     }
@@ -172,9 +255,11 @@ impl PlatonicSolidDef {
         Model::flat(vec![ModelPart {
             local_transform: Transform::default(),
             primitives: vec![
-                faces_mesh(&shape, radius * CORE_SCALE, Colour::WHITE, ids[CORE]),
-                faces_mesh(&shape, radius * SHELL_INSET, ALABASTER, ids[SHELL]),
-                frame_mesh(&shape, radius, ids[GILT]),
+                star_mesh(&shape, radius, ids[STAR]),
+                rays_mesh(&shape, radius, ids[RAYS]),
+                faces_mesh(&shape, radius * SHELL_INSET, CRYSTAL, ids[SHELL]),
+                gilt_mesh(&shape, radius, Self::rest(kind), ids[GILT]),
+                pearls_mesh(&shape, radius, ids[PEARL]),
             ],
         }])
     }
@@ -190,7 +275,7 @@ impl PlatonicSolidDef {
 
 impl Spawnable for PlatonicSolidDef {
     fn material_count(&self) -> usize {
-        3
+        5
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
@@ -221,6 +306,7 @@ impl Spawnable for PlatonicSolidDef {
             )))
             .with(Collectable::solid(REACH))
             .with(PointLight::new(LIGHT, LIGHT_INTENSITY, LIGHT_RANGE))
+            .with(ParticleEmitter::new(ParticleEffectType::Motes).with_spawn_rate(MOTES_PER_SECOND))
             .build()]
     }
 }
@@ -256,28 +342,172 @@ fn faces_mesh(
     mesh
 }
 
-/// A gilt rod down every edge of the solid at `radius`, and a bead at every
-/// corner.
-fn frame_mesh(shape: &Polyhedron, radius: f32, material: MaterialId) -> MeshPrimitive {
+/// The star: the solid at `radius` × [`STAR_BODY`], a point raised on
+/// every face to `radius` × [`STAR_POINTS`], each side flat.
+fn star_mesh(shape: &Polyhedron, radius: f32, material: MaterialId) -> MeshPrimitive {
     let mut mesh = MeshPrimitive {
         vertices: Vec::new(),
         indices: Vec::new(),
         material,
     };
+    for (index, face) in shape.faces.iter().enumerate() {
+        let apex = shape.face_normal(index) * radius * STAR_POINTS;
+        for i in 0..face.len() {
+            let a = shape.vertices[face[i]] * radius * STAR_BODY;
+            let b = shape.vertices[face[(i + 1) % face.len()]] * radius * STAR_BODY;
+            let normal = (b - a).cross(&(apex - a)).normalize();
+            let first = mesh.vertices.len() as u32;
+            for pos in [a, b, apex] {
+                mesh.vertices.push(Vertex {
+                    pos,
+                    color: Vector4::new(1.0, 1.0, 1.0, 1.0),
+                    tex_coords: Vector2::zeros(),
+                    normal,
+                    ao: 1.0,
+                });
+            }
+            mesh.indices.extend([first, first + 1, first + 2]);
+        }
+    }
+    mesh
+}
+
+/// A ray out through the middle of every face, tapering to nothing.
+fn rays_mesh(shape: &Polyhedron, radius: f32, material: MaterialId) -> MeshPrimitive {
+    let mut mesh = MeshPrimitive {
+        vertices: Vec::new(),
+        indices: Vec::new(),
+        material,
+    };
+    for index in 0..shape.faces.len() {
+        let out = shape.face_normal(index) * radius;
+        Strand::through(vec![(out * RAY_FROM, RAY_ROOT), (out * RAY_TO, 0.0)])
+            .sides(6)
+            .rings(3)
+            .lay(&mut mesh, |_| (Vector3::new(1.0, 1.0, 1.0), 1.0));
+    }
+    mesh
+}
+
+/// An empty mesh in `material`.
+fn mesh_in(material: MaterialId) -> MeshPrimitive {
+    MeshPrimitive {
+        vertices: Vec::new(),
+        indices: Vec::new(),
+        material,
+    }
+}
+
+/// Add `more` to `mesh`.
+fn append(mesh: &mut MeshPrimitive, more: MeshPrimitive) {
+    let first = mesh.vertices.len() as u32;
+    mesh.vertices.extend(more.vertices);
+    mesh.indices
+        .extend(more.indices.into_iter().map(|index| index + first));
+}
+
+/// Two directions square to `axis` and to each other.
+fn square_to(axis: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
+    let spare = if axis.y.abs() < 0.9 {
+        Vector3::y()
+    } else {
+        Vector3::x()
+    };
+    let u = axis.cross(&spare).normalize();
+    (u, axis.cross(&u))
+}
+
+/// Everything gilt: a rod down every edge of the solid at `radius` with
+/// two strands of wire twisted round it, a cup at every corner, and the
+/// beaded ring about it, level when the solid is held at `rest`.
+fn gilt_mesh(
+    shape: &Polyhedron,
+    radius: f32,
+    rest: UnitQuaternion<f32>,
+    material: MaterialId,
+) -> MeshPrimitive {
+    let mut mesh = mesh_in(material);
+    let gold = |_| (GOLD, 1.0);
     for (a, b) in shape.edges() {
         let (from, to) = (shape.vertices[a] * radius, shape.vertices[b] * radius);
         Strand::through(vec![(from, ROD_RADIUS), (to, ROD_RADIUS)])
             .sides(ROD_SIDES)
             .rings(1)
-            .lay(&mut mesh, |_| (GOLD, 1.0));
+            .lay(&mut mesh, gold);
+
+        let along = to - from;
+        let (u, v) = square_to(along.normalize());
+        let stations = ((along.norm() / WIRE_PITCH) * WIRE_STATIONS as f32).ceil() as usize;
+        for strand in 0..2 {
+            let start = strand as f32 * PI;
+            let path = (0..=stations)
+                .map(|i| {
+                    let t = i as f32 / stations as f32;
+                    let turn = start + t * along.norm() / WIRE_PITCH * TAU;
+                    let round = (u * turn.cos() + v * turn.sin()) * ROD_RADIUS;
+                    (from + along * t + round, WIRE_RADIUS)
+                })
+                .collect();
+            Strand::through(path).sides(5).rings(1).lay(&mut mesh, gold);
+        }
     }
-    let bead = Colour::new(GOLD_BEAD.x, GOLD_BEAD.y, GOLD_BEAD.z, 1.0);
+
+    // The cups: a rim of wire round each pearl's waist, on a gold boss.
+    let cup = Colour::new(GOLD_BEAD.x, GOLD_BEAD.y, GOLD_BEAD.z, 1.0);
     for corner in &shape.vertices {
-        let ball = Ellipsoid::ball(BEAD_RADIUS, corner * radius).mesh(bead, material);
-        let first = mesh.vertices.len() as u32;
-        mesh.vertices.extend(ball.vertices);
-        mesh.indices
-            .extend(ball.indices.into_iter().map(|index| index + first));
+        let out = corner.normalize();
+        let at = out * radius;
+        append(
+            &mut mesh,
+            Ellipsoid::ball(CUP_RADIUS, at).mesh(cup, material),
+        );
+        let (u, v) = square_to(out);
+        let rim = at + out * PEARL_RISE * 0.6;
+        let path = (0..=24)
+            .map(|i| {
+                let a = TAU * i as f32 / 24.0;
+                (
+                    rim + (u * a.cos() + v * a.sin()) * PEARL_RADIUS * 0.95,
+                    CUP_RIM,
+                )
+            })
+            .collect();
+        Strand::through(path).sides(6).rings(1).lay(&mut mesh, gold);
+    }
+
+    // The ring, level as the solid is held, with its beads.
+    let level = rest.inverse() * Vector3::y();
+    let (u, v) = square_to(level);
+    let ring = radius * RING_RADIUS;
+    let path = (0..=RING_STATIONS)
+        .map(|i| {
+            let a = TAU * i as f32 / RING_STATIONS as f32;
+            ((u * a.cos() + v * a.sin()) * ring, RING_THICKNESS)
+        })
+        .collect();
+    Strand::through(path).sides(8).rings(1).lay(&mut mesh, gold);
+    let beads = (TAU * ring / RING_BEAD_SPACING).round() as usize;
+    for i in 0..beads {
+        let a = TAU * i as f32 / beads as f32;
+        let at = (u * a.cos() + v * a.sin()) * ring;
+        append(
+            &mut mesh,
+            Ellipsoid::ball(RING_BEAD_RADIUS, at).mesh(cup, material),
+        );
+    }
+    mesh
+}
+
+/// A pearl at every corner, set out from it in its cup.
+fn pearls_mesh(shape: &Polyhedron, radius: f32, material: MaterialId) -> MeshPrimitive {
+    let mut mesh = mesh_in(material);
+    for corner in &shape.vertices {
+        let out = corner.normalize();
+        let at = out * (radius + PEARL_RISE);
+        append(
+            &mut mesh,
+            Ellipsoid::ball(PEARL_RADIUS, at).mesh(PEARL_COLOUR, material),
+        );
     }
     mesh
 }
@@ -318,10 +548,10 @@ mod tests {
     /// strays from the solid it outlines.
     #[test]
     fn the_model_is_whole_and_holds_to_its_solid() {
-        let ids = [MaterialId(0), MaterialId(1), MaterialId(2)];
+        let ids: Vec<MaterialId> = (0..5).map(MaterialId).collect();
         for kind in PlatonicSolid::ALL {
             let model = PlatonicSolidDef::model(kind, &ids);
-            let reach = PlatonicSolidDef::circumradius(kind) + BEAD_RADIUS + 1e-4;
+            let reach = PlatonicSolidDef::circumradius(kind) * RAY_TO + 1e-4;
             for mesh in model.parts.iter().flat_map(|part| &part.primitives) {
                 assert!(!mesh.indices.is_empty(), "{kind:?} has an empty mesh");
                 let count = mesh.vertices.len() as u32;

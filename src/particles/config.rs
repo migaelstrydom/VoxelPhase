@@ -45,6 +45,8 @@ pub struct ParticleConfig {
     pub shard_glitter: ParticleSpec,
     /// Leaves knocked off a clump of foliage.
     pub leaves: ParticleSpec,
+    /// Motes of light about a Platonic solid.
+    pub motes: ParticleSpec,
 
     /// Gravity in world units per second squared, before each particle's own
     /// `gravity_scale`.
@@ -69,6 +71,7 @@ impl ParticleConfig {
             ParticleEffectType::EmberTrail => &self.ember_trail,
             ParticleEffectType::ShardGlitter => &self.shard_glitter,
             ParticleEffectType::Leaves => &self.leaves,
+            ParticleEffectType::Motes => &self.motes,
         }
     }
 }
@@ -86,6 +89,7 @@ impl Default for ParticleConfig {
             ember_trail: ember_trail(),
             shard_glitter: shard_glitter(),
             leaves: leaves(),
+            motes: motes(),
             gravity: 9.81,
         }
     }
@@ -295,6 +299,36 @@ fn shard_glitter() -> ParticleSpec {
     }
 }
 
+/// Motes of light about a Platonic solid: born anywhere in a ball about it,
+/// they swell to a point of light, wink out, and drift a little upward as
+/// they go, like dust in a sunbeam. Additive, so they only ever add light.
+fn motes() -> ParticleSpec {
+    ParticleSpec {
+        lifetime: Spread::new(0.5, 1.3),
+        size: Spread::new(0.018, 0.042),
+        speed: Spread::new(0.03, 0.16),
+        launch: LaunchPattern::Sphere,
+        spawn_radius: 0.5,
+        ramp: ColourRamp::new(&[
+            ColourStop::new(0.0, rgba(2.6, 2.2, 1.4, 0.0)),
+            ColourStop::new(0.25, rgba(3.2, 2.7, 1.7, 1.0)),
+            ColourStop::new(0.45, rgba(1.6, 1.2, 0.6, 0.7)),
+            ColourStop::new(1.0, rgba(1.0, 0.7, 0.3, 0.0)),
+        ]),
+        growth: 0.0,
+        spin: Spread::new(0.0, 0.0),
+        additive: 1.0,
+        billow: 0.0,
+        silhouette: Silhouette::Disc,
+        flutter: 0.0,
+        gravity_scale: -0.03,
+        drag: 1.5,
+        turbulence: 0.2,
+        stretch: 0.0,
+        most_live: Some(240),
+    }
+}
+
 /// The column left behind: slow, dark, swelling, and by far the longest-lived
 /// thing an explosion produces.
 ///
@@ -435,6 +469,7 @@ mod tests {
             ParticleEffectType::EmberTrail,
             ParticleEffectType::ShardGlitter,
             ParticleEffectType::Leaves,
+            ParticleEffectType::Motes,
         ] {
             let spec = config.spec(effect_type);
             assert!(spec.lifetime.min > 0.0, "{effect_type:?} lives no time");
