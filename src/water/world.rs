@@ -18,6 +18,7 @@
 use std::time::{Duration, Instant};
 
 use nalgebra::Point3;
+use rustc_hash::FxHashMap;
 
 use crate::debug::DebugLog;
 use crate::level::{Settle, WaterConfig};
@@ -26,7 +27,7 @@ use crate::terrain::TerrainWorld;
 use super::coupling::{Disturbance, Disturbances};
 use super::falling::FallingWater;
 use super::field::{DrawnDepths, Fall, Jet, PumpId, PumpPlacement, SurfaceVersions, WaterField};
-use super::geometry::{SpanChunkCoord, ORTHOGONAL};
+use super::geometry::{SpanChunkCoord, SpanIndex, ORTHOGONAL};
 use super::query::WaterQuery;
 use super::waves::SurfaceWaves;
 
@@ -39,6 +40,10 @@ const SETTLE_STEP: f32 = 0.1;
 /// head, so by then lakes stand within centimetres of steady and settle the
 /// rest of the way in play.
 const SETTLE_LIMIT: f32 = 30.0;
+
+/// The least change in the head of water run full in a hole that is drawn,
+/// m.
+const HEAD_SEEN: f32 = 0.02;
 
 /// Longest frame the field steps in one go, s: a hitch is not a flood.
 const LONGEST_FRAME: f32 = 0.1;
@@ -65,6 +70,9 @@ pub struct WaterWorld {
     jets: Vec<Jet>,
     /// Each chunk's falls as the versions last took them, by slot.
     falls: Vec<Vec<Fall>>,
+    /// Each cell run full in a hole and the head it stood under, m, as the
+    /// versions last took them.
+    heads: FxHashMap<SpanIndex, f32>,
     /// The state of the generator that draws each landing's kick.
     stir: u32,
     /// Seconds simulated: the clock the drawn currents run on.
@@ -90,6 +98,7 @@ impl WaterWorld {
             falls: (0..field.cells().chunks.len())
                 .map(|slot| field.falls().of_slot(slot).to_vec())
                 .collect(),
+            heads: FxHashMap::default(),
             waves: SurfaceWaves::new(config, &field),
             stir: 0x9E37_79B9,
             field,
@@ -126,6 +135,7 @@ impl WaterWorld {
         self.versions.update(self.field.cells(), moving);
         self.note_jets();
         self.note_falls();
+        self.note_heads();
         self.note_foam();
         self.falling = FallingWater::build(&self.field);
         self.stir_landings();
@@ -206,6 +216,55 @@ impl WaterWorld {
             });
             for near in beside {
                 if !self.falls[near].is_empty() {
+                    self.versions.touch(near);
+                }
+            }
+        }
+    }
+
+    /// Move the version of every chunk holding water run full in a hole
+    /// whose head has changed enough to be seen, or that has come under a
+    /// head or out from under one, and of the chunks round it. Such water
+    /// is drawn at its head, which moves with the water at the two ends of
+    /// its hole while its own depth, which its version is taken from,
+    /// cannot. The heads kept are those last drawn, so a change too small
+    /// to see on any one frame is still drawn once it adds up.
+    fn note_heads(&mut self) {
+        let cells = self.field.cells();
+        let now = |cell: SpanIndex| cells.head(cell, |end| cells.surface(end) as f32);
+        let mut moved: Vec<u32> = (cells.run_full.keys())
+            .filter(|&&cell| {
+                let was = self.heads.get(&cell);
+                now(cell).is_some_and(|head| was.is_none_or(|was| (was - head).abs() > HEAD_SEEN))
+            })
+            .chain(
+                self.heads
+                    .keys()
+                    .filter(|&cell| !cells.run_full.contains_key(cell)),
+            )
+            .map(|cell| cell.slot)
+            .collect();
+        if moved.is_empty() {
+            return;
+        }
+        moved.sort_unstable();
+        moved.dedup();
+        self.heads
+            .retain(|cell, _| moved.binary_search(&cell.slot).is_err());
+        let drawn = (cells.run_full.keys())
+            .filter(|cell| moved.binary_search(&cell.slot).is_ok())
+            .filter_map(|&cell| Some((cell, now(cell)?)));
+        self.heads.extend(drawn);
+        for slot in moved {
+            let Some(chunk) = cells.chunks.get(slot as usize) else {
+                continue;
+            };
+            for (dx, dz) in (-1..=1).flat_map(|dz| (-1..=1).map(move |dx| (dx, dz))) {
+                let near = SpanChunkCoord {
+                    x: chunk.coord.x + dx,
+                    z: chunk.coord.z + dz,
+                };
+                if let Some(near) = cells.slot_of(near) {
                     self.versions.touch(near);
                 }
             }
