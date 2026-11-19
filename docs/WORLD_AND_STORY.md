@@ -37,7 +37,16 @@ Pacioli, its edges a frame: a star burning gold inside clear crystal (the
 solid stellated, as Kepler stellated it), a ray of light out through every
 face like a monstrance's, the frame's rods wound with gold wire, a pearl at
 every corner, a beaded armillary ring about it, and motes of light winking
-round it. A
+round it.
+
+Each solid is coloured for its element in the *Timaeus*, after Leonardo's
+scheme (red for fire, yellow for earth, green for water, blue for air,
+white for light): the tetrahedron vermilion in carnelian, the cube ochre in
+topaz, the octahedron cerulean in pale sapphire, the icosahedron sea green
+in aquamarine, and the dodecahedron, the cosmos, white light with violet at
+its heart. The star carries the deep colour, the crystal only a tint, and
+the gold and pearl are the same on all five, so they read as one set.
+Only the colours are decided; the elements' behaviours below are not. A
 `Goal` asks for every solid the level holds. Until the temple is built,
 full levels end at a brazier too.
 

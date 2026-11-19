@@ -43,7 +43,7 @@ use crate::geometry::{PlatonicSolid, Polyhedron};
 use crate::lighting::PointLight;
 use crate::model::{MeshPrimitive, Model, ModelPart, Transform};
 use crate::objective::{Hover, LevelProgress};
-use crate::particles::{ParticleEffectType, ParticleEmitter};
+use crate::particles::{Palette, ParticleEffectType, ParticleEmitter};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{
     Emission, Material, MaterialId, SurfaceFinish, SurfaceModulation,
@@ -52,8 +52,78 @@ use crate::rendering::reflection::Reflects;
 use crate::rendering::transparency::Transparency;
 use crate::rendering::vertex::Vertex;
 
-/// The name the solids' materials are shared under in a level.
-const PALETTE: &str = "platonic_solids";
+/// The colours of a solid's element, after Leonardo, whose treatise on
+/// painting gives red to fire, yellow to earth, green to water, blue to air
+/// and white to light; the dodecahedron, Plato's cosmos, takes the light of
+/// the heavens, white with a breath of violet. The star carries the deep
+/// colour, the crystal only a tint of it, and the rays and motes are its
+/// light: the colour lifted toward white. All linear.
+#[derive(Clone, Copy, Debug)]
+pub struct Element {
+    /// The star's fire, saturated, so its bloom is the element's colour.
+    pub star: Colour,
+    /// The rays and motes: the element's light.
+    pub rays: Colour,
+    /// The crystal's tint where the sun falls on it.
+    pub crystal: Colour,
+    /// What it casts on its surroundings.
+    pub light: Colour,
+}
+
+impl Element {
+    /// The element `kind` stands for, in the *Timaeus*.
+    pub fn of(kind: PlatonicSolid) -> Self {
+        let c = |r, g, b| Colour::new(r, g, b, 1.0);
+        match kind {
+            // Fire: vermilion in carnelian.
+            PlatonicSolid::Tetrahedron => Self {
+                star: c(1.0, 0.24, 0.02),
+                rays: c(1.0, 0.7, 0.42),
+                crystal: c(0.98, 0.66, 0.4),
+                light: c(1.0, 0.52, 0.24),
+            },
+            // Earth: ochre in topaz.
+            PlatonicSolid::Cube => Self {
+                star: c(1.0, 0.56, 0.05),
+                rays: c(1.0, 0.86, 0.55),
+                crystal: c(0.94, 0.8, 0.5),
+                light: c(1.0, 0.74, 0.36),
+            },
+            // Air: cerulean in pale sapphire.
+            PlatonicSolid::Octahedron => Self {
+                star: c(0.28, 0.55, 1.0),
+                rays: c(0.78, 0.89, 1.0),
+                crystal: c(0.7, 0.82, 0.96),
+                light: c(0.62, 0.78, 1.0),
+            },
+            // Water: sea green in aquamarine.
+            PlatonicSolid::Icosahedron => Self {
+                star: c(0.04, 0.66, 0.52),
+                rays: c(0.66, 0.98, 0.9),
+                crystal: c(0.6, 0.86, 0.84),
+                light: c(0.48, 0.95, 0.8),
+            },
+            // The cosmos: white light, violet at its heart.
+            PlatonicSolid::Dodecahedron => Self {
+                star: c(0.72, 0.52, 1.0),
+                rays: c(1.0, 0.97, 1.0),
+                crystal: c(0.86, 0.82, 0.95),
+                light: c(0.88, 0.84, 1.0),
+            },
+        }
+    }
+
+    /// The name its materials are shared under in a level.
+    fn palette(kind: PlatonicSolid) -> &'static str {
+        match kind {
+            PlatonicSolid::Tetrahedron => "platonic_fire",
+            PlatonicSolid::Cube => "platonic_earth",
+            PlatonicSolid::Octahedron => "platonic_air",
+            PlatonicSolid::Icosahedron => "platonic_water",
+            PlatonicSolid::Dodecahedron => "platonic_cosmos",
+        }
+    }
+}
 
 /// Slots in the palette.
 const STAR: usize = 0;
@@ -121,37 +191,6 @@ const MOTES_PER_SECOND: f32 = 20.0;
 /// brushing past one and not taking it reads as a bug.
 const REACH: f32 = 1.2;
 
-/// The star's fire: deep gold, saturated, so the bloom round it is gold
-/// and not white.
-const STAR_LIGHT: Colour = Colour {
-    r: 1.0,
-    g: 0.42,
-    b: 0.05,
-    a: 1.0,
-};
-/// The rays' light: nearly white, a touch of gold.
-const RAY_LIGHT: Colour = Colour {
-    r: 1.0,
-    g: 0.88,
-    b: 0.62,
-    a: 1.0,
-};
-/// What the solid casts on its surroundings.
-const LIGHT: Colour = Colour {
-    r: 1.0,
-    g: 0.72,
-    b: 0.35,
-    a: 1.0,
-};
-
-/// The crystal's tint where the sun falls on it: pale honey.
-const CRYSTAL: Colour = Colour {
-    r: 0.95,
-    g: 0.82,
-    b: 0.6,
-    a: 1.0,
-};
-
 /// The star, as luminance, its points brighter where they turn from the
 /// eye; the rays, brightest of all and thin, so they bloom into shafts.
 /// Both well over the bloom threshold.
@@ -199,12 +238,13 @@ pub struct PlatonicSolidDef {
 }
 
 impl PlatonicSolidDef {
-    /// The materials of every solid, one to a slot: the star inside, the
-    /// crystal round it, the frame's gilt and the rays.
-    pub fn materials() -> Vec<Material> {
+    /// The materials of a solid of `kind`, one to a slot: the star inside,
+    /// the crystal round it, the frame's gilt, the rays and the pearls.
+    pub fn materials(kind: PlatonicSolid) -> Vec<Material> {
+        let element = Element::of(kind);
         vec![
             Material::coloured(Colour::WHITE).with_emission(Emission {
-                colour: STAR_LIGHT,
+                colour: element.star,
                 strength: STAR_GLOW,
                 rim_strength: STAR_RIM_STRENGTH,
                 rim_power: STAR_RIM_POWER,
@@ -213,7 +253,7 @@ impl PlatonicSolidDef {
                 .with_finish(SurfaceFinish::POLISHED)
                 .with_transparency(SHELL_OPTICS)
                 .with_emission(Emission {
-                    colour: STAR_LIGHT,
+                    colour: element.star,
                     strength: SHELL_GLOW,
                     rim_strength: SHELL_RIM_STRENGTH,
                     rim_power: SHELL_RIM_POWER,
@@ -222,7 +262,7 @@ impl PlatonicSolidDef {
                 .with_finish(GILT_FINISH)
                 .with_reflections(Reflects::Surroundings),
             Material::coloured(Colour::WHITE).with_emission(Emission {
-                colour: RAY_LIGHT,
+                colour: element.rays,
                 strength: RAY_GLOW,
                 ..Emission::default()
             }),
@@ -257,7 +297,12 @@ impl PlatonicSolidDef {
             primitives: vec![
                 star_mesh(&shape, radius, ids[STAR]),
                 rays_mesh(&shape, radius, ids[RAYS]),
-                faces_mesh(&shape, radius * SHELL_INSET, CRYSTAL, ids[SHELL]),
+                faces_mesh(
+                    &shape,
+                    radius * SHELL_INSET,
+                    Element::of(kind).crystal,
+                    ids[SHELL],
+                ),
                 gilt_mesh(&shape, radius, Self::rest(kind), ids[GILT]),
                 pearls_mesh(&shape, radius, ids[PEARL]),
             ],
@@ -279,11 +324,13 @@ impl Spawnable for PlatonicSolidDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        Ok(ctx.palette(PALETTE, Self::materials))
+        let kind = self.kind;
+        Ok(ctx.palette(Element::palette(kind), || Self::materials(kind)))
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
         let anchor = Vector3::new(self.pos.0, self.pos.1, self.pos.2);
+        let element = Element::of(self.kind);
         let model = Arc::new(Self::model(self.kind, materials));
 
         world
@@ -305,8 +352,16 @@ impl Spawnable for PlatonicSolidDef {
                 hover.glow(),
             )))
             .with(Collectable::solid(REACH))
-            .with(PointLight::new(LIGHT, LIGHT_INTENSITY, LIGHT_RANGE))
-            .with(ParticleEmitter::new(ParticleEffectType::Motes).with_spawn_rate(MOTES_PER_SECOND))
+            .with(PointLight::new(element.light, LIGHT_INTENSITY, LIGHT_RANGE))
+            .with(
+                ParticleEmitter::new(ParticleEffectType::Motes)
+                    .with_spawn_rate(MOTES_PER_SECOND)
+                    .with_palette(Palette::single(Vector3::new(
+                        element.rays.r,
+                        element.rays.g,
+                        element.rays.b,
+                    ))),
+            )
             .build()]
     }
 }

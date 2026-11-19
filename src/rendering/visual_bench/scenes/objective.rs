@@ -89,7 +89,7 @@ impl VisualScene for Objective {
             .map(|&kind| {
                 (
                     kind,
-                    Drawn::new(PlatonicSolidDef::materials(), |ids| {
+                    Drawn::new(PlatonicSolidDef::materials(kind), |ids| {
                         PlatonicSolidDef::model(kind, ids)
                     }),
                 )
@@ -162,7 +162,7 @@ impl VisualScene for Objective {
                 &day,
             ),
         ];
-        for index in [1, 4] {
+        for index in 0..solids.len() {
             let at = Point3::from(solid_at(index));
             shots.push(shot(
                 &format!("close_{:?}", solids[index].0).to_lowercase(),
