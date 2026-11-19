@@ -30,8 +30,9 @@ const SLACK: f32 = 0.5;
 /// How far over its fall's lip a curtain's vertex may stand, m. A fall's
 /// lip is the middle of its edge, and its curtain hangs from the corners
 /// at the edge's ends, which stand higher where the surface slopes steeply
-/// along it: a metre or so, where a surge runs along a brink.
-const LIP_SLACK: f32 = 1.5;
+/// along it: 1.6 m, for a frame, where a blast threw up a column of water
+/// beside a thin fall in W4.
+const LIP_SLACK: f32 = 2.0;
 
 /// Depth below which a surface vertex is not asked about, m: the draw cuts
 /// the surface off at its shore.
