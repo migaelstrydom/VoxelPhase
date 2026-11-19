@@ -65,6 +65,9 @@ pub struct Push {
     /// How fast it raises the face's discharge, m²/s²; positive from the
     /// face's `a` to its `b`.
     pub rate: f32,
+    /// The fastest it drives the face's water, m/s, signed as `rate` is:
+    /// water already running that fast is left alone.
+    pub speed: f32,
 }
 
 /// A face, by its owning chunk's slot and its place in that chunk's list.

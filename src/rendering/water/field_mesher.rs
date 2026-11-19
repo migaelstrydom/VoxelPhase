@@ -50,8 +50,8 @@ use crate::water::{WaterWorld, FIELD_BODY};
 use super::curtain::{fan, strip, Curtain};
 use super::divide::WaterPatch;
 use super::field_sources::{
-    self, corner_flow, gather, landing_jets, Corner, CurtainSource, DrawnCells, Meeting,
-    VertexSource,
+    self, corner_carried, gather, landing_jets, Carried, Corner, CurtainSource, DrawnCells,
+    Meeting, VertexSource,
 };
 use super::jet::{Jet, JET_RING, JET_ROWS, PLUNGE_CORNERS};
 use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
@@ -148,16 +148,16 @@ impl<'a> FieldScene<'a> {
     }
 
     /// The corner of `span`'s column on the (sx, sz) side, for a cell whose
-    /// surface stands at `level`, its flow, and where it reads from: the cell and the
-    /// cells across from it on each side and diagonally, as `gather` joins
-    /// them.
+    /// surface stands at `level`, what its water carries, and where it
+    /// reads from: the cell and the cells across from it on each side and
+    /// diagonally, as `gather` joins them.
     fn corner(
         &self,
         span: SpanRef,
         level: f64,
         sx: i32,
         sz: i32,
-    ) -> (Corner, Vector2<f32>, VertexSource) {
+    ) -> (Corner, Carried, VertexSource) {
         let x = self.across(span, sx, 0, level);
         let z = self.across(span, 0, sz, level);
         let diagonal = x
@@ -172,8 +172,8 @@ impl<'a> FieldScene<'a> {
         let meetings: SmallVec<[Meeting; 4]> =
             cells.iter().map(|&c| Meeting::of(&drawn, c)).collect();
         let (corner, shape) = gather(&meetings, level);
-        let flow = corner_flow(self.field, &cells, shape);
-        (corner, flow, VertexSource::Corner { cells, shape })
+        let carried = corner_carried(self.field, &cells, shape);
+        (corner, carried, VertexSource::Corner { cells, shape })
     }
 
     /// A cell's surface, the curtains of the water falling from it, and the
@@ -418,11 +418,13 @@ pub(super) fn skirt_vertex(
     out.surface = 0.0;
     out.depth = 0.0;
     out.flow = Vector2::zeros();
+    out.air = 0.0;
     for (i, w) in weights.into_iter().enumerate() {
         let c = corner(i);
         out.surface += w * c.surface;
         out.depth += w * c.depth;
         out.flow += c.flow * w;
+        out.air += w * c.air;
     }
     if out.depth < FILM_DEPTH {
         out.depth *= 1.0 - past;
@@ -522,22 +524,22 @@ const CORNER_EDGES: [[usize; 2]; 4] = [[2, 3], [3, 0], [0, 1], [1, 2]];
 fn lay_cell(
     mesh: &mut RiverMesh,
     column: Column,
-    built: [(Corner, Vector2<f32>, VertexSource); 4],
+    built: [(Corner, Carried, VertexSource); 4],
     falls: [bool; 4],
 ) -> [Option<[u32; 3]>; 4] {
     let (x0, z0) = column.min_corner();
     let base = mesh.vertices.len() as u32;
-    for ((cx, cz), (corner, flow, source)) in CORNERS.into_iter().zip(built) {
+    for ((cx, cz), (corner, carried, source)) in CORNERS.into_iter().zip(built) {
         mesh.vertices.push(RiverVertex {
             xz: Vector2::new(x0 + cx * COLUMN_SIZE, z0 + cz * COLUMN_SIZE),
             surface: corner.height as f32,
             depth: corner.depth as f32,
-            flow,
+            flow: carried.flow,
             face: Vector2::zeros(),
             sheet: Vector4::zeros(),
             normal: Vector3::y(),
             fray: 0.0,
-            air: 0.0,
+            air: carried.foam,
             life: RiverVertex::ALWAYS,
         });
         mesh.sources.vertices.push(source);

@@ -53,6 +53,15 @@ const float SHEET_FULL_POUR = 0.12;
 // Share of the way from a fall's middle out to its frayed end past which it
 // frays away.
 const float FRAY_SHARE = 0.5;
+// Foam the water carries (`fragAir` on the surface): how far past covering
+// the water it must lie to cover it whole, and over what share of the
+// billows' range its patches' edges fade.
+const float RIDING_FOAM_FULL = 1.2;
+const float RIDING_FOAM_EDGE = 0.4;
+// Water churned full of air under its foam: its colour, and how far the
+// water under the thickest foam is turned to it.
+const vec3 AERATED_COLOR = vec3(0.62, 0.86, 0.88);
+const float AERATED_SHARE = 0.55;
 // Gravity, m/s²: how long falling water has taken to drop as far as it has.
 const float FALL_GRAVITY = 9.81;
 // How far the head and the tail of a fall's water are torn up and down it, s
@@ -534,7 +543,8 @@ void main() {
     vec2 carrying = flow * min(1.0, MAX_CARRY_SPEED / max(speed, 1.0e-3));
     // Lace is dear and only shows where water runs fast or thins out to an
     // edge; open water goes without.
-    bool foamy = !sheet && (speed > WHITE_WATER_SPEED.x || nearEdge);
+    float riding = sheet ? 0.0 : clamp(fragAir, 0.0, 1.0);
+    bool foamy = !sheet && (speed > WHITE_WATER_SPEED.x || nearEdge || riding > 0.02);
     for (int p = 0; p < 2; p++) {
         // Each phase starts over at its own offset, so the restart is not
         // seen as the same pattern coming back.
@@ -679,8 +689,18 @@ void main() {
     // Water thinning up a wall is no beach: only a gentle shore froths.
     float edgeFoam = edge * mix(0.15, 0.5, froth) * (1.0 - smoothstep(FROTHING_SLOPE.x, FROTHING_SLOPE.y, thinning));
     float whiteWater = smoothstep(WHITE_WATER_SPEED.x, WHITE_WATER_SPEED.y, speed) * froth * 0.6;
-    float foamFactor = max(edgeFoam, whiteWater);
+    // Foam the water carries from where it was made lies in billows that
+    // close up where it is thick and break into flecks as it thins, over
+    // water turned pale by the air churned into it.
+    float billows = smoothstep(0.25, 0.75, whiteNoise / 1.5);
+    float cover = smoothstep(0.0, RIDING_FOAM_EDGE, riding * RIDING_FOAM_FULL - (1.0 - billows));
+    // Laced inside where it is thin, never the lace's net on its own, and
+    // closing up where it lies thick.
+    float thick = smoothstep(0.5, 1.0, riding);
+    float ridingFoam = cover * mix(0.3 + 0.7 * lace, 0.75 + 0.25 * lace, thick);
     vec3 foamColor = vec3(0.9, 0.95, 1.0) * (0.8 + 0.2 * NdotL);
+    color = mix(color, AERATED_COLOR * (0.55 + 0.45 * NdotL), AERATED_SHARE * smoothstep(0.1, 1.0, riding));
+    float foamFactor = max(max(edgeFoam, whiteWater), ridingFoam);
     color = mix(color, foamColor, foamFactor);
 
     // --- Soft edges: fade into what is behind where the water thins ---

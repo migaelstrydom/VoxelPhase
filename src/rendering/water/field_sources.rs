@@ -157,6 +157,7 @@ pub(super) fn midway(from: RiverVertex, to: &RiverVertex) -> RiverVertex {
         surface: 0.5 * (from.surface + to.surface),
         depth: 0.5 * (from.depth + to.depth),
         flow: 0.5 * (from.flow + to.flow),
+        air: 0.5 * (from.air + to.air),
         ..from
     }
 }
@@ -267,25 +268,41 @@ pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
     (corner, shape)
 }
 
-/// A corner's flow: the mean velocity of the cells in its group, so that the
-/// shader's flow mapping runs smoothly across cells instead of switching at
-/// every edge.
-pub(super) fn corner_flow(field: &WaterField, cells: &[SpanIndex], shape: Shape) -> Vector2<f32> {
-    let (mut sum, mut count) = (Vector2::zeros(), 0.0);
+/// What the water at a corner carries: its flow, and the foam riding it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Carried {
+    /// Depth-averaged velocity, m/s, x and z.
+    pub flow: Vector2<f32>,
+    /// Foam, as the field has it (`FieldChunk::foam`).
+    pub foam: f32,
+}
+
+/// What a corner's water carries: the mean of the cells in its group, so
+/// that the shader's flow mapping and its foam run smoothly across cells
+/// instead of switching at every edge.
+pub(super) fn corner_carried(field: &WaterField, cells: &[SpanIndex], shape: Shape) -> Carried {
+    let (mut flow, mut foam, mut count) = (Vector2::zeros(), 0.0, 0.0);
     for (i, &c) in cells.iter().enumerate() {
         if shape.grouped & (1 << i) != 0 {
-            sum += field.velocity(c);
+            flow += field.velocity(c);
+            foam += field.foam(c);
             count += 1.0;
         }
     }
     if count > 0.0 {
-        sum / count
+        Carried {
+            flow: flow / count,
+            foam: foam / count,
+        }
     } else {
-        Vector2::zeros()
+        Carried {
+            flow: Vector2::zeros(),
+            foam: 0.0,
+        }
     }
 }
 
-/// Where one vertex reads its height, depth and flow.
+/// Where one vertex reads its height, depth, flow and foam.
 #[derive(Debug, Clone)]
 pub(super) enum VertexSource {
     /// A corner of a cell's quad: the cells meeting there, the cell's own
@@ -431,7 +448,9 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
         match source {
             VertexSource::Corner { cells: at, shape } => {
                 if !at.iter().any(|c| cells.replaced_since(c.slot, read)) {
-                    mesh.vertices[v].flow = corner_flow(field, at, *shape);
+                    let carried = corner_carried(field, at, *shape);
+                    mesh.vertices[v].flow = carried.flow;
+                    mesh.vertices[v].air = carried.foam;
                     continue;
                 }
                 let meetings: SmallVec<[Meeting; 4]> =
@@ -445,7 +464,9 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 let vertex = &mut mesh.vertices[v];
                 vertex.surface = corner.height as f32;
                 vertex.depth = corner.depth as f32;
-                vertex.flow = corner_flow(field, at, now);
+                let carried = corner_carried(field, at, now);
+                vertex.flow = carried.flow;
+                vertex.air = carried.foam;
             }
             &VertexSource::Edge { from } => {
                 let source = mesh.vertices[from as usize];
@@ -453,6 +474,7 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 vertex.surface = source.surface;
                 vertex.depth = source.depth;
                 vertex.flow = source.flow;
+                vertex.air = source.air;
             }
             VertexSource::Skirt {
                 first,
@@ -466,6 +488,7 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 vertex.surface = from.surface;
                 vertex.depth = from.depth;
                 vertex.flow = from.flow;
+                vertex.air = from.air;
             }
             &VertexSource::Between { of: [a, b] } => {
                 let from = mesh.vertices[a as usize];
@@ -474,6 +497,7 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 vertex.surface = between.surface;
                 vertex.depth = between.depth;
                 vertex.flow = between.flow;
+                vertex.air = between.air;
             }
             VertexSource::Curtain => {}
             &VertexSource::Jet {

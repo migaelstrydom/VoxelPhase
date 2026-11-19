@@ -11,6 +11,9 @@
 //!                    (each falling face's arc and landing: what the next
 //!                     step sends into the air, what comes down where, and
 //!                     what is drawn and strikes)
+//!                                │ landings
+//!                                ▼
+//!                              Foam (made, carried on the faces, fading)
 //! ```
 //!
 //! The water is the only state: depths in cells, discharges on faces. An
@@ -34,6 +37,7 @@ use super::currents;
 use super::faces::{lay_faces, link_faces, SeaBoundary};
 use super::falls::{Fall, Falls};
 use super::fill::{fill_fed, fill_pool, fill_sea, pool_seed, SpillLevels};
+use super::foam::Foam;
 use super::fronts::{self, Front};
 use super::pumps::{Jet, PumpId, PumpPlacement, Pumps};
 use super::remap::carry;
@@ -109,6 +113,8 @@ pub struct WaterField {
     sea: Option<SeaBoundary>,
     /// The water going over edges as it stood after the last step or edit.
     falls: Falls,
+    /// What steps the foam riding the water.
+    foam: Foam,
     ledger: FieldLedger,
     frame: FieldFrame,
     /// Carrying time of an edit since the last step, reported with it.
@@ -212,6 +218,7 @@ impl WaterField {
             pumps: Pumps::default(),
             sea,
             falls: Falls::default(),
+            foam: Foam::default(),
             ledger,
             frame: FieldFrame::default(),
             edit_time: None,
@@ -326,6 +333,7 @@ impl WaterField {
         conduits::find(&mut self.cells, self.solver.pressed());
         let brinks = Some(self.solver.brinks());
         self.ledger.sunk += self.falls.find(&self.graph, &mut self.cells, brinks, dt);
+        self.foam.step(&mut self.cells, self.falls.landings(), dt);
         self.frame = FieldFrame {
             stats,
             awake,
@@ -395,6 +403,17 @@ impl WaterField {
     /// of that fall's ends meets it there (`Falls::beside`).
     pub fn fall_beside(&self, fall: &Fall, end: usize) -> Option<(&Fall, usize)> {
         self.falls.beside(&self.graph, &self.cells, fall, end)
+    }
+
+    /// The foam riding a cell's water (`FieldChunk::foam`).
+    pub fn foam(&self, cell: SpanIndex) -> f32 {
+        self.cells.chunks[cell.slot as usize].foam[cell.flat as usize]
+    }
+
+    /// The chunks whose foam has changed by more than can be seen since
+    /// this was last asked, by slot.
+    pub fn take_foam_moved(&mut self) -> Vec<usize> {
+        self.foam.take_moved()
     }
 
     /// Depth-averaged velocity in a cell, m/s, x and z.

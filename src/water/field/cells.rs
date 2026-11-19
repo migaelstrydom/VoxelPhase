@@ -32,6 +32,9 @@ pub struct FieldChunk {
     pub ceiling: Vec<f32>,
     /// Water depth over the bed, m, per cell.
     pub depth: Vec<f64>,
+    /// Foam riding the water, per cell (`super::foam`): 0 for none, 1 for
+    /// water covered with it, more where it lies thicker.
+    pub foam: Vec<f32>,
     /// Depth-averaged velocity, m/s, per cell: x and z, as of the last step
     /// whose water moved here.
     pub velocity: Vec<Vector2<f32>>,
@@ -62,6 +65,7 @@ impl FieldChunk {
             offsets.push(bed.len() as u32);
         }
         let depth = vec![0.0; bed.len()];
+        let foam = vec![0.0; bed.len()];
         let velocity = vec![Vector2::zeros(); bed.len()];
         Self {
             coord,
@@ -69,6 +73,7 @@ impl FieldChunk {
             bed,
             ceiling,
             depth,
+            foam,
             velocity,
             faces: Vec::new(),
             boundary: Vec::new(),

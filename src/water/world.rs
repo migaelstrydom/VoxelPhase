@@ -126,6 +126,7 @@ impl WaterWorld {
         self.versions.update(self.field.cells(), moving);
         self.note_jets();
         self.note_falls();
+        self.note_foam();
         self.falling = FallingWater::build(&self.field);
         self.stir_landings();
         self.waves.step(&self.field, dt);
@@ -206,6 +207,27 @@ impl WaterWorld {
             for near in beside {
                 if !self.falls[near].is_empty() {
                     self.versions.touch(near);
+                }
+            }
+        }
+    }
+
+    /// Move the version of every chunk whose foam has changed by more than
+    /// can be seen, and of the chunks round it, whose surfaces read its
+    /// cells along their shared edges.
+    fn note_foam(&mut self) {
+        for slot in self.field.take_foam_moved() {
+            let cells = self.field.cells();
+            let coord = cells.chunks[slot].coord;
+            for dz in -1..=1 {
+                for dx in -1..=1 {
+                    let near = SpanChunkCoord {
+                        x: coord.x + dx,
+                        z: coord.z + dz,
+                    };
+                    if let Some(near) = cells.slot_of(near) {
+                        self.versions.touch(near);
+                    }
                 }
             }
         }

@@ -121,9 +121,11 @@ pub struct RiverVertex {
     /// 1 at the free end of a thin fall, 0 at the closed end of a thick one
     /// and wherever its curtain runs on into the next. Zero on the surface.
     pub fray: f32,
-    /// On falling water, how much air it has taken in as it leaves its lip:
-    /// 0 for water sliding glassy over a brink, 1 for water bursting white
-    /// out of a hole. Zero on the surface.
+    /// The air in the water. On falling water, how much it has taken in as
+    /// it leaves its lip: 0 for water sliding glassy over a brink, 1 for
+    /// water bursting white out of a hole. On the surface, the foam riding
+    /// it, as the field has it (`FieldChunk::foam`): 0 for none, 1 for
+    /// water covered with it, more where it lies thicker.
     pub air: f32,
     /// On falling water, when on the water's clock its fall began and when
     /// it stopped pouring, s: the draw shows only as much of it as holds

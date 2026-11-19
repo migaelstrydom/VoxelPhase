@@ -37,6 +37,10 @@ pub(super) const BRINK_STEP: f32 = 0.2;
 /// (`conduits`).
 const PRESSED_SLACK: f32 = 5.0e-3;
 
+/// Steepest slope of the surface whose pull a push on a face may match:
+/// landing water tilts the pool away from its foot by no more.
+const PUSH_SLOPE: f32 = 0.05;
+
 /// Face width and the distance between cell centres, m.
 const DX: f32 = COLUMN_SIZE;
 
@@ -234,14 +238,7 @@ impl FieldSolver {
     /// The momentum update on every stepped face, and on every conduit.
     fn update_faces(&mut self, cells: &mut FieldCells, dt: f32) -> u64 {
         let p = self.params;
-        // Landing water shoves the faces beside it before they are read.
-        for i in 0..cells.pushes.len() {
-            let push = cells.pushes[i];
-            let chunk = &mut cells.chunks[push.face.slot as usize];
-            if let Some(face) = chunk.faces.get_mut(push.face.index as usize) {
-                face.q += push.rate * dt;
-            }
-        }
+        self.push_faces(cells, dt);
         self.previous.resize_with(cells.chunks.len(), Vec::new);
         for &slot in &self.stepped {
             let previous = &mut self.previous[slot];
@@ -306,6 +303,38 @@ impl FieldSolver {
         self.pressed = pressed;
         self.drive_conduits(cells, dt);
         count
+    }
+
+    /// Have landing water shove the faces beside it (`FieldCells::pushes`),
+    /// before they are read: each towards the speed its push drives it to
+    /// and no faster, and no harder than gravity down `PUSH_SLOPE` would
+    /// push back. The scheme carries no momentum downstream, so what a
+    /// torrent lands with would otherwise heap the pool up at its foot.
+    fn push_faces(&self, cells: &mut FieldCells, dt: f32) {
+        for i in 0..cells.pushes.len() {
+            let push = cells.pushes[i];
+            let (slot, index) = (push.face.slot as usize, push.face.index as usize);
+            let Some(&face) = cells.chunks[slot].faces.get(index) else {
+                continue;
+            };
+            let owner = SpanIndex {
+                slot: push.face.slot,
+                flat: face.a,
+            };
+            let depth = flow_depth(cells, owner, &face);
+            if depth <= self.params.dry_depth {
+                continue;
+            }
+            let most = G * depth * PUSH_SLOPE;
+            let pushed = face.q + push.rate.clamp(-most, most) * dt;
+            let driven = push.speed * depth;
+            let q = if push.speed >= 0.0 {
+                pushed.min(driven.max(face.q))
+            } else {
+                pushed.max(driven.min(face.q))
+            };
+            cells.chunks[slot].faces[index].q = q;
+        }
     }
 
     /// Move each conduit's water as one column: every face of it takes the
@@ -559,7 +588,7 @@ fn wake_on_flow(cells: &mut FieldCells, slot: usize, volume: f64) {
 
 /// How deep the water flows through a face whose owning cell is `a`: from
 /// the higher bed to the higher surface, under its roof.
-fn flow_depth(cells: &FieldCells, a: SpanIndex, face: &Face) -> f32 {
+pub(super) fn flow_depth(cells: &FieldCells, a: SpanIndex, face: &Face) -> f32 {
     let floor = cells.bed(a).max(cells.bed(face.b));
     let surface = (cells.surface(a) as f32).max(cells.surface(face.b) as f32);
     surface.min(face.roof) - floor

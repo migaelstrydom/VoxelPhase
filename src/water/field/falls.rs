@@ -44,6 +44,7 @@ use crate::water::geometry::{
 use super::cells::{FieldCells, CELL_AREA};
 use super::faces::{Axis, Face, FaceRef, Flight, Push};
 use super::field::WET_DEPTH;
+use super::foam::landing_power;
 
 /// Least flow over an edge, per metre of it, that is a fall, m²/s.
 const MIN_POUR: f32 = 0.005;
@@ -87,8 +88,9 @@ const MAX_COLUMNS: usize = 96;
 const CARRIED: f32 = 0.5;
 
 /// Slowest a fall's water moves along an axis as it lands for it to push
-/// the water there along it, m/s.
+/// the water there along it, m/s, and the fastest it drives that water.
 const PUSHING_SPEED: f32 = 0.2;
+const PUSHED_SPEED: f32 = 1.0;
 
 /// How far apart, level, the lips of a fall found after an edit and one
 /// found before it may lie for the two to be the same fall, m.
@@ -228,6 +230,9 @@ pub struct Falls {
     /// Per chunk slot: how many times its cells had been laid out when its
     /// falls were last found (`FieldCells::generation`).
     generations: Vec<u32>,
+    /// Each cell water came down in when the falls were last found, and
+    /// the power it landed there with, per metre of its fall's lip, m³/s³.
+    landings: Vec<(SpanIndex, f32)>,
 }
 
 /// What a fall goes over.
@@ -272,6 +277,12 @@ impl Falls {
     /// The water in the air, m³.
     pub fn aloft(&self) -> f64 {
         self.iter().map(|fall| fall.aloft).sum()
+    }
+
+    /// Each cell water came down in when the falls were last found, and
+    /// the power it landed there with, per metre of its fall's lip, m³/s³.
+    pub fn landings(&self) -> &[(SpanIndex, f32)] {
+        &self.landings
     }
 
     pub fn len(&self) -> usize {
@@ -561,6 +572,7 @@ impl Falls {
     /// that came down outside the world, m³.
     fn bring_down(&mut self, graph: &SpanGraph, cells: &mut FieldCells, dt: f32) -> f64 {
         let mut lost = 0.0;
+        self.landings.clear();
         for fall in self.chunks.iter_mut().flatten() {
             if fall.spent.is_some() {
                 fall.into = fall.into.and_then(|_| cell_under(graph, cells, fall));
@@ -569,6 +581,12 @@ impl Falls {
             let due = fall.due(dt);
             fall.aloft -= due;
             lost += pour_into(cells, &into, due);
+            if fall.lands() && !into.is_empty() {
+                let speed = fall.velocity.norm();
+                let height = fall.lip.y - fall.landing.y;
+                let power = landing_power(fall.pour, speed, height) / into.len() as f32;
+                self.landings.extend(into.iter().map(|&cell| (cell, power)));
+            }
             if fall.spent.is_none() && fall.lands() && fall.landing == fall.foot {
                 push(graph, cells, fall, &into);
             }
@@ -677,7 +695,8 @@ fn pour_into(cells: &mut FieldCells, into: &[SpanIndex], volume: f64) -> f64 {
 
 /// Have `fall`'s water push the water it lands in the way it flies: on each
 /// axis it moves along, the face of each cell it lands in on the side it
-/// is headed for takes a share of the momentum it lands with.
+/// is headed for takes a share of the momentum it lands with, until its
+/// water runs at a share of the speed the fall lands at.
 fn push(graph: &SpanGraph, cells: &mut FieldCells, fall: &Fall, into: &[SpanIndex]) {
     if into.is_empty() {
         return;
@@ -703,6 +722,7 @@ fn push(graph: &SpanGraph, cells: &mut FieldCells, fall: &Fall, into: &[SpanInde
                 cells.pushes.push(Push {
                     face,
                     rate: share * speed,
+                    speed: (CARRIED * speed).clamp(-PUSHED_SPEED, PUSHED_SPEED),
                 });
             }
         }
