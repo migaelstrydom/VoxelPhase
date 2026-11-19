@@ -25,6 +25,7 @@ use crate::force_field::ForceFieldSystem;
 use crate::fracture::{DebrisCullSystem, FractureSystem};
 use crate::glass::{GlassCrackSystem, SheetShareSystem};
 use crate::input::InputActionSystem;
+use crate::light_shaft::LightShaftSystem;
 use crate::lighting::LightCollectionSystem;
 use crate::meadow::MeadowSystem;
 use crate::objective::{BrazierSystem, GoalSystem, HoverSystem, ProgressSystem};
@@ -213,6 +214,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["collection", "objective_progress", "physics_sync"],
         )
         .with(BrazierSystem, "brazier", &["goal"])
+        .with(LightShaftSystem, "light_shaft", &["brazier"])
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
         .with(TrampolineBedSystem, "trampoline_bed", &["physics_sync"])
         .with(FoliageLandingSystem, "foliage_landing", &["physics_sync"])

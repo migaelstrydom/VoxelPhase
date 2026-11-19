@@ -10,6 +10,7 @@ use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::fire::components::{FireSeat, OnFire};
 use crate::force_field::{ring_draws, ring_model, ColumnMesh, ForceFieldVisual};
 use crate::hud::{Hud, HudContext};
+use crate::light_shaft::{LightShaft, ShaftMesh};
 use crate::lighting::ActiveLights;
 use crate::particles::ParticlePool;
 use crate::rendering::debug_render::render_debug_overlays;
@@ -235,7 +236,10 @@ impl<'a> System<'a> for RenderSystem {
         Read<'a, FrameStart>,
         Read<'a, ActiveLights>,
         Read<'a, AimState>,
-        ReadStorage<'a, ForceFieldVisual>,
+        (
+            ReadStorage<'a, ForceFieldVisual>,
+            ReadStorage<'a, LightShaft>,
+        ),
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -264,7 +268,7 @@ impl<'a> System<'a> for RenderSystem {
             frame_start,
             active_lights,
             aim_state,
-            force_fields,
+            (force_fields, light_shafts),
         ) = data;
 
         // A resized window rebuilds the output before the camera is read, so
@@ -509,6 +513,27 @@ impl<'a> System<'a> for RenderSystem {
                             &texture_manager,
                         ) {
                             log::error!("RenderSystem: Failed to draw a force field: {}", e);
+                        }
+                    }
+
+                    // Shafts of light: light too, sorted with the glass. Each
+                    // stands plumb from its foot, wherever its entity is
+                    // turned.
+                    let shafts = ShaftMesh::of((&entities, &positions, &light_shafts).join().map(
+                        |(entity, position, shaft)| {
+                            let turned = orientations.get(entity).map(|o| o.0).unwrap_or_default();
+                            (position.0 + turned * shaft.base, shaft)
+                        },
+                    ));
+                    if !shafts.is_empty() {
+                        if let Err(e) = renderer.draw_light_shaft(
+                            draw_cb,
+                            &shafts.vertices,
+                            &shafts.indices,
+                            &material_manager,
+                            &texture_manager,
+                        ) {
+                            log::error!("RenderSystem: Failed to draw the light shafts: {}", e);
                         }
                     }
                     renderer.record_stage(RenderStage::Models, lap.elapsed());

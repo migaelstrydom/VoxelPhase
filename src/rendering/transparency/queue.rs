@@ -52,6 +52,9 @@ pub enum BlendedShading {
     /// A force-field column: light rather than a surface, recorded once with
     /// both faces (`force_field::column`).
     ForceField,
+    /// A shaft of light, recorded as a force-field column is
+    /// (`light_shaft::mesh`).
+    LightShaft,
 }
 
 /// One blended draw, held back for the sorted flush.

@@ -4,6 +4,7 @@ use nalgebra::{Matrix4, Point3, Vector3};
 
 use crate::core::error::EngineResult;
 use crate::force_field::ColumnMesh;
+use crate::light_shaft::ShaftMesh;
 use crate::lighting::{ActiveLight, ActiveLights};
 use crate::particles::ParticlePool;
 use crate::rendering::colour::Colour;
@@ -222,6 +223,9 @@ pub struct SceneShot {
     /// Force-field columns, in world space, drawn as light in the blended
     /// pass (`force_field::column`).
     pub force_fields: Vec<ColumnMesh>,
+    /// Shafts of light, drawn as light in the sorted blended pass
+    /// (`light_shaft::mesh`).
+    pub light_shafts: Vec<ShaftMesh>,
 }
 
 impl SceneShot {
@@ -234,6 +238,7 @@ impl SceneShot {
             water: None,
             particles: None,
             force_fields: Vec::new(),
+            light_shafts: Vec::new(),
         }
     }
 
@@ -264,6 +269,11 @@ impl SceneShot {
 
     pub fn with_force_field(mut self, columns: ColumnMesh) -> Self {
         self.force_fields.push(columns);
+        self
+    }
+
+    pub fn with_light_shaft(mut self, shafts: ShaftMesh) -> Self {
+        self.light_shafts.push(shafts);
         self
     }
 }

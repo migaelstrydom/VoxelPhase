@@ -26,6 +26,7 @@ pub mod input;
 pub mod level;
 pub mod level_check;
 pub mod level_viewer;
+pub mod light_shaft;
 pub mod lighting;
 pub mod meadow;
 pub mod model;

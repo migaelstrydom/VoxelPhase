@@ -136,6 +136,16 @@ impl VisualBench {
             )?;
         }
 
+        for shafts in &shot.light_shafts {
+            renderer.draw_light_shaft(
+                cb,
+                &shafts.vertices,
+                &shafts.indices,
+                material_manager,
+                texture_manager,
+            )?;
+        }
+
         // Water and particles are drawn in the scene pass, submitted before it
         // closes, the water first — the same place and the same order as in a
         // level.

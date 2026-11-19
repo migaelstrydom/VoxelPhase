@@ -32,6 +32,7 @@ use crate::force_field::ForceFieldVisual;
 use crate::fracture::{CompoundFracture, Debris, DebrisBudget, PieceSplits};
 use crate::glass::BrittleSheet;
 use crate::input::{GameplayActions, InputState};
+use crate::light_shaft::LightShaft;
 use crate::lighting::{ActiveLights, PointLight};
 use crate::model::PartLooks;
 use crate::objective::{Brazier, Goal, Hover, LevelProgress};
@@ -148,6 +149,7 @@ impl WorldBuilder {
         world.register::<WaterPump>();
         world.register::<Plumbing>();
         world.register::<ForceFieldVisual>();
+        world.register::<LightShaft>();
     }
 
     pub fn with_renderer(mut self, renderer: Renderer) -> Self {

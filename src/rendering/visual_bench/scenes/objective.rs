@@ -2,17 +2,21 @@
 //!
 //! The meshes and materials are the game's own (`PlatonicSolidDef::model`,
 //! `BrazierDef::model`), so a shot here is what a level draws. The solids
-//! hang as they hover, each held on a corner; the brazier is shown cold and
-//! lit (its coals glowing and its firelight on, but not the fire itself,
-//! which is simulated only in the game).
+//! hang as they hover, each held on a corner; the brazier is shown waiting
+//! (its embers banked, a pale shaft of light over it) and lit (its coals
+//! glowing, its shaft gold and its firelight on, but not the fire itself,
+//! which is simulated only in the game), close to and from across a level.
 
 use nalgebra::{Isometry3, Matrix4, Point3, Translation3, UnitQuaternion, Vector3};
 
 use crate::app::spawnables::{BrazierDef, PlatonicSolidDef};
 use crate::core::error::EngineResult;
+use crate::fire::components::FireSeat;
 use crate::geometry::PlatonicSolid;
+use crate::light_shaft::ShaftMesh;
 use crate::lighting::{ActiveLight, LightId};
 use crate::model::Model;
+use crate::objective::{Brazier, Goal};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId, SurfaceModulation};
 use crate::rendering::visual_bench::scene::{
@@ -32,6 +36,10 @@ const BRAZIER_AT: Vector3<f32> = Vector3::new(0.0, 0.0, -2.2);
 const FIRELIGHT_AT: Vector3<f32> = Vector3::new(0.0, 1.2, 0.0);
 const FIRELIGHT_RANGE: f32 = 7.8;
 const FIRELIGHT: f32 = 1.4;
+
+/// The embers' glow in a brazier that waits, as a share of a lit one's: a
+/// moment of their breath.
+const BANKED: f32 = 0.14;
 
 pub struct Objective;
 
@@ -113,8 +121,18 @@ impl VisualScene for Objective {
         let brazier_meshes = |lit: bool| {
             brazier.meshes(
                 Isometry3::translation(BRAZIER_AT.x, BRAZIER_AT.y, BRAZIER_AT.z).to_homogeneous(),
-                if lit { 1.0 } else { 0.0 },
+                if lit { 1.0 } else { BANKED },
             )
+        };
+        // The shaft over it, as the brazier's own system aims it.
+        let shaft = |lit: bool| {
+            let mut state = Brazier::new(FireSeat {
+                base: Vector3::zeros(),
+                size: Vector3::zeros(),
+            });
+            state.lit = lit;
+            let shaft = BrazierDef::light_shaft(state.shaft(&Goal::new(2.0)));
+            ShaftMesh::of([(BRAZIER_AT + shaft.base, &shaft)])
         };
 
         // A low golden sun from ahead and to one side, as on the island.
@@ -141,6 +159,7 @@ impl VisualScene for Objective {
             SceneShot::new(label, SceneCamera::looking_at(eye, target).with_fov(fov))
                 .with_environment(environment.clone())
                 .with_meshes(meshes)
+                .with_light_shaft(shaft(lit))
         };
 
         let brazier_middle = Point3::from(BRAZIER_AT + Vector3::new(0.0, 0.6, 0.0));
@@ -152,6 +171,22 @@ impl VisualScene for Objective {
                 42.0,
                 false,
                 &day,
+            ),
+            shot(
+                "afar",
+                Point3::new(18.0, 4.0, 22.0),
+                Point3::new(0.0, 4.0, -2.0),
+                50.0,
+                false,
+                &day,
+            ),
+            shot(
+                "afar_lit",
+                Point3::new(18.0, 4.0, 22.0),
+                Point3::new(0.0, 4.0, -2.0),
+                50.0,
+                true,
+                &firelit,
             ),
             shot(
                 "solids",

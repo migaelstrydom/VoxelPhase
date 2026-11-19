@@ -7,6 +7,7 @@
 // its pod down to the ground. The mesh is rebuilt every frame by
 // `force_field::column`, which packs everything the look needs into the
 // ordinary vertex format; see `force_field.frag` for what each channel means.
+// It is also the vertex stage of `light_shaft.frag`, which needs no more.
 
 #include "scene.glsl"
 

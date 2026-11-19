@@ -14,6 +14,9 @@
 //!                         its lip), Goal + Brazier (`objective`)
 //! ```
 //!
+//! A shaft of light stands from its bowl into the sky, so it is seen as
+//! the place to go from anywhere in a level (`objective::brazier`).
+//!
 //! It belongs to reason, not to the garden (`docs/VISUAL_DIRECTION.md`):
 //! cast bronze, kept bright, of true proportions, on the model of the
 //! Roman tripods found at Pompeii. It is an ordinary body, heavy enough
@@ -40,11 +43,14 @@ use crate::components::{
 use crate::core::error::EngineResult;
 use crate::fire::components::FireSeat;
 use crate::geometry::Polyhedron;
+use crate::light_shaft::{LightShaft, ShaftLook};
 use crate::model::{MeshPrimitive, Model, ModelPart, Transform};
 use crate::objective::{Brazier, Goal};
 use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
 use crate::rendering::colour::Colour;
-use crate::rendering::material::{Emission, Material, MaterialId, SurfaceFinish};
+use crate::rendering::material::{
+    Emission, Material, MaterialId, SurfaceFinish, SurfaceModulation,
+};
 use crate::rendering::reflection::Reflects;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_perlin_3d;
@@ -150,6 +156,13 @@ const EMBER_COLOUR: Colour = Colour {
 /// The flame's volume over the coals: as wide as the bowl, a little taller
 /// than a man's forearm.
 const FLAME_SIZE: Vector3<f32> = Vector3::new(0.56, 0.85, 0.56);
+/// The shaft of light that stands from its bowl into the sky: how tall,
+/// and its radius at the bowl and at its top, m. Tall enough to be seen
+/// over anything in a level; it widens and fades as it rises, so it has no
+/// end to be seen.
+const SHAFT_HEIGHT: f32 = 70.0;
+const SHAFT_RADII: (f32, f32) = (0.3, 2.2);
+
 /// How far below the lip the flame's base sits, m: down among the coals.
 const FLAME_SUNK: f32 = 0.06;
 
@@ -222,6 +235,12 @@ impl BrazierDef {
             local_transform: Transform::default(),
             primitives,
         }])
+    }
+
+    /// The shaft of light over its bowl, from its ground point, looking as
+    /// `look`.
+    pub fn light_shaft(look: ShaftLook) -> LightShaft {
+        LightShaft::new(Self::flame_base(), SHAFT_HEIGHT, SHAFT_RADII, look)
     }
 
     /// Where its flame sits, from its ground point.
@@ -301,8 +320,9 @@ impl Spawnable for BrazierDef {
             .with(RigidBodyComponent(body))
             .with(ModelInstance::new(Arc::new(model)))
             .with(Renderable)
-            .with(MaterialModulation(brazier.embers()))
+            .with(MaterialModulation(SurfaceModulation::emissive(0.0)))
             .with(Goal::new(self.radius))
+            .with(Self::light_shaft(ShaftLook::NONE).moved_by(-moved))
             .with(brazier)
             .build()]
     }

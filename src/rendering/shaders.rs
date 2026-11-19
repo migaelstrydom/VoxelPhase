@@ -27,6 +27,7 @@ mod bytecode {
     /// Force-field columns: the field a suspension stands on
     pub const FORCE_FIELD_VERTEX: &[u8] = embedded_spirv!("force_field.vert");
     pub const FORCE_FIELD_FRAGMENT: &[u8] = embedded_spirv!("force_field.frag");
+    pub const LIGHT_SHAFT_FRAGMENT: &[u8] = embedded_spirv!("light_shaft.frag");
 
     /// Overlay/UI pipeline shaders
     pub const OVERLAY_VERTEX: &[u8] = embedded_spirv!("overlay.vert");
@@ -89,6 +90,16 @@ impl ShaderManager {
         Self::load_shader(
             device,
             bytecode::FORCE_FIELD_FRAGMENT,
+            ShaderStage::Fragment,
+        )
+    }
+
+    /// Load the light-shaft fragment shader. Its vertex stage is the force
+    /// field's.
+    pub fn load_light_shaft_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(
+            device,
+            bytecode::LIGHT_SHAFT_FRAGMENT,
             ShaderStage::Fragment,
         )
     }

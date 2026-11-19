@@ -174,6 +174,12 @@ impl DrawOptions {
         owner: None,
         shading: BlendedShading::ForceField,
     };
+
+    /// A shaft of light: drawn as a force-field column is.
+    const LIGHT_SHAFT: Self = Self {
+        shading: BlendedShading::LightShaft,
+        ..Self::FORCE_FIELD
+    };
 }
 
 /// The world-space direction the camera looks along, recovered from its view
@@ -1127,6 +1133,28 @@ impl Renderer {
         )
     }
 
+    /// Draw the frame's shafts of light, built this frame in world space by
+    /// `light_shaft::mesh`, as light in the sorted blended pass.
+    pub fn draw_light_shaft(
+        &mut self,
+        cb: vk::CommandBuffer,
+        vertices: &[Vertex],
+        indices: &[u32],
+        material_manager: &MaterialManager,
+        texture_manager: &TextureManager,
+    ) -> EngineResult<()> {
+        self.draw_mesh_internal(
+            cb,
+            vertices,
+            indices,
+            &Matrix4::identity(),
+            material_manager.fallback_texture(),
+            SurfaceParams::MATTE,
+            texture_manager,
+            DrawOptions::LIGHT_SHAFT,
+        )
+    }
+
     /// Draw a mesh with a specific texture handle and lighting parameters.
     ///
     /// This is a lower-level method used by draw_model and terrain rendering.
@@ -1497,6 +1525,9 @@ impl Renderer {
                 }
                 BlendedShading::ForceField => {
                     recorder.draw_clipped(pipeline.force_field, &draw.geometry, clip);
+                }
+                BlendedShading::LightShaft => {
+                    recorder.draw_clipped(pipeline.light_shaft, &draw.geometry, clip);
                 }
             }
         }

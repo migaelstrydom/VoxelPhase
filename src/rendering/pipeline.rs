@@ -39,6 +39,9 @@ pub enum ShaderProgram {
     /// `force_field.vert/frag`: the field a suspension stands on, shaded as
     /// light (see `force_field::column`).
     ForceField,
+    /// `force_field.vert` and `light_shaft.frag`: a shaft of light standing
+    /// into the sky (see `light_shaft::mesh`).
+    LightShaft,
 }
 
 /// Configurable state for a standard geometry pipeline variant.
@@ -74,6 +77,8 @@ pub struct PipelineFactory {
     device: Arc<ManagedDevice>,
     surface: ShaderPair,
     force_field: ShaderPair,
+    /// Its own fragment stage; the vertex stage is the force field's.
+    light_shaft_fragment: vk::ShaderModule,
     extent: vk::Extent2D,
 }
 
@@ -87,10 +92,12 @@ impl PipelineFactory {
             vertex: ShaderManager::load_force_field_vertex(&device)?,
             fragment: ShaderManager::load_force_field_fragment(&device)?,
         };
+        let light_shaft_fragment = ShaderManager::load_light_shaft_fragment(&device)?;
         Ok(Self {
             device,
             surface,
             force_field,
+            light_shaft_fragment,
             extent,
         })
     }
@@ -99,6 +106,10 @@ impl PipelineFactory {
         match program {
             ShaderProgram::Surface => self.surface,
             ShaderProgram::ForceField => self.force_field,
+            ShaderProgram::LightShaft => ShaderPair {
+                vertex: self.force_field.vertex,
+                fragment: self.light_shaft_fragment,
+            },
         }
     }
 
@@ -257,6 +268,9 @@ impl Drop for PipelineFactory {
                     .device
                     .destroy_shader_module(pair.fragment, None);
             }
+            self.device
+                .device
+                .destroy_shader_module(self.light_shaft_fragment, None);
         }
     }
 }
@@ -313,6 +327,8 @@ pub struct GraphicsPipeline {
     /// Force-field columns: premultiplied, both faces in one draw, and no
     /// depth written, since a field is light and hides nothing drawn after it.
     pub force_field: vk::Pipeline,
+    /// Light shafts: as the force field, premultiplied, both faces, no depth.
+    pub light_shaft: vk::Pipeline,
     /// Pipeline layout shared by all standard geometry variants.
     pub layout: vk::PipelineLayout,
     /// Render pass for the HDR scene: opaque geometry, then blended.
@@ -462,6 +478,18 @@ impl GraphicsPipeline {
             },
         )?;
 
+        let light_shaft = factory.create(
+            renderpass,
+            layout,
+            &PipelineVariantConfig {
+                program: ShaderProgram::LightShaft,
+                polygon_mode: vk::PolygonMode::FILL,
+                cull_mode: vk::CullModeFlags::NONE,
+                depth_write: false,
+                blend_mode: BlendMode::Premultiplied,
+            },
+        )?;
+
         let transparent = factory.create(
             transparent_renderpass,
             layout,
@@ -481,6 +509,7 @@ impl GraphicsPipeline {
             scene_blended_back,
             scene_blended_front,
             force_field,
+            light_shaft,
             layout,
             renderpass,
             resume_renderpass,
@@ -794,6 +823,7 @@ impl Drop for GraphicsPipeline {
                 .device
                 .destroy_pipeline(self.scene_blended_front, None);
             self.device.device.destroy_pipeline(self.force_field, None);
+            self.device.device.destroy_pipeline(self.light_shaft, None);
             self.device
                 .device
                 .destroy_pipeline_layout(self.layout, None);
