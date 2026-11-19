@@ -253,9 +253,9 @@ thing the puzzle turns on.
 | C1 | A roller in a pen, seen through a gap, with a soft wall between it and the exit. Stand behind the wall. | T | | Safety |
 | C2 | A roller patrols the hollow the player must cross. Crater its path and it is stranded in the hole. **Prototyped:** `c2_roller_in_the_hollow`: the hollow's sides are open to the sky, so a hit throws the player off. Played: too easy to run past the roller in a 16 m hollow; now 5 m wide and 18 m long. | C | Earth | Blast |
 | C3 | The same hollow with no grenades and a pool above it. Flood it. | C | Water | Water |
-| C4 | A bell-carrier follows, slowly. Lead it onto a float, a seesaw or a weak earth bridge: it is the heaviest thing in the room. **Prototyped:** `c4_bell_on_the_bridge`: it stands on the only bridge; shove it off, dig it out, or draw it off and go round. | C | Objects | Safety |
+| C4 | A bell-carrier follows, slowly. Lead it onto a float, a seesaw or a weak earth bridge: it is the heaviest thing in the room. **Prototyped:** `c4_bell_on_the_bridge`: it stands on the only bridge; shove it off, dig it out, or draw it off and go round. Played: a blast on the bridge dropped the far island as rubble, since nothing holds a floating island up but the bridge; and the carrier is jumped over. Wants islands that hold without the bridge, and a carrier that fills the way (a low roof, a narrow ledge). | C | Objects | Safety |
 | C5 | A piper on a rock and no grenades anywhere. Stand where its throw should land. | C | Earth | Safety |
-| C6 | A mussel beside a path a stalker walks. Draw the stalker across it. **Prototyped:** `c6_mussel_and_stalker`. | X | | Safety |
+| C6 | A mussel beside a path a stalker walks. Draw the stalker across it. **Prototyped:** `c6_mussel_and_stalker`. Played: the mussel is jumped over. Wants a mussel that fills the way, under a low roof. | X | | Safety |
 | C8 | A roller cannot be led to a far bank the player cannot reach. Dig a groove that carries it there once it is rolling. | C | Earth | Blast |
 | C9 | A bell-carrier and a seesaw: lead it onto the low end and whatever sits on the other is thrown. | C | Objects | Safety |
 | C7 | Egg-walkers are light and quick: they cross a float that will not bear the player, and trip what the player cannot reach. | C | Objects | |
@@ -302,14 +302,14 @@ marks one that depends on behaviour not yet confirmed in the engine.
 | Blasting a cliff drops boulders. Dropped in the right place they dam the stream below: height is spent to buy a dam. | One thing, two jobs | Water |
 | A boulder is wanted as a step, but the blast that frees it also sends it rolling off the island. Dig it a hollow to land in first. | Too much | Objects |
 | An earth bridge will bear the player and not the bell-carrier. Cross first, and let it follow. | Shared support | Creatures |
-| The exit ledge is held up by the same bank that blocks the way to it. Take only as much as leaves it standing. **Prototyped:** `e10_shared_support`: the exit is a slab jutting from the bank. | Shared support | |
+| The exit ledge is held up by the same bank that blocks the way to it. Take only as much as leaves it standing. **Prototyped:** `e10_shared_support`: the exit is a slab jutting from the bank. Played: does not read as "take only as much as you need". | Shared support | |
 
 ### Water
 
 | Idea | Pattern | Also |
 |---|---|---|
 | Falling water pushes what it lands on. Turn a fall so it drives a float across a still pool. | Borrowed force | Objects |
-| A spring's jet holds a ball up. Something light set on the jet rides at its top: a lifter made from water. **Prototyped:** `w11_jet_lift`, as a check that a jet lifts the player. A cap over the spring cannot hold it back: a jet passes through what hangs over it. | One thing, two jobs | Objects |
+| A spring's jet holds a ball up. Something light set on the jet rides at its top: a lifter made from water. **Prototyped:** `w11_jet_lift`, as a check that a jet lifts the player. A cap over the spring cannot hold it back: a jet passes through what hangs over it. Played: the jet pushes down, not up: a stream meets a body on the falling half of its arc only, and a straight-up jet's falling half comes down on itself. | One thing, two jobs | Objects |
 | A sealed barrel wants to rise. Wedged under a sunk platform, it lifts the platform when the basin floods. | Borrowed force | Objects |
 | Glass holds a pool back and shows what is behind it. Breaking it is a breach that no earth can mend. | Too much | Objects |
 | Two basins joined by a channel find one level. Raising one by dropping rubble into it raises the other. | Borrowed force | Earth |
@@ -343,8 +343,8 @@ marks one that depends on behaviour not yet confirmed in the engine.
 
 | Idea | Pattern | Also |
 |---|---|---|
-| A piper is slowly bombing the platforms the crossing needs. Cross before they are gone, or stop it seeing them. **Prototyped:** `c10_piper_and_the_stones`: four stepping stones, one hit each. | The clock is the key | Creatures, Machines |
-| A creature stands in a dry channel below a dam. Burst the dam and it is washed off the island. **Prototyped:** `c11_washed_off`, with a stalker: whether a flood moves one is the open question. | Borrowed force | Water, Creatures |
+| A piper is slowly bombing the platforms the crossing needs. Cross before they are gone, or stop it seeing them. **Prototyped:** `c10_piper_and_the_stones`: four stepping stones, one hit each. Played: works. | The clock is the key | Creatures, Machines |
+| A creature stands in a dry channel below a dam. Burst the dam and it is washed off the island. **Prototyped:** `c11_washed_off`, with a stalker: whether a flood moves one is the open question. Played: the flood does not move the stalker at all. | Borrowed force | Water, Creatures |
 | A creature throws the player's grenades back. Throw round it, over it, or so that its return lands where the blast is wanted **(build)**. | Borrowed force | Creatures |
 | A crate dropped in a stream will be carried to the bottom, where it is needed to cross. Get there before it goes over the edge. | Unwanted passenger | Water, Body |
 
@@ -408,6 +408,9 @@ each hard one:
 | A level with no ground | Sky rooms built only of floating pieces, so no route has terrain beside it to sculpt | Every terrain has a base height; islands are volumes over it |
 | Ground that shatters | E9: a surface (glass) that breaks at the first blast, so a guess costs the room | Not started |
 | Jump tuning | M3 and every gap: a running jump carries over 12 m | Not started |
+| Islands that hold by themselves | C4: a floating island joined to another by a bridge falls as rubble when the bridge is cut | Not started |
+| Water moves creatures | C11: a flood leaves a stalker where it stands | Not started |
+| A jet that rises | W11: a body in an upward jet is struck by its falling half and pushed down | Not started |
 
 ## Open questions
 
