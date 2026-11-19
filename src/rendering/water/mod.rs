@@ -1,3 +1,4 @@
+mod audit;
 mod chop_tiles;
 mod curtain;
 mod divide;
@@ -13,6 +14,7 @@ mod river_parts;
 mod scene;
 mod vertex;
 
+pub use audit::{indexed_within, worst_stray, Drawn, Stray};
 pub use divide::{Side, WaterDivide, WaterPatch, NO_CLIP};
 pub use field_mesher::FieldScene;
 pub use footprint::ScreenFootprint;

@@ -71,6 +71,13 @@ const FASTEST_AIR: f32 = 0.8;
 /// it is seen to come from inside.
 const JET_SET_BACK: f32 = 0.6;
 
+/// How far out from its hole's mouth a jet has drawn in from the hole's
+/// whole height to its own thickness, m.
+const PLUG_RUN: f32 = 1.0;
+
+/// The least time of flight a jet's body is drawn through, s.
+const PLUG_TIME: f32 = 0.3;
+
 /// Least flow over an edge, per metre of it, that a curtain draws as full,
 /// m²/s: a curtain is drawn as deep as the water pours over its edge, so
 /// the draw cuts it where it only trickles.
@@ -94,6 +101,10 @@ struct Tongue {
     /// How far back from its lip its body starts, m: a jet's, inside the
     /// hole it bursts out of.
     set_back: f32,
+    /// How far over its top, and under its underside, the hole it bursts
+    /// out of stands open, m: it fills the hole behind its mouth, and
+    /// draws in to its own thickness over the first of its flight.
+    plug: f32,
 }
 
 /// A strand's water at one moment of its fall.
@@ -107,21 +118,28 @@ struct Section {
 
 impl Tongue {
     fn of(fall: &Fall) -> Self {
-        let height = fall.height();
-        let duration = fall_time(height);
-        let level = if duration > 0.0 {
+        let mut height = fall.height();
+        let mut duration = fall_time(height);
+        let mut level = if duration > 0.0 {
             fall.throw() / duration
         } else {
             Vector2::zeros()
         };
-        let (air, set_back) = if fall.driven {
-            (1.0, JET_SET_BACK)
+        let (air, set_back, plug) = if fall.driven {
+            // A jet that meets water as it comes out still comes out: its
+            // body is drawn on into that water the way it was thrown, far
+            // enough to close the hole's mouth over the water's surface.
+            if duration < PLUG_TIME {
+                duration = PLUG_TIME;
+                height = 0.5 * GRAVITY * PLUG_TIME * PLUG_TIME;
+                level = fall.velocity;
+            }
+            let plug = 0.5 * (fall.opening - fall.depth).max(0.0);
+            (1.0, JET_SET_BACK, plug)
         } else {
             let speed = fall.velocity.norm();
-            (
-                FASTEST_AIR * smoothstep(AIRY_SPEED.0, AIRY_SPEED.1, speed),
-                0.0,
-            )
+            let air = FASTEST_AIR * smoothstep(AIRY_SPEED.0, AIRY_SPEED.1, speed);
+            (air, 0.0, 0.0)
         };
         Self {
             lip: fall.lip,
@@ -132,6 +150,7 @@ impl Tongue {
             depth: fall.depth,
             air,
             set_back,
+            plug,
         }
     }
 
@@ -142,17 +161,18 @@ impl Tongue {
         let velocity = Vector3::new(self.level.x, -GRAVITY * t, self.level.y);
         // The flow over the lip keeps its rate as it speeds up: it thins.
         let thickness = self.pour / velocity.norm().max(1.0e-3);
+        let filling = self.plug * (1.0 - smoothstep(0.0, PLUG_RUN, out.norm()));
         Section {
             top: Point3::new(
                 self.lip.x + out.x,
-                self.lip.y - self.fall * share * share,
+                self.lip.y - self.fall * share * share + filling,
                 self.lip.z + out.y,
             ),
             velocity,
             thickness: thickness.clamp(
                 MIN_THICKNESS,
                 self.depth.clamp(MIN_THICKNESS, MAX_THICKNESS),
-            ),
+            ) + 2.0 * filling,
         }
     }
 
@@ -520,8 +540,10 @@ mod tests {
             reach: [0.0; 2],
             velocity: Vector2::new(2.0, 0.0),
             depth: 0.4,
+            opening: 0.4,
             pour: 0.8,
             driven: false,
+            drowned: false,
             foot: Point3::new(2.0 + 2.0 * duration, 6.0, z),
             landing: Point3::new(2.0 + 2.0 * duration, 6.0, z),
             into: None,

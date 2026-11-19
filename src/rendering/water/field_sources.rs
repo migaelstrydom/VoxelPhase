@@ -18,7 +18,7 @@ use nalgebra::Vector2;
 use smallvec::SmallVec;
 
 use crate::water::falling::falls;
-use crate::water::field::{DrawnDepths, Falls, FieldCells, Jet as FieldJet, WaterField};
+use crate::water::field::{DrawnDepths, Fall, Falls, FieldCells, Jet as FieldJet, WaterField};
 use crate::water::geometry::{SpanGraph, SpanIndex, SpanRef, ORTHOGONAL};
 
 use super::curtain::Curtain;
@@ -108,6 +108,13 @@ impl DrawnCells<'_> {
         self.level(at).is_some()
     }
 
+    /// Whether `fall` is its cell's surface going over an edge, and not
+    /// water leaving by an opening down in its side: a slot at the foot of
+    /// a lake, whose lip lies far under the lake's surface.
+    pub(super) fn off_the_top(&self, fall: &Fall) -> bool {
+        self.surface(fall.from) - fall.lip.y as f64 <= SUNK_LIP
+    }
+
     /// A cell's `surface`, if it is `drawn`.
     pub(super) fn level(&self, at: SpanIndex) -> Option<f64> {
         let depth = self.depth(at);
@@ -175,17 +182,27 @@ impl DrawnCells<'_> {
     }
 }
 
+/// How far under its cell's surface a fall's lip may lie for the fall to be
+/// that surface going over an edge, m. Lower, it leaves by an opening in
+/// the water's side.
+const SUNK_LIP: f64 = 0.3;
+
 /// The falls pouring from the cells of chunk `slot`, as a surface's shape
-/// takes them: by cell and direction, and whether each is driven. A spent
-/// fall shapes nothing: its curtain is drawn until its water is down, and
-/// its going is no change of shape.
-pub(super) fn falls_of(
-    field: &WaterField,
+/// takes them: by cell and direction, whether each is driven, and whether
+/// it goes off the top of its cell's water (`DrawnCells::off_the_top`). A
+/// spent fall shapes nothing: its curtain is drawn until its water is
+/// down, and its going is no change of shape.
+pub(super) fn falls_of<'a>(
+    field: &'a WaterField,
+    cells: &'a DrawnCells<'a>,
     slot: u32,
-) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
+) -> impl Iterator<Item = (u32, u8, bool, bool)> + 'a {
     (field.falls().of_slot(slot as usize).iter())
         .filter(|fall| fall.spent.is_none())
-        .map(|fall| (fall.from.flat, fall.direction, fall.driven))
+        .map(|fall| {
+            let top = cells.off_the_top(fall);
+            (fall.from.flat, fall.direction, fall.driven, top)
+        })
 }
 
 /// The surface vertex midway between `from` and `to`.
@@ -222,16 +239,27 @@ pub(super) struct Meeting {
     /// for water run full in a hole, whose head follows the water beside
     /// it and pulls none of it down.
     pub weight: f64,
+    /// The roof its surface lies under: its ceiling, or none (infinite)
+    /// under open sky and for water run full in a hole, drawn at its head.
+    /// Water standing higher than this beside it is another sheet of water,
+    /// over the roof.
+    pub roof: f64,
 }
 
 impl Meeting {
     pub fn of(cells: &DrawnCells, at: SpanIndex) -> Self {
         let depth = cells.depth(at);
+        let free = cells.free(at);
         Self {
             surface: cells.level(at),
             bed: cells.bed(at) as f64,
             depth,
-            weight: if cells.free(at) { depth } else { 0.0 },
+            weight: if free { depth } else { 0.0 },
+            roof: if free {
+                cells.cells.ceiling(at) as f64
+            } else {
+                f64::INFINITY
+            },
         }
     }
 }
@@ -266,20 +294,28 @@ pub(super) struct Shape {
 /// the cells of each one's depth: a dry one's is zero, or left out where its
 /// floor stands above the water, since the terrain hides the surface there.
 pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
-    let mut surfaces: SmallVec<[(f64, f64, f64); 4]> = meetings
+    let mut surfaces: SmallVec<[(f64, f64, f64, f64); 4]> = meetings
         .iter()
-        .filter_map(|m| Some((m.surface?, m.weight, m.bed)))
+        .filter_map(|m| Some((m.surface?, m.weight, m.bed, m.roof)))
         .collect();
     surfaces.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut group: SmallVec<[(f64, f64); 4]> = SmallVec::new();
-    for (s, d, bed) in surfaces {
-        if group.last().is_some_and(|&(last, _)| falls(s, bed, last)) {
+    // The lowest roof over the group's water: water standing higher is not
+    // of the group, but lies over that roof.
+    let mut roofed = f64::INFINITY;
+    for (s, d, bed, roof) in surfaces {
+        if group
+            .last()
+            .is_some_and(|&(last, _)| falls(s, bed, last) || s > roofed)
+        {
             if group.iter().any(|&(g, _)| g == level) {
                 break;
             }
             group.clear();
+            roofed = f64::INFINITY;
         }
         group.push((s, d));
+        roofed = roofed.min(roof);
     }
     let held: f64 = group.iter().map(|&(_, w)| w).sum();
     let height = if held > 0.0 {
@@ -432,7 +468,7 @@ pub struct SurfaceSources {
     pub(super) curtains: Vec<CurtainSource>,
     /// The falls leaving its chunk's cells when it was built (`falls_of`):
     /// its shape holds while they are the falls leaving them.
-    pub(super) falls: Vec<(u32, u8, bool)>,
+    pub(super) falls: Vec<(u32, u8, bool, bool)>,
     /// The update whose drawn depths the surface was last read from.
     pub(super) read: u64,
     /// The jets landing in its chunk when it was built, in the field's
@@ -491,7 +527,7 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 };
                 cells.drawn(at) == was
             }));
-    held &= falls_of(field, slot).eq(sources.falls.iter().copied());
+    held &= falls_of(field, cells, slot).eq(sources.falls.iter().copied());
     // The jets landing in its chunk must be the ones it was built with,
     // flying the arcs they flew, for its jet vertices to be theirs.
     let jets = landing_jets(field, slot);

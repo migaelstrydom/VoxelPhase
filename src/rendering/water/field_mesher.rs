@@ -193,12 +193,17 @@ impl<'a> FieldScene<'a> {
         let over = [0, 1, 2, 3].map(|direction| self.field.fall(at, direction).copied());
         let first = mesh.vertices.len() as u32;
         // Only water still going over an edge shapes the surface there: a
-        // spent fall's curtain hangs from where its water left.
-        let pouring = over.map(|fall| fall.is_some_and(|fall| fall.spent.is_none()));
+        // spent fall's curtain hangs from where its water left. Nor does
+        // water leaving by a slot down in its side, which goes from the
+        // slot and not from the surface over it.
+        let drawn = self.drawn_cells();
+        let off_the_top = |fall: &Fall| drawn.off_the_top(fall);
+        let pouring =
+            over.map(|fall| fall.is_some_and(|fall| fall.spent.is_none() && off_the_top(&fall)));
         let lips = lay_cell(mesh, column, built, pouring);
         for (fall, lip) in over.iter().zip(lips) {
             if let Some(fall) = fall {
-                self.curtain(mesh, fall, lip);
+                self.curtain(mesh, fall, lip.filter(|_| off_the_top(fall)));
             }
         }
         self.skirt(mesh, column, level, first);
@@ -809,7 +814,7 @@ impl WaterScene for FieldScene<'_> {
                 self.curtain(&mut mesh, fall, None);
             }
         }
-        mesh.sources.falls = field_sources::falls_of(self.field, slot as u32).collect();
+        mesh.sources.falls = field_sources::falls_of(self.field, &drawn, slot as u32).collect();
         mesh.sources.jets = landing_jets(self.field, slot as u32);
         for index in 0..mesh.sources.jets.len() {
             self.jet(&mut mesh, index);

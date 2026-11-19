@@ -42,7 +42,7 @@ use crate::water::geometry::{
     Column, SpanGraph, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL,
 };
 
-use super::cells::{FieldCells, CELL_AREA};
+use super::cells::{FieldCells, CELL_AREA, FULL_SLACK};
 use super::faces::{Axis, Face, FaceRef, Flight, Push};
 use super::field::WET_DEPTH;
 use super::foam::landing_power;
@@ -123,11 +123,21 @@ pub struct Fall {
     pub velocity: Vector2<f32>,
     /// How thick the water is as it leaves, m.
     pub depth: f32,
+    /// How much of the opening it leaves by it fills behind its mouth, m:
+    /// the whole height of a hole run full, however thin its jet flies.
+    /// Its depth, for water going over a lip, or out of a hole it does not
+    /// fill.
+    pub opening: f32,
     /// What it carries over each metre of its lip, m²/s.
     pub pour: f32,
     /// Whether it bursts out of a hole, driven by open water standing over
     /// the hole's roof behind it, rather than running over a lip.
     pub driven: bool,
+    /// Whether it comes out under the water outside, with the top of the
+    /// hole it fills still standing clear of that water. None of it flies:
+    /// its water runs on into the water outside as over any face. It is
+    /// kept to be seen, filling the hole's mouth over the water.
+    pub drowned: bool,
     /// Where the top of its water would come down, flying free: the end of
     /// its arc. Behind a wall, where one stands in its way.
     pub foot: Point3<f32>,
@@ -161,6 +171,13 @@ impl Fall {
     pub fn face(&self) -> Vector2<f32> {
         let step = self.step();
         Vector2::new(step.di as f32, step.dk as f32)
+    }
+
+    /// The top of its water at the mouth of the opening it leaves by: over
+    /// its own top by half of what the opening is taller than it is thick,
+    /// since a jet leaves from the opening's middle.
+    pub fn roof(&self) -> f32 {
+        self.lip.y + 0.5 * (self.opening - self.depth).max(0.0)
     }
 
     /// How far its top falls, m.
@@ -225,12 +242,14 @@ impl Fall {
         self.from == other.from
             && self.direction == other.direction
             && self.driven == other.driven
+            && self.drowned == other.drowned
             && self.spent.is_some() == other.spent.is_some()
             && self.age >= other.age
             && self.into.is_some() == other.into.is_some()
             && (self.lip - other.lip).norm() <= NEAR
             && (self.foot - other.foot).norm() <= NEAR + SHARE * self.height()
             && close(self.depth, other.depth)
+            && close(self.opening, other.opening)
             && close(self.pour, other.pour)
     }
 }
@@ -334,7 +353,8 @@ impl Falls {
         let (other, meets) = self.next_round(graph, cells, fall, end)?;
         let (back, _) = self.next_round(graph, cells, other, meets)?;
         let mutual = back.from == fall.from && back.direction == fall.direction;
-        (mutual && other.spent.is_some() == fall.spent.is_some()).then_some((other, meets))
+        let alike = other.spent.is_some() == fall.spent.is_some() && other.drowned == fall.drowned;
+        (mutual && alike).then_some((other, meets))
     }
 
     /// The fall `fall`'s lip would run on into at its end `end`, and that
@@ -450,11 +470,16 @@ impl Falls {
             let direction = direction_of(face.axis, sign);
             let head = driving_head(cells, upper, face, face.q > 0.0);
             let pour = face.q.abs();
-            let Some(fall) = over_face(graph, cells, upper, lower, direction, pour, head) else {
+            let Some(mut fall) = over_face(graph, cells, upper, lower, direction, pour, head)
+            else {
                 continue;
             };
-            if fall.driven && drowned(graph, cells, &fall, lower) {
-                continue;
+            if fall.driven && !fall.drowned {
+                match met(graph, cells, &fall, lower) {
+                    None => {}
+                    Some(level) if fall.roof() - level >= JET_CLEARANCE => fall.drowned = true,
+                    Some(_) => continue,
+                }
             }
             let edge = Edge::Face {
                 slot,
@@ -602,6 +627,11 @@ impl Falls {
                         fall.landing = landed.at;
                         fall.into = landed.into;
                         fall.settling = fall.flight_time().max(fall.settling - dt);
+                        // A drowned jet's water goes over its face as over
+                        // any other: none of it flies.
+                        if fall.drowned {
+                            continue;
+                        }
                         *flight = Some(cells.flights.len() as u32);
                         let face = &mut cells.chunks[*slot as usize].faces[*index as usize];
                         face.flight = *flight;
@@ -657,7 +687,8 @@ impl Falls {
                     let power = landing_power(fall.pour, speed, height) / into.len() as f32;
                     self.landings.extend(into.iter().map(|&cell| (cell, power)));
                 }
-                if fall.spent.is_none() && fall.lands() && fall.landing == fall.foot {
+                let flown = fall.spent.is_none() && !fall.drowned;
+                if flown && fall.lands() && fall.landing == fall.foot {
                     push(graph, cells, fall, &into);
                 }
                 let all_roofed = into.iter().all(|&cell| cells.ceiling(cell).is_finite());
@@ -728,6 +759,7 @@ fn carry_on(
 ) -> f64 {
     let mut lost = 0.0;
     let mut matched = vec![false; found.len()];
+    let mut waiting = vec![false; found.len()];
     let mut spent = Vec::new();
     for old in before {
         let level = |fall: &Fall| Vector2::new(fall.lip.x, fall.lip.z);
@@ -744,15 +776,19 @@ fn carry_on(
                 .binary_search_by_key(&key, |(f, _)| (f.from.flat, f.direction))
                 .ok()
         };
+        // A jet found drowned with water it threw still in the air is not
+        // seen so yet: that water comes down first, where it was going,
+        // as a spent fall's does.
+        let thrown = |i: usize| found[i].0.drowned && !old.drowned && old.aloft > 0.0;
         match again {
-            Some(i) => {
+            Some(i) if !thrown(i) => {
                 matched[i] = true;
                 let now = &mut found[i].0;
                 now.age = old.age + dt;
-                now.aloft += old.aloft;
                 now.settling = old.settling;
+                now.aloft += old.aloft;
             }
-            None => {
+            drowned => {
                 let mut ghost = Fall {
                     age: old.age + dt,
                     spent: Some(old.spent.unwrap_or(0.0) + dt),
@@ -762,30 +798,47 @@ fn carry_on(
                     ghost.into = ghost.into.and_then(|_| cell_under(graph, cells, &ghost));
                     let into = footprint(graph, cells, &ghost);
                     lost += set_down(graph, cells, &into, ghost.aloft);
+                    if let Some(i) = drowned {
+                        matched[i] = true;
+                    }
                 } else {
                     spent.push((ghost, Edge::Spent));
+                    if let Some(i) = drowned {
+                        matched[i] = true;
+                        waiting[i] = true;
+                    }
                 }
             }
         }
     }
+    let mut waiting = waiting.into_iter();
+    found.retain(|_| !waiting.next().unwrap_or(false));
     found.extend(spent);
     lost
 }
 
 /// The cell under where a spent fall's water lands, as the ground stands
 /// now: the cells it was found landing in may have been laid out again
-/// since. Where it struck a wall, the column it came down the side of.
+/// since. Where it struck a wall, the column it came down the side of; and
+/// where the ground now stands over the place it landed, the column it
+/// came from.
 fn cell_under(graph: &SpanGraph, cells: &FieldCells, fall: &Fall) -> Option<SpanIndex> {
     let level = Vector2::new(fall.landing.x, fall.landing.z);
     let along = fall.velocity.try_normalize(1.0e-6).unwrap_or(fall.face());
     let struck = fall.landing != fall.foot;
-    let at = level + along * if struck { -NUDGE } else { NUDGE };
-    let column = Column::containing(at.x, at.y);
-    if !graph.contains_column(column) {
-        return None;
-    }
-    let span = graph.span_at(column, fall.landing.y)?;
-    cells.index(graph, column, span.ordinal)
+    let ahead = if struck { -NUDGE } else { NUDGE };
+    [ahead, -ahead].into_iter().find_map(|nudge| {
+        let at = level + along * nudge;
+        let column = Column::containing(at.x, at.y);
+        if !graph.contains_column(column) {
+            return None;
+        }
+        // A height inside the ground is in no span, and the graph answers
+        // with the one over it: water does not land up there.
+        let span = graph.span_at(column, fall.landing.y)?;
+        let cell = cells.index(graph, column, span.ordinal)?;
+        (cells.bed(cell) <= fall.landing.y + FOOTPRINT_RISE).then_some(cell)
+    })
 }
 
 /// Pour `volume` m³ into the cells `into`, each an equal share, but no
@@ -1007,10 +1060,14 @@ struct Leaving {
     top: f32,
     /// How thick it is.
     depth: f32,
+    /// How tall the opening it leaves by is.
+    opening: f32,
     /// Its level velocity.
     velocity: Vector2<f32>,
     /// Whether open water behind it drives it out.
     driven: bool,
+    /// Whether it comes out under the water outside (`Fall::drowned`).
+    drowned: bool,
 }
 
 /// How the water of cell `upper` leaves over an edge facing `face` to the
@@ -1021,7 +1078,9 @@ struct Leaving {
 /// speed its head gives it there, as thick as carries its flow at that
 /// speed. Its top need only come out clear of what lies outside. Otherwise it
 /// goes over as it runs: off the top of its own water, or of as much of it
-/// as the opening lets through, where that `falls`.
+/// as the opening lets through, where that `falls`. Where it does neither,
+/// but fills a hole whose top stands clear, it is a jet drowned
+/// (`Fall::drowned`).
 fn leaving(
     cells: &FieldCells,
     upper: SpanIndex,
@@ -1041,7 +1100,7 @@ fn leaving(
     }
     let below = cells.surface(lower);
     let running = pour / depth.max(MEASURED_DEPTH) as f32;
-    if let Some(head) = head {
+    let jet = head.and_then(|head| {
         let floor = cells.bed(upper).max(cells.bed(lower));
         let opening = level as f32 - floor;
         let middle = floor + 0.5 * opening;
@@ -1049,22 +1108,35 @@ fn leaving(
         let speed = driven.max(running);
         let thickness = (pour / speed).min(opening);
         let top = middle + 0.5 * thickness;
-        if opening >= JET_OPENING && top - below as f32 >= JET_CLEARANCE {
-            return Some(Leaving {
-                top,
-                depth: thickness,
-                velocity: launch(face, speed, Vector2::zeros()),
-                driven: true,
-            });
-        }
+        // Where the water behind it stands against the opening's roof it
+        // fills the hole to its mouth, however thin it flies: it is seen
+        // there, drowned, for as long as the top of the hole stands clear
+        // of the water outside, though its own top does not.
+        let pressed = cells.surface(upper) >= roof - FULL_SLACK;
+        let clear = |top: f32| top - below as f32 >= JET_CLEARANCE;
+        let seen = clear(top) || (pressed && clear(floor + opening));
+        (opening >= JET_OPENING && seen).then(|| Leaving {
+            top,
+            depth: thickness,
+            opening: if pressed { opening } else { thickness },
+            velocity: launch(face, speed, Vector2::zeros()),
+            driven: true,
+            drowned: !clear(top),
+        })
+    });
+    if jet.as_ref().is_some_and(|jet| !jet.drowned) {
+        return jet;
     }
     let flow = cells.chunks[upper.slot as usize].velocity[upper.flat as usize];
-    falls(level, cells.bed(upper) as f64, below).then(|| Leaving {
+    let over = falls(level, cells.bed(upper) as f64, below).then(|| Leaving {
         top: level as f32,
         depth: depth as f32,
+        opening: depth as f32,
         velocity: launch(face, running, flow),
         driven: false,
-    })
+        drowned: false,
+    });
+    over.or(jet)
 }
 
 /// The fall from cell `upper` over its edge in `direction` to the cell
@@ -1098,8 +1170,10 @@ fn over_face(
         reach,
         velocity: leaving.velocity,
         depth: leaving.depth,
+        opening: leaving.opening,
         pour,
         driven: leaving.driven,
+        drowned: leaving.drowned,
         foot: lip,
         landing: lip,
         into: None,
@@ -1139,8 +1213,10 @@ fn off_edge(
         reach: [0.0; 2],
         velocity: launch(face, speed, flow),
         depth: depth as f32,
+        opening: depth as f32,
         pour,
         driven: false,
+        drowned: false,
         foot: lip,
         landing: lip,
         into: None,
@@ -1161,12 +1237,12 @@ fn off_edge(
 /// comes out into the air.
 const DROWNED_REACH: usize = 6;
 
-/// Whether the jet `fall`, bursting towards the cell `below`, meets the
-/// water outside before its top has dropped any way: water heaped at the
-/// hole's mouth, or a pool risen to it. It is then no jet but the hole's
-/// water running on into the water outside, which its head must push
-/// aside.
-fn drowned(graph: &SpanGraph, cells: &FieldCells, fall: &Fall, below: SpanIndex) -> bool {
+/// The level of the water outside that the jet `fall`, bursting towards
+/// the cell `below`, meets before its top has dropped any way: water
+/// heaped at the hole's mouth, or a pool risen to it. It is then no jet
+/// flying but the hole's water running on into the water outside, which
+/// its head must push aside. None for a jet that comes out into the air.
+fn met(graph: &SpanGraph, cells: &FieldCells, fall: &Fall, below: SpanIndex) -> Option<f32> {
     let landed = land(
         graph,
         cells,
@@ -1176,7 +1252,8 @@ fn drowned(graph: &SpanGraph, cells: &FieldCells, fall: &Fall, below: SpanIndex)
         below,
         DROWNED_REACH,
     );
-    landed.into.is_some() && fall.lip.y - landed.foot.y < JET_CLEARANCE
+    let into = landed.into?;
+    (fall.lip.y - landed.foot.y < JET_CLEARANCE).then(|| cells.surface(into) as f32)
 }
 
 /// How far above the level its water lands at a cell's floor may stand for
@@ -1574,28 +1651,52 @@ mod tests {
         let mut found = Falls::default();
         found.find(&graph, &mut cells, None, 0.0);
         let jet = *found.get(cell(4, 5), 0).expect("its top clears the water");
-        assert!(jet.driven && jet.lip.y > 1.95);
-        for i in 5..CHUNK_COLUMNS {
-            *cells.depth_mut(cell(i, 5)) = 1.9;
-        }
-        found.find(&graph, &mut cells, None, 0.0);
-        assert!(
-            found.iter().all(|fall| fall.spent.is_some()),
-            "drowned, it runs on under the water"
-        );
+        assert!(jet.driven && !jet.drowned && jet.lip.y > 1.95);
+        assert!((jet.roof() - 2.5).abs() < 1.0e-3, "it fills its hole");
+        assert_eq!(cells.flights.len(), 1);
     }
 
     #[test]
-    fn a_jet_that_meets_water_before_it_has_dropped_is_no_fall() {
+    fn a_jet_drowned_under_its_hole_s_roof_is_kept_to_be_seen_and_none_of_it_flies() {
+        let (graph, mut cells) = holed_dam(4.0);
+        let mut found = Falls::default();
+        // Water over the jet's top, at 2 m, but well under the hole's roof,
+        // at 2.5 m.
+        for i in 5..CHUNK_COLUMNS {
+            *cells.depth_mut(cell(i, 5)) = 2.1;
+        }
+        found.find(&graph, &mut cells, None, 0.0);
+        let jet = *found.get(cell(4, 5), 0).expect("the hole's top is clear");
+        assert!(jet.driven && jet.drowned && jet.spent.is_none());
+        assert!(cells.flights.is_empty(), "its water runs on over its face");
+        // Water up to the hole's roof: nothing of it is left to see.
+        for i in 5..CHUNK_COLUMNS {
+            *cells.depth_mut(cell(i, 5)) = 2.4;
+        }
+        found.find(&graph, &mut cells, None, 0.0);
+        assert!(found.iter().all(|fall| fall.spent.is_some()));
+    }
+
+    #[test]
+    fn a_jet_that_meets_water_before_it_has_dropped_does_not_fly() {
         let (graph, mut cells) = holed_dam(4.0);
         // The cell at the hole's mouth is dry, but water stands as high as
-        // the jet's top from the next one on.
+        // the jet's top from the next one on: under the hole's roof.
         for i in 6..CHUNK_COLUMNS {
             *cells.depth_mut(cell(i, 5)) = 2.0;
         }
         let mut found = Falls::default();
         found.find(&graph, &mut cells, None, 0.0);
-        assert!(found.get(cell(4, 5), 0).is_none(), "it runs on into it");
+        let jet = found
+            .get(cell(4, 5), 0)
+            .expect("it is seen running into it");
+        assert!(jet.drowned && cells.flights.is_empty());
+        // Up to the hole's roof, and it is no fall at all.
+        for i in 6..CHUNK_COLUMNS {
+            *cells.depth_mut(cell(i, 5)) = 2.4;
+        }
+        found.find(&graph, &mut cells, None, 0.0);
+        assert!(found.iter().all(|fall| fall.spent.is_some()));
     }
 
     #[test]

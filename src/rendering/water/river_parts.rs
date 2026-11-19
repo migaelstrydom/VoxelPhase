@@ -142,6 +142,7 @@ impl RiverParts {
     fn join(&mut self) {
         self.joined.vertices.clear();
         self.joined.indices.clear();
+        self.joined.sheet_indices.clear();
         self.joined.draws.clear();
         for part in self.parts.values_mut() {
             part.joined_at = self.joined.vertices.len();
@@ -296,6 +297,12 @@ mod in_a_level {
             compared += 1;
         }
         assert!(compared > 0);
+        let joined = parts.mesh();
+        let sheets: usize = (parts.parts.values())
+            .map(|p| p.mesh.sheet_indices.len())
+            .sum();
+        assert_eq!(joined.sheet_indices.len(), sheets, "each sheet joined once");
+        assert!(crate::rendering::water::audit::indexed_within(joined));
         (parts, water)
     }
 

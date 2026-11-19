@@ -121,6 +121,26 @@ is a jet: its body starts back inside the hole, it is white from the lip
 of the cells beside it towards its roof (`DrawnCells::drawn`). A wall in an
 arc's way is left to hide the rest of it.
 
+A jet fills the hole it bursts out of, however thin it flies (`Fall::opening`):
+its body is drawn from the hole's floor to its roof behind the mouth and
+draws in to its own thickness over the first metre of its flight
+(`Tongue::plug`), or the far end of the hole showed over its top. One drowned
+by the water outside (`Fall::drowned`) is drawn the same for a short way on
+into that water, so the hole's mouth is closed over the pool for as long as
+its top stands clear; before, the far side showed through a hole half under
+water.
+
+A fall whose lip lies well under its cell's surface (`SUNK_LIP`) leaves by an
+opening in the water's side: a slot at the foot of a lake. Its curtain hangs
+from its own arc, as a jet's out of a hole does, and the surface over it is
+laid as if nothing went over that edge. Hung from the surface it was a sheet
+from the top of the lake down to the slot.
+
+Water under a roof and water standing higher than that roof beside it are
+two sheets of water, one over the roof, and no corner joins them
+(`Meeting::roof`), though the face between them is open: a pocket under a
+slab beside a lake. Joined, the pocket's surface ramped up to the lake's.
+
 Water run full in a hole between two waters (a conduit's full cells) has no
 surface of its own, but is drawn: at the head it is under
 (`DrawnCells::surface`), which falls along the hole from the level behind it
@@ -445,6 +465,7 @@ src/rendering/water/
     field_mesher.rs -- the field's surface, per chunk
     field_sources.rs -- where each vertex of the field's surface reads its water
     river_parts.rs  -- river surfaces read again or rebuilt when their version moves
+    audit.rs        -- a drawn mesh checked against its water: nothing drawn where none is
     ocean_ring.rs   -- the sea past the map's open edges
     curtain.rs      -- a fall's curtain: strands, top and under faces, caps, foam
     jet.rs          -- a source's jet, drawn as a tube of falling water

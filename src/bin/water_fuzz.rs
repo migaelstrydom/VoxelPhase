@@ -10,7 +10,10 @@
 //! - the ledger balances;
 //! - no water runs faster than anything a level could make;
 //! - no cell under a roof holds more than it has room for, and no fall's
-//!   water comes down above where it left.
+//!   water comes down above where it left;
+//! - nothing is drawn where there is no water: the surface and the falls'
+//!   curtains, meshed as the game meshes them, are finite and stand no
+//!   higher than the water or the lip they are drawn for.
 //!
 //! Then it leaves the water alone for a while and, on a level nothing
 //! feeds, checks it has come to rest, or is still running out of the world
@@ -22,6 +25,7 @@
 
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use nalgebra::Point3;
 use rand::rngs::StdRng;
@@ -29,9 +33,13 @@ use rand::{Rng, SeedableRng};
 
 use voxel_phase::level::load_level;
 use voxel_phase::level_check::build_terrain;
+use voxel_phase::rendering::water::{indexed_within, worst_stray, RiverParts};
 use voxel_phase::terrain::{BlastConfig, TerrainWorld};
 use voxel_phase::water::field::WET_DEPTH;
 use voxel_phase::water::WaterWorld;
+
+/// Where the last panic came from, for the seed's report.
+static PANICKED_AT: Mutex<Option<String>> = Mutex::new(None);
 
 /// Frames run after each blast, at 60 Hz.
 const FRAMES_BETWEEN: usize = 45;
@@ -88,10 +96,15 @@ fn main() {
             std::process::exit(2);
         }
     };
-    // Panics are caught and reported per seed; the default hook would print
-    // each one again.
+    // Panics are caught and reported per seed, with where they came from;
+    // the default hook would print each one again.
     env_logger::init();
-    panic::set_hook(Box::new(|_| {}));
+    panic::set_hook(Box::new(|info| {
+        let at = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()));
+        *PANICKED_AT.lock().unwrap_or_else(|e| e.into_inner()) = at;
+    }));
     let mut failures = 0;
     for seed in 0..options.seeds {
         let findings = match panic::catch_unwind(AssertUnwindSafe(|| run_seed(&options, seed))) {
@@ -100,7 +113,14 @@ fn main() {
                 eprintln!("{e}");
                 std::process::exit(1);
             }
-            Err(payload) => vec![format!("panicked: {}", panic_message(&payload))],
+            Err(payload) => {
+                let at = PANICKED_AT.lock().unwrap_or_else(|e| e.into_inner()).take();
+                vec![format!(
+                    "panicked at {}: {}",
+                    at.as_deref().unwrap_or("an unknown place"),
+                    panic_message(&payload)
+                )]
+            }
         };
         if findings.is_empty() {
             println!("seed {seed}: ok");
@@ -129,6 +149,7 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
     let mut rng = StdRng::seed_from_u64(seed);
     let mut findings = Vec::new();
     let mut time = 0.0;
+    let mut rivers = RiverParts::default();
 
     let mut frame = |terrain: &mut TerrainWorld,
                      water: &mut WaterWorld,
@@ -140,6 +161,23 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
         water.step(dt);
         time += dt;
         check(water, rng, time, findings);
+        rivers.sync(&*water);
+        if !indexed_within(rivers.mesh()) {
+            findings.push(format!(
+                "t {time:.2}: the drawn mesh has a triangle of vertices it has not got"
+            ));
+        }
+        // A surface waiting its turn to be built again is drawn as the
+        // water stood, which is no fault of how it is drawn.
+        if rivers.lag().0 == 0 {
+            if let Some(stray) = worst_stray(rivers.mesh(), water) {
+                findings.push(format!(
+                    "t {time:.2}: a {:?} vertex at ({:.1}, {:.1}, {:.1}) is drawn {:.2} m over \
+                     its water",
+                    stray.drawn, stray.at.x, stray.at.y, stray.at.z, stray.over
+                ));
+            }
+        }
     };
 
     for blast in 0..options.blasts {

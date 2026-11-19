@@ -108,8 +108,13 @@ below its old height.
   gives it, thinner than the opening by as much; jets side by side even out
   how thick they are and how high their tops stand, as falls do their
   velocities. A jet that meets the water outside before its top has dropped a
-  quarter metre is no jet: its water runs on into that water, which the
-  hole's head must then push aside. Open water standing over the top of the
+  quarter metre does not fly: its water runs on into that water, which the
+  hole's head must then push aside. While the top of the hole it fills
+  still stands clear of that water it is kept as a fall that is *drowned*
+  (`Fall::drowned`), for the drawing alone: nothing of it goes into the
+  air, and what it threw while it flew comes down first, where it was
+  going. A fall knows how much of its opening it fills behind its mouth
+  (`Fall::opening`): the whole hole, where it runs full. Open water standing over the top of the
   opening it leaves by drives itself the same way: a slot at the foot of a
   lake is a jet from the slot, not a fall off the top of the lake. What
   leaves over any face is no higher than the opening's roof. What draws a
@@ -215,6 +220,9 @@ seiche.
 | Metres of water stood over the roof of a hole in a dam (`water_fuzz`) | A jet shut in by rock kept sending water into the air with nowhere to land, and its last water was forced into a full cell | A face sends up no more than has room to land; a spent fall's last water backs up to the nearest room |
 | A cave's water stood 20 cm over its roof after a blast nearby | The re-mesh brought its ceiling back lower | A re-paired span's ceiling is held, as its floor is |
 | A lake poured into a slot at its foot for ever and the pocket beyond never filled | The water left as a fall off the top of the lake and was set down on the lake again | Water leaves no higher than the opening's roof, as a jet where open water stands over it |
+| The curtains' index list grew with every rebuild of the drawn rivers, six times too long after ten seconds over a breach, and all of it was uploaded (`water_fuzz`'s mesh audit; on main since 2026-10-12) | `RiverParts::join` cleared every list but the sheets' | It clears that one too |
+| A sheet of falling water stood from a lake's surface down to a slot at its foot; a pocket's surface ramped up 12 m to the lake's (the mesh audit) | The slot's fall hung its curtain from the surface, and the two waters shared corners | A fall with its lip under the surface hangs from its own arc; water under a roof shares no corner with water over it |
+| Water set down on top of a dam, over a hole 12 m below (the mesh audit, while trying a change) | A spent fall's landing was looked up by height, and a height inside the ground is answered with the span above it | The landing must have its floor under the water that lands; else the column the water came from takes it |
 
 ## 5. Rendering
 

@@ -175,7 +175,9 @@ impl FallingWater {
     /// Every stream of falling water in `field`.
     pub fn build(field: &WaterField) -> Self {
         let mut streams = Vec::new();
-        for fall in field.falls().iter() {
+        // A jet drowned at its hole's mouth is under the water there, which
+        // carries what it meets as any water does.
+        for fall in field.falls().iter().filter(|fall| !fall.drowned) {
             let path = FallPath::sheet(
                 fall.lip,
                 fall.face(),
