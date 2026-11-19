@@ -29,10 +29,6 @@ use super::faces::{Face, FaceRef};
 /// Most faces a conduit runs through.
 const LONGEST: usize = 16;
 
-/// How near its ceiling a cell's water must stand for the cell to be full,
-/// m.
-const FULL_SLACK: f64 = 5.0e-3;
-
 /// Least opening a conduit's narrowest face must leave, m.
 const LEAST_THROAT: f32 = 0.02;
 
@@ -70,6 +66,20 @@ impl Conduit {
         }
     }
 
+    /// The head at the middle of the full cell `place` in from its − end,
+    /// m, with the water at its ends standing at `levels`: on the line
+    /// between the heads at its two ends, which is how the pressure falls
+    /// along a column moving as one.
+    pub fn grade(&self, place: usize, levels: [f32; 2]) -> f32 {
+        let ends = if levels[0] >= levels[1] {
+            [levels[0], levels[1].max(self.mouths[1])]
+        } else {
+            [levels[0].max(self.mouths[0]), levels[1]]
+        };
+        let share = (place as f32 + 1.0) / self.faces.len() as f32;
+        ends[0] + (ends[1] - ends[0]) * share
+    }
+
     /// Its discharge per metre of face after `dt` seconds, from `q`: the
     /// column's momentum, pushed by its head and held back by the loss at
     /// its mouth and by `friction` (the solver's own, for water this deep
@@ -86,12 +96,6 @@ impl Conduit {
 
 fn face_at(cells: &FieldCells, at: FaceRef) -> &Face {
     &cells.chunks[at.slot as usize].faces[at.index as usize]
-}
-
-/// Whether a cell's water is pressed against its ceiling.
-fn full(cells: &FieldCells, cell: SpanIndex) -> bool {
-    let room = (cells.ceiling(cell) - cells.bed(cell)) as f64;
-    room.is_finite() && cells.depth(cell) >= room - FULL_SLACK
 }
 
 /// The opening a face leaves, floor to roof.
@@ -116,7 +120,7 @@ fn through(cells: &FieldCells, start: FaceRef) -> Option<Conduit> {
             slot: at.slot,
             flat: face.a,
         };
-        if !full(cells, cell) {
+        if !cells.full(cell) {
             break cell;
         }
         at = face.behind?;
@@ -128,7 +132,7 @@ fn through(cells: &FieldCells, start: FaceRef) -> Option<Conduit> {
     let mut at = start;
     let high = loop {
         let cell = face_at(cells, at).b;
-        if !full(cells, cell) {
+        if !cells.full(cell) {
             break cell;
         }
         at = face_at(cells, at).ahead?;
@@ -166,6 +170,7 @@ fn dissolve(cells: &mut FieldCells) {
         }
     }
     cells.conduits = conduits;
+    cells.run_full.clear();
 }
 
 /// Find the field's conduits again as its water stands. `pressed` are the
@@ -187,6 +192,11 @@ pub(super) fn find(cells: &mut FieldCells, pressed: &[FaceRef]) {
         let index = cells.conduits.len() as u32;
         for at in &conduit.faces {
             cells.chunks[at.slot as usize].faces[at.index as usize].conduit = Some(index);
+        }
+        // Every face but the last runs into a full cell.
+        for (place, at) in conduit.faces.iter().rev().skip(1).rev().enumerate() {
+            let full = face_at(cells, *at).b;
+            cells.run_full.insert(full, (index, place as u32));
         }
         cells.conduits.push(conduit);
     }
@@ -216,6 +226,12 @@ mod tests {
                 *cells.depth_mut(at) = depth.min(room);
             }
         }
+    }
+
+    fn every_face(cells: &FieldCells) -> Vec<FaceRef> {
+        (0..cells.chunks[0].faces.len() as u32)
+            .map(|index| FaceRef { slot: 0, index })
+            .collect()
     }
 
     fn run(cells: &mut FieldCells, solver: &mut FieldSolver, seconds: f32) {
@@ -263,6 +279,28 @@ mod tests {
         assert!((q - rated).abs() < 0.1 * rated, "{q} against {rated}");
         let critical = 0.5 * (GRAVITY * 0.5).sqrt();
         assert!(q > 2.0 * critical, "more than a free surface would pass");
+    }
+
+    #[test]
+    fn the_head_in_a_hole_run_full_falls_evenly_from_end_to_end() {
+        let (_, mut cells) = basin(false, |i, _| match i {
+            6..=8 => roofed(1.0, 1.5),
+            _ => open(0.0),
+        });
+        fill(&mut cells, 1..9, 4.0);
+        fill(&mut cells, 9..15, 2.0);
+        let faces = every_face(&cells);
+        find(&mut cells, &faces);
+        let head =
+            |cells: &FieldCells, i: i32| cells.head(cell(i, 5), |at| cells.surface(at) as f32);
+        let heads: Vec<f32> = (6..=8)
+            .map(|i| head(&cells, i).expect("run full"))
+            .collect();
+        assert!((heads[0] - 3.5).abs() < 1e-4 && (heads[1] - 3.0).abs() < 1e-4);
+        assert!((heads[2] - 2.5).abs() < 1e-4, "{heads:?}");
+        assert_eq!(head(&cells, 3), None, "open water has its own");
+        forget(&mut cells);
+        assert_eq!(head(&cells, 7), None);
     }
 
     #[test]

@@ -121,13 +121,32 @@ is a jet: its body starts back inside the hole, it is white from the lip
 of the cells beside it towards its roof (`DrawnCells::drawn`). A wall in an
 arc's way is left to hide the rest of it.
 
+Water run full in a hole between two waters (a conduit's full cells) has no
+surface of its own, but is drawn: at the head it is under
+(`DrawnCells::surface`), which falls along the hole from the level behind it
+to the level it runs out into. Its corners weigh nothing in the corners they
+share (`Meeting::weight`), so they take the water's level on either side and
+pull none of it down. The surface lies over the cell's roof, where the rock
+hides it wherever the roof is really there; without it the water behind and
+the water in front each stopped flat at the roofed column and left an open
+step between them. Any other cell filled to its roof (a sealed cavity, the
+water under a slab) draws none.
+
 A fall has a life (`Fall::age`, `Fall::spent`): new, its water has fallen
 only as far as its age lets it; once it stops pouring, what is in the air
 goes on down. Its vertices carry when it began and when it stopped, on the
 water's clock (`life`), and the draw shows only the stretch between its first
 water and its last, torn at both ends. A spent fall's curtain hangs from its
-own arc, since the surface it left is no longer shaped by it. Nothing is read
-again as a fall ages: the clock does it.
+own arc, since the surface it left is no longer shaped by it, runs on only
+into other spent falls, is left as built, and is folded to a point once its
+fall is gone, so its going builds nothing again. Nothing is read again as a
+fall ages: the clock does it.
+
+Seen from below its lip, a thick fall shows its under face near the top and
+its top face lower down. The under face is white from the lip and lit
+through from above (`SHEET_THROUGH`), and neither face mirrors the sky whole
+where it is seen edge on (`SHEET_MAX_MIRROR`), or the line where one hands
+over to the other is drawn across the fall as a bright wire.
 
 A curtain's vertices carry `sheet` = (drop below the lip, whole fall, side,
 thickness), the `normal` of their face, where their water left its lip (in
@@ -369,10 +388,12 @@ the water and fading over a few seconds. Each corner of the surface carries
 its cells' (in `air`, which on a curtain is the air in the falling water),
 and the shader lays it as billows that close up where it is thick
 (`RIDING_FOAM_FULL`) and break into patches as it thins, laced inside, over
-water turned pale by the air churned into it (`AERATED_COLOR`). It moves with
-the current because the billows' noise is carried by the flow, like the lace.
-A chunk whose foam changed by more than can be seen has its version moved,
-with those round it (`WaterWorld::note_foam`).
+water turned pale by the air churned into it (`AERATED_COLOR`), which follows
+the billows too, so its edge is not the straight edge of the cells that hold
+it. It moves with the current because the billows' noise is carried by the
+flow, like the lace. A chunk whose foam changed by more than can be seen has
+its version moved, and where the change reaches its border, so have those
+round it (`WaterWorld::note_foam`).
 
 ### 7. Falling water
 

@@ -528,6 +528,7 @@ mod tests {
             age: 60.0,
             spent: None,
             aloft: 0.0,
+            settling: 0.0,
         }
     }
 

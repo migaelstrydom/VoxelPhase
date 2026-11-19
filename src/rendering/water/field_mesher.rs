@@ -236,6 +236,23 @@ impl<'a> FieldScene<'a> {
         });
     }
 
+    /// Whether water run full in a hole in `column` is drawn about `level`:
+    /// over its own roof, where the graph has only the ground above it.
+    fn run_full_at(&self, column: Column, level: f64) -> bool {
+        let (cells, graph) = (self.field.cells(), self.field.graph());
+        if cells.run_full.is_empty() {
+            return false;
+        }
+        let drawn = self.drawn_cells();
+        (0..graph.spans(column).len()).any(|ordinal| {
+            cells.index(graph, column, ordinal as u8).is_some_and(|c| {
+                cells.run_full.contains_key(&c)
+                    && drawn.drawn(c)
+                    && (drawn.surface(c) - level).abs() < RUN_FULL_NEAR
+            })
+        })
+    }
+
     /// What stands in `column` at `level`, beside a wet cell there: water,
     /// a dry cell (none where the column is rock at that height), a drop,
     /// or the map's edge.
@@ -244,6 +261,9 @@ impl<'a> FieldScene<'a> {
         let Some(slot) = graph.slot(column.chunk()) else {
             return Beside::Outside;
         };
+        if self.run_full_at(column, level) {
+            return Beside::Wet;
+        }
         let span = graph.span_at(column, level as f32);
         let cell = span.and_then(|span| self.cell(span));
         match cell {
@@ -438,6 +458,10 @@ pub(super) fn skirt_vertex(
 /// column, m: the depth from which `water.frag` reads the ground behind the
 /// water as its depth (`GROUND_TRUSTED_DEPTH`).
 const FILM_DEPTH: f32 = 0.3;
+
+/// How near a level the head of water run full in a hole must be drawn for
+/// the hole's column to be covered at that level, m.
+const RUN_FULL_NEAR: f64 = 1.0;
 
 /// How far below a cell's water the whole floor of a dry column beside it
 /// must lie for the column to be a drop, not a bank, m: no skirt is laid

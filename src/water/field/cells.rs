@@ -7,6 +7,7 @@
 //! the graph has already replaced the chunk.
 
 use nalgebra::Vector2;
+use rustc_hash::FxHashMap;
 
 use crate::water::geometry::{
     Column, SpanChunk, SpanChunkCoord, SpanGraph, SpanIndex, CHUNK_COLUMNS, COLUMNS_PER_CHUNK,
@@ -18,6 +19,10 @@ use super::faces::{BoundaryFace, Face, Flight, Push};
 
 /// Plan area of one cell, m².
 pub const CELL_AREA: f64 = (COLUMN_SIZE * COLUMN_SIZE) as f64;
+
+/// How near its ceiling a cell's water must stand for the cell to be full,
+/// m.
+pub const FULL_SLACK: f64 = 5.0e-3;
 
 /// One span chunk's cells and the faces they own.
 #[derive(Debug, Clone)]
@@ -126,6 +131,9 @@ pub struct FieldCells {
     /// The runs of faces whose water moves as one column under a roof
     /// (`Face::conduit` counts into these), as they were last found.
     pub conduits: Vec<Conduit>,
+    /// Each cell run full inside a conduit: which conduit, and how many
+    /// full cells in from its − end.
+    pub run_full: FxHashMap<SpanIndex, (u32, u32)>,
     /// Per slot: how many times its chunk's cells have been laid out again,
     /// after which a `SpanIndex` into it means a different cell.
     generations: Vec<u32>,
@@ -151,6 +159,7 @@ impl FieldCells {
             flights: Vec::new(),
             pushes: Vec::new(),
             conduits: Vec::new(),
+            run_full: FxHashMap::default(),
             origin,
             width,
         }
@@ -208,6 +217,28 @@ impl FieldCells {
 
     pub fn surface(&self, at: SpanIndex) -> f64 {
         self.chunks[at.slot as usize].surface(at.flat as usize)
+    }
+
+    /// How much deeper a cell's water can stand before it meets its
+    /// ceiling, m: without end under open sky, and none, or less, where it
+    /// is pressed against its roof.
+    pub fn room(&self, at: SpanIndex) -> f64 {
+        (self.ceiling(at) - self.bed(at)) as f64 - self.depth(at)
+    }
+
+    /// Whether a cell's water is pressed against its ceiling: it has no
+    /// surface, and no air for water to fall into.
+    pub fn full(&self, at: SpanIndex) -> bool {
+        self.room(at) <= FULL_SLACK
+    }
+
+    /// The head of the water in a cell run full inside a conduit, m, for
+    /// ends whose water stands at what `level` says. None for any other
+    /// cell.
+    pub fn head(&self, at: SpanIndex, level: impl Fn(SpanIndex) -> f32) -> Option<f32> {
+        let &(conduit, place) = self.run_full.get(&at)?;
+        let conduit = self.conduits.get(conduit as usize)?;
+        Some(conduit.grade(place as usize, conduit.ends.map(level)))
     }
 
     /// Water held by every cell, m³.

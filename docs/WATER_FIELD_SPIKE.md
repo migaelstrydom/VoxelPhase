@@ -74,7 +74,9 @@ below its old height.
   of the mouth there, so a hole that opens on air runs by the head over its
   middle. The solver notes the faces whose water stands against their roofs,
   and conduits are found again from those after each step. A tunnel that bends
-  or ends blind is left to the flow law.
+  or ends blind is left to the flow law. Each full cell of a conduit has a
+  head (`FieldCells::head`), on the line between the heads at its two ends:
+  what its water is drawn at, since it has no surface of its own.
 - **Falls** (`falls.rs`). Water going over an edge flies. After each step the
   field finds its falls: every face pouring from water that `falls` to what lies
   across it (a step over 0.5 m off a floor standing 0.2 m or more above the water
@@ -98,8 +100,22 @@ below its old height.
   step across them as it steps, so levels without falls pay nothing. Water in a
   roofed cell with open water standing over its roof behind it is *driven*: it
   bursts out as a jet from the middle of the opening at the speed its head
-  gives it, thinner than the opening by as much. What draws a fall, what it
-  strikes and where it sprays all read the same `Fall`.
+  gives it, thinner than the opening by as much; jets side by side even out
+  how thick they are and how high their tops stand, as falls do their
+  velocities. A jet that meets the water outside before its top has dropped a
+  quarter metre is no jet: its water runs on into that water, which the
+  hole's head must then push aside. What draws a fall, what it strikes and
+  where it sprays all read the same `Fall`.
+
+  Water in the air comes down where there is room for it. Nothing falls into
+  a cell filled to its roof, an arc that meets such water under a roof comes
+  down before it as it would before a wall, and a cell under a roof takes no
+  more than it has room for: the rest goes to the other cells the fall lands
+  in, or stays in the air. A fall holds its water in the air as one amount,
+  brought down over the time it takes to fall; when its landing comes
+  suddenly nearer that time shrinks no faster than time passes
+  (`Fall::settling`), or seconds' worth of a torrent would come down in one
+  step as a column of water.
 - **Foam** (`foam.rs`). One number per cell, read only by what draws the
   water. It is made where water loses speed all at once: where a fall lands (by
   the power it lands with), where fast water runs into slower (the solver notes
@@ -241,6 +257,13 @@ Open:
   cannot run away from its foot as a fast thin sheet: on a shallow floor it
   piles up there until it is deep enough to leave at Froude 1, and a narrow
   channel below a hole run full backs up to the hole.
+- **A big breach heaps the pool as it drowns.** A jet's water lands where it
+  flies to; once the pool has risen to the hole it runs into the cell at the
+  hole's mouth instead, and the column in the hole, still moving at the jet's
+  speed, piles metres of water there before its head can stop it. The heap
+  falls back within seconds. Throwing that water on through the pool was
+  tried and made it worse: nothing then throttles the hole. The pool needs
+  the jet's momentum, which the scheme cannot carry.
 - **Only a straight tunnel runs under pressure.** A conduit is one run of full
   cells along one axis. Round a bend, or through a flooded cave wider than a
   run, the water moves by the flow law alone, which passes at most Froude 1

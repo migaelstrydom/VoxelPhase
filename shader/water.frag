@@ -43,6 +43,13 @@ const float SHEET_GLASS_THICKNESS = 0.15;
 // How far light wraps round a falling curtain past its terminator: white
 // water scatters it, so its shadowed side is only dimmer.
 const float SHEET_WRAP = 0.4;
+// How much of the light falling on the far side of a curtain comes through
+// it: seen from under, white water is lit from above.
+const float SHEET_THROUGH = 0.8;
+// Most of the sky a falling sheet mirrors where it is seen edge on. Its face
+// is ruffled; mirrored whole, the line along which it turns away from the eye
+// is drawn across the fall as a bright wire.
+const float SHEET_MAX_MIRROR = 0.25;
 // How far the ropes of white water stand out of a curtain, as the slope
 // their streaks tilt its face by.
 const float SHEET_RELIEF = 0.9;
@@ -380,6 +387,10 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     float seconds = sqrt(2.0 * drop / FALL_GRAVITY);
     float head = 1.0 - smoothstep(0.0, FLYING_HEAD, fragLife.x - seconds);
     float air = max(clamp(fragAir, 0.0, 1.0), head);
+    // Its under face springs clear of the ledge torn and white: only its
+    // top slides over the lip as glass.
+    bool under = face.y < -1.0e-3;
+    air = under ? 1.0 : air;
     float aerated = 1.0 - (1.0 - air) * (1.0 - smoothstep(0.0, SHEET_GLASS_DROP, drop));
     float pour = smoothstep(0.0, SHEET_FULL_POUR, fragWetDepth);
     // Thick glass is deep green and hides what is behind it.
@@ -391,11 +402,12 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     // noise ruffles it.
     vec3 sheetN = embossed(face, coarse, SHEET_RELIEF * aerated);
     sheetN = normalize(sheetN + 0.35 * vec3(noiseN.x, 0.0, noiseN.z));
-    float wrapped = clamp((dot(sheetN, L) + SHEET_WRAP) / (1.0 + SHEET_WRAP), 0.0, 1.0);
-    float skyward = 0.5 + 0.5 * sheetN.y;
+    float lit = dot(sheetN, L);
+    float wrapped = clamp((max(lit, -SHEET_THROUGH * lit) + SHEET_WRAP) / (1.0 + SHEET_WRAP), 0.0, 1.0);
+    float skyward = 0.5 + 0.5 * abs(sheetN.y);
     vec3 H = normalize(L + V);
     float NdotH = max(dot(sheetN, H), 0.0);
-    float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(sheetN, V), 0.0), 5.0);
+    float fresnel = min(0.02 + 0.98 * pow(1.0 - max(dot(sheetN, V), 0.0), 5.0), SHEET_MAX_MIRROR);
     vec3 sky = mix(vec3(0.6, 0.7, 0.8), vec3(0.25, 0.4, 0.7), max(reflect(-V, sheetN).y, 0.0));
     vec3 tint = mix(vec3(0.10, 0.30, 0.32), vec3(0.03, 0.15, 0.17), body);
     vec3 glass = mix(tint, sky, 0.1 + 0.6 * fresnel)
@@ -704,7 +716,10 @@ void main() {
     float thick = smoothstep(0.5, 1.0, riding);
     float ridingFoam = cover * mix(0.3 + 0.7 * lace, 0.5 + 0.4 * lace, thick);
     vec3 foamColor = vec3(0.9, 0.95, 1.0) * (0.8 + 0.2 * NdotL);
-    color = mix(color, AERATED_COLOR * (0.55 + 0.45 * NdotL), AERATED_SHARE * smoothstep(0.1, 1.0, riding));
+    // The pale water follows the billows too: by the foam's amount alone
+    // its edge is the straight edge of the cells that hold it.
+    float churned = smoothstep(0.1, 1.0, riding * (0.5 + billows));
+    color = mix(color, AERATED_COLOR * (0.55 + 0.45 * NdotL), AERATED_SHARE * churned);
     float foamFactor = max(max(edgeFoam, whiteWater), ridingFoam);
     color = mix(color, foamColor, foamFactor);
 

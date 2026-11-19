@@ -69,19 +69,44 @@ impl DrawnCells<'_> {
         self.cells.bed(at)
     }
 
-    pub(super) fn surface(&self, at: SpanIndex) -> f64 {
+    /// Where a cell's water stands, by its depth.
+    fn standing(&self, at: SpanIndex) -> f64 {
         self.bed(at) as f64 + self.depth(at)
     }
 
-    /// Whether a cell has a surface to draw: deep enough, not filled to its
-    /// roof, not perched, and not bursting out of a hole as a jet, which
-    /// comes from the middle of the hole it fills, under where a surface
-    /// would lie. A cell without one stands to the water beside it as dry
-    /// ground does: it lifts none of their corners towards its roof.
+    /// Whether a cell's water has a surface of its own: room left over it
+    /// under its ceiling.
+    pub(super) fn free(&self, at: SpanIndex) -> bool {
+        self.standing(at) < self.cells.ceiling(at) as f64 - ROOF_GAP
+    }
+
+    /// The head of a cell run full inside a conduit, between the water
+    /// standing at the conduit's two ends as drawn.
+    fn head(&self, at: SpanIndex) -> Option<f64> {
+        let level = |end: SpanIndex| self.standing(end) as f32;
+        self.cells.head(at, level).map(f64::from)
+    }
+
+    /// The level a cell's water is drawn at: where it stands, or, pressed
+    /// against its roof in a hole run full, the head it is under there,
+    /// which falls along the hole from the water behind it to the water it
+    /// runs out into. The rock hides it wherever the roof is really there.
+    pub(super) fn surface(&self, at: SpanIndex) -> f64 {
+        if self.free(at) {
+            return self.standing(at);
+        }
+        self.head(at).unwrap_or_else(|| self.standing(at))
+    }
+
+    /// Whether a cell has a surface to draw: deep enough; with room over
+    /// it, or run full in a hole between two waters, whose surfaces its
+    /// head joins; not perched; and not bursting out of a hole as a jet,
+    /// which comes from the middle of the hole it fills, under where a
+    /// surface would lie. A cell without one stands to the water beside it
+    /// as dry ground does: it lifts none of their corners towards its roof.
     pub(super) fn drawn(&self, at: SpanIndex) -> bool {
-        let depth = self.depth(at);
-        depth > DRAWN_DEPTH
-            && self.surface(at) < self.cells.ceiling(at) as f64 - ROOF_GAP
+        self.depth(at) > DRAWN_DEPTH
+            && (self.free(at) || self.head(at).is_some())
             && !self.perched(at)
             && !self.bursts(at)
     }
@@ -181,6 +206,10 @@ pub(super) struct Meeting {
     pub bed: f64,
     /// Its depth.
     pub depth: f64,
+    /// How much its surface weighs in the corner's: its depth, or nothing
+    /// for water run full in a hole, whose head follows the water beside
+    /// it and pulls none of it down.
+    pub weight: f64,
 }
 
 impl Meeting {
@@ -190,6 +219,7 @@ impl Meeting {
             surface: cells.drawn(at).then(|| cells.surface(at)),
             bed: cells.bed(at) as f64,
             depth,
+            weight: if cells.free(at) { depth } else { 0.0 },
         }
     }
 }
@@ -226,7 +256,7 @@ pub(super) struct Shape {
 pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
     let mut surfaces: SmallVec<[(f64, f64, f64); 4]> = meetings
         .iter()
-        .filter_map(|m| Some((m.surface?, m.depth, m.bed)))
+        .filter_map(|m| Some((m.surface?, m.weight, m.bed)))
         .collect();
     surfaces.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut group: SmallVec<[(f64, f64); 4]> = SmallVec::new();
@@ -239,8 +269,12 @@ pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
         }
         group.push((s, d));
     }
-    let held: f64 = group.iter().map(|&(_, d)| d).sum();
-    let height = group.iter().map(|&(s, d)| s * d).sum::<f64>() / held;
+    let held: f64 = group.iter().map(|&(_, w)| w).sum();
+    let height = if held > 0.0 {
+        group.iter().map(|&(s, w)| s * w).sum::<f64>() / held
+    } else {
+        group.iter().map(|&(s, _)| s).sum::<f64>() / group.len() as f64
+    };
     let (low, high) = (group[0].0, group[group.len() - 1].0);
 
     let mut shape = Shape { wet: 0, grouped: 0 };
