@@ -13,7 +13,6 @@ use specs::{
 
 use crate::components::Position;
 use crate::damage::Health;
-use crate::debug::DebugLines;
 use crate::objective::LevelProgress;
 use crate::particles::{Palette, ParticleEffectType, ParticleEmitter};
 use crate::player::Player;
@@ -104,22 +103,12 @@ impl<'a> System<'a> for CollectionSystem {
         WriteStorage<'a, Collectable>,
         WriteStorage<'a, Health>,
         Write<'a, LevelProgress>,
-        Write<'a, DebugLines>,
         Read<'a, LazyUpdate>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (
-            entities,
-            time,
-            players,
-            positions,
-            mut collectables,
-            mut healths,
-            mut progress,
-            mut debug,
-            lazy,
-        ) = data;
+        let (entities, time, players, positions, mut collectables, mut healths, mut progress, lazy) =
+            data;
         let dt = time.delta_seconds();
 
         let Some((player, player_position)) = (&entities, &players, &positions)
@@ -146,7 +135,6 @@ impl<'a> System<'a> for CollectionSystem {
                 Reward::Heart { value } => {
                     if let Some(health) = healths.get_mut(player) {
                         health.current = (health.current + value).min(health.max);
-                        debug.add("Caught", format!("heart +{value:.0}"));
                     }
                 }
                 Reward::Solid => {
