@@ -105,10 +105,22 @@ impl DrawnCells<'_> {
     /// surface would lie. A cell without one stands to the water beside it
     /// as dry ground does: it lifts none of their corners towards its roof.
     pub(super) fn drawn(&self, at: SpanIndex) -> bool {
-        self.depth(at) > DRAWN_DEPTH
-            && (self.free(at) || self.head(at).is_some())
-            && !self.perched(at)
-            && !self.bursts(at)
+        self.level(at).is_some()
+    }
+
+    /// A cell's `surface`, if it is `drawn`.
+    pub(super) fn level(&self, at: SpanIndex) -> Option<f64> {
+        let depth = self.depth(at);
+        if depth <= DRAWN_DEPTH {
+            return None;
+        }
+        let standing = self.bed(at) as f64 + depth;
+        let level = if standing < self.cells.ceiling(at) as f64 - ROOF_GAP {
+            standing
+        } else {
+            self.head(at)?
+        };
+        (!self.perched(at) && !self.bursts(at)).then_some(level)
     }
 
     /// Whether a cell's water bursts out of it as a jet. Asked of every
@@ -216,7 +228,7 @@ impl Meeting {
     pub fn of(cells: &DrawnCells, at: SpanIndex) -> Self {
         let depth = cells.depth(at);
         Self {
-            surface: cells.drawn(at).then(|| cells.surface(at)),
+            surface: cells.level(at),
             bed: cells.bed(at) as f64,
             depth,
             weight: if cells.free(at) { depth } else { 0.0 },

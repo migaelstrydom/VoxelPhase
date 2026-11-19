@@ -56,6 +56,10 @@ pub struct Flight {
     pub from_owner: bool,
     /// What has gone over the face since its fall last took it, m³.
     pub aloft: f64,
+    /// The most that may go over it before its fall next takes it, m³: what
+    /// has room to come down where the fall lands. Without end where it
+    /// lands under open sky.
+    pub room: f64,
 }
 
 /// The momentum falling water lands with, on a face beside where it lands.

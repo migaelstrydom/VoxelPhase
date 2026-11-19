@@ -28,6 +28,17 @@ use crate::water::geometry::{SpanIndex, COLUMN_SIZE};
 /// Gravity, m/s².
 const G: f32 = 9.81;
 
+/// The most times a substep fits the cells' inflows again after cutting
+/// one. Each carries the cut one cell further back along a run of full
+/// cells.
+const REFITS: usize = 16;
+
+/// The least cut worth fitting again for, m³, and the least a cell must be
+/// passing on to count on it for room: a centimetre's depth over a cell.
+/// Water held at rest against a full cave is cut by less every substep. A
+/// cell left that much over its roof has that much less room the next.
+const CUT_VOLUME: f64 = 0.01 * CELL_AREA;
+
 /// Least step between two cells' surfaces at which their face is noted as
 /// a brink, m: a little under the least water falls across
 /// (`falls::LEAST_STEP`), since the water moves on before falls are found.
@@ -129,6 +140,17 @@ pub struct FieldSolver {
     previous: Vec<Vec<(f32, f32)>>,
     /// Per chunk: whether it is stepped this frame.
     is_stepped: Vec<bool>,
+    /// Per chunk: whether it is touched this frame.
+    is_touched: Vec<bool>,
+    /// The chunks with a cell whose share of its inflow was just cut, or
+    /// whose water was held back from falling.
+    cut: Vec<usize>,
+    /// The chunks whose cells' shares are being fitted again, the chunks
+    /// whose faces they give over, and, per chunk, whether it is one of the
+    /// first.
+    round: Vec<usize>,
+    owners: Vec<usize>,
+    refitting: Vec<bool>,
     /// The faces whose cells' surfaces stood a step apart as the last
     /// substep began: the only ones water may be falling over.
     brinks: Vec<FaceRef>,
@@ -176,7 +198,11 @@ impl FieldSolver {
             let north = Some(slot + width as usize).filter(|&s| s < count);
             [east, north]
         };
-        let mut marked = vec![false; count];
+        let mut marked = std::mem::take(&mut self.is_touched);
+        marked.clear();
+        marked.resize(count, false);
+        self.refitting.clear();
+        self.refitting.resize(count, false);
         for slot in 0..count {
             let awake = |s: usize| cells.chunks[s].awake;
             if awake(slot) || neighbours(slot).into_iter().flatten().any(awake) {
@@ -189,6 +215,7 @@ impl FieldSolver {
                 }
             }
         }
+        self.is_touched = marked;
         for buffer in [
             &mut self.demand,
             &mut self.offered,
@@ -450,6 +477,12 @@ impl FieldSolver {
     /// Scale each face's flow so that no cell gives more than it holds, and
     /// none takes more than it has room for under its ceiling. Water does not
     /// flow under pressure: a full cave stays full and no fuller.
+    ///
+    /// A full cell has room only for what it passes on, and what it passes
+    /// on is cut where the cell beyond is full too, or where it falls with
+    /// no room to land (`Flight::room`), so the shares are fitted again
+    /// wherever one was cut, each time against what the cells beyond were
+    /// last found to take.
     fn limit_outflows(&mut self, cells: &FieldCells, dt: f32) {
         for &slot in &self.touched {
             self.demand[slot].iter_mut().for_each(|d| *d = 0.0);
@@ -469,25 +502,127 @@ impl FieldSolver {
                 *give = if asked > held { held / asked } else { 1.0 };
             }
         }
+        self.cut.clear();
         self.for_each_flow(cells, volume, |this, giver, taker, v| {
-            if let Some((slot, flat)) = taker {
-                let give = giver.map_or(1.0, |(s, f)| this.give[s][f]);
-                this.offered[slot][flat] += v * give;
+            let given = v * giver.map_or(1.0, |(s, f)| this.give[s][f]);
+            match taker {
+                Some(Taker::Across((slot, flat))) => this.offered[slot][flat] += given,
+                Some(Taker::Air(flight)) => {
+                    if given * (1.0 - flown(cells, flight, given)) > CUT_VOLUME {
+                        this.cut.extend(giver.map(|(slot, _)| slot));
+                    }
+                }
+                None => {}
             }
         });
-        for &slot in &self.touched {
+        let touched = std::mem::take(&mut self.touched);
+        let leaning = self.fit_takes(cells, &touched, false);
+        self.touched = touched;
+        if leaning {
+            self.refit(cells, volume);
+        }
+    }
+
+    /// Fit the share of its offered inflow each cell of the chunks `slots`
+    /// takes to the room it has under its ceiling, counting what `demand`
+    /// says it passes on, and note in `cut` the chunks where a share fell
+    /// by `CUT_VOLUME` or more. `again` fits them no higher than they were
+    /// last fitted. Returns whether any cell has room for its inflow only
+    /// by passing on that much.
+    fn fit_takes(&mut self, cells: &FieldCells, slots: &[usize], again: bool) -> bool {
+        let mut leaning = false;
+        for &slot in slots {
             let chunk = &cells.chunks[slot];
+            let mut cut = false;
             for (i, take) in self.take[slot].iter_mut().enumerate() {
                 let offered = self.offered[slot][i];
-                let room = ((chunk.ceiling[i] - chunk.bed[i]) as f64 - chunk.depth[i]) * CELL_AREA
-                    + self.demand[slot][i] * self.give[slot][i];
-                *take = if offered > room {
-                    (room / offered).max(0.0)
+                let empty = ((chunk.ceiling[i] - chunk.bed[i]) as f64 - chunk.depth[i]) * CELL_AREA;
+                if offered <= empty {
+                    if !again {
+                        *take = 1.0;
+                    }
+                    continue;
+                }
+                let passed = self.demand[slot][i] * self.give[slot][i];
+                let had = if again { *take } else { 1.0 };
+                let fits = if offered > empty + passed {
+                    ((empty + passed) / offered).max(0.0)
                 } else {
                     1.0
                 };
+                leaning |= passed > CUT_VOLUME;
+                cut |= (had - fits) * offered > CUT_VOLUME;
+                *take = fits.min(had);
+            }
+            if cut {
+                self.cut.push(slot);
             }
         }
+        leaning
+    }
+
+    /// Fit again the shares of the cells that give to those just cut, by
+    /// what they pass on now, until no share falls. Only the chunks round a
+    /// cut are looked at: a cell that gives to one in a cut chunk is in
+    /// that chunk or one of the four beside it, and what it gives goes over
+    /// its own chunk's faces or those of the chunks to its −x and −z.
+    fn refit(&mut self, cells: &FieldCells, volume: impl Fn(f32) -> f64) {
+        let width = cells.width().max(1) as usize;
+        let count = cells.chunks.len();
+        let mut round = std::mem::take(&mut self.round);
+        let mut owners = std::mem::take(&mut self.owners);
+        for _ in 0..REFITS {
+            if self.cut.is_empty() {
+                break;
+            }
+            round.clear();
+            for &slot in &self.cut {
+                let x = slot % width;
+                let beside = [
+                    Some(slot),
+                    (x > 0).then(|| slot - 1),
+                    (x + 1 < width).then_some(slot + 1),
+                    slot.checked_sub(width),
+                    Some(slot + width).filter(|&s| s < count),
+                ];
+                round.extend(beside.into_iter().flatten().filter(|&s| self.is_touched[s]));
+            }
+            round.sort_unstable();
+            round.dedup();
+            self.cut.clear();
+            owners.clear();
+            for &slot in &round {
+                let behind = [
+                    Some(slot),
+                    (slot % width > 0).then(|| slot - 1),
+                    slot.checked_sub(width),
+                ];
+                owners.extend(behind.into_iter().flatten().filter(|&s| self.is_stepped[s]));
+                self.demand[slot].iter_mut().for_each(|d| *d = 0.0);
+                self.refitting[slot] = true;
+            }
+            owners.sort_unstable();
+            owners.dedup();
+            for &owner in &owners {
+                self.for_each_flow_of(cells, owner, &volume, &mut |this, giver, taker, v| {
+                    let Some((slot, flat)) = giver.filter(|&(slot, _)| this.refitting[slot]) else {
+                        return;
+                    };
+                    let taken = match taker {
+                        Some(Taker::Across((s, f))) => this.take[s][f],
+                        Some(Taker::Air(flight)) => flown(cells, flight, v * this.give[slot][flat]),
+                        None => 1.0,
+                    };
+                    this.demand[slot][flat] += v * taken;
+                });
+            }
+            for &slot in &round {
+                self.refitting[slot] = false;
+            }
+            self.fit_takes(cells, &round, true);
+        }
+        self.round = round;
+        self.owners = owners;
     }
 
     /// Visit every stepped flow this substep as (giver, taker, volume), each
@@ -496,31 +631,40 @@ impl FieldSolver {
         &mut self,
         cells: &FieldCells,
         volume: impl Fn(f32) -> f64,
-        mut visit: impl FnMut(&mut Self, Option<(usize, usize)>, Option<(usize, usize)>, f64),
+        mut visit: impl FnMut(&mut Self, Option<(usize, usize)>, Option<Taker>, f64),
     ) {
         for i in 0..self.stepped.len() {
             let slot = self.stepped[i];
-            let chunk = &cells.chunks[slot];
-            for face in &chunk.faces {
-                let v = volume(face.q);
-                if v == 0.0 {
-                    continue;
-                }
-                match ends(cells, slot, face, v > 0.0) {
-                    (giver, Taker::Across(taker)) => {
-                        visit(self, Some(giver), Some(taker), v.abs());
-                    }
-                    (giver, Taker::Air(_)) => visit(self, Some(giver), None, v.abs()),
-                }
+            self.for_each_flow_of(cells, slot, &volume, &mut visit);
+        }
+    }
+
+    /// Visit every flow over the faces of the chunk `slot`, as
+    /// `for_each_flow` does.
+    #[inline]
+    fn for_each_flow_of(
+        &mut self,
+        cells: &FieldCells,
+        slot: usize,
+        volume: &impl Fn(f32) -> f64,
+        visit: &mut impl FnMut(&mut Self, Option<(usize, usize)>, Option<Taker>, f64),
+    ) {
+        let chunk = &cells.chunks[slot];
+        for face in &chunk.faces {
+            let v = volume(face.q);
+            if v == 0.0 {
+                continue;
             }
-            for face in &chunk.boundary {
-                let v = volume(face.q);
-                let cell = (slot, face.cell as usize);
-                if v > 0.0 {
-                    visit(self, Some(cell), None, v);
-                } else if v < 0.0 {
-                    visit(self, None, Some(cell), -v);
-                }
+            let (giver, taker) = ends(cells, slot, face, v > 0.0);
+            visit(self, Some(giver), Some(taker), v.abs());
+        }
+        for face in &chunk.boundary {
+            let v = volume(face.q);
+            let cell = (slot, face.cell as usize);
+            if v > 0.0 {
+                visit(self, Some(cell), None, v);
+            } else if v < 0.0 {
+                visit(self, None, Some(Taker::Across(cell)), -v);
             }
         }
     }
@@ -551,7 +695,8 @@ impl FieldSolver {
                         part
                     }
                     Taker::Air(flight) => {
-                        let part = v * self.share(Some(giver), None);
+                        let given = v * self.share(Some(giver), None);
+                        let part = given * flown(cells, flight, given);
                         cells.flights[flight as usize].aloft += part;
                         part
                     }
@@ -585,7 +730,20 @@ impl FieldSolver {
     }
 }
 
+/// The share of the `given` m³ a face sends into the air that its flight
+/// has room for where its fall lands.
+fn flown(cells: &FieldCells, flight: u32, given: f64) -> f64 {
+    let flight = &cells.flights[flight as usize];
+    let left = (flight.room - flight.aloft).max(0.0);
+    if given > left {
+        left / given
+    } else {
+        1.0
+    }
+}
+
 /// What takes the water a face moves.
+#[derive(Clone, Copy)]
 enum Taker {
     /// The cell across the face, as (slot, flat).
     Across((usize, usize)),
@@ -689,4 +847,40 @@ fn inertial(q: f32, depth: f32, slope: f32, dt: f32, p: &FlowParams) -> f32 {
     let q = (q - G * depth * dt * slope) / (1.0 + friction(q, depth, dt, p));
     let limit = p.froude_limit * depth * (G * depth).sqrt();
     q.clamp(-limit, limit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::water::field::testing::{basin, cell, open, roofed};
+    use crate::water::geometry::CHUNK_COLUMNS;
+
+    #[test]
+    fn a_cave_whose_way_on_is_shut_fills_no_fuller_than_its_roof() {
+        // Deep water over columns 1 to 5 beside a cave 1 m high over
+        // columns 6 to 11 that ends blind.
+        let (_, mut cells) = basin(false, |i, _| match i {
+            6..=11 => roofed(0.0, 1.0),
+            12.. => open(50.0),
+            _ => open(0.0),
+        });
+        for k in 1..CHUNK_COLUMNS - 1 {
+            for i in 1..6 {
+                *cells.depth_mut(cell(i, k)) = 4.0;
+            }
+        }
+        let before = cells.volume();
+        let mut solver = FieldSolver::default();
+        let mut over = 0.0f64;
+        for frame in 0..180 {
+            // One long frame, as a blast's is.
+            solver.step(&mut cells, if frame == 30 { 0.1 } else { 1.0 / 60.0 });
+            for i in 6..=11 {
+                over = over.max(-cells.room(cell(i, 5)));
+            }
+        }
+        assert!(over < 1.0e-3, "{over} m over its roof");
+        assert!(cells.full(cell(11, 5)), "it has filled to its end");
+        assert!((cells.volume() - before).abs() < 1.0e-9 * before);
+    }
 }

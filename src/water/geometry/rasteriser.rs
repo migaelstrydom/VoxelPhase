@@ -120,6 +120,9 @@ pub struct RasterStats {
     pub floor_min_holds: usize,
     /// Slivers thinner than a voxel that a re-mesh closed.
     pub closed_slivers: usize,
+    /// Ceilings that came back lower than an old span resting under them
+    /// had, held at the old height.
+    pub ceiling_holds: usize,
     pub invariant_violations: usize,
     /// The most recent violation: the column, its old floor and its new.
     pub last_violation: Option<(Column, f32, f32)>,
@@ -441,6 +444,9 @@ impl SpanRasteriser {
     /// span's `floor_min` to the ledge. Both are held at the old height, so
     /// that everything downstream can rely on floors and saddles that only
     /// drop (§3.2).
+    ///
+    /// Re-triangulation can lower a ceiling the same way, and that is held
+    /// too, so the water already standing under a roof still fits there.
     fn remap_column(
         &mut self,
         column: Column,
@@ -462,6 +468,9 @@ impl SpanRasteriser {
                 // span is the one it rests on.
                 if !std::mem::replace(&mut claimed[n], true) {
                     self.hold_floor(column, span, &mut new[n], voxel_size);
+                }
+                if hold_ceiling(span, n, new) {
+                    self.stats.ceiling_holds += 1;
                 }
             } else if new_ordinal.is_some() {
                 self.stats.closed_slivers += 1;
@@ -509,6 +518,19 @@ impl SpanRasteriser {
         );
         debug_assert!(false, "removal-only invariant broken at {column:?}");
     }
+}
+
+/// Keep the ceiling of the re-paired span `new[n]` from dropping below that
+/// of an old span resting in it, as far as the floor of the span above lets
+/// it stand. Returns whether it had dropped.
+fn hold_ceiling(old: &Span, n: usize, new: &mut [Span]) -> bool {
+    let above = new.get(n + 1).map_or(f32::INFINITY, |span| span.floor_c);
+    let held = old.ceiling.min(above);
+    let dropped = held > new[n].ceiling;
+    if dropped {
+        new[n].ceiling = held;
+    }
+    dropped
 }
 
 /// Tiles whose squares overlap a box's XZ footprint grown by `margin`.
@@ -807,6 +829,23 @@ mod tests {
             floor_max: floor,
             ceiling: f32::INFINITY,
         }
+    }
+
+    #[test]
+    fn a_ceiling_that_comes_back_lower_is_held_as_far_as_the_floor_above() {
+        let cave = |ceiling: f32| Span {
+            ceiling,
+            ..top_span(5.0)
+        };
+        let mut new = [cave(6.0), top_span(8.0)];
+        assert!(hold_ceiling(&cave(6.2), 0, &mut new));
+        assert_eq!(new[0].ceiling, 6.2);
+        let mut new = [cave(6.0), top_span(6.1)];
+        assert!(hold_ceiling(&cave(6.2), 0, &mut new));
+        assert_eq!(new[0].ceiling, 6.1);
+        let mut new = [cave(7.0), top_span(8.0)];
+        assert!(!hold_ceiling(&cave(6.2), 0, &mut new), "a blast raised it");
+        assert_eq!(new[0].ceiling, 7.0);
     }
 
     /// Solid ground at the centre, and a cave reaching into the square's

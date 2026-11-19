@@ -34,9 +34,16 @@ pub fn roofed(bed: f32, ceiling: f32) -> Span {
 /// One chunk whose column (i, k) holds `span(i, k)`, awake, with faces
 /// laid. Its edges give onto the void.
 pub fn chunk_of(span: impl Fn(i32, i32) -> Span) -> (SpanGraph, FieldCells) {
+    stacked(|i, k| vec![span(i, k)])
+}
+
+/// `chunk_of`, with column (i, k) holding every span of `spans(i, k)`,
+/// bottom to top: ground over a cave. `cell` does not find its cells;
+/// `FieldCells::index` does.
+pub fn stacked(spans: impl Fn(i32, i32) -> Vec<Span>) -> (SpanGraph, FieldCells) {
     let coord = SpanChunkCoord { x: 0, z: 0 };
     let columns: Vec<Vec<Span>> = (0..COLUMNS_PER_CHUNK as i32)
-        .map(|local| vec![span(local % CHUNK_COLUMNS, local / CHUNK_COLUMNS)])
+        .map(|local| spans(local % CHUNK_COLUMNS, local / CHUNK_COLUMNS))
         .collect();
     let mut graph = SpanGraph::new(coord, coord);
     graph.replace_chunk(coord, SpanChunk::from_columns(&columns, 1));

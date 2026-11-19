@@ -61,8 +61,13 @@ below its old height.
   cells. Each face moves the same volume out of one cell and into the other, so
   the ledger balances to rounding (1e-13 m³).
 - **Limits.** A cell never gives more than it holds, nor takes more than fits
-  under its ceiling, so a cave fills to its roof and no further. A face never runs
-  faster than Froude 1, which stands in for critical flow over an edge.
+  under its ceiling, so a cave fills to its roof and no further. A full cell
+  has room only for what it passes on, and that is cut where the cell beyond
+  is full too, so where an inflow is cut the cells that give to it are fitted
+  again, a cell further back along a run of full cells each time. Only the
+  chunks round a cut are visited, and only for cuts of a centimetre's depth
+  or more, which is the most a cell can stand over its roof. A face never
+  runs faster than Froude 1, which stands in for critical flow over an edge.
 - **Conduits** (`conduits.rs`). Water pressed against a roof has no surface
   slope for the flow law to read: two full cells stand level whatever pushes on
   them, so left to it a drowned tunnel passes nothing and two ponds joined
@@ -104,14 +109,22 @@ below its old height.
   how thick they are and how high their tops stand, as falls do their
   velocities. A jet that meets the water outside before its top has dropped a
   quarter metre is no jet: its water runs on into that water, which the
-  hole's head must then push aside. What draws a fall, what it strikes and
-  where it sprays all read the same `Fall`.
+  hole's head must then push aside. Open water standing over the top of the
+  opening it leaves by drives itself the same way: a slot at the foot of a
+  lake is a jet from the slot, not a fall off the top of the lake. What
+  leaves over any face is no higher than the opening's roof. What draws a
+  fall, what it strikes and where it sprays all read the same `Fall`.
 
   Water in the air comes down where there is room for it. Nothing falls into
   a cell filled to its roof, an arc that meets such water under a roof comes
   down before it as it would before a wall, and a cell under a roof takes no
   more than it has room for: the rest goes to the other cells the fall lands
-  in, or stays in the air. A fall holds its water in the air as one amount,
+  in, or stays in the air. A face sends no more into the air than has room
+  to land (`Flight::room`: the room under the roofs its fall lands under,
+  shared between the falls landing there, less what is already in the air),
+  so a jet into a full cave stops as any face into a full cell does. The
+  last water of a fall that has stopped backs up into the nearest cells with
+  room. A fall holds its water in the air as one amount,
   brought down over the time it takes to fall; when its landing comes
   suddenly nearer that time shrinks no faster than time passes
   (`Fall::settling`), or seconds' worth of a torrent would come down in one
@@ -127,7 +140,10 @@ below its old height.
   edge, so waves leave the map. A closed edge of a map with a sea is a wall below
   sea level and void above it.
 - **Edits** (`remap.rs`). The rasteriser re-pairs the columns a blast touched.
-  Each old span's water moves into the new span that holds its old floor. Faces
+  Each old span's water moves into the new span that holds its old floor. A
+  blast only removes ground, so a floor that comes back higher, or a ceiling
+  lower, was only triangulated differently, and both are held where they
+  were: the water under a roof still fits there. Faces
   are laid again only in the rebuilt chunks and the chunks owning faces into them.
   An edit costs 1.7–2.2 ms: about 1 ms re-pairing, the rest carrying water.
 - **Sleep** (`activity.rs`). An 8 m chunk sleeps after 2 s calm. Any flow into
@@ -195,6 +211,10 @@ seiche.
 | A 30 cm mound under a source | θ cancels the outflow at a point source | A source pours over its landing cell and the cells around it |
 | Films stood on steep banks beside a river, 15–30 cm above it | θ blended the river's discharge into the film's shallow face every substep, pushing water up the bank | θ blends each neighbour's velocity, carried at the face's own depth |
 | A river running diagonally stood 11 cm deeper than the same river along the lattice | θ blended each face towards the dry bank ahead of it | A dry neighbour face counts as the face itself, as a wall does (`bearing` scenario) |
+| A cave filling from its blind end stood up to 16 cm over its roof | A full cell's room counted what it passed on, though the cell beyond took none | Inflows are fitted again against what the cells beyond take |
+| Metres of water stood over the roof of a hole in a dam (`water_fuzz`) | A jet shut in by rock kept sending water into the air with nowhere to land, and its last water was forced into a full cell | A face sends up no more than has room to land; a spent fall's last water backs up to the nearest room |
+| A cave's water stood 20 cm over its roof after a blast nearby | The re-mesh brought its ceiling back lower | A re-paired span's ceiling is held, as its floor is |
+| A lake poured into a slot at its foot for ever and the pocket beyond never filled | The water left as a fall off the top of the lake and was set down on the lake again | Water leaves no higher than the opening's roof, as a jet where open water stands over it |
 
 ## 5. Rendering
 

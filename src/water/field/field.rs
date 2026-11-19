@@ -444,6 +444,18 @@ impl WaterField {
         (shallowest, finite)
     }
 
+    /// How high the water stands in all, m⁴: each cell's volume by the
+    /// height of its middle. Water left alone only ever loses it.
+    pub fn potential(&self) -> f64 {
+        let mut potential = 0.0;
+        for chunk in &self.cells.chunks {
+            for (flat, &depth) in chunk.depth.iter().enumerate() {
+                potential += depth * CELL_AREA * (chunk.bed[flat] as f64 + 0.5 * depth);
+            }
+        }
+        potential
+    }
+
     /// How far over its roof the water of any cell stands, m: nothing where
     /// every cell under a roof holds no more than it has room for.
     pub fn over_roof(&self) -> f64 {

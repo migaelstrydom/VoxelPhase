@@ -240,15 +240,16 @@ impl<'a> FieldScene<'a> {
     /// over its own roof, where the graph has only the ground above it.
     fn run_full_at(&self, column: Column, level: f64) -> bool {
         let (cells, graph) = (self.field.cells(), self.field.graph());
-        if cells.run_full.is_empty() {
+        // A hole has ground over it: a span of its own above the hole's.
+        let spans = graph.spans(column).len();
+        if cells.run_full.is_empty() || spans < 2 {
             return false;
         }
         let drawn = self.drawn_cells();
-        (0..graph.spans(column).len()).any(|ordinal| {
+        (0..spans - 1).any(|ordinal| {
             cells.index(graph, column, ordinal as u8).is_some_and(|c| {
                 cells.run_full.contains_key(&c)
-                    && drawn.drawn(c)
-                    && (drawn.surface(c) - level).abs() < RUN_FULL_NEAR
+                    && (drawn.level(c)).is_some_and(|head| (head - level).abs() < RUN_FULL_NEAR)
             })
         })
     }
@@ -261,13 +262,11 @@ impl<'a> FieldScene<'a> {
         let Some(slot) = graph.slot(column.chunk()) else {
             return Beside::Outside;
         };
-        if self.run_full_at(column, level) {
-            return Beside::Wet;
-        }
         let span = graph.span_at(column, level as f32);
         let cell = span.and_then(|span| self.cell(span));
         match cell {
             Some(cell) if self.drawn_cells().drawn(cell) => Beside::Wet,
+            _ if self.run_full_at(column, level) => Beside::Wet,
             // Dry ground a fall below the water all over the column: no
             // bank the water could end against, but the foot of a drop its
             // water goes over.

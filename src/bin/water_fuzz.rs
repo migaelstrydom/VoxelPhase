@@ -12,8 +12,9 @@
 //! - no cell under a roof holds more than it has room for, and no fall's
 //!   water comes down above where it left.
 //!
-//! Then it leaves the water alone for a while and, on a level nothing feeds,
-//! checks it comes to rest.
+//! Then it leaves the water alone for a while and, on a level nothing
+//! feeds, checks it has come to rest, or is still running out of the world
+//! or down to somewhere lower.
 //!
 //! ```text
 //! cargo run --release --bin water_fuzz -- levels/test_arena.level.ron --seeds 20 --blasts 12
@@ -58,6 +59,16 @@ const LANDED_ABOVE: f32 = 0.05;
 /// fastest it may still run then on a level nothing feeds, m/s.
 const REST: f32 = 120.0;
 const REST_SPEED: f32 = 0.05;
+
+/// Water still running then may be a lake still emptying, which is no
+/// fault: over the last `WATCHED` seconds, s, it has let at least
+/// `DRAINING` m³ out of the world, through a hole a blast opened to the
+/// void or the sea, or has come to stand at least `SINKING` m⁴ lower in
+/// all, as water running from a higher pond to a lower does. Water going
+/// round and round does neither.
+const WATCHED: f32 = 10.0;
+const DRAINING: f64 = 1.0e-2;
+const SINKING: f64 = 1.0;
 
 /// Random points read each frame, as floating bodies would.
 const READS: usize = 16;
@@ -159,7 +170,9 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
         }
     }
 
-    for _ in 0..(REST * 60.0) as usize {
+    let frames = (REST * 60.0) as usize;
+    let mut before = (0.0, 0.0);
+    for left in (0..frames).rev() {
         frame(
             &mut terrain,
             &mut water,
@@ -167,11 +180,17 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
             1.0 / 60.0,
             &mut findings,
         );
+        if left == (WATCHED * 60.0) as usize {
+            before = (water.field().ledger().sunk, water.field().potential());
+        }
     }
-    let speed = water.field().max_speed();
-    if water.field().sources().is_empty() && speed > REST_SPEED {
+    let field = water.field();
+    let draining = (field.ledger().sunk - before.0).abs() > DRAINING;
+    let sinking = before.1 - field.potential() > SINKING;
+    let speed = field.max_speed();
+    if field.sources().is_empty() && !draining && !sinking && speed > REST_SPEED {
         findings.push(format!(
-            "still running at {speed:.2} m/s after {REST:.0} s left alone"
+            "still running at {speed:.2} m/s after {REST:.0} s left alone, and getting no lower"
         ));
     }
     Ok(findings)
