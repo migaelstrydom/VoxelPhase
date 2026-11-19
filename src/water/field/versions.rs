@@ -11,6 +11,25 @@ use crate::water::geometry::{SpanChunkCoord, CHUNK_COLUMNS};
 /// Least change in depth that moves a chunk's version, m.
 const TOLERANCE: f64 = 1.0e-3;
 
+/// The same, as a share of the water's depth, where that is more: deep
+/// water simmers by millimetres wherever anything runs into it, and its
+/// level a few millimetres out cannot be seen, while reading its whole
+/// surface again every frame for them is most of what drawing a level's
+/// rivers costs. A shore's thin water keeps `TOLERANCE`, where a
+/// millimetre moves the waterline, and so does what a chunk tells its
+/// neighbours of the cells along its border once it is drawn again, so
+/// that their surfaces still meet.
+const TOLERANCE_SHARE: f64 = 2.0e-3;
+
+/// The most `TOLERANCE_SHARE` lets water of any depth go undrawn by, m: a
+/// reservoir running out is seen to go down smoothly against its dam.
+const MOST_TOLERANCE: f64 = 5.0e-3;
+
+/// The least change in the depth of water `depth` deep that is drawn.
+fn tolerance(depth: f64) -> f64 {
+    (TOLERANCE_SHARE * depth).clamp(TOLERANCE, MOST_TOLERANCE)
+}
+
 /// One version per chunk, by slot.
 #[derive(Debug, Clone, Default)]
 pub struct SurfaceVersions {
@@ -74,7 +93,7 @@ impl SurfaceVersions {
             let changed = drawn
                 .iter()
                 .zip(&chunk.depth)
-                .any(|(a, b)| (a - b).abs() > TOLERANCE);
+                .any(|(a, b)| (a - b).abs() > tolerance(*a));
             if !changed {
                 continue;
             }
@@ -165,5 +184,39 @@ impl Sides {
     /// Whether the neighbour at (dx, dz) draws an edge that meets a change.
     fn reaches(&self, dx: i32, dz: i32) -> bool {
         self.x[(dx + 1) as usize] && self.z[(dz + 1) as usize]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::water::field::testing::{cell, chunk_of, open};
+
+    #[test]
+    fn deep_water_moves_its_version_by_a_share_of_its_depth_and_thin_water_by_a_millimetre() {
+        let (_, mut cells) = chunk_of(|_, _| open(0.0));
+        *cells.depth_mut(cell(5, 5)) = 2.0;
+        *cells.depth_mut(cell(9, 9)) = 0.2;
+        let mut versions = SurfaceVersions::new(&cells);
+        let moved = |versions: &mut SurfaceVersions, cells: &FieldCells| {
+            let before = versions.versions()[0];
+            versions.update(cells, [0]);
+            versions.versions()[0] != before
+        };
+        // 3 mm on 2 m of water is under two parts in a thousand of it.
+        *cells.depth_mut(cell(5, 5)) += 0.003;
+        assert!(!moved(&mut versions, &cells));
+        // A little at a time, it adds up to more.
+        *cells.depth_mut(cell(5, 5)) += 0.002;
+        assert!(moved(&mut versions, &cells));
+        assert!(!moved(&mut versions, &cells), "and is drawn as it stands");
+        // On 20 cm, 1.5 mm is seen at the waterline.
+        *cells.depth_mut(cell(9, 9)) += 0.0015;
+        assert!(moved(&mut versions, &cells));
+        // However deep, half a centimetre is drawn.
+        *cells.depth_mut(cell(5, 5)) = 20.0;
+        moved(&mut versions, &cells);
+        *cells.depth_mut(cell(5, 5)) += 0.006;
+        assert!(moved(&mut versions, &cells));
     }
 }

@@ -78,7 +78,14 @@ It offers two kinds of surface:
 The game's water is a shallow-water field (`docs/WATER_FIELD_SPIKE.md`), drawn
 through the river pipeline by `field_mesher.rs`: one surface per 8 m chunk,
 keyed by a version the water moves only when that chunk's depths have moved
-by more than a millimetre. `RiverParts` keeps each river surface apart. One
+by more than can be seen: a millimetre, or two parts in a thousand of the
+water's depth where that is more, up to half a centimetre
+(`water/field/versions.rs`). Deep water simmers by millimetres wherever
+anything runs into it, and reading every such surface again each frame was
+most of what drawing water_park's rivers cost (4.1 ms a frame of 6.9 at
+rest, against 2.2 of 4.1 now). What a chunk tells its neighbours of the
+cells along its border keeps to the millimetre, so their surfaces still
+meet. `RiverParts` keeps each river surface apart. One
 whose version moved is read again in place every frame: each vertex records
 the cells it was built from (`field_sources.rs`), so while the water keeps
 its shape (no cell going wet or dry, no group of surfaces splitting or
