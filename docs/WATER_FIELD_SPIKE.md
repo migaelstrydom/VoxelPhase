@@ -68,6 +68,14 @@ below its old height.
   chunks round a cut are visited, and only for cuts of a centimetre's depth
   or more, which is the most a cell can stand over its roof. A face never
   runs faster than Froude 1, which stands in for critical flow over an edge.
+- **Breaking** (`breaking.rs`). The flow law turns a slope into speed and
+  loses none of its energy on the way, so a wave run up a wall comes back as
+  high as it went. Where open water stands steeper than 0.6 across a face,
+  deep on both sides and with no ledge between (the faces the solver found a
+  step across are the only ones asked), half of what stands over that slope
+  goes to the lower side each step and gains no speed by it: what a
+  breaking wave loses to its own turbulence. Falls, fronts running out over
+  a film and water under roofs are left alone.
 - **Conduits** (`conduits.rs`). Water pressed against a roof has no surface
   slope for the flow law to read: two full cells stand level whatever pushes on
   them, so left to it a drowned tunnel passes nothing and two ponds joined
@@ -223,6 +231,7 @@ seiche.
 | The curtains' index list grew with every rebuild of the drawn rivers, six times too long after ten seconds over a breach, and all of it was uploaded (`water_fuzz`'s mesh audit; on main since 2026-10-12) | `RiverParts::join` cleared every list but the sheets' | It clears that one too |
 | A sheet of falling water stood from a lake's surface down to a slot at its foot; a pocket's surface ramped up 12 m to the lake's (the mesh audit) | The slot's fall hung its curtain from the surface, and the two waters shared corners | A fall with its lip under the surface hangs from its own arc; water under a roof shares no corner with water over it |
 | Water set down on top of a dam, over a hole 12 m below (the mesh audit, while trying a change) | A spent fall's landing was looked up by height, and a height inside the ground is answered with the span above it | The landing must have its floor under the water that lands; else the column the water came from takes it |
+| Water ran over the top of W1's dam after a breach 12 m below it, and fell back down its face in thin falls | A jet's top, evened with its neighbours', stood in its own hole's roof, so its arc met a wall at once and all of it landed in one cell | The arc starts under the roof of the cell it comes out into |
 
 ## 5. Rendering
 
@@ -297,10 +306,12 @@ Open:
   through the pool, fanned out over eight metres, made that 3.5 m and the
   usual peaks a quarter lower; a quadratic drag a hundred times Manning's
   made them higher, since a heap sheds slower through it. Neither was kept.
-  What is missing is what a real plunge pool does with a jet: it takes its
-  water in under the surface and loses its energy to turbulence. The scheme
-  can only set water down on top and has no term that loses energy to a
-  steep wave.
+  Letting water that stands too steep break (`breaking.rs`) is: over four
+  such breaches, five centimetres apart, the worst heap came down from
+  4.7 m to 3.4 m on average, and nothing reached the top of the dam. What
+  is left is the slosh itself. What is missing is what a real plunge pool
+  does with a jet: it takes its water in under the surface and loses its
+  energy to turbulence. The scheme can only set water down on top.
 - **Only a straight tunnel runs under pressure.** A conduit is one run of full
   cells along one axis. Round a bend, or through a flooded cave wider than a
   run, the water moves by the flow law alone, which passes at most Froude 1

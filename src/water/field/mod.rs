@@ -2,6 +2,7 @@
 //! discharges on the faces between them.
 
 mod activity;
+mod breaking;
 mod cells;
 mod conduits;
 mod currents;

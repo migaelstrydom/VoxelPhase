@@ -31,6 +31,7 @@ use crate::water::geometry::{
 };
 
 use super::activity;
+use super::breaking;
 use super::cells::{FieldCells, CELL_AREA};
 use super::conduits;
 use super::currents;
@@ -308,6 +309,7 @@ impl WaterField {
             .filter(|&s| self.cells.chunks[s].awake)
             .collect();
         let stats = self.solver.step(&mut self.cells, dt);
+        breaking::settle(&mut self.cells, self.solver.brinks());
         self.ledger.sunk += stats.boundary_out;
         for sink in &self.sinks {
             self.ledger.sunk += sink.drain(&mut self.cells);
