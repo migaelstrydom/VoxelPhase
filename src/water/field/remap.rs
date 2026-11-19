@@ -3,11 +3,13 @@
 //! An edit re-pairs a few columns' spans. The water standing in each old
 //! span moves into the new span that holds its old floor, so a crater under
 //! water leaves the water where it was, over a floor that has dropped away,
-//! and the flow law does the rest. Faces are laid again only in the chunks
+//! and the flow law does the rest. What a new span has no room for under
+//! its roof goes to the span above it. Faces are laid again only in the chunks
 //! the edit rebuilt and the chunks owning faces into them; a face between
 //! two columns the edit left alone keeps its discharge.
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use crate::water::geometry::{
     Column, SpanChunkCoord, SpanGraph, SpanIndex, SpanRemap, COLUMNS_PER_CHUNK,
@@ -78,6 +80,13 @@ pub fn carry(
                 None => lost += depth * CELL_AREA,
             }
         }
+        for &(local, ..) in moved.get(&coord).into_iter().flatten() {
+            let column = new.offsets[local] as usize..new.offsets[local + 1] as usize;
+            let rooms: SmallVec<[f64; 4]> = (column.clone())
+                .map(|flat| (new.ceiling[flat] - new.bed[flat]) as f64)
+                .collect();
+            pass_up(&mut new.depth[column], &rooms);
+        }
     }
 
     for &slot in &owners {
@@ -112,6 +121,21 @@ pub fn carry(
         }
     }
     lost
+}
+
+/// Pass what each of a column's cells holds over the `room` under its roof
+/// up to the cell above it, bottom to top. An edit can leave a span with
+/// less room than the water it is given: a sheet of ground the re-mesh has
+/// drawn across what was one span. The water that stood over the sheet is
+/// the upper span's. The top cell has no roof to stand over.
+fn pass_up(depth: &mut [f64], room: &[f64]) {
+    for cell in 0..depth.len().saturating_sub(1) {
+        let over = depth[cell] - room[cell];
+        if over > 0.0 {
+            depth[cell] -= over;
+            depth[cell + 1] += over;
+        }
+    }
 }
 
 /// The discharge on every face of `owners` that joins two columns the edit
@@ -159,4 +183,25 @@ fn face_key(cells: &FieldCells, slot: usize, a: u32, b: SpanIndex) -> Option<Fac
         a: (here.coord.column(la), oa),
         b: (there.coord.column(lb), ob),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn water_over_a_new_span_s_roof_goes_to_the_span_above() {
+        // A pocket 0.27 m high given 0.4 m of water, under open water.
+        let mut depth = [0.4, 2.0];
+        pass_up(&mut depth, &[0.27, f64::INFINITY]);
+        assert!((depth[0] - 0.27).abs() < 1.0e-12 && (depth[1] - 2.13).abs() < 1.0e-12);
+        // Through a full span between them.
+        let mut depth = [1.5, 0.5, 0.0];
+        pass_up(&mut depth, &[1.0, 0.5, f64::INFINITY]);
+        assert_eq!(depth, [1.0, 0.5, 0.5]);
+        // Water that fits is left where it is.
+        let mut depth = [0.2, 0.0];
+        pass_up(&mut depth, &[0.27, f64::INFINITY]);
+        assert_eq!(depth, [0.2, 0.0]);
+    }
 }

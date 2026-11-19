@@ -153,10 +153,13 @@ below its old height.
   edge, so waves leave the map. A closed edge of a map with a sea is a wall below
   sea level and void above it.
 - **Edits** (`remap.rs`). The rasteriser re-pairs the columns a blast touched.
-  Each old span's water moves into the new span that holds its old floor. A
-  blast only removes ground, so a floor that comes back higher, or a ceiling
-  lower, was only triangulated differently, and both are held where they
-  were: the water under a roof still fits there. Faces
+  Each old span's water moves into the new span it has become: the one that
+  holds its old floor, or, where the re-mesh has lifted that floor over the
+  roof of a pocket under it, the one sharing most of its air. A blast only
+  removes ground, so a floor that comes back higher, or a ceiling lower, was
+  only triangulated differently, and both are held where they were: the
+  water under a roof still fits there. What a new span still has no room
+  for goes to the span above it. Faces
   are laid again only in the rebuilt chunks and the chunks owning faces into them.
   An edit costs 1.7–2.2 ms: about 1 ms re-pairing, the rest carrying water.
 - **Sleep** (`activity.rs`). An 8 m chunk sleeps after 2 s calm. Any flow into
@@ -232,6 +235,7 @@ seiche.
 | A sheet of falling water stood from a lake's surface down to a slot at its foot; a pocket's surface ramped up 12 m to the lake's (the mesh audit) | The slot's fall hung its curtain from the surface, and the two waters shared corners | A fall with its lip under the surface hangs from its own arc; water under a roof shares no corner with water over it |
 | Water set down on top of a dam, over a hole 12 m below (the mesh audit, while trying a change) | A spent fall's landing was looked up by height, and a height inside the ground is answered with the span above it | The landing must have its floor under the water that lands; else the column the water came from takes it |
 | Water ran over the top of W1's dam after a breach 12 m below it, and fell back down its face in thin falls | A jet's top, evened with its neighbours', stood in its own hole's roof, so its arc met a wall at once and all of it landed in one cell | The arc starts under the roof of the cell it comes out into |
+| A lake's 11 m of water stood in a pocket a quarter metre high under it after a blast (`water_fuzz`, one seed in sixteen) | The re-mesh lifted the lake's floor over the pocket's roof, and the lake was mapped to the span holding its old floor's height: the pocket | An old span becomes the new one sharing most of its air; what a span has no room for goes to the span above |
 
 ## 5. Rendering
 

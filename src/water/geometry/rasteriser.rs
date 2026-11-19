@@ -63,7 +63,9 @@ pub struct SpanRemap {
     pub chunks: Vec<SpanChunkCoord>,
 }
 
-/// One old span and the new span containing `(centre, old.floor_c + ε)`.
+/// One old span and the new span it has become: the one containing
+/// `(centre, old.floor_c + ε)`, or, where a re-mesh has lifted its floor over
+/// a pocket's roof, the one that shares most of its air.
 #[derive(Debug, Clone, Copy)]
 pub struct RemapEntry {
     pub column: Column,
@@ -433,8 +435,10 @@ impl SpanRasteriser {
         );
     }
 
-    /// Map each old span to the new span containing `(centre, floor_c + ε)`,
-    /// and hold the new span's floor no higher than the old span it rests on.
+    /// Map each old span to the new span it has become (`most_shared`: the
+    /// one containing `(centre, floor_c + ε)`, but for a floor lifted over a
+    /// pocket's roof), and hold the new span's floor no higher than the old
+    /// span it rests on.
     ///
     /// Two things can lift a floor without adding material. Re-triangulation
     /// can raise `floor_c` by a fraction of a voxel (see
@@ -458,7 +462,7 @@ impl SpanRasteriser {
         let mut claimed = [false; u8::MAX as usize + 1];
         for (ordinal, span) in old.iter().enumerate() {
             let y = span.floor_c + REMAP_EPSILON;
-            let new_ordinal = new.iter().position(|s| s.ceiling > y);
+            let new_ordinal = most_shared(span, y, new);
             let rests = new_ordinal.is_none_or(|n| {
                 let sliver = span.ceiling - span.floor_c < voxel_size;
                 !(sliver && new[n].floor_c > y)
@@ -518,6 +522,24 @@ impl SpanRasteriser {
         );
         debug_assert!(false, "removal-only invariant broken at {column:?}");
     }
+}
+
+/// The new span an old one becomes: of those reaching over `y`, just over
+/// the old span's floor, the one that shares the most of its air, and the
+/// lowest of those that share as much. That is the span holding the old
+/// floor, except where a re-mesh has lifted a floor over the roof of a
+/// pocket under it: the pocket then holds the old floor's height, and the
+/// span over it nearly all of the old span's air and all of its water.
+fn most_shared(old: &Span, y: f32, new: &[Span]) -> Option<usize> {
+    let shared = |s: &Span| old.ceiling.min(s.ceiling) - old.floor_c.max(s.floor_c);
+    let mut best: Option<(usize, f32)> = None;
+    for (n, s) in new.iter().enumerate().filter(|(_, s)| s.ceiling > y) {
+        let air = shared(s);
+        if best.is_none_or(|(_, most)| air > most) {
+            best = Some((n, air));
+        }
+    }
+    best.map(|(n, _)| n)
 }
 
 /// Keep the ceiling of the re-paired span `new[n]` from dropping below that
@@ -829,6 +851,39 @@ mod tests {
             floor_max: floor,
             ceiling: f32::INFINITY,
         }
+    }
+
+    #[test]
+    fn an_old_span_becomes_the_new_one_that_shares_most_of_its_air() {
+        let cave = |floor: f32, ceiling: f32| Span {
+            ceiling,
+            ..top_span(floor)
+        };
+        // A lake over a pocket, whose roof the re-mesh has lifted over the
+        // lake's old floor: the lake is still the open span.
+        let lake = top_span(6.0);
+        let new = [cave(4.1, 5.4), cave(5.7, 6.25), top_span(6.3)];
+        assert_eq!(most_shared(&lake, 6.0 + REMAP_EPSILON, &new), Some(2));
+        // The pocket is still the pocket.
+        assert_eq!(
+            most_shared(&cave(5.7, 5.9), 5.7 + REMAP_EPSILON, &new),
+            Some(1)
+        );
+        // A floor blown out from under a span: it becomes the span below.
+        let new = [top_span(2.0)];
+        assert_eq!(most_shared(&lake, 6.0 + REMAP_EPSILON, &new), Some(0));
+        // Every floor gone: nothing.
+        assert_eq!(most_shared(&lake, 6.0 + REMAP_EPSILON, &[]), None);
+        // Two spans merged into one are both that one.
+        let new = [cave(4.1, 9.0), top_span(12.0)];
+        assert_eq!(
+            most_shared(&cave(4.1, 5.4), 4.1 + REMAP_EPSILON, &new),
+            Some(0)
+        );
+        assert_eq!(
+            most_shared(&cave(5.7, 9.0), 5.7 + REMAP_EPSILON, &new),
+            Some(0)
+        );
     }
 
     #[test]
