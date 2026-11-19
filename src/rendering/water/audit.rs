@@ -9,7 +9,8 @@
 //!
 //! - every triangle is of vertices the mesh has;
 //! - every vertex is finite;
-//! - a surface vertex under water stands no higher than the water near it;
+//! - a surface vertex under water stands no higher than the water near it,
+//!   or the head of water run full in a hole near it;
 //! - a curtain's vertex stands no higher than the lip its water left, or
 //!   a jet's than the top of its arc.
 
@@ -36,8 +37,13 @@ const LIP_SLACK: f32 = 1.5;
 /// the surface off at its shore.
 const SHORE: f32 = 0.05;
 
-/// Columns out from a surface vertex that its water is looked for in.
+/// Columns out from a surface vertex that its water is looked for in, and
+/// that the head of water run full in a hole is. Such water is drawn at
+/// its head, over its own roof and inside the ground wherever the roof is
+/// really there, and where several holes meet in a pocket each corner
+/// takes the mean of the heads round it, which reach a cell further.
 const NEAR: i32 = 2;
+const HEAD_NEAR: i32 = 3;
 
 /// How far from where a curtain's vertex says its water left the lip of
 /// the fall it is drawn for may lie, m.
@@ -120,11 +126,20 @@ fn strays<'a>(
         // Falling water is drawn as a body round its arc, half as thick
         // again over it as the water is there.
         let (highest, slack) = match drawn {
-            Drawn::Surface if vertex.depth > SHORE => (water_near(water, vertex.xz)?, SLACK),
+            Drawn::Surface if vertex.depth > SHORE => {
+                let near = water_near(water, vertex.xz);
+                (
+                    near.stands.into_iter().chain(near.head).reduce(f32::max)?,
+                    SLACK,
+                )
+            }
             Drawn::Surface => return None,
             Drawn::Curtain => {
-                let lip = lip_of(water, vertex.flow)?;
-                (lip + 0.5 * vertex.sheet.w, LIP_SLACK)
+                // It hangs from the surface's corners, which stand at the
+                // head of any water run full beside its lip.
+                let lip = lip_of(water, vertex.flow)? + 0.5 * vertex.sheet.w;
+                let head = water_near(water, vertex.flow).head;
+                (head.map_or(lip, |head| head.max(lip)), LIP_SLACK)
             }
         };
         let over = vertex.surface - highest;
@@ -154,21 +169,32 @@ fn finite(vertex: &RiverVertex) -> bool {
         .all(|v| v.is_finite())
 }
 
-/// The highest water within `NEAR` columns of a point: as it stands in the
-/// field, as it was last drawn, or as the head of a hole run full is drawn.
-/// None where there is none.
-fn water_near(water: &WaterWorld, xz: Vector2<f32>) -> Option<f32> {
+/// The water near a point.
+#[derive(Default)]
+struct Near {
+    /// The highest it stands within `NEAR` columns, in the field or as it
+    /// was last drawn.
+    stands: Option<f32>,
+    /// The highest head of water run full in a hole within `HEAD_NEAR`.
+    head: Option<f32>,
+}
+
+/// The water near a point: how high it stands, and the head of any of it
+/// run full in a hole.
+fn water_near(water: &WaterWorld, xz: Vector2<f32>) -> Near {
     let field = water.field();
     let (graph, cells) = (field.graph(), field.cells());
     let drawn = water.drawn_depths();
     let middle = Column::containing(xz.x - 0.5 * COLUMN_SIZE, xz.y - 0.5 * COLUMN_SIZE);
-    let mut highest: Option<f32> = None;
-    for di in -NEAR + 1..=NEAR {
-        for dk in -NEAR + 1..=NEAR {
+    let mut found = Near::default();
+    let higher = |a: Option<f32>, b: f32| Some(a.map_or(b, |a| a.max(b)));
+    for di in -HEAD_NEAR + 1..=HEAD_NEAR {
+        for dk in -HEAD_NEAR + 1..=HEAD_NEAR {
             let column = middle.offset(di, dk);
             if !graph.contains_column(column) {
                 continue;
             }
+            let near = (-NEAR + 1..=NEAR).contains(&di) && (-NEAR + 1..=NEAR).contains(&dk);
             for ordinal in 0..graph.spans(column).len() {
                 let Some(cell) = cells.index(graph, column, ordinal as u8) else {
                     continue;
@@ -181,14 +207,16 @@ fn water_near(water: &WaterWorld, xz: Vector2<f32>) -> Option<f32> {
                 if depth <= 0.0 {
                     continue;
                 }
-                let stands = cells.bed(cell) + depth as f32;
-                let head = cells.head(cell, |end| cells.surface(end) as f32);
-                let level = head.map_or(stands, |head| head.max(stands));
-                highest = Some(highest.map_or(level, |h| h.max(level)));
+                if near {
+                    found.stands = higher(found.stands, cells.bed(cell) + depth as f32);
+                }
+                if let Some(head) = cells.head(cell, |end| cells.surface(end) as f32) {
+                    found.head = higher(found.head, head);
+                }
             }
         }
     }
-    highest
+    found
 }
 
 /// The highest that falling water which left within `SAME_LIP` of `left`,
