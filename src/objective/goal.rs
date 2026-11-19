@@ -26,36 +26,51 @@ pub struct Goal {
 
     /// Whether it has been ruined and can no longer be reached.
     pub ruined: bool,
+
+    /// Where the ground it stands on is, from its position, m: what the
+    /// player must be standing level with to arrive.
+    pub ground: Vector3<f32>,
 }
 
 impl Goal {
-    /// A goal not yet reached, arrived at within `radius`.
+    /// A goal not yet reached, arrived at within `radius` of a position
+    /// that is its ground.
     pub fn new(radius: f32) -> Self {
         Self {
             radius,
             reached: false,
             ruined: false,
+            ground: Vector3::zeros(),
         }
     }
 
-    /// Whether a player at `player` is standing in the goal at `goal`.
-    ///
-    /// Horizontal distance against the radius, with a separate and generous
-    /// vertical band: the player may be a step up or mid-jump, but the floor
-    /// below must not count.
-    pub fn contains(&self, goal: Vector3<f32>, player: Vector3<f32>) -> bool {
-        let dx = player.x - goal.x;
-        let dz = player.z - goal.z;
-        let horizontal = (dx * dx + dz * dz).sqrt();
+    /// The same goal, standing on ground `ground` from its position.
+    pub fn standing_on(self, ground: Vector3<f32>) -> Self {
+        Self { ground, ..self }
+    }
 
-        horizontal <= self.radius && (player.y - goal.y).abs() <= VERTICAL_REACH
+    /// Whether a player whose middle is at `player` is standing in the goal
+    /// at `goal`.
+    ///
+    /// Horizontal distance against the radius, and the player's middle in a
+    /// band over the goal's ground: on it, a step up or mid-jump counts; a
+    /// floor below it does not, nor a walkway overhead.
+    pub fn contains(&self, goal: Vector3<f32>, player: Vector3<f32>) -> bool {
+        let ground = goal + self.ground;
+        let dx = player.x - ground.x;
+        let dz = player.z - ground.z;
+        let horizontal = (dx * dx + dz * dz).sqrt();
+        let rise = player.y - ground.y;
+
+        horizontal <= self.radius && (-BELOW_GROUND..=ABOVE_GROUND).contains(&rise)
     }
 }
 
-/// How far above or below the goal's own point the player may be. Wide
-/// enough to cover a jump and a plinth, narrow enough that a walkway overhead
-/// is not the goal.
-const VERTICAL_REACH: f32 = 3.0;
+/// How far below the goal's ground the player's middle may be, m: standing
+/// in a shallow dip beside it, but not on a floor a storey down.
+const BELOW_GROUND: f32 = 0.5;
+/// How far above it, m: a step up beside it, or the top of a jump.
+const ABOVE_GROUND: f32 = 2.5;
 
 /// Finishes the level when the player reaches a goal with every solid, and
 /// loses it when every goal is ruined.
@@ -118,10 +133,24 @@ mod tests {
     fn the_goal_is_a_column_not_a_sphere() {
         let at = Vector3::new(10.0, 4.0, 10.0);
 
-        assert!(goal().contains(at, Vector3::new(11.9, 6.0, 10.0)));
-        assert!(!goal().contains(at, Vector3::new(12.5, 4.0, 10.0)));
-        // Directly below, but a storey down: a different floor, not the goal.
-        assert!(!goal().contains(at, Vector3::new(10.0, -0.5, 10.0)));
+        assert!(goal().contains(at, Vector3::new(11.9, 4.8, 10.0)));
+        assert!(goal().contains(at, Vector3::new(10.0, 6.0, 10.0)));
+        assert!(!goal().contains(at, Vector3::new(12.5, 4.8, 10.0)));
+        // Directly below, but on a floor two metres down: not the goal.
+        assert!(!goal().contains(at, Vector3::new(10.0, 2.8, 10.0)));
+        // Nor a walkway overhead.
+        assert!(!goal().contains(at, Vector3::new(10.0, 7.5, 10.0)));
+    }
+
+    /// A brazier's position is its middle; its goal is judged from the
+    /// ground it stands on.
+    #[test]
+    fn the_goal_is_judged_from_its_ground() {
+        let middle = Vector3::new(0.0, 0.5, 0.0);
+        let goal = goal().standing_on(Vector3::new(0.0, -0.5, 0.0));
+
+        assert!(goal.contains(middle, Vector3::new(1.0, 0.8, 0.0)));
+        assert!(!goal.contains(middle, Vector3::new(1.0, -1.2, 0.0)));
     }
 
     /// A world with the player standing in one goal, and a level of

@@ -45,7 +45,7 @@ Level(
 
             anchors: [],
             objects: [
-                Brazier(pos: (20.0, 15.0, 25.0), radius: 1.5),
+                Brazier(pos: (20.0, 13.0, 25.0), radius: 1.5),
             ],
         ),
     ],

@@ -327,7 +327,7 @@ impl Spawnable for BrazierDef {
             .with(ModelInstance::new(Arc::new(model)))
             .with(Renderable)
             .with(MaterialModulation(SurfaceModulation::emissive(0.0)))
-            .with(Goal::new(self.radius))
+            .with(Goal::new(self.radius).standing_on(-moved))
             .with(Self::light_shaft(ShaftLook::NONE).moved_by(-moved))
             .with(brazier)
             .build()]

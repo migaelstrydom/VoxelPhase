@@ -14,7 +14,7 @@
 // A piper on the east rim lobs a grenade at the player every few seconds
 // while the pit fills: something to dodge. Its misses crater the pit too.
 //
-// The goal's point is 3 m over the island.
+// The brazier stands on the island.
 //
 //               N (+z)
 //   ┌────┬────┬───┬───────────────┬──────┐
@@ -70,7 +70,7 @@ Level(
             anchors: [],
             objects: [
                 Piper(pos: (33.0, 21.0)),
-                Brazier(pos: (22.0, 11.5, 21.0), radius: 1.5),
+                Brazier(pos: (22.0, 8.5, 21.0), radius: 1.5),
             ],
         ),
     ],

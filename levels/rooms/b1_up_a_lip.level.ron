@@ -3,8 +3,8 @@
 // Two islands side by side, the far one 3 m higher: its face is a lip a full
 // jump catches. Jump, catch it, climb.
 //
-// The goal's point is 2 m over the upper island, so a jump from below does
-// not count.
+// The brazier stands on the upper island; a jump from below does not reach
+// it.
 //
 //   side view, looking west
 //                    ◎
@@ -45,7 +45,7 @@ Level(
 
             anchors: [],
             objects: [
-                Brazier(pos: (20.0, 15.0, 24.0), radius: 2.0),
+                Brazier(pos: (20.0, 13.0, 24.0), radius: 2.0),
             ],
         ),
     ],

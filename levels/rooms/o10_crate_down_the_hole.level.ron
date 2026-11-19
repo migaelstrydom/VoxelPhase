@@ -8,7 +8,7 @@
 // The upper island is 4 m of rock: digging a way straight down onto the exit
 // costs far more grenades than the hole.
 //
-// The goal's point is 2 m over the exit island.
+// The brazier stands on the exit island.
 //
 //   side view, looking north
 //     ▣  ☺
@@ -53,7 +53,7 @@ Level(
             anchors: [],
             objects: [
                 Crate(pos: (18.0, 16.8, 20.0), size: 0.8),
-                Brazier(pos: (26.5, 10.5, 20.0), radius: 1.5),
+                Brazier(pos: (26.5, 8.5, 20.0), radius: 1.5),
             ],
         ),
     ],

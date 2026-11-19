@@ -14,8 +14,7 @@
 // holds what fills the well and the channel to just under the floor, so the
 // crate stays in the well's grip.
 //
-// The goal's point is 3 m above the island: it counts a player within 3 m of
-// it vertically.
+// The brazier stands on the island.
 //
 //               N (+z)
 //   ┌────────┬────────────────────────────┐
@@ -69,7 +68,7 @@ Level(
             anchors: [],
             objects: [
                 Crate(pos: (16.0, 5.05, 20.0), size: 1.0),
-                Brazier(pos: (16.0, 17.0, 23.6), radius: 1.5),
+                Brazier(pos: (16.0, 14.0, 23.6), radius: 1.5),
             ],
         ),
     ],

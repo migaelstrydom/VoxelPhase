@@ -744,6 +744,12 @@ Solid(pos: (6.0, 1.0, -4.5), kind: Cube),
 Brazier(pos: (8.0, 0.0, -8.0), radius: 2.5),
 ```
 
+The player arrives standing within `radius` of it, level with the ground
+it stands on: on it, a step up or mid-jump counts, a floor below or a
+walkway overhead does not. Put `pos` on the ground, not above it: every
+body starts asleep, so one placed in the air hangs there until something
+wakes it, and `level_check` reports it as not at rest.
+
 Arriving at the brazier with every solid the level holds lights it and
 finishes the level. Arriving early does nothing. Nothing is said in words:
 the flame is the news. A level with no solids (a challenge room) is

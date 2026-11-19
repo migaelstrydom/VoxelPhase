@@ -8,7 +8,7 @@
 // and off the strip's far end. Crater the strip under the exit first: the
 // block drops into the crater and stops, its top 3 m under the exit's lip.
 //
-// The goal's point is 2 m over the exit island.
+// The brazier stands on the exit island.
 //
 //               N (+z)
 //         ┌───────────┐       z = 36
@@ -53,7 +53,7 @@ Level(
             anchors: [],
             objects: [
                 IceBox(pos: (24.5, 11.05, 8.0), half_extents: (1.0, 1.0, 1.0)),
-                Brazier(pos: (28.5, 16.5, 24.0), radius: 1.5),
+                Brazier(pos: (28.5, 14.5, 24.0), radius: 1.5),
             ],
         ),
     ],

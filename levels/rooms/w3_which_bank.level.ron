@@ -80,10 +80,8 @@ Level(
 
             anchors: [],
             objects: [
-                // 3 m over the island: the goal counts a player within 3 m of
-                // it vertically, and set on the island it would count one
-                // jumping under it.
-                Brazier(pos: (13.0, 13.0, 24.0), radius: 1.5),
+                // On the island.
+                Brazier(pos: (13.0, 10.0, 24.0), radius: 1.5),
             ],
         ),
     ],

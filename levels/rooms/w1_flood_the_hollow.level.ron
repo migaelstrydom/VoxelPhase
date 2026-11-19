@@ -13,8 +13,8 @@
 // nothing where it lands, or a boulder about as tall as the island is thick,
 // which leaves its lip some 4 m over a player standing on it.
 //
-// The goal's point is 3 m above the island: it counts a player within 3 m of
-// it vertically, so set on the island it would count one jumping under it.
+// The brazier stands on the island. A player under the island is a storey
+// below it, and does not reach it.
 //
 // The reservoir's floor is a metre above the pit's, under where a grenade
 // thrown from the floor strikes the dam, so the crater reaches below it. Pit
@@ -80,7 +80,7 @@ Level(
 
             anchors: [],
             objects: [
-                Brazier(pos: (23.0, 13.0, 20.0), radius: 1.5),
+                Brazier(pos: (23.0, 10.0, 20.0), radius: 1.5),
             ],
         ),
     ],
