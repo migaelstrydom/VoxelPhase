@@ -444,6 +444,33 @@ impl WaterField {
         (shallowest, finite)
     }
 
+    /// How far over its roof the water of any cell stands, m: nothing where
+    /// every cell under a roof holds no more than it has room for.
+    pub fn over_roof(&self) -> f64 {
+        let mut over = 0.0f64;
+        for chunk in &self.cells.chunks {
+            for (flat, &depth) in chunk.depth.iter().enumerate() {
+                let room = (chunk.ceiling[flat] - chunk.bed[flat]) as f64;
+                over = over.max(depth - room);
+            }
+        }
+        over
+    }
+
+    /// How far above its own lip any fall's water comes down, m: at its
+    /// foot, or on the floor of the cell it lands in. Nothing where every
+    /// fall falls.
+    pub fn highest_landing(&self) -> f32 {
+        let mut rise = 0.0f32;
+        for fall in self.falls.iter() {
+            rise = rise.max(fall.foot.y - fall.lip.y);
+            if let Some(into) = fall.into.filter(|_| fall.spent.is_none()) {
+                rise = rise.max(self.cells.bed(into) - fall.lip.y);
+            }
+        }
+        rise
+    }
+
     /// The fastest water anywhere, m/s: each face's discharge over the mean
     /// depth either side, where both sides hold at least `MEASURED_DEPTH`.
     pub fn max_speed(&self) -> f32 {

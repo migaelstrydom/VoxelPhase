@@ -8,7 +8,9 @@
 //!   do;
 //! - no cell's depth is negative and every depth and discharge is finite;
 //! - the ledger balances;
-//! - no water runs faster than anything a level could make.
+//! - no water runs faster than anything a level could make;
+//! - no cell under a roof holds more than it has room for, and no fall's
+//!   water comes down above where it left.
 //!
 //! Then it leaves the water alone for a while and, on a level nothing feeds,
 //! checks it comes to rest.
@@ -45,6 +47,12 @@ const LEDGER_TOLERANCE: f64 = 1.0e-6;
 
 /// Fastest water any level could make, m/s: a fall of some twenty metres.
 const MAX_SPEED: f32 = 20.0;
+
+/// Furthest a cell's water may stand over its roof, m, and a fall's water
+/// come down above its lip, m. Either reads as water where none can be: a
+/// level far over a slab, a landing on the ground above a hole.
+const OVER_ROOF: f64 = 0.05;
+const LANDED_ABOVE: f32 = 0.05;
 
 /// How long the water is left alone after the last blast, s, and the
 /// fastest it may still run then on a level nothing feeds, m/s.
@@ -189,6 +197,18 @@ fn check(water: &WaterWorld, rng: &mut StdRng, time: f32, findings: &mut Vec<Str
     let speed = field.max_speed();
     if speed > MAX_SPEED {
         findings.push(format!("t {time:.2}: water runs at {speed:.1} m/s"));
+    }
+    let over = field.over_roof();
+    if over > OVER_ROOF {
+        findings.push(format!(
+            "t {time:.2}: a cell stands {over:.2} m over its roof"
+        ));
+    }
+    let rise = field.highest_landing();
+    if rise > LANDED_ABOVE {
+        findings.push(format!(
+            "t {time:.2}: a fall lands {rise:.2} m above its lip"
+        ));
     }
     let (min, max) = field.graph().column_bounds();
     let query = water.query();
