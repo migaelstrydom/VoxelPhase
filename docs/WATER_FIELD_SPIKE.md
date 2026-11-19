@@ -277,13 +277,22 @@ Open:
   cannot run away from its foot as a fast thin sheet: on a shallow floor it
   piles up there until it is deep enough to leave at Froude 1, and a narrow
   channel below a hole run full backs up to the hole.
-- **A big breach heaps the pool as it drowns.** A jet's water lands where it
-  flies to; once the pool has risen to the hole it runs into the cell at the
-  hole's mouth instead, and the column in the hole, still moving at the jet's
-  speed, piles metres of water there before its head can stop it. The heap
-  falls back within seconds. Throwing that water on through the pool was
-  tried and made it worse: nothing then throttles the hole. The pool needs
-  the jet's momentum, which the scheme cannot carry.
+- **A big breach throws the pool below it about.** Two grenades in W1's dam
+  let some 37 m³/s into a hollow ten metres across. Its jets land in a few
+  square metres, which stand a metre or two proud to shed that much, and the
+  hollow sloshes from wall to wall every three seconds, a metre up and down,
+  running up the dam and into the corners two to four metres over the pool.
+  As each wave reaches the hole the jets drown, the column in the hole, still
+  moving at the jet's speed, piles into the cells at its mouth, and the heap
+  falls back as the next wave. Measured (`scratch` probe, 2026-11-19): the
+  worst heap 4.2 m. Setting a drowned hole's water down along the jet's way
+  through the pool, fanned out over eight metres, made that 3.5 m and the
+  usual peaks a quarter lower; a quadratic drag a hundred times Manning's
+  made them higher, since a heap sheds slower through it. Neither was kept.
+  What is missing is what a real plunge pool does with a jet: it takes its
+  water in under the surface and loses its energy to turbulence. The scheme
+  can only set water down on top and has no term that loses energy to a
+  steep wave.
 - **Only a straight tunnel runs under pressure.** A conduit is one run of full
   cells along one axis. Round a bend, or through a flooded cave wider than a
   run, the water moves by the flow law alone, which passes at most Froude 1
