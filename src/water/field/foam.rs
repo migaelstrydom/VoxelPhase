@@ -17,7 +17,7 @@
 //! what draws the water reads it.
 
 use crate::water::falling::GRAVITY;
-use crate::water::geometry::{SpanIndex, COLUMN_SIZE};
+use crate::water::geometry::{SpanChunkCoord, SpanIndex, COLUMN_SIZE};
 
 use super::activity::CALM_DISCHARGE;
 use super::cells::FieldCells;
@@ -46,7 +46,7 @@ const MOST_CARRIED: f32 = 0.5;
 
 /// Least depth a face's discharge is divided by for its speed, m, so a
 /// film's trickle is not taken for a torrent.
-const MEASURED_DEPTH: f32 = 0.05;
+pub(super) const MEASURED_DEPTH: f32 = 0.05;
 
 /// The power falling water lands with, per metre of its lip and per cell it
 /// lands in, m³/s³ (what pours times the square of the speed it lands at),
@@ -61,10 +61,14 @@ const JUMP_DROP: (f32, f32) = (0.4, 2.0);
 /// Least depth of the water a jump runs into, m.
 const JUMP_DEPTH: f64 = 0.1;
 
+/// Slowest water that makes foam by anything it does but land, m/s: the
+/// solver notes the faces running this fast, and no others are looked at.
+pub(super) const BREAKING_SPEED: f32 = 0.5;
+
 /// Heights of a surge running out over dry ground, m, and its speeds, m/s,
 /// from which its front makes foam and at which it makes the most.
 const FRONT_HEIGHT: (f32, f32) = (0.1, 0.6);
-const FRONT_SPEED: (f32, f32) = (0.5, 2.0);
+const FRONT_SPEED: (f32, f32) = (BREAKING_SPEED, 2.0);
 
 fn ramp((from, to): (f32, f32), x: f32) -> f32 {
     ((x - from) / (to - from)).clamp(0.0, 1.0)
@@ -103,12 +107,22 @@ pub struct Foam {
 }
 
 impl Foam {
-    /// Advance the foam by `dt` seconds over the water as it now runs:
-    /// carry it on the awake chunks' faces, make it where `landings` (each
-    /// a cell and the power water lands in it with) come down, where fast
-    /// water runs into slow and where a surge runs out over dry ground,
-    /// and fade it everywhere.
-    pub(super) fn step(&mut self, cells: &mut FieldCells, landings: &[(SpanIndex, f32)], dt: f32) {
+    /// Advance the foam by `dt` seconds over the water as it now runs: make
+    /// it where `landings` (each a cell and the power water lands in it
+    /// with) come down, and where the water through one of the `fast` faces
+    /// (those the solver found running at `BREAKING_SPEED` or more) runs
+    /// into slower water or out over dry ground; carry it on the faces of
+    /// the chunks that hold any; and fade it.
+    ///
+    /// Only chunks with foam, or with something making it, are touched:
+    /// still water and smooth water cost nothing.
+    pub(super) fn step(
+        &mut self,
+        cells: &mut FieldCells,
+        landings: &[(SpanIndex, f32)],
+        fast: &[FaceRef],
+        dt: f32,
+    ) {
         let count = cells.chunks.len();
         for buffer in [&mut self.shown, &mut self.carried, &mut self.made] {
             buffer.resize_with(count, Vec::new);
@@ -116,27 +130,24 @@ impl Foam {
         self.foamy.resize(count, false);
         self.stirred.clear();
         self.stirred.resize(count, false);
-        for slot in 0..count {
-            if cells.chunks[slot].awake || self.foamy[slot] {
-                self.stir(cells, slot);
-            }
-        }
         for &(cell, power) in landings {
-            self.stir(cells, cell.slot as usize);
-            let made = &mut self.made[cell.slot as usize][cell.flat as usize];
-            *made = made.max(landing_strength(power));
+            self.make(cells, cell, landing_strength(power));
+        }
+        for &at in fast {
+            self.break_at(cells, at);
         }
         for slot in 0..count {
-            if cells.chunks[slot].awake {
-                self.run_faces(cells, slot, dt);
+            if cells.chunks[slot].awake && self.reaches_foam(cells, slot) {
+                self.carry(cells, slot, dt);
             }
         }
         let fade = (-dt / FOAM_LIFE).exp();
         let making = 1.0 - (-MAKING_RATE * dt).exp();
         for slot in 0..count {
-            if !self.stirred[slot] {
+            if !(self.stirred[slot] || self.foamy[slot]) {
                 continue;
             }
+            self.stir(cells, slot);
             let chunk = &mut cells.chunks[slot];
             let (carried, made) = (&mut self.carried[slot], &mut self.made[slot]);
             let mut any = false;
@@ -170,18 +181,78 @@ impl Foam {
 
     /// Have this step read and write chunk `slot`'s foam.
     fn stir(&mut self, cells: &FieldCells, slot: usize) {
-        if !self.stirred[slot] {
+        let cells = cells.chunks[slot].depth.len();
+        if !self.stirred[slot] || self.carried[slot].len() != cells {
             self.stirred[slot] = true;
-            let cells = cells.chunks[slot].depth.len();
             self.carried[slot].resize(cells, 0.0);
             self.made[slot].resize(cells, 0.0);
         }
     }
 
-    /// Carry foam across the faces of awake chunk `slot`, and note what
-    /// their water makes: a jump where it runs fast into slower water, a
-    /// front where it surges out over dry ground.
-    fn run_faces(&mut self, cells: &FieldCells, slot: usize, dt: f32) {
+    /// Note a source that would raise `cell`'s foam to `strength` (0 to 1)
+    /// of the most a cell holds.
+    fn make(&mut self, cells: &FieldCells, cell: SpanIndex, strength: f32) {
+        if strength <= 0.0 {
+            return;
+        }
+        self.stir(cells, cell.slot as usize);
+        let made = &mut self.made[cell.slot as usize][cell.flat as usize];
+        *made = made.max(strength);
+    }
+
+    /// Whether chunk `slot`'s faces run between cells any of which may hold
+    /// foam: its own, or those of the chunks its faces reach into on its +x
+    /// and +z sides.
+    fn reaches_foam(&self, cells: &FieldCells, slot: usize) -> bool {
+        let coord = cells.chunks[slot].coord;
+        let holds = |slot: usize| self.foamy[slot] || self.stirred[slot];
+        let beside = |x: i32, z: i32| {
+            let near = SpanChunkCoord {
+                x: coord.x + x,
+                z: coord.z + z,
+            };
+            cells.slot_of(near).is_some_and(holds)
+        };
+        holds(slot) || beside(1, 0) || beside(0, 1)
+    }
+
+    /// Note what the water through fast face `at` makes: a front where it
+    /// surges out over dry ground, a jump where it runs into water going
+    /// slower. Water going over a fall makes its foam where it lands.
+    fn break_at(&mut self, cells: &FieldCells, at: FaceRef) {
+        let Some(face) = cells.chunks[at.slot as usize].faces.get(at.index as usize) else {
+            return;
+        };
+        let owner = SpanIndex {
+            slot: at.slot,
+            flat: face.a,
+        };
+        let forward = face.q > 0.0;
+        let (giver, taker) = if forward {
+            (owner, face.b)
+        } else {
+            (face.b, owner)
+        };
+        let held = cells.depth(giver);
+        if held <= WET_DEPTH || falls_over(cells, face, forward) {
+            return;
+        }
+        let speed = face.q.abs() / flow_depth(cells, owner, face).max(MEASURED_DEPTH);
+        let ahead = cells.depth(taker);
+        if ahead <= WET_DEPTH {
+            let made = ramp(FRONT_HEIGHT, held as f32) * ramp(FRONT_SPEED, speed);
+            self.make(cells, giver, made);
+        } else if speed > JUMP_SPEED && ahead >= JUMP_DEPTH {
+            let next = if forward { face.ahead } else { face.behind };
+            let onward = next.map_or(0.0, |next| speed_through(cells, next));
+            let onward = if forward { onward } else { -onward };
+            self.make(cells, taker, ramp(JUMP_DROP, speed - onward.max(0.0)));
+        }
+    }
+
+    /// Carry foam across the faces of awake chunk `slot`, with the water.
+    /// Foam going over a fall is lost in it.
+    fn carry(&mut self, cells: &FieldCells, slot: usize, dt: f32) {
         let chunk = &cells.chunks[slot];
         for face in &chunk.faces {
             if face.q.abs() < CALM_DISCHARGE {
@@ -197,40 +268,17 @@ impl Foam {
             } else {
                 (face.b, owner)
             };
-            let held = cells.depth(giver);
-            if held <= WET_DEPTH {
-                continue;
-            }
-            self.stir(cells, taker.slot as usize);
-            let falls = face
-                .flight
-                .is_some_and(|flight| cells.flights[flight as usize].from_owner == forward);
             let foam = cells.chunks[giver.slot as usize].foam[giver.flat as usize];
-            if foam > 0.0 {
-                let share = (face.q.abs() * dt / (held as f32 * COLUMN_SIZE)).min(MOST_CARRIED);
-                self.carried[giver.slot as usize][giver.flat as usize] -= foam * share;
-                // Foam going over a fall is lost in it: the fall makes its
-                // own where it lands.
-                if !falls {
-                    self.carried[taker.slot as usize][taker.flat as usize] += foam * share;
-                }
-            }
-            if falls {
+            let held = cells.depth(giver);
+            if foam <= 0.0 || held <= WET_DEPTH {
                 continue;
             }
-            let speed = face.q.abs() / flow_depth(cells, owner, face).max(MEASURED_DEPTH);
-            let ahead = cells.depth(taker);
-            if ahead <= WET_DEPTH {
-                let made = ramp(FRONT_HEIGHT, held as f32) * ramp(FRONT_SPEED, speed);
-                let at = &mut self.made[giver.slot as usize][giver.flat as usize];
-                *at = at.max(made);
-            } else if speed > JUMP_SPEED && ahead >= JUMP_DEPTH {
-                let next = if forward { face.ahead } else { face.behind };
-                let onward = next.map_or(0.0, |next| speed_through(cells, next));
-                let onward = if forward { onward } else { -onward };
-                let made = ramp(JUMP_DROP, speed - onward.max(0.0));
-                let at = &mut self.made[taker.slot as usize][taker.flat as usize];
-                *at = at.max(made);
+            let share = (face.q.abs() * dt / (held as f32 * COLUMN_SIZE)).min(MOST_CARRIED);
+            self.stir(cells, giver.slot as usize);
+            self.carried[giver.slot as usize][giver.flat as usize] -= foam * share;
+            if !falls_over(cells, face, forward) {
+                self.stir(cells, taker.slot as usize);
+                self.carried[taker.slot as usize][taker.flat as usize] += foam * share;
             }
         }
     }
@@ -243,6 +291,13 @@ impl Foam {
         moved.dedup();
         moved
     }
+}
+
+/// Whether the water through `face`, running the way `forward` says, goes
+/// over a fall there.
+fn falls_over(cells: &FieldCells, face: &Face, forward: bool) -> bool {
+    face.flight
+        .is_some_and(|flight| cells.flights[flight as usize].from_owner == forward)
 }
 
 /// How fast water runs through a face, m/s: positive from its `a` to its
@@ -287,27 +342,38 @@ mod tests {
         face.q = q;
     }
 
+    /// Every face carrying water, as the solver would note the fast ones.
+    fn fast_faces(cells: &FieldCells) -> Vec<FaceRef> {
+        (cells.chunks[0].faces.iter().enumerate())
+            .filter(|(_, face)| face.q != 0.0)
+            .map(|(index, _)| FaceRef {
+                slot: 0,
+                index: index as u32,
+            })
+            .collect()
+    }
+
     #[test]
     fn landing_water_makes_foam_that_fades_when_it_stops() {
         let mut cells = pond();
         let mut field = Foam::default();
         let at = cell(5, 5);
         for _ in 0..60 {
-            field.step(&mut cells, &[(at, 100.0)], 1.0 / 60.0);
+            field.step(&mut cells, &[(at, 100.0)], &[], 1.0 / 60.0);
         }
         assert!(foam(&cells, at) > 1.2, "{}", foam(&cells, at));
         assert_eq!(foam(&cells, cell(9, 9)), 0.0);
         assert_eq!(field.take_moved(), vec![0]);
         for _ in 0..(4.0 * FOAM_LIFE * 60.0) as usize {
-            field.step(&mut cells, &[], 1.0 / 60.0);
+            field.step(&mut cells, &[], &[], 1.0 / 60.0);
         }
         assert!(foam(&cells, at) < 0.05);
         for _ in 0..(4.0 * FOAM_LIFE * 60.0) as usize {
-            field.step(&mut cells, &[], 1.0 / 60.0);
+            field.step(&mut cells, &[], &[], 1.0 / 60.0);
         }
         assert_eq!(foam(&cells, at), 0.0);
         field.take_moved();
-        field.step(&mut cells, &[], 1.0 / 60.0);
+        field.step(&mut cells, &[], &[], 1.0 / 60.0);
         assert!(field.take_moved().is_empty(), "nothing left to move");
     }
 
@@ -315,7 +381,7 @@ mod tests {
     fn a_trickle_landing_makes_none() {
         let mut cells = pond();
         let mut field = Foam::default();
-        field.step(&mut cells, &[(cell(5, 5), 0.5)], 1.0);
+        field.step(&mut cells, &[(cell(5, 5), 0.5)], &[], 1.0);
         assert_eq!(foam(&cells, cell(5, 5)), 0.0);
     }
 
@@ -323,13 +389,13 @@ mod tests {
     fn foam_is_carried_the_way_the_water_runs() {
         let mut cells = pond();
         let mut field = Foam::default();
-        cells.chunks[0].foam[cell(5, 5).flat as usize] = 1.0;
+        field.step(&mut cells, &[(cell(5, 5), 100.0)], &[], 0.5);
         // 0.5 m/s to +x through every face of the row.
         for i in 1..CHUNK_COLUMNS - 2 {
             run(&mut cells, i, 5, 0.5);
         }
         for _ in 0..60 {
-            field.step(&mut cells, &[], 1.0 / 60.0);
+            field.step(&mut cells, &[], &[], 1.0 / 60.0);
         }
         let ahead = foam(&cells, cell(6, 5));
         assert!(ahead > 0.1, "{ahead}");
@@ -349,7 +415,8 @@ mod tests {
         for i in 1..CHUNK_COLUMNS - 2 {
             run(&mut cells, i, 9, 3.0);
         }
-        field.step(&mut cells, &[], 0.1);
+        let fast = fast_faces(&cells);
+        field.step(&mut cells, &[], &fast, 0.1);
         assert!(foam(&cells, cell(8, 5)) > 0.3, "where it is slowed");
         assert_eq!(foam(&cells, cell(4, 5)), 0.0, "not where it runs on");
         assert_eq!(foam(&cells, cell(6, 9)), 0.0);
@@ -363,7 +430,8 @@ mod tests {
             *cells.depth_mut(cell(i, 5)) = 0.0;
         }
         run(&mut cells, 7, 5, 2.0);
-        field.step(&mut cells, &[], 0.1);
+        let fast = fast_faces(&cells);
+        field.step(&mut cells, &[], &fast, 0.1);
         assert!(foam(&cells, cell(7, 5)) > 0.3);
     }
 }

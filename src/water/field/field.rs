@@ -333,7 +333,9 @@ impl WaterField {
         conduits::find(&mut self.cells, self.solver.pressed());
         let brinks = Some(self.solver.brinks());
         self.ledger.sunk += self.falls.find(&self.graph, &mut self.cells, brinks, dt);
-        self.foam.step(&mut self.cells, self.falls.landings(), dt);
+        let fast = self.solver.fast();
+        self.foam
+            .step(&mut self.cells, self.falls.landings(), fast, dt);
         self.frame = FieldFrame {
             stats,
             awake,

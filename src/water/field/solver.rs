@@ -22,6 +22,7 @@
 
 use super::cells::{FieldCells, CELL_AREA};
 use super::faces::{Face, FaceRef};
+use super::foam::{BREAKING_SPEED, MEASURED_DEPTH};
 use crate::water::geometry::{SpanIndex, COLUMN_SIZE};
 
 /// Gravity, m/s².
@@ -134,6 +135,9 @@ pub struct FieldSolver {
     /// The faces whose water stood against their roofs as the last substep
     /// began: every conduit runs through at least one.
     pressed: Vec<FaceRef>,
+    /// The faces whose water ran at `BREAKING_SPEED` or more after the last
+    /// substep: the only ones whose water may be breaking into foam.
+    fast: Vec<FaceRef>,
 }
 
 impl FieldSolver {
@@ -217,6 +221,7 @@ impl FieldSolver {
         self.choose_chunks(cells, cells.width());
         self.brinks.clear();
         self.pressed.clear();
+        self.fast.clear();
         let mut stats = StepStats {
             chunks: self.stepped.len() as u32,
             ..StepStats::default()
@@ -257,8 +262,10 @@ impl FieldSolver {
         let mut count = 0;
         let mut brinks = std::mem::take(&mut self.brinks);
         let mut pressed = std::mem::take(&mut self.pressed);
+        let mut fast = std::mem::take(&mut self.fast);
         brinks.clear();
         pressed.clear();
+        fast.clear();
         for &slot in &self.stepped {
             let mut faces = std::mem::take(&mut cells.chunks[slot].faces);
             let stepped = faces.iter_mut().zip(&self.previous[slot]);
@@ -287,6 +294,9 @@ impl FieldSolver {
                 if !in_conduit {
                     let blended = self.blended(cells, face, depth);
                     face.q = inertial(blended, depth, step / DX, dt, &p);
+                    if face.q.abs() >= BREAKING_SPEED * depth.max(MEASURED_DEPTH) {
+                        fast.push(at);
+                    }
                 }
             }
             count += faces.len() as u64;
@@ -301,6 +311,7 @@ impl FieldSolver {
         }
         self.brinks = brinks;
         self.pressed = pressed;
+        self.fast = fast;
         self.drive_conduits(cells, dt);
         count
     }
@@ -340,7 +351,7 @@ impl FieldSolver {
     /// Move each conduit's water as one column: every face of it takes the
     /// discharge its head drives (`Conduit::driven`), from the mean of what
     /// they carried.
-    fn drive_conduits(&self, cells: &mut FieldCells, dt: f32) {
+    fn drive_conduits(&mut self, cells: &mut FieldCells, dt: f32) {
         let conduits = std::mem::take(&mut cells.conduits);
         for conduit in &conduits {
             let face = |at: &FaceRef| cells.chunks[at.slot as usize].faces[at.index as usize].q;
@@ -350,6 +361,11 @@ impl FieldSolver {
             let q = conduit.driven(q, levels, held, dt);
             for at in &conduit.faces {
                 cells.chunks[at.slot as usize].faces[at.index as usize].q = q;
+            }
+            // Where it comes out, it runs into whatever stands there.
+            if q.abs() >= BREAKING_SPEED * conduit.throat {
+                let out = if q > 0.0 { conduit.faces.len() - 1 } else { 0 };
+                self.fast.push(conduit.faces[out]);
             }
         }
         cells.conduits = conduits;
@@ -365,6 +381,12 @@ impl FieldSolver {
     /// began.
     pub fn pressed(&self) -> &[FaceRef] {
         &self.pressed
+    }
+
+    /// The faces whose water ran at `foam::BREAKING_SPEED` or more after the
+    /// last substep.
+    pub fn fast(&self) -> &[FaceRef] {
+        &self.fast
     }
 
     /// A face's discharge at the start of the substep, blended with the mean
