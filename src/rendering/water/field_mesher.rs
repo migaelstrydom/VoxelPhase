@@ -231,6 +231,8 @@ impl<'a> FieldScene<'a> {
             beside: beside.map(|b| b.map(|(other, _)| (other.from, other.direction))),
             hung,
             first,
+            count: mesh.vertices.len() as u32 - first,
+            spent: fall.spent.is_some(),
         });
     }
 

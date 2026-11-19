@@ -40,8 +40,12 @@ const MAKING_RATE: f32 = 6.0;
 /// Foam under which a cell has none.
 const GONE: f32 = 0.01;
 
-/// Least change in a cell's foam that can be seen.
-const SEEN: f32 = 0.04;
+/// Least change in a cell's foam that can be seen, and the fewest steps
+/// between two tellings of a chunk's drawers that its foam has moved: foam
+/// fades smoothly, and a surface read again for it every frame is read
+/// three times more than its foam needs.
+const SEEN: f32 = 0.05;
+const TOLD_EVERY: u8 = 3;
 
 /// Most of a cell's foam one face carries off in a step.
 const MOST_CARRIED: f32 = 0.5;
@@ -106,6 +110,13 @@ pub struct Foam {
     foamy: Vec<bool>,
     /// Per chunk slot: whether this step reads or writes its cells' foam.
     stirred: Vec<bool>,
+    /// Per chunk slot: steps since its drawers were last told its foam had
+    /// moved, up to `TOLD_EVERY`.
+    untold: Vec<u8>,
+    /// Per chunk slot: whether its foam has moved by more than can be seen
+    /// and its drawers have yet to be told, so it is looked at again even
+    /// once it holds none.
+    owed: Vec<bool>,
     /// The chunks whose foam has changed by more than can be seen since
     /// they were last taken (`take_moved`), and whether each one's border
     /// cells hold or held any, which the chunks round it draw too.
@@ -134,6 +145,8 @@ impl Foam {
             buffer.resize_with(count, Vec::new);
         }
         self.foamy.resize(count, false);
+        self.untold.resize(count, TOLD_EVERY);
+        self.owed.resize(count, false);
         self.stirred.clear();
         self.stirred.resize(count, false);
         for &(cell, power) in landings {
@@ -150,7 +163,7 @@ impl Foam {
         let fade = (-dt / FOAM_LIFE).exp();
         let making = 1.0 - (-MAKING_RATE * dt).exp();
         for slot in 0..count {
-            if !(self.stirred[slot] || self.foamy[slot]) {
+            if !(self.stirred[slot] || self.foamy[slot] || self.owed[slot]) {
                 continue;
             }
             self.stir(cells, slot);
@@ -175,22 +188,28 @@ impl Foam {
                 made[flat] = 0.0;
             }
             self.foamy[slot] = any;
+            self.untold[slot] = self.untold[slot].saturating_add(1).min(TOLD_EVERY);
             let shown = &mut self.shown[slot];
+            // The last of a cell's foam going is seen however little it was:
+            // nothing looks at the chunk again to say so.
             let seen = shown.len() != chunk.foam.len()
-                || (shown.iter().zip(&chunk.foam)).any(|(a, b)| (a - b).abs() > SEEN);
-            if seen {
+                || (shown.iter().zip(&chunk.foam))
+                    .any(|(&was, &now)| (was - now).abs() > SEEN || (now == 0.0 && was != 0.0));
+            self.owed[slot] = seen;
+            if seen && self.untold[slot] >= TOLD_EVERY {
                 let shared = (0..COLUMNS_PER_CHUNK)
                     .filter(|&local| on_border(local))
                     .any(|local| {
                         let cells =
                             chunk.offsets[local] as usize..chunk.offsets[local + 1] as usize;
                         let held = |foam: &[f32]| {
-                            foam.get(cells.clone())
-                                .is_some_and(|f| f.iter().any(|&f| f > 0.0))
+                            (foam.get(cells.clone())).is_some_and(|f| f.iter().any(|&f| f > 0.0))
                         };
                         held(&chunk.foam) || held(shown)
                     });
                 shown.clone_from(&chunk.foam);
+                self.untold[slot] = 0;
+                self.owed[slot] = false;
                 self.moved.push((slot, shared));
             }
         }
@@ -401,6 +420,10 @@ mod tests {
             field.step(&mut cells, &[], &[], 1.0 / 60.0);
         }
         assert_eq!(foam(&cells, at), 0.0);
+        assert!(
+            field.shown[0].iter().all(|&f| f == 0.0),
+            "and its drawers know"
+        );
         field.take_moved();
         field.step(&mut cells, &[], &[], 1.0 / 60.0);
         assert!(field.take_moved().is_empty(), "nothing left to move");

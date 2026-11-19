@@ -296,7 +296,8 @@ impl Falls {
     /// The fall whose lip runs on from `fall`'s at its end `end`
     /// (`edge_ends`), and which of that fall's ends meets it there: the two
     /// are one curtain. None where the fall ends, and where more lips meet
-    /// at that corner than two falls can share.
+    /// at that corner than two falls can share. A pouring fall and a spent
+    /// one are not one curtain: the spent one is on its way down.
     pub fn beside(
         &self,
         graph: &SpanGraph,
@@ -306,7 +307,8 @@ impl Falls {
     ) -> Option<(&Fall, usize)> {
         let (other, meets) = self.next_round(graph, cells, fall, end)?;
         let (back, _) = self.next_round(graph, cells, other, meets)?;
-        (back.from == fall.from && back.direction == fall.direction).then_some((other, meets))
+        let mutual = back.from == fall.from && back.direction == fall.direction;
+        (mutual && other.spent.is_some() == fall.spent.is_some()).then_some((other, meets))
     }
 
     /// The fall `fall`'s lip would run on into at its end `end`, and that

@@ -86,14 +86,19 @@ impl DrawnCells<'_> {
             && !self.bursts(at)
     }
 
-    /// Whether a cell's water bursts out of it as a jet.
+    /// Whether a cell's water bursts out of it as a jet. Asked of every
+    /// cell at every corner, so it looks once into its chunk's falls, which
+    /// lie in order of cell.
     fn bursts(&self, at: SpanIndex) -> bool {
-        self.cells.ceiling(at).is_finite()
-            && (0..ORTHOGONAL.len()).any(|direction| {
-                self.falls
-                    .get(at, direction)
-                    .is_some_and(|fall| fall.driven)
-            })
+        if !self.cells.ceiling(at).is_finite() {
+            return false;
+        }
+        let falls = self.falls.of_slot(at.slot as usize);
+        let first = falls.partition_point(|fall| fall.from.flat < at.flat);
+        falls[first..]
+            .iter()
+            .take_while(|fall| fall.from.flat == at.flat)
+            .any(|fall| fall.driven)
     }
 
     /// Whether a cell holds only a film perched on its bed while a
@@ -133,21 +138,17 @@ impl DrawnCells<'_> {
     }
 }
 
-/// The falls leaving the cells of chunk `slot`, as a surface's shape takes
-/// them: by cell and direction, whether each is driven, and whether it is
-/// spent.
+/// The falls pouring from the cells of chunk `slot`, as a surface's shape
+/// takes them: by cell and direction, and whether each is driven. A spent
+/// fall shapes nothing: its curtain is drawn until its water is down, and
+/// its going is no change of shape.
 pub(super) fn falls_of(
     field: &WaterField,
     slot: u32,
-) -> impl Iterator<Item = (u32, u8, bool, bool)> + '_ {
-    (field.falls().of_slot(slot as usize).iter()).map(|fall| {
-        (
-            fall.from.flat,
-            fall.direction,
-            fall.driven,
-            fall.spent.is_some(),
-        )
-    })
+) -> impl Iterator<Item = (u32, u8, bool)> + '_ {
+    (field.falls().of_slot(slot as usize).iter())
+        .filter(|fall| fall.spent.is_none())
+        .map(|fall| (fall.from.flat, fall.direction, fall.driven))
 }
 
 /// The surface vertex midway between `from` and `to`.
@@ -352,6 +353,9 @@ pub(super) enum VertexSource {
 
 /// One fall's curtain in a built surface: a run of vertices read again
 /// together from the fall, while it and the falls it runs on into stand.
+/// A spent fall's is left as built: its water is in the air, the draw
+/// shows less of it by the clock (`RiverVertex::life`), and once the last
+/// of it is down it is folded away, with no surface built again for it.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct CurtainSource {
     /// The fall it is drawn for, by its cell and direction.
@@ -361,8 +365,11 @@ pub(super) struct CurtainSource {
     /// The surface vertices it hangs from, at its lip's two ends and its
     /// middle; none where the water it leaves has no surface.
     pub hung: Option<[u32; 3]>,
-    /// Its first vertex.
+    /// Its first vertex, and how many it has.
     pub first: u32,
+    pub count: u32,
+    /// Whether its fall was spent when it was built.
+    pub spent: bool,
 }
 
 /// A built surface's vertex sources, and what else must hold for its shape
@@ -379,7 +386,7 @@ pub struct SurfaceSources {
     pub(super) curtains: Vec<CurtainSource>,
     /// The falls leaving its chunk's cells when it was built (`falls_of`):
     /// its shape holds while they are the falls leaving them.
-    pub(super) falls: Vec<(u32, u8, bool, bool)>,
+    pub(super) falls: Vec<(u32, u8, bool)>,
     /// The update whose drawn depths the surface was last read from.
     pub(super) read: u64,
     /// The jets landing in its chunk when it was built, in the field's
@@ -530,9 +537,19 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
         }
     }
     // Each curtain again from its fall, once the surface it hangs from has
-    // been read.
+    // been read. A spent fall's is as it was built until its water is
+    // down, then folded to a point.
     for curtain in &sources.curtains {
-        let Some(fall) = field.fall(curtain.fall.0, curtain.fall.1 as usize) else {
+        let first = curtain.first as usize;
+        let fall = field.fall(curtain.fall.0, curtain.fall.1 as usize);
+        if curtain.spent {
+            if fall.is_none_or(|fall| fall.spent.is_none()) {
+                let folded = mesh.vertices[first];
+                mesh.vertices[first..first + curtain.count as usize].fill(folded);
+            }
+            continue;
+        }
+        let Some(fall) = fall.filter(|fall| fall.spent.is_none()) else {
             held = false;
             continue;
         };
@@ -544,7 +561,6 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
         let top = curtain.hung.map(|hung| hung_from(&mesh.vertices, hung));
         let beside = beside.map(|b| b.map(|(other, _)| other));
         let vertices = Curtain::new(fall, beside, top, cells.clock).vertices();
-        let first = curtain.first as usize;
         mesh.vertices[first..first + vertices.len()].copy_from_slice(&vertices);
     }
     // A surface that lost its shape reads every cell again until built.
