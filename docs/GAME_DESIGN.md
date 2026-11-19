@@ -42,7 +42,9 @@ What the world does back:
    with the water under it.
 4. **Loose things obey physics, and only physics.** They stack, topple, roll,
    block, float and weigh. Nothing acts at a distance: there are no plates
-   that open doors. A weight does its work where it rests.
+   that open doors. A weight does its work where it rests. The level's
+   objective (solids, temple, brazier) sits outside this rule because it
+   never changes the room ([WORLD_AND_STORY.md](WORLD_AND_STORY.md)).
 5. **Only lifters give height back:** trampolines, moving platforms, pumps and
    springs, rising water, the hover sled. A room has a fixed few.
 6. **Creatures follow their nature, always.** A roller rolls at whoever it

@@ -1,8 +1,7 @@
 //! Does the surface detail survive being walked towards, and die quietly when
 //! walked away from?
 //!
-//! Detail normals and roughness are one system, not two (see §4.2 of
-//! VISUAL_DIRECTION.md). The claim that justifies building them together is
+//! Detail normals and roughness are one system, not two. The claim that justifies building them together is
 //! that the coupling handles distance by itself: where the relief has shrunk
 //! below a pixel, the variation folds into roughness and the surface goes
 //! matte, with no authored LOD fade anywhere. This sheet is that claim's test.

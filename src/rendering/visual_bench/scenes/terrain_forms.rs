@@ -12,7 +12,7 @@
 //! judged — a 1 m crevice, a 0.7 m arch, a crater rim — are decimetre-scale
 //! detail. One wide tableau would render each of them a few pixels across and
 //! report nothing; the sheet would be trusted and it would be useless, which is
-//! precisely the failure mode `VISUAL_HANDOFF.md` records twice. So the terrain
+//! a failure the bench has already had twice. So the terrain
 //! is one composition and the sheet is a set of close reads of it, each framed
 //! so its feature fills the tile.
 //!
@@ -51,7 +51,7 @@
 //! and the sky hemisphere between them light the two almost equally, so a
 //! continuous change of slope arrives as a continuous change of almost nothing.
 //! That is the same complaint as the flat crevices, one level up, and it is the
-//! case `VISUAL_DIRECTION.md` §4's slope-driven terrain material exists for.
+//! case the slope-driven terrain material exists for.
 
 use nalgebra::{Point3, Vector3};
 

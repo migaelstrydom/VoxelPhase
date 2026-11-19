@@ -156,7 +156,7 @@ failure has something to show up on.
   is why it is the right dial and `SKY_IRRADIANCE_FACTOR` is not. Raising the
   sky fill would narrow the ~5:1 key-to-fill ratio and flatten every surface in
   the frame; raising `sun_intensity` would move the absolute light level, which
-  the level albedos pin (see `VISUAL_HANDOFF.md`). Measured on the `shadows`
+  the level albedos pin. Measured on the `shadows`
   sheet, going from mean 0.037 to 0.080 lifts a shadowed ground pixel by ~41% in
   linear terms while moving the lit ground by ~2%.
 - `ShadowVolume::pcf_radius` sets the edge softness, and is uniform data

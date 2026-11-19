@@ -37,7 +37,7 @@ map is already correct.
 
 - **AO on props, the player, or any dynamic body.** Terrain is static and can be
   baked; a tumbling crate cannot. Occlusion between moving bodies and the ground
-  they rest on is the screen-space item in `VISUAL_DIRECTION.md` §3, and it is a
+  they rest on would be a screen-space effect, a
   different feature with a different mechanism.
 - **Long-range occlusion.** This darkens crevices at a scale of a few voxels. A
   valley floor does not get darker for being in a valley.
@@ -386,8 +386,8 @@ Ambient is an author's stand-in for light arriving from everywhere, and it was
 raised specifically to open up the sun's shadows; leaving it unoccluded puts a
 floor under every crease at exactly that level, and AO has almost nothing left
 to darken. It is also the term that costs nothing to occlude: it is a flat add,
-so occluding it darkens creases without touching the level on open ground that
-`VISUAL_HANDOFF.md` says the level albedos pin.
+so occluding it darkens creases without touching the level on open ground,
+which the level albedos pin.
 
 Specular wants its own treatment because a mirror in a crevice still reflects
 whatever is in front of it; fully occluding it reads as dirt rather than as
@@ -397,8 +397,8 @@ Start simple.
 
 **Do not retune `SKY_IRRADIANCE_FACTOR` or `GROUND_ALBEDO` in the same change.**
 Both exist to fake this occlusion and both should eventually rise toward 1.0 now
-that it is computed. But raising them raises the absolute light level, and per
-`VISUAL_HANDOFF.md` that level is pinned by content: the level albedos are
+that it is computed. But raising them raises the absolute light level, and
+that level is pinned by content: the level albedos are
 saturated primaries authored against the current lighting, and pushing them up
 the tonemap's shoulder washes the game out. Land AO with the discounts
 unchanged — the frame gets slightly darker, only in creases — then judge the
@@ -517,7 +517,7 @@ risk is taken.
 `visual_bench` has **no marching-cubes terrain scene**. Every existing scene is
 props and primitives on a flat slab, which means terrain AO would be
 unfalsifiable from an agent shell — and the bench has already misled twice by
-being too flattering (see `VISUAL_HANDOFF.md`). A scene with real generated
+being too flattering. A scene with real generated
 terrain, a crevice, an overhang and a fresh crater is part of step 3, not a
 follow-up to it.
 
