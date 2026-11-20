@@ -92,6 +92,15 @@ Level(
                 Solid(pos: (2.5, 1.2, -8.5), kind: Dodecahedron),
                 Brazier(pos: (8.0, 0.0, -8.0), radius: 2.5),
 
+                // Pages of Euclid's Elements, scattered: kept, never needed.
+                // One by the spawn, one at the foot of the spring's pillar,
+                // one by the trilithon and one over the crater's pond
+                // (surface -1.5), to be swum for.
+                Scroll(pos: (-3.0, 1.2, -4.0), proposition: Equilateral),
+                Scroll(pos: (-12.6, 1.4, -11.4), proposition: Pythagoras),
+                Scroll(pos: (15.0, 1.3, -2.0), proposition: Circumcircle),
+                Scroll(pos: (-12.0, -0.8, 12.0), proposition: Pentagon),
+
                 // Lighting/material test subjects. Same physics as BeachBall.
                 // `glow` is emitted luminance, so the same number is the same
                 // brightness at any hue and blooms above the 1.3 threshold.

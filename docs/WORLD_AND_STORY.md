@@ -50,7 +50,25 @@ Only the colours are decided; the elements' behaviours below are not. A
 `Goal` asks for every solid the level holds. Until the temple is built,
 full levels end at a brazier too.
 
-Collectibles where only some are needed may come later. None exist yet.
+### Pages of Euclid's *Elements*
+
+The optional collectible: a papyrus scroll held open, its rolls upright as a
+reader holds them, hovering and turning slowly like a solid. Taking one is
+never needed to complete a level; `LevelProgress` counts them apart from the
+solids, and nothing shows the count yet.
+
+In code (`app/spawnables/scroll/`), a scroll is a `Scroll(pos, proposition)`
+in a level. The open sheet carries one proposition's figure, drawn as Euclid
+drew it (lines, circles, a dot for each lettered point), laid in gold that
+shines, as an illuminated book's chrysography does; two columns of faded
+uncial script frame it, unreadable, since the game is wordless. Its knobs
+are the solids' gilt. Four propositions exist: I.1 (the equilateral
+triangle from two circles), I.47 (Pythagoras), IV.5 (the circle about a
+triangle) and IV.11 (the pentagon in a circle). `visual_bench scrolls` shows
+them.
+
+Not decided: whether pages come in sets (the *Elements* has thirteen books),
+and whether the sheet should flutter.
 
 ### The objective is not part of the room
 
@@ -58,7 +76,8 @@ GAME_DESIGN's rule that nothing acts at a distance governs how a room
 changes. The objective (solids, temple, brazier) is the game's score, kept
 outside the room's physics:
 
-- Taking a solid opens, moves and builds nothing in the room.
+- Taking a solid (or a scroll) opens, moves and builds nothing in the
+  room.
 - The temple stands whole from the start, where it can be seen from across
   the level. Arriving there before all five solids are in does nothing.
 - The temple is as breakable as everything else. If the hero breaks it, or
@@ -176,15 +195,6 @@ somewhere. Two places it could go:
   on the triptych's closed shutters gains a ring for each act completed, and
   turns once the game is finished. Lit braziers from the challenge rooms
   could hang on it as stars.
-
-### Other collectibles
-
-- **Pages of Euclid's *Elements*.** Loose pages hover and flutter in the
-  air, each showing a geometric figure (the Pythagorean square, a bisected
-  angle, a circle through three points), so no text is needed to read them.
-  These would be the optional collectibles, where only some are needed or
-  none are required. The *Elements* has thirteen books, which gives a
-  natural number of sets to complete.
 
 ### Motifs
 

@@ -18,6 +18,11 @@ pub struct LevelProgress {
     /// that places none reports none.
     pub solids_total: u32,
 
+    /// Scrolls taken so far, and how many the level spawned. Kept apart
+    /// from the solids: no level needs them.
+    pub scrolls_taken: u32,
+    pub scrolls_total: u32,
+
     /// Seconds since the level started, frozen once the goal is reached.
     pub elapsed: f32,
 
@@ -43,6 +48,16 @@ impl LevelProgress {
     /// level can be finished and then cleaned out.
     pub fn take_solid(&mut self) {
         self.solids_taken += 1;
+    }
+
+    /// Register a scroll that has just been spawned into the level.
+    pub fn add_scroll(&mut self) {
+        self.scrolls_total += 1;
+    }
+
+    /// Record a scroll taken.
+    pub fn take_scroll(&mut self) {
+        self.scrolls_taken += 1;
     }
 
     /// How many of the level's solids are still to be taken.
@@ -97,6 +112,19 @@ mod tests {
 
         assert_eq!(progress.solids_total, 2);
         assert_eq!(progress.solids_taken, 1);
+        assert_eq!(progress.solids_outstanding(), 1);
+    }
+
+    /// A scroll taken counts as a scroll, and leaves the solids still owed.
+    #[test]
+    fn scrolls_are_counted_apart_from_solids() {
+        let mut progress = LevelProgress::default();
+        progress.add_solid();
+        progress.add_scroll();
+        progress.take_scroll();
+
+        assert_eq!(progress.scrolls_total, 1);
+        assert_eq!(progress.scrolls_taken, 1);
         assert_eq!(progress.solids_outstanding(), 1);
     }
 

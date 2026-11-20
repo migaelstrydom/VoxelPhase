@@ -34,6 +34,7 @@ use nalgebra::{UnitQuaternion, Vector2, Vector3, Vector4};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::gilt::{gilt, GOLD, GOLD_BEAD};
 use super::{MaterialCtx, Spawnable};
 use crate::app::sculpt::{Ellipsoid, Strand};
 use crate::components::{MaterialModulation, ModelInstance, Orientation, Position, Renderable};
@@ -205,23 +206,12 @@ const SHELL_GLOW: f32 = 0.2;
 const SHELL_RIM_STRENGTH: f32 = 3.0;
 const SHELL_RIM_POWER: f32 = 3.0;
 
-/// Gold, as the colour of what it mirrors (linear): a little bright where
-/// the light catches a bead.
-const GOLD: Vector3<f32> = Vector3::new(1.0, 0.62, 0.2);
-const GOLD_BEAD: Vector3<f32> = Vector3::new(1.0, 0.68, 0.26);
-
 /// A pearl's lustre (linear): white with a blush of rose and cream.
 const PEARL_COLOUR: Colour = Colour {
     r: 0.95,
     g: 0.9,
     b: 0.86,
     a: 1.0,
-};
-
-/// Burnished gold: a mirror, softened.
-const GILT_FINISH: SurfaceFinish = SurfaceFinish {
-    roughness: 0.2,
-    metallic: 1.0,
 };
 
 /// The solid lights its own surroundings, which is what makes one tucked
@@ -258,9 +248,7 @@ impl PlatonicSolidDef {
                     rim_strength: SHELL_RIM_STRENGTH,
                     rim_power: SHELL_RIM_POWER,
                 }),
-            Material::coloured(Colour::WHITE)
-                .with_finish(GILT_FINISH)
-                .with_reflections(Reflects::Surroundings),
+            gilt(),
             Material::coloured(Colour::WHITE).with_emission(Emission {
                 colour: element.rays,
                 strength: RAY_GLOW,

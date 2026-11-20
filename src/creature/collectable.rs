@@ -25,6 +25,8 @@ pub enum Reward {
     Heart { value: f32 },
     /// One of the level's Platonic solids.
     Solid,
+    /// A page of Euclid's *Elements*: kept, and never needed.
+    Scroll,
 }
 
 /// Something the player collects by touching it.
@@ -64,9 +66,19 @@ impl Collectable {
             arming_delay: 0.0,
         }
     }
+
+    /// A page of Euclid's *Elements*, taken from `reach` metres. Armed
+    /// immediately, as a solid is.
+    pub fn scroll(reach: f32) -> Self {
+        Self {
+            reach,
+            reward: Reward::Scroll,
+            arming_delay: 0.0,
+        }
+    }
 }
 
-/// Sparks shed by a solid as it is taken, in its gold.
+/// Sparks shed by a solid or a scroll as it is taken, in its gold.
 const GLINT_COLOURS: [Vector3<f32>; 2] =
     [Vector3::new(2.6, 1.9, 0.9), Vector3::new(2.2, 1.3, 0.45)];
 /// How many, how far they are thrown (as a scale on the glitter's own),
@@ -75,8 +87,8 @@ const GLINT_SPARKS: u32 = 48;
 const GLINT_SCALE: f32 = 2.2;
 const GLINT_LIFETIME: f32 = 0.1;
 
-/// The burst of gold a solid goes out in when it is taken.
-fn solid_glint() -> ParticleEmitter {
+/// The burst of gold a solid or a scroll goes out in when it is taken.
+fn glint() -> ParticleEmitter {
     ParticleEmitter::new(ParticleEffectType::ShardGlitter)
         .with_palette(Palette::mixed(&[
             (GLINT_COLOURS[0], 1.0),
@@ -141,7 +153,14 @@ impl<'a> System<'a> for CollectionSystem {
                     progress.take_solid();
                     lazy.create_entity(&entities)
                         .with(Position(at))
-                        .with(solid_glint())
+                        .with(glint())
+                        .build();
+                }
+                Reward::Scroll => {
+                    progress.take_scroll();
+                    lazy.create_entity(&entities)
+                        .with(Position(at))
+                        .with(glint())
                         .build();
                 }
             }

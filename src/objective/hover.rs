@@ -1,4 +1,5 @@
-//! The idle motion that tells a solid apart from a prop.
+//! The idle motion that tells a collectable (a solid, a scroll) apart from
+//! a prop.
 //!
 //! A solid has no rigid body: it hangs where it was authored and cannot be
 //! knocked about, so its `Position` and `Orientation` are nobody else's to

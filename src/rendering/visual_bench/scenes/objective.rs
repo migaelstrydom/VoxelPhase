@@ -43,13 +43,16 @@ const BANKED: f32 = 0.14;
 pub struct Objective;
 
 /// A model with the materials it is drawn in.
-struct Drawn {
+pub(super) struct Drawn {
     model: Model,
     materials: Vec<Material>,
 }
 
 impl Drawn {
-    fn new(materials: Vec<Material>, model: impl FnOnce(&[MaterialId]) -> Model) -> Self {
+    pub(super) fn new(
+        materials: Vec<Material>,
+        model: impl FnOnce(&[MaterialId]) -> Model,
+    ) -> Self {
         let ids: Vec<MaterialId> = (0..materials.len() as u32).map(MaterialId).collect();
         Self {
             model: model(&ids),
@@ -58,7 +61,7 @@ impl Drawn {
     }
 
     /// Its meshes placed by `pose`, its glow scaled by `glow`.
-    fn meshes(&self, pose: Matrix4<f32>, glow: f32) -> Vec<SceneMesh> {
+    pub(super) fn meshes(&self, pose: Matrix4<f32>, glow: f32) -> Vec<SceneMesh> {
         self.model
             .parts
             .iter()

@@ -53,6 +53,21 @@ impl MaterialCtx<'_> {
         ids
     }
 
+    /// As [`palette`](Self::palette), for materials whose making can fail,
+    /// such as those that upload a texture: `make` is given the textures,
+    /// and runs only the first time the level asks for `name`.
+    pub fn try_palette(
+        &mut self,
+        name: &'static str,
+        make: impl FnOnce(&TextureManager) -> EngineResult<Vec<Material>>,
+    ) -> EngineResult<Vec<MaterialId>> {
+        if let Some(ids) = self.palettes.get(name) {
+            return Ok(ids.clone());
+        }
+        let materials = make(self.textures)?;
+        Ok(self.palette(name, || materials))
+    }
+
     /// Register a material whose texture is a pattern baked over a substance's
     /// palette, reusing an identical texture if one has already been made.
     ///

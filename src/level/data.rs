@@ -39,10 +39,10 @@ use crate::app::spawnables::{
     FruitDef, FruitKind, GlassSheetDef, GlazedOrbDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef,
     HoneycombWallDef, HouseDef, HoverSledDef, IceBoxDef, IceWallDef, IcosahedronDef, IglooDef,
     JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef, OctahedronDef,
-    PendulumDef, PlankBridgeDef, PlankDef, PlatonicSolidDef, PlayWheelDef, PumpDef, PyramidDef,
-    RockDef, SeesawDef, ShrubDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef,
-    TetrahedronDef, TowerDef, TrampolineDef, TreeDef, TrilithonDef, VoussoirArchDef, BARREL_RADIUS,
-    BEACH_BALL_RADIUS,
+    PendulumDef, PlankBridgeDef, PlankDef, PlatonicSolidDef, PlayWheelDef, Proposition, PumpDef,
+    PyramidDef, RockDef, ScrollDef, SeesawDef, ShrubDef, Spawnable, StackDef, StackItemDef,
+    TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TreeDef, TrilithonDef,
+    VoussoirArchDef, BARREL_RADIUS, BEACH_BALL_RADIUS,
 };
 use crate::geometry::PlatonicSolid;
 use crate::platform::{DeckSuspension, RouteLoop};
@@ -1006,6 +1006,15 @@ pub enum LevelObject {
         /// Which of the five.
         kind: PlatonicSolid,
     },
+    /// A page of Euclid's *Elements*: a papyrus roll held open on a figure,
+    /// hanging where it is authored and turning. Taken by walking into it;
+    /// no level needs it.
+    Scroll {
+        /// Where the middle of its open sheet hangs.
+        pos: (f32, f32, f32),
+        /// Whose figure it carries.
+        proposition: Proposition,
+    },
     /// The bronze tripod brazier that ends the level: lit by arriving at it
     /// with every solid taken. A heavy body like any other, and knocked
     /// over, it can no longer be lit.
@@ -1905,6 +1914,7 @@ impl LevelObject {
             LevelObject::GlazedOrb { pos, .. } => ("GlazedOrb", point(pos)),
             LevelObject::GlowingOrb { pos, .. } => ("GlowingOrb", point(pos)),
             LevelObject::Solid { pos, .. } => ("Solid", point(pos)),
+            LevelObject::Scroll { pos, .. } => ("Scroll", point(pos)),
             LevelObject::Brazier { pos, .. } => ("Brazier", point(pos)),
             LevelObject::Box { pos, .. } => ("Box", point(pos)),
             LevelObject::Plank { pos, .. } => ("Plank", point(pos)),
@@ -2036,6 +2046,7 @@ impl LevelObject {
             // Hangs in the air and is never stood on; what it covers is the
             // point it was authored at.
             LevelObject::Solid { .. } => Point,
+            LevelObject::Scroll { .. } => Point,
             // It stands on its three feet.
             LevelObject::Brazier { .. } => Disc {
                 radius: BrazierDef::FOOTPRINT_RADIUS,
@@ -2339,6 +2350,8 @@ impl LevelObject {
             | LevelObject::GlazedOrb { .. }
             | LevelObject::GlowingOrb { .. }
             | LevelObject::Solid { .. }
+            // It turns about the vertical as it hangs.
+            | LevelObject::Scroll { .. }
             | LevelObject::Brazier { .. }
             | LevelObject::Crate { .. }
             | LevelObject::HeavyCrate { .. }
@@ -2435,6 +2448,7 @@ impl LevelObject {
             LevelObject::GlazedOrb { pos, .. } => p3(pos),
             LevelObject::GlowingOrb { pos, .. } => p3(pos),
             LevelObject::Solid { pos, .. } => p3(pos),
+            LevelObject::Scroll { pos, .. } => p3(pos),
             LevelObject::Brazier { pos, .. } => p3(pos),
             LevelObject::Box { pos, yaw, .. } => {
                 p3(pos);
@@ -2619,6 +2633,11 @@ impl LevelObject {
             LevelObject::Solid { pos, kind } => Box::new(PlatonicSolidDef {
                 pos: *pos,
                 kind: *kind,
+            }),
+
+            LevelObject::Scroll { pos, proposition } => Box::new(ScrollDef {
+                pos: *pos,
+                proposition: *proposition,
             }),
 
             LevelObject::Brazier { pos, radius } => Box::new(BrazierDef {
@@ -3697,6 +3716,19 @@ mod objective_tests {
         };
         assert_eq!(pos, (1.0, 2.0, 3.0));
         assert_eq!(kind, PlatonicSolid::Dodecahedron);
+    }
+
+    #[test]
+    fn a_scroll_parses_with_its_position_and_proposition() {
+        let object: LevelObject =
+            ron::from_str("Scroll(pos: (1.0, 2.0, 3.0), proposition: Pythagoras)")
+                .expect("Scroll should parse");
+
+        let LevelObject::Scroll { pos, proposition } = object else {
+            panic!("expected a Scroll");
+        };
+        assert_eq!(pos, (1.0, 2.0, 3.0));
+        assert_eq!(proposition, Proposition::Pythagoras);
     }
 
     #[test]

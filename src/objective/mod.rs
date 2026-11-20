@@ -2,8 +2,9 @@
 //! then reach its goal.
 //!
 //! ```text
-//!   Solid (Collectable) ──► CollectionSystem ──► LevelProgress ◄── ProgressSystem
-//!        │                                          ▲               (the clock)
+//!   Solid, Scroll ──► CollectionSystem ──► LevelProgress ◄── ProgressSystem
+//!   (Collectable)                                   ▲               (the clock)
+//!        │                                          │
 //!   HoverSystem                                     │
 //!   (bob, turn, breath)                       GoalSystem ◄── Goal (radius,
 //!                                                   │         reached, ruined)
@@ -15,7 +16,8 @@
 //!
 //! [`LevelProgress`] is the single piece of state for the run: how many
 //! solids exist, how many are taken, how long it has taken, and whether it
-//! is won or lost. None of it is told in words: a solid taken goes out in
+//! is won or lost. It counts the scrolls (pages of Euclid's *Elements*) a
+//! level scatters too, but no level asks for them. None of it is told in words: a solid taken goes out in
 //! a burst of gold, a won level's brazier burns, a lost one lies spilled.
 //! The objective is the game's score, kept outside the room's physics
 //! (`docs/WORLD_AND_STORY.md`): taking a solid moves nothing, and arriving
