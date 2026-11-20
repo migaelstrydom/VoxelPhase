@@ -329,26 +329,32 @@ fn motes() -> ParticleSpec {
     }
 }
 
-/// The column left behind: slow, dark, swelling, and by far the longest-lived
-/// thing an explosion produces.
+/// The column left behind: slow, dark, swelling, and the longest-lived thing
+/// an explosion produces.
 ///
 /// Its alpha starts at zero and rises over the first tenth of its life. A
 /// cloud this large appearing at full opacity in one frame is the single most
 /// obvious particle artefact there is, and the fade-in costs nothing.
+///
+/// After that it thins as fast as it spreads, and is gone within three
+/// seconds. Dense smoke the size this cloud grows to curtains off the fight
+/// that follows the blast; it should mark where the blast was, not hide what
+/// comes next. `explosion_preview --times` reports how much of the view it
+/// hides at each moment.
 fn smoke() -> ParticleSpec {
     ParticleSpec {
-        lifetime: Spread::new(2.5, 5.0),
+        lifetime: Spread::new(1.5, 3.0),
         size: Spread::new(0.8, 1.7),
         speed: Spread::new(2.0, 6.5),
         launch: LaunchPattern::Upward { up_bias: 0.35 },
         spawn_radius: 0.9,
         ramp: ColourRamp::new(&[
             ColourStop::new(0.0, rgba(0.018, 0.016, 0.015, 0.0)),
-            ColourStop::new(0.10, rgba(0.024, 0.022, 0.020, 0.9)),
-            ColourStop::new(0.5, rgba(0.055, 0.052, 0.050, 0.55)),
+            ColourStop::new(0.10, rgba(0.024, 0.022, 0.020, 0.85)),
+            ColourStop::new(0.45, rgba(0.055, 0.052, 0.050, 0.35)),
             ColourStop::new(1.0, rgba(0.115, 0.110, 0.105, 0.0)),
         ]),
-        growth: 4.2,
+        growth: 3.4,
         spin: Spread::new(0.15, 0.9),
         additive: 0.0,
         billow: 1.0,

@@ -130,7 +130,7 @@ impl Default for ExplosionVisuals {
                 // Late enough that the fire is already cooling when the column
                 // starts, so the smoke looks like the fire's residue rather
                 // than something that was there all along.
-                Stage::sustained(Smoke, 6, 18.0, 1.1).after(0.22),
+                Stage::sustained(Smoke, 6, 18.0, 0.7).after(0.22),
             ],
             light: BlastLightSpec::default(),
         }
@@ -326,6 +326,12 @@ impl<'a> System<'a> for BlastLightSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::particles::ParticleConfig;
+
+    /// Seconds after detonation by which the last of the smoke must be gone.
+    /// A blast that leaves the view curtained off for longer hides the fight
+    /// that follows it.
+    const SMOKE_CLEARED_BY: f32 = 4.0;
 
     fn blast(scale: f32) -> BlastLight {
         BlastLightSpec::default().at_scale(scale)
@@ -416,6 +422,24 @@ mod tests {
         assert!(
             smoke.delay > core.delay + core.duration,
             "smoke must start after the core is gone"
+        );
+    }
+
+    #[test]
+    fn the_smoke_clears_soon_after_the_blast() {
+        let visuals = ExplosionVisuals::default();
+        let smoke = visuals
+            .stages
+            .iter()
+            .find(|stage| stage.effect == ParticleEffectType::Smoke)
+            .expect("no smoke column");
+        let config = ParticleConfig::default();
+        let longest_life = config.spec(ParticleEffectType::Smoke).lifetime.max;
+
+        let last_puff_gone = smoke.delay + smoke.duration + longest_life;
+        assert!(
+            last_puff_gone <= SMOKE_CLEARED_BY,
+            "the last smoke lingers until {last_puff_gone}s after the blast"
         );
     }
 

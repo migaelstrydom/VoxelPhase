@@ -8,7 +8,13 @@
 //! ```bash
 //! cargo run --bin explosion_preview
 //! cargo run --bin explosion_preview -- --radius 8 --out /tmp/big_blast.png
+//! cargo run --bin explosion_preview -- --times 1,2,3,4,5,6,7,8
 //! ```
+//!
+//! `--times` replaces the default moments (seconds after detonation) with your
+//! own, e.g. to follow the smoke out to the end. Each moment's line reports how
+//! much of the view the blast hides: the share of the tile seen through less
+//! than half its light, which is what a lingering cloud costs the player.
 //!
 //! The simulation is the shipping code: the same emitters, the same
 //! `step_emitter`, the same `ParticlePool`. Only the *rasteriser* is a stand-in
@@ -35,15 +41,18 @@ use voxel_phase::particles::{
 /// burst-only emitter) is exercised rather than skipped over.
 const DT: f32 = 1.0 / 120.0;
 
-/// Moments after detonation to draw, in seconds. Weighted towards the start,
-/// where everything that matters happens.
+/// Moments after detonation to draw by default, in seconds. Weighted towards
+/// the start, where everything that matters happens.
 const SAMPLE_TIMES: [f32; 12] = [
     0.0, 0.04, 0.08, 0.14, 0.22, 0.35, 0.5, 0.7, 1.0, 1.4, 2.0, 3.0,
 ];
 
-/// Tile size in pixels, and the grid they are laid out in.
+/// Tile size in pixels, and how many tiles a row of the sheet holds.
 const TILE: (u32, u32) = (400, 260);
-const GRID: (u32, u32) = (4, 3);
+const COLUMNS: u32 = 4;
+
+/// A pixel seen through less than this share of its light counts as hidden.
+const HIDDEN_TRANSMITTANCE: f32 = 0.5;
 
 /// Camera placement. Far enough back and low enough that the ground reads.
 const EYE: Vector3<f32> = Vector3::new(0.0, 2.8, -13.0);
@@ -57,33 +66,37 @@ const GROUND_ALBEDO: Vector3<f32> = Vector3::new(0.26, 0.23, 0.19);
 fn main() {
     let options = Options::parse();
 
-    let mut sheet = RgbImage::new(TILE.0 * GRID.0, TILE.1 * GRID.1);
     let frames = simulate(&options);
+    let rows = (frames.len() as u32).div_ceil(COLUMNS).max(1);
+    let mut sheet = RgbImage::new(TILE.0 * COLUMNS, TILE.1 * rows);
+    let mut hidden = Vec::with_capacity(frames.len());
 
     for (index, frame) in frames.iter().enumerate() {
         let tile = render(frame);
-        let origin_x = (index as u32 % GRID.0) * TILE.0;
-        let origin_y = (index as u32 / GRID.0) * TILE.1;
+        let origin_x = (index as u32 % COLUMNS) * TILE.0;
+        let origin_y = (index as u32 / COLUMNS) * TILE.1;
 
         for y in 0..TILE.1 {
             for x in 0..TILE.0 {
-                sheet.put_pixel(origin_x + x, origin_y + y, *tile.get_pixel(x, y));
+                sheet.put_pixel(origin_x + x, origin_y + y, *tile.image.get_pixel(x, y));
             }
         }
+        hidden.push(tile.hidden);
     }
 
     sheet.save(&options.out).expect("failed to write preview");
     println!(
         "{} explosion frames ({:?}) -> {}",
         frames.len(),
-        SAMPLE_TIMES,
+        options.times,
         options.out.display()
     );
-    for frame in &frames {
+    for (frame, hidden) in frames.iter().zip(hidden) {
         println!(
-            "  t={:>4.2}s  {:>4} particles  light {:>6.2} @ range {:>5.1}",
+            "  t={:>4.2}s  {:>4} particles  hides {:>5.1}% of view  light {:>6.2} @ range {:>5.1}",
             frame.time,
             frame.particles.len(),
+            hidden * 100.0,
             frame.light.map(|l| l.intensity).unwrap_or(0.0),
             frame.light.map(|l| l.range).unwrap_or(0.0),
         );
@@ -94,6 +107,8 @@ struct Options {
     radius: f32,
     out: PathBuf,
     seed: u64,
+    /// Moments to draw, in seconds after detonation, ascending.
+    times: Vec<f32>,
 }
 
 impl Options {
@@ -102,6 +117,7 @@ impl Options {
             radius: 5.0,
             out: PathBuf::from("scratch/explosion_preview.png"),
             seed: 20260807,
+            times: SAMPLE_TIMES.to_vec(),
         };
 
         let args: Vec<String> = std::env::args().skip(1).collect();
@@ -118,6 +134,14 @@ impl Options {
                 }
                 "--seed" => {
                     options.seed = args[index + 1].parse().expect("bad --seed");
+                    index += 2;
+                }
+                "--times" => {
+                    options.times = args[index + 1]
+                        .split(',')
+                        .map(|time| time.trim().parse().expect("bad --times"))
+                        .collect();
+                    options.times.sort_by(f32::total_cmp);
                     index += 2;
                 }
                 other => panic!("unknown argument {other}"),
@@ -161,10 +185,10 @@ fn simulate(options: &Options) -> Vec<Frame> {
     let mut time = 0.0;
     let mut next_sample = 0;
 
-    while next_sample < SAMPLE_TIMES.len() {
-        if time >= SAMPLE_TIMES[next_sample] {
+    while next_sample < options.times.len() {
+        if time >= options.times[next_sample] {
             frames.push(Frame {
-                time: SAMPLE_TIMES[next_sample],
+                time: options.times[next_sample],
                 particles: pool.particles().to_vec(),
                 light: (!light.is_spent()).then(|| light.current()),
             });
@@ -214,14 +238,24 @@ fn camera_basis() -> (Vector3<f32>, Vector3<f32>, Vector3<f32>) {
     (right, up, forward)
 }
 
-fn render(frame: &Frame) -> RgbImage {
+/// One drawn moment and how much of the view it hides.
+struct Tile {
+    image: RgbImage,
+    /// Share of the tile's pixels seen through less than
+    /// [`HIDDEN_TRANSMITTANCE`] of their light.
+    hidden: f32,
+}
+
+fn render(frame: &Frame) -> Tile {
     let (width, height) = TILE;
     let (right, up, forward) = camera_basis();
     let tan_half = (FOV_Y_DEGREES.to_radians() * 0.5).tan();
     let aspect = width as f32 / height as f32;
 
-    // Linear HDR accumulation buffer, seeded with the backdrop.
+    // Linear HDR accumulation buffer, seeded with the backdrop, and the share
+    // of the backdrop's light still reaching each pixel.
     let mut buffer = vec![Vector3::zeros(); (width * height) as usize];
+    let mut transmittance = vec![1.0_f32; (width * height) as usize];
     for y in 0..height {
         for x in 0..width {
             let ray = pixel_ray(x, y, width, height, aspect, tan_half, right, up, forward);
@@ -246,6 +280,7 @@ fn render(frame: &Frame) -> RgbImage {
             &frame.particles[index],
             depth,
             &mut buffer,
+            &mut transmittance,
             width,
             height,
             tan_half,
@@ -253,6 +288,12 @@ fn render(frame: &Frame) -> RgbImage {
             up,
         );
     }
+
+    let hidden_pixels = transmittance
+        .iter()
+        .filter(|&&light| light < HIDDEN_TRANSMITTANCE)
+        .count();
+    let hidden = hidden_pixels as f32 / transmittance.len() as f32;
 
     let mut image = RgbImage::new(width, height);
     for y in 0..height {
@@ -269,7 +310,7 @@ fn render(frame: &Frame) -> RgbImage {
             );
         }
     }
-    image
+    Tile { image, hidden }
 }
 
 /// Distance along the view axis, positive in front of the camera.
@@ -366,6 +407,7 @@ fn draw_particle(
     particle: &Particle,
     depth: f32,
     buffer: &mut [Vector3<f32>],
+    transmittance: &mut [f32],
     width: u32,
     height: u32,
     tan_half: f32,
@@ -427,6 +469,7 @@ fn draw_particle(
 
             let index = (y as u32 * width + x as u32) as usize;
             buffer[index] = fragment.premultiplied + buffer[index] * (1.0 - fragment.alpha);
+            transmittance[index] *= 1.0 - fragment.alpha;
         }
     }
 }
