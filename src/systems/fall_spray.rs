@@ -8,7 +8,9 @@
 //!                          ──▶ spend this frame's share of the budget on
 //!                              landings drawn by weight: droplets thrown up
 //!                              and out of the foam, and now and then a puff
-//!                              of mist rising off it
+//!                              of mist rising off it; where water falling
+//!                              into the void has broken up in the air, only
+//!                              haze going on down
 //! ```
 //!
 //! The budget is a rate, not a count per fall: however many falls a level
@@ -37,6 +39,11 @@ const FULL_POWER: f32 = 2000.0;
 
 /// Farthest from the eye a landing throws spray, m.
 const SPRAY_RANGE: f32 = 80.0;
+
+/// How far back up its fall, as seconds of its speed where it is gone,
+/// water broken up in the void hangs as haze: about the time it takes to
+/// break up (`SHEET_BREAKUP` in `shader/water.frag`).
+const HAZE_SPREAD: f32 = 0.6;
 
 /// Spray and mist where falls land, on budgets carried between frames.
 #[derive(Debug)]
@@ -73,14 +80,44 @@ impl FallSpray {
         let total: f32 = landings.iter().map(|&(_, power)| power).sum();
         let share = share(total, FULL_POWER);
         let mut rng = rand::thread_rng();
+        // Water broken up in the void throws no droplets out of foam: it is
+        // spray already, and goes on down as a haze.
+        let splashing: Vec<(Landing, f32)> =
+            landings.iter().copied().filter(|(l, _)| !l.void).collect();
         self.droplets
-            .spend(&landings, share, dt, &mut rng, |l, rng| {
+            .spend(&splashing, share, dt, &mut rng, |l, rng| {
                 pool.spawn(droplet(l, rng))
             });
         self.mist.spend(&landings, share, dt, &mut rng, |l, rng| {
-            pool.spawn(mist(l, rng))
+            pool.spawn(if l.void { haze(l, rng) } else { mist(l, rng) })
         });
     }
+}
+
+/// A puff of the spray water falling into the void has broken up into:
+/// somewhere along the last of its fall, carried on down the way the water
+/// was going, slowing and spreading as it fades.
+fn haze(landing: &Landing, rng: &mut impl Rng) -> Particle {
+    let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+    let drift = Vector3::new(angle.cos(), 0.0, angle.sin()) * rng.gen_range(0.3..1.0);
+    let ramp = ColourRamp::fade(
+        Vector4::new(0.88, 0.94, 1.0, 0.1),
+        Vector4::new(0.9, 0.95, 1.0, 0.0),
+    );
+    let back_up = landing.velocity * rng.gen_range(-HAZE_SPREAD..0.0);
+    let mut puff = Particle::new(
+        along(landing, rng) + back_up,
+        landing.velocity * rng.gen_range(0.2..0.35) + drift,
+        rng.gen_range(1.0..1.8),
+        rng.gen_range(2.0..3.0),
+        ramp,
+    )
+    .with_dynamics(-0.02, 1.2);
+    puff.growth = 3.0;
+    puff.billow = 1.0;
+    puff.angle = rng.gen_range(0.0..std::f32::consts::TAU);
+    puff.seed = rng.gen_range(0.0..1.0);
+    puff
 }
 
 /// Somewhere along where `landing` meets the water.

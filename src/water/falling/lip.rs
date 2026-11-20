@@ -18,9 +18,11 @@ const FALL: f64 = 0.5;
 /// one column and a slope on the next.
 const LEDGE: f64 = 0.2;
 
-/// How far water falling into the void past the map's edge is taken to
-/// fall, m.
-const VOID_DROP: f64 = 6.0;
+/// How far water falling into the void, off the world's edge, is followed,
+/// m: until it has broken up in the air, as `SHEET_BREAKUP` in
+/// `shader/water.frag` draws it. Nothing catches it, so there is nowhere
+/// else for it to end.
+pub const VOID_DROP: f64 = 30.0;
 
 /// How fast water is thrown out over a lip when it barely moves, m/s, so
 /// even a trickle clears the face it falls down.
@@ -41,7 +43,7 @@ pub fn falls(upper: f64, bed: f64, lower: f64) -> bool {
     upper - lower > FALL && bed - lower > LEDGE
 }
 
-/// The water a surface at `level` falls to off the map's edge: the sea's
+/// The water a surface at `level` falls to off the world's edge: the sea's
 /// level `outside`, or `VOID_DROP` below where there is none.
 pub fn off_map(level: f64, outside: Option<f64>) -> f64 {
     outside.unwrap_or(level - VOID_DROP)
@@ -109,6 +111,26 @@ pub fn ledge_reach(step: Step, (sx, sz): (i32, i32), quarters: &[f32; 4], ledge:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Water falling into the void is followed as far as the shader draws
+    /// it before it has broken up in the air.
+    #[test]
+    fn the_void_drop_is_where_the_shader_has_broken_falling_water_up() {
+        let glsl =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/shader/water.frag"))
+                .expect("shader/water.frag");
+        let breakup = glsl
+            .split_once("SHEET_BREAKUP = vec2(")
+            .and_then(|(_, rest)| rest.split_once(')'))
+            .map(|(pair, _)| pair)
+            .expect("water.frag declares SHEET_BREAKUP");
+        let gone: f64 = breakup
+            .split(',')
+            .nth(1)
+            .and_then(|end| end.trim().parse().ok())
+            .expect("SHEET_BREAKUP's end");
+        assert_eq!(gone, VOID_DROP);
+    }
 
     #[test]
     fn water_on_a_floor_above_the_water_below_falls_to_it() {

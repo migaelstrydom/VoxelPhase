@@ -65,6 +65,9 @@ pub struct Landing {
     /// Whether the water it lands in falls on again, as on a step down a
     /// cliff: it lands on a film, not in a pool.
     pub onward: bool,
+    /// Whether it meets nothing: it has fallen into the void and broken up
+    /// in the air at `at`, with no water there to land in.
+    pub void: bool,
 }
 
 /// One stream and the box its water stays in.
@@ -82,6 +85,8 @@ struct Stream {
     /// of it, but for a fall just begun, whose water has not yet got far,
     /// or one spent, whose last water has left the lip behind.
     flying: (f32, f32),
+    /// Whether it falls into the void, where it breaks up in the air.
+    void: bool,
     min: Point3<f32>,
     max: Point3<f32>,
 }
@@ -101,6 +106,7 @@ impl Stream {
             into,
             lands: path.duration(),
             flying: (0.0, f32::INFINITY),
+            void: false,
             min,
             max,
         }
@@ -109,6 +115,11 @@ impl Stream {
     /// The same stream, holding water only over `flying` (s after leaving).
     fn flying(self, flying: (f32, f32)) -> Self {
         Self { flying, ..self }
+    }
+
+    /// The same stream, falling into the void where `void`.
+    fn into_void(self, void: bool) -> Self {
+        Self { void, ..self }
     }
 
     /// Whether its water is meeting the world now.
@@ -188,7 +199,8 @@ impl FallingWater {
             );
             let stream = Stream::new(path, Some(fall.from), fall.into)
                 .landing_at(fall.landing.y)
-                .flying(fall.flying());
+                .flying(fall.flying())
+                .into_void(fall.into_void);
             streams.push(stream);
         }
         let cells = field.cells();
@@ -231,6 +243,7 @@ impl FallingWater {
                     half_length: slab.half_length,
                     discharge: path.discharge(),
                     onward,
+                    void: stream.void,
                 }
             })
     }

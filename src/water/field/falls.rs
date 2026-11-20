@@ -197,6 +197,10 @@ pub struct Fall {
     pub landing: Point3<f32>,
     /// The cell it lands in; none where it leaves the world.
     pub into: Option<SpanIndex>,
+    /// Whether it falls off the world into the void, where nothing catches
+    /// it: followed down until it has broken up in the air (`VOID_DROP`),
+    /// it lands nowhere.
+    pub into_void: bool,
     /// How long its water has been going over, s: its water has fallen no
     /// further than that lets it.
     pub age: f32,
@@ -341,8 +345,9 @@ enum Edge {
         below: SpanIndex,
         flight: Option<u32>,
     },
-    /// The map's edge, down to the water at `level`.
-    Map { level: f32 },
+    /// The map's edge, down to the water at `level`, or into the void
+    /// where there is none.
+    Map { level: f32, void: bool },
     /// Nothing any more: it is spent.
     Spent,
 }
@@ -1286,11 +1291,13 @@ fn follow(graph: &SpanGraph, cells: &FieldCells, fall: &mut Fall, edge: &Edge) {
             fall.foot = landed.foot;
             fall.landing = landed.at;
             fall.into = landed.into;
+            fall.into_void = false;
         }
-        Edge::Map { level } => {
+        Edge::Map { level, void } => {
             let out = fall.velocity * fall_time(fall.lip.y - level);
             fall.foot = Point3::new(fall.lip.x + out.x, level, fall.lip.z + out.y);
             fall.landing = fall.foot;
+            fall.into_void = void;
         }
         Edge::Spent => {}
     }
@@ -1677,6 +1684,7 @@ fn over_face(
         foot: lip,
         landing: lip,
         into: None,
+        into_void: false,
         age: 0.0,
         lapsed: 0.0,
         spent: None,
@@ -1722,6 +1730,7 @@ fn off_edge(
         foot: lip,
         landing: lip,
         into: None,
+        into_void: false,
         age: 0.0,
         lapsed: 0.0,
         spent: None,
@@ -1732,6 +1741,7 @@ fn off_edge(
         fall,
         Edge::Map {
             level: below as f32,
+            void: outside.is_none(),
         },
     ))
 }

@@ -70,9 +70,12 @@ Level(
                     ),
                     // The pond under the knoll's east face, held by its lip.
                     Basin(center: (12.0, -12.0), radius: 5.0, floor: 4.0, warp: 1.5, seed: 11),
-                    // Its brook, east to the rim.
+                    // Its brook, east out of it and through a notch in the rim.
                     Channel(
-                        points: [(15.0, 5.0, -11.0), (22.0, 4.6, -8.0), (29.0, 4.2, -5.0), (36.0, 4.0, -3.0)],
+                        points: [
+                            (14.5, 4.6, -11.5), (18.0, 4.5, -10.0), (24.0, 4.0, -8.0),
+                            (30.0, 3.2, -5.5), (38.0, 2.4, -3.0),
+                        ],
                         width: 1.6, bank: 1.2, warp: 1.0, seed: 12,
                     ),
                 ],
@@ -137,9 +140,9 @@ Level(
 
     water: Some((
         bodies: [
-            Pool(seed: (12.0, -12.0), surface_level: 5.0),
+            Pool(seed: (12.0, -12.0), surface_level: 4.7),
             // Out of the knoll's east face into the pond.
-            Spring(position: (5.0, 9.0, -14.0), direction: (2.5, 0.0, 0.0), discharge: 1.5),
+            Spring(position: (5.0, 9.0, -14.0), direction: (5.0, 0.0, 0.0), discharge: 1.5),
         ],
     )),
 )

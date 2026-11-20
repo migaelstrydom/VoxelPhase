@@ -38,6 +38,11 @@ const float SHEET_GLASS_DROP = 0.8;
 // How far above its foot falling water breaks up into the spray it lands in,
 // m.
 const float SHEET_FOOT_FADE = 0.7;
+// How far falling water drops before it breaks up in the air, m: its ropes
+// part from the first, and by the second it is all spray and gone. Only
+// water falling into the void goes so far, and is followed that far
+// (`VOID_DROP` in `src/water/falling/lip.rs`; a test holds them together).
+const vec2 SHEET_BREAKUP = vec2(14.0, 30.0);
 // How thick falling glass is when it is two-thirds opaque, m.
 const float SHEET_GLASS_THICKNESS = 0.15;
 // How far light wraps round a falling curtain past its terminator: white
@@ -438,6 +443,10 @@ float sheetCover(Sheet s, float fresnel, float behindDepth) {
     float alpha = mix(glassAlpha, mix(0.92, 0.98, s.body) * strandAlpha, s.aerated);
     // It breaks up over the white water at its foot.
     alpha *= smoothstep(0.0, SHEET_FOOT_FADE * (0.5 + s.coarse), s.fall - s.drop);
+    // Falling far, it breaks up in the air: its ropes part, thinnest first,
+    // and the last of them go to spray.
+    float broken = smoothstep(SHEET_BREAKUP.x, SHEET_BREAKUP.y, s.drop);
+    alpha *= smoothstep(1.15 * broken - 0.15, 1.15 * broken, s.strands);
     // A frayed end thins out into strands and is gone.
     float frayed = s.across + (s.coarse - 0.5) * FRAY_SHARE;
     alpha *= 1.0 - fragFray * smoothstep(1.0 - FRAY_SHARE, 1.0, frayed);

@@ -300,9 +300,12 @@ pipeline, with no new shader:
 - the foam riding each cell (section 2), carried on its corners in the
   attribute a curtain uses for the air in it, and drawn as billows laced
   inside over water turned pale by that air;
-- a curtain off the map's edge where a cell's water leaves through it: down to
-  the sea's level past an open edge, or 6 m into the void where there is no
-  sea (the same `falls` rule, so water level with the sea draws none);
+- a curtain off the world's edge (the map's, or a floating island's rim)
+  where a cell's water leaves through it: down to the sea's level past an
+  open edge, or into the void where there is no sea, followed 30 m down
+  (`VOID_DROP`) while it breaks up in the air from 14 m (`SHEET_BREAKUP`),
+  with no foam under it and a haze where it is gone (the same `falls` rule,
+  so water level with the sea draws none);
 - a shore patch half a column into each dry column beside a wet cell, and a
   quarter into each diagonal one between two dry sides.
 

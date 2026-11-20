@@ -343,6 +343,9 @@ pub(super) struct Curtain {
     strands: [Strand; 3],
     /// When its fall began and stopped pouring (`RiverVertex::life`).
     life: Vector2<f32>,
+    /// Whether it falls off the world into the void: it breaks up in the
+    /// air, and lands in nothing to lay foam on.
+    void: bool,
 }
 
 impl Curtain {
@@ -406,6 +409,7 @@ impl Curtain {
         Self {
             strands: [end(0), middle, end(1)],
             life: Vector2::new(clock - fall.age, stopped),
+            void: fall.into_void,
         }
     }
 
@@ -422,7 +426,8 @@ impl Curtain {
     }
 
     /// Its vertices: its top face, strand by strand, each from lip to foot;
-    /// its under face likewise; its foam, strand by strand; then the cap of
+    /// its under face likewise; its foam, strand by strand (none for a fall
+    /// into the void); then the cap of
     /// each free end, row by row, top edge then under edge.
     pub fn vertices(&self) -> Vec<RiverVertex> {
         let mut out = Vec::with_capacity(Self::vertex_count(self.free()));
@@ -431,8 +436,11 @@ impl Curtain {
                 out.extend((0..=CURTAIN_ROWS).map(|row| strand.body(row, face)));
             }
         }
+        // Water falling into the void has no foam: its patch is drawn
+        // shrunk to its foot, where it covers nothing.
+        let plunge = if self.void { [0.0; 3] } else { PLUNGE_ROWS };
         for strand in &self.strands {
-            out.extend(PLUNGE_ROWS.iter().map(|&across| strand.plunge(across)));
+            out.extend(plunge.iter().map(|&across| strand.plunge(across)));
         }
         for strand in [&self.strands[0], &self.strands[2]] {
             if strand.free {
@@ -548,6 +556,7 @@ mod tests {
             foot: Point3::new(2.0 + 2.0 * duration, 6.0, z),
             landing: Point3::new(2.0 + 2.0 * duration, 6.0, z),
             into: None,
+            into_void: false,
             age: 60.0,
             lapsed: 0.0,
             spent: None,
