@@ -210,6 +210,7 @@ fn blasted_plot(voxel_size: f32, blasts: &[Blast], surface_texture: &TextureHand
             },
         ],
         bedrock_thickness: 0.0,
+        underside: Vec::new(),
         surface_bands: Vec::new(),
         smooth_slopes: true,
         features: Vec::new(),

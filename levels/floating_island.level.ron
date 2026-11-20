@@ -1,0 +1,145 @@
+// Floating Island — a garden hanging in the open sky.
+//
+// One island, about sixty metres across, on a keel of limestone that hangs
+// thirty metres below it to a point. A knoll stands on its north side; a
+// spring in the knoll's face fills a pond, and the pond's overflow runs east
+// in a brook and pours off the rim. There is nothing around the island and
+// nothing under it: walk off the edge and the level begins again.
+//
+//                       north (−z)
+//               ░░░ knoll ░░░  ▶ spring
+//             ░░░░░░░░░░░ pond ──brook──▶ falls off the rim
+//          meadow                       ▒
+//               trees    spawn    crates on a terrace at the rim
+//
+// The surface runs on at the shore's height past the coast (`base_height`),
+// so the keel's side is what ends the land and the coast is as smooth as its
+// outline. The keel shares the island's outline, warp and seed, so its edge
+// is the coast.
+//
+// Things to try: shove the crates off the east rim; blow a crag off the
+// keel from the rim above it; blow the pond's lip and send it over the edge.
+Level(
+    name: "Floating Island",
+
+    segments: [
+        (
+            name: "island",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (-48.0, -44.0, -48.0), max: (48.0, 24.0, 48.0)),
+                base_height: 3.0,
+                bedrock_thickness: 0.0,
+                material_layers: [
+                    (depth: 0.6,   material: Grass),
+                    (depth: 2.5,   material: Dirt),
+                    (depth: 999.0, material: Limestone),
+                ],
+                surface_bands: [
+                    // Cliffs are bare stone.
+                    (steeper_than: Some(1.5), layers: [(depth: 999.0, material: Limestone)]),
+                ],
+
+                features: [
+                    // The island's lawns, rolling up from the coast.
+                    Landmass(
+                        outline: [
+                            (-30.0, 2.0), (-27.0, -12.0), (-18.0, -24.0), (-4.0, -29.0),
+                            (10.0, -27.0), (22.0, -20.0), (30.0, -8.0), (33.0, 4.0),
+                            (27.0, 16.0), (16.0, 24.0), (4.0, 27.0), (-8.0, 25.0),
+                            (-18.0, 20.0), (-27.0, 12.0),
+                        ],
+                        shore_height: 3.0, height: 6.0, rise: 10.0,
+                        warp: 3.0, relief: 1.2, seed: 1,
+                    ),
+                    // The knoll on the north side.
+                    Landmass(
+                        outline: [
+                            (-16.0, -14.0), (-12.0, -22.0), (-2.0, -24.0), (6.0, -20.0),
+                            (6.0, -13.0), (-2.0, -9.0), (-12.0, -9.0),
+                        ],
+                        shore_height: 6.0, height: 12.0, rise: 5.0, skirt: 4.0,
+                        warp: 2.0, relief: 1.5, seed: 2,
+                    ),
+                    // A low terrace by the east rim, level for the crates.
+                    Landmass(
+                        outline: [(23.5, 5.5), (29.0, 5.0), (29.5, 10.0), (26.0, 12.5), (23.0, 10.0)],
+                        shore_height: 4.0, height: 5.0, rise: 1.5, skirt: 2.0,
+                        warp: 1.0, seed: 4,
+                    ),
+                    // The pond under the knoll's east face, held by its lip.
+                    Basin(center: (12.0, -12.0), radius: 5.0, floor: 4.0, warp: 1.5, seed: 11),
+                    // Its brook, east to the rim.
+                    Channel(
+                        points: [(15.0, 5.0, -11.0), (22.0, 4.6, -8.0), (29.0, 4.2, -5.0), (36.0, 4.0, -3.0)],
+                        width: 1.6, bank: 1.2, warp: 1.0, seed: 12,
+                    ),
+                ],
+
+                underside: [
+                    // The keel: a rim two metres under the coast, then a craggy
+                    // belly falling to thirty metres below it.
+                    Keel(
+                        outline: [
+                            (-30.0, 2.0), (-27.0, -12.0), (-18.0, -24.0), (-4.0, -29.0),
+                            (10.0, -27.0), (22.0, -20.0), (30.0, -8.0), (33.0, 4.0),
+                            (27.0, 16.0), (16.0, 24.0), (4.0, 27.0), (-8.0, 25.0),
+                            (-18.0, 20.0), (-27.0, 12.0),
+                        ],
+                        rim: 1.0, bottom: -24.0, taper: 24.0,
+                        warp: 3.0, roughness: 3.0, seed: 1,
+                        material: Limestone,
+                    ),
+                    // The point it hangs to, under the middle.
+                    Keel(
+                        outline: [(-6.0, -6.0), (2.0, -9.0), (8.0, -3.0), (5.0, 5.0), (-4.0, 5.0)],
+                        rim: -12.0, bottom: -36.0, taper: 8.0,
+                        warp: 2.0, roughness: 0.8, seed: 3,
+                        material: Limestone,
+                    ),
+                ],
+            ),
+
+            objects: [
+                // A grove on the south lawn.
+                Tree(pos: (-12.0, 12.0), height: 5.0, crown_radius: 1.2, crowns: 3),
+                Tree(pos: (-17.0, 7.0), height: 4.0, crown_radius: 1.0),
+                Tree(pos: (2.0, 16.0), height: 4.4, crown_radius: 1.1),
+                Shrub(pos: (-8.0, 9.0), radius: 0.9),
+                Shrub(pos: (-20.0, 1.0), radius: 0.8),
+                Shrub(pos: (8.0, 11.0), radius: 0.7),
+                // Cypresses on the knoll.
+                Cypress(pos: (-6.0, -18.0), height: 5.6, radius: 0.65),
+                Cypress(pos: (-10.0, -15.0), height: 4.6, radius: 0.55),
+                // Crates on the terrace by the east rim, to shove off.
+                Dropped(Crate(pos: (25.5, 7.0, 7.8), size: 0.5)),
+                Dropped(Crate(pos: (27.0, 7.0, 8.4), size: 0.5)),
+                Dropped(Crate(pos: (26.0, 7.0, 9.8), size: 0.5)),
+            ],
+        ),
+    ],
+
+    placements: [Root(segment: "island")],
+
+    player_spawn: (0.0, 8.0, 12.0),
+
+    meadow: Some(()),
+
+    daylight: (
+        sun_bearing: 125.0,
+        sun_elevation: 30.0,
+        sun_colour: (1.0, 0.8, 0.56),
+        sun_intensity: 2.0,
+        fill_colour: (0.07, 0.07, 0.09),
+        visibility: Some(220.0),
+    ),
+
+    water: Some((
+        bodies: [
+            Pool(seed: (12.0, -12.0), surface_level: 5.0),
+            // Out of the knoll's east face into the pond.
+            Spring(position: (5.0, 9.0, -14.0), direction: (2.5, 0.0, 0.0), discharge: 1.5),
+        ],
+    )),
+)

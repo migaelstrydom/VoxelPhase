@@ -266,6 +266,71 @@ pub struct Terrain {
     /// Volumetric features — place or carve voxels in 3D (evaluated after heightfield).
     #[serde(default)]
     pub volumes: Vec<VolumeFeature>,
+    /// What the heightfield hangs on. Empty, every column is solid from the
+    /// floor of `bounds` up to its surface, and the land is a slab filling
+    /// them. Given, a column is solid only from the underside these shapes
+    /// make up to its surface, and only inside their outlines: the land is an
+    /// island in the air, with nothing around or below it. See
+    /// `terrain::underside`.
+    #[serde(default)]
+    pub underside: Vec<UndersideFeature>,
+}
+
+/// Shapes a terrain's land hangs on, each inside its own outline. Where two
+/// overlap, the solid is the union of what each holds.
+#[derive(Deserialize)]
+pub enum UndersideFeature {
+    /// The rock under a floating island: a sheer side on its outline, from
+    /// the surface down to `rim`, then a belly curving in and down to
+    /// `bottom`.
+    ///
+    /// ```text
+    ///      surface ──┐                        ┌── surface
+    ///   rim ─────────┤                        ├──
+    ///                 ╲                      ╱
+    ///                  ╲_      taper ▸     _╱
+    ///   bottom ──────────╲______________╱
+    /// ```
+    Keel {
+        /// Closed outline in (x, z), in order around the island: its edge.
+        /// Beyond it there is no ground at all.
+        outline: Vec<(f32, f32)>,
+        /// Absolute height of the underside on the outline. The island's side
+        /// runs from the surface down to it, so the surface there less `rim`
+        /// is how thick the island's edge is.
+        rim: f32,
+        /// Absolute height of the underside at its deepest.
+        bottom: f32,
+        /// Distance inland over which the underside falls from `rim` to
+        /// `bottom`, steepest at the rim and level at the end. Past it the
+        /// underside is flat; as long as the island's half-width it hangs to
+        /// a belly under the middle.
+        taper: f32,
+        /// How far noise moves the outline in and out (m). With a landmass's
+        /// own outline, `warp` and `seed`, the keel's edge is that landmass's
+        /// coast.
+        #[serde(default)]
+        warp: f32,
+        /// How rough the underside is (m): ribs and gullies this far in and
+        /// out down its flanks, crags this far up and down under its belly.
+        /// A rib reaching the outline leaves a sheer face under the coast,
+        /// as deep as the belly falls over the rib's reach: keep it well
+        /// short of `taper` for a belly without walls.
+        #[serde(default)]
+        roughness: f32,
+        /// Noise seed for warp and crags.
+        #[serde(default)]
+        seed: u32,
+        /// What the underside is made of: the solid nearer it than the
+        /// surface. The surface's own layers lay the rest.
+        #[serde(default = "default_keel_material")]
+        material: VoxelMaterialId,
+    },
+}
+
+/// Material of a keel that does not state one.
+fn default_keel_material() -> VoxelMaterialId {
+    VoxelMaterialId::Rock
 }
 
 /// Two voxels of bedrock at a 1.0 voxel size — enough that a charge cannot

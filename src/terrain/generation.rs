@@ -21,6 +21,7 @@ use super::csg::{
 };
 use super::landform::{Basin, Channel, Landmass};
 use super::traversal::{excavate, rasterise, route_plan, RoutePart};
+use super::underside::ColumnUnderside;
 use super::voxel::{Voxel, VoxelMaterial};
 use crate::collision::AABB;
 use crate::level::{
@@ -91,7 +92,9 @@ fn clip_to_bounds(grid: &mut ChunkGrid, bounds: &AABB, step: f32) {
     }
 }
 
-/// Pass 1: heightfield — fill columns based on feature-driven height.
+/// Pass 1: heightfield — fill columns based on feature-driven height, from
+/// the floor of the bounds or, on a hung terrain, from its underside
+/// (`super::underside`).
 ///
 /// Walks one chunk column at a time. Heights are evaluated once per voxel
 /// column and reused for every chunk in that column, and each chunk is resolved
@@ -110,7 +113,7 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
     let chunk_z = (div_floor(iz0, n), div_floor(iz1 - 1, n));
 
     // Per voxel column within one chunk column.
-    let mut columns: Vec<Column> = Vec::new();
+    let mut columns: Vec<Option<Column>> = Vec::new();
 
     for cx in chunk_x.0..=chunk_x.1 {
         let xs = (cx * n).max(ix0);
@@ -128,24 +131,36 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
 
             // Evaluate the heightfield once for this chunk column.
             columns.clear();
-            let mut top_index = iy0;
+            let mut top_index = i32::MIN;
+            let mut lowest_index = i32::MAX;
             for ix in xs..xe {
                 for iz in zs..ze {
                     let column = Column::at(ix as f32 * step, iz as f32 * step, iy0, step, terrain);
-                    top_index = top_index.max(column.air_top + 1);
+                    if let Some(column) = &column {
+                        top_index = top_index.max(column.air_top + 1);
+                        lowest_index = lowest_index.min(column.lowest);
+                    }
                     columns.push(column);
                 }
             }
+            if lowest_index > top_index {
+                continue;
+            }
 
-            // Only the chunks between the floor and the highest surface (plus the
+            // Only the chunks between the lowest solid (the floor, or a
+            // hung terrain's underside) and the highest surface (plus the
             // partial-air voxels above it) hold anything.
-            let cy_lo = div_floor(iy0, n);
+            let cy_lo = div_floor(lowest_index, n);
             let cy_hi = div_floor(top_index.min(iy1 - 1), n);
 
             for cy in cy_lo..=cy_hi {
                 let ys = (cy * n).max(iy0);
                 let ye = ((cy + 1) * n).min(iy1);
-                if ys >= ye {
+                let reached = columns
+                    .iter()
+                    .flatten()
+                    .any(|column| column.lowest < ye && column.air_top >= ys);
+                if ys >= ye || !reached {
                     continue;
                 }
 
@@ -155,7 +170,10 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
                     let x = ix as f32 * step;
                     for iz in zs..ze {
                         let z = iz as f32 * step;
-                        let column = &columns[index];
+                        let Some(column) = &columns[index] else {
+                            index += 1;
+                            continue;
+                        };
                         index += 1;
 
                         let top_voxel_y = column.top as f32 * step;
@@ -164,10 +182,10 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
                             continue;
                         }
 
-                        for iy in ys..ye.min(column.air_top + 1) {
+                        for iy in ys.max(column.lowest)..ye.min(column.air_top + 1) {
                             let y = iy as f32 * step;
                             let density = column.density_at(y, step);
-                            if y < column.height {
+                            if density > 0.0 {
                                 let material = if y <= floor_y + terrain.bedrock_thickness {
                                     VoxelMaterial::Bedrock
                                 } else {
@@ -225,10 +243,26 @@ struct Column<'a> {
     /// Whether the column lies under the top of a sheer face, every voxel of
     /// it on that face, its top one included.
     under_face: bool,
+    /// What the column hangs on, when the terrain has an underside; `None`
+    /// stands it on the floor.
+    underside: Option<ColumnUnderside>,
+    /// Index of the lowest voxel the column writes: the floor's, or the
+    /// lowest a voxel's distance above its underside.
+    lowest: i32,
 }
 
 impl<'a> Column<'a> {
-    fn at(x: f32, z: f32, iy0: i32, step: f32, terrain: &'a Terrain) -> Self {
+    /// The column at (x, z), or `None` where a hung terrain holds nothing
+    /// near it.
+    fn at(x: f32, z: f32, iy0: i32, step: f32, terrain: &'a Terrain) -> Option<Self> {
+        let underside = (!terrain.underside.is_empty())
+            .then(|| ColumnUnderside::at(x, z, step, &terrain.underside, terrain.smooth_slopes));
+        if underside.as_ref().is_some_and(ColumnUnderside::is_empty) {
+            return None;
+        }
+        let lowest = underside
+            .as_ref()
+            .map_or(iy0, |underside| underside.lowest_index(step).max(iy0));
         // Debiased before anything is derived from it: an authored height
         // that lands exactly on a lattice plane degenerates marching cubes, and
         // the column's indices must describe the height actually encoded.
@@ -266,7 +300,7 @@ impl<'a> Column<'a> {
         let face_above = neighbours
             .filter(|_| height - face_below >= sheer)
             .and_then(|around| face_top(x, z, height, around, step, sheer, terrain));
-        Self {
+        Some(Self {
             height,
             top,
             air_top,
@@ -276,7 +310,9 @@ impl<'a> Column<'a> {
             face_below,
             depth_origin: top_voxel_index(face_above.unwrap_or(height), step) as f32 * step,
             under_face: face_above.is_some(),
-        }
+            underside,
+            lowest,
+        })
     }
 
     /// The material at height `y`, by its depth below `depth_origin`.
@@ -294,7 +330,17 @@ impl<'a> Column<'a> {
     /// from the top of the face: measured from its own top, each column down a
     /// face only a few voxels wide began its layers again, and a ramp's flank
     /// wore stripes of turf and soil parallel to the ramp.
+    ///
+    /// In a hung column, what lies nearer the underside than the surface is
+    /// the underside's own material.
     fn material_at(&self, y: f32, step: f32) -> VoxelMaterial {
+        if let Some(material) = self
+            .underside
+            .as_ref()
+            .and_then(|underside| underside.material_at(y, step, self.height))
+        {
+            return material;
+        }
         let depth = self.depth_origin - y;
         let on_face = self.under_face || (depth >= step && y > self.face_below);
         material_at_depth(
@@ -314,8 +360,14 @@ impl<'a> Column<'a> {
     ///
     /// Held out of [`SURFACE_BAND`] on its own side: `debias_height` keeps the
     /// vertical distance out of it, and the stretch would shrink it back in.
+    ///
+    /// A hung column is bounded by its underside as well (`underside`).
     fn density_at(&self, y: f32, step: f32) -> f32 {
-        let density = ((self.height - y) / (step * self.stretch)).clamp(-1.0, 1.0);
+        let mut density = (self.height - y) / (step * self.stretch);
+        if let Some(underside) = &self.underside {
+            density = density.min(underside.density_at(y, step));
+        }
+        let density = density.clamp(-1.0, 1.0);
         density.signum() * density.abs().max(SURFACE_BAND)
     }
 }
@@ -356,7 +408,8 @@ fn top_voxel_index(height: f32, step: f32) -> i32 {
 }
 
 /// Directions of a column's neighbours, in voxels: +x, -x, +z, -z.
-const NEIGHBOUR_OFFSETS: [(f32, f32); 4] = [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
+pub(super) const NEIGHBOUR_OFFSETS: [(f32, f32); 4] =
+    [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)];
 
 /// Heights of the heightfield a voxel away from (x, z), in the order of
 /// [`NEIGHBOUR_OFFSETS`].
@@ -416,7 +469,7 @@ fn face_top(
 /// barely changed with height beside a neighbour's that changed fully, and
 /// the gradient normals along the rim swung back into the plateau and drew a
 /// black line down its edge.
-fn encoded_slope(height: f32, around: &[f32; 4], step: f32) -> f32 {
+pub(super) fn encoded_slope(height: f32, around: &[f32; 4], step: f32) -> f32 {
     let axis = |ahead: f32, behind: f32| {
         let rise_ahead = ahead - height;
         let rise_behind = height - behind;
@@ -1562,7 +1615,7 @@ fn material_at_depth(depth: f32, layers: &[MaterialLayer]) -> VoxelMaterial {
     }
 }
 
-fn to_voxel_material(id: VoxelMaterialId) -> VoxelMaterial {
+pub(super) fn to_voxel_material(id: VoxelMaterialId) -> VoxelMaterial {
     match id {
         VoxelMaterialId::Grass => VoxelMaterial::Grass,
         VoxelMaterialId::Dirt => VoxelMaterial::Dirt,
@@ -1651,7 +1704,7 @@ pub(super) fn point_to_segment_projection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::level::{Extent, SurfaceBand};
+    use crate::level::{Extent, SurfaceBand, UndersideFeature};
 
     /// A plateau laid with grass over dirt, its cliffs bare rock. Its coast
     /// is warped, so the lip where the slope passes the band's runs across
@@ -1660,6 +1713,7 @@ mod tests {
     fn cliffed_plateau(voxel_size: f32) -> Terrain {
         Terrain {
             bedrock_thickness: 0.0,
+            underside: Vec::new(),
             voxel_size,
             bounds: Extent {
                 min: (-8.0, 0.0, -8.0),
@@ -1704,6 +1758,7 @@ mod tests {
     fn sheer_ramp() -> Terrain {
         Terrain {
             bedrock_thickness: 0.0,
+            underside: Vec::new(),
             voxel_size: 0.25,
             bounds: Extent {
                 min: (0.0, 0.0, -4.0),
@@ -1730,6 +1785,130 @@ mod tests {
             }],
             volumes: Vec::new(),
         }
+    }
+
+    /// Land at 3 m hung on a keel inside an 8.1 m square (off the lattice):
+    /// a rim at 1 m, a bottom at -8.1 m. The surface runs on past the
+    /// outline, so the keel's side is what ends the land.
+    fn hung_island() -> Terrain {
+        Terrain {
+            bedrock_thickness: 2.0,
+            underside: vec![UndersideFeature::Keel {
+                outline: vec![(-8.1, -8.1), (8.1, -8.1), (8.1, 8.1), (-8.1, 8.1)],
+                rim: 1.0,
+                bottom: -8.1,
+                taper: 6.0,
+                warp: 0.0,
+                roughness: 0.0,
+                seed: 0,
+                material: VoxelMaterialId::Slate,
+            }],
+            voxel_size: 0.5,
+            bounds: Extent {
+                min: (-40.0, -40.0, -40.0),
+                max: (40.0, 10.0, 40.0),
+            },
+            base_height: 3.0,
+            material_layers: vec![
+                MaterialLayer {
+                    depth: 0.6,
+                    material: VoxelMaterialId::Grass,
+                },
+                MaterialLayer {
+                    depth: 999.0,
+                    material: VoxelMaterialId::Dirt,
+                },
+            ],
+            surface_bands: Vec::new(),
+            smooth_slopes: true,
+            features: Vec::new(),
+            volumes: Vec::new(),
+        }
+    }
+
+    fn generated(terrain: &Terrain) -> ChunkGrid {
+        let (min, max) = (terrain.bounds.min, terrain.bounds.max);
+        let bounds = AABB::new(
+            Point3::new(min.0, min.1, min.2),
+            Point3::new(max.0, max.1, max.2),
+        );
+        let mut grid = ChunkGrid::new(terrain.voxel_size);
+        generate_terrain(&mut grid, terrain, &bounds);
+        grid
+    }
+
+    /// Where the surface marching cubes draws crosses the lattice edge from
+    /// `a` to the next sample along `axis`.
+    fn crossing(grid: &ChunkGrid, a: Point3<f32>, axis: usize, step: f32) -> f32 {
+        let mut b = a;
+        b[axis] += step;
+        let (da, db) = (grid.get(a).density, grid.get(b).density);
+        assert!(
+            da * db < 0.0,
+            "no surface between {a} ({da}) and {b} ({db})"
+        );
+        a[axis] + step * da / (da - db)
+    }
+
+    /// A hung terrain is solid only between its keel's underside and its
+    /// surface, inside the keel's outline: not around the island, and not
+    /// down to the floor of its bounds, where a slab would stand.
+    #[test]
+    fn a_keel_hangs_the_land_in_the_air() {
+        let terrain = hung_island();
+        let grid = generated(&terrain);
+        let solid = |x: f32, y: f32, z: f32| grid.get(Point3::new(x, y, z)).density > 0.0;
+
+        assert!(solid(0.0, 0.0, 0.0) && solid(0.0, 2.5, 0.0) && solid(7.5, 2.0, 0.0));
+        assert!(!solid(0.0, -9.0, 0.0), "below the keel");
+        assert!(!solid(0.0, -39.0, 0.0), "the floor of the bounds");
+        assert!(!solid(0.0, 3.5, 0.0), "above the surface");
+        for y in [-8.0, -2.0, 0.0, 2.0, 2.5] {
+            assert!(!solid(9.0, y, 0.0), "beside the island at {y} m");
+            assert!(!solid(20.0, y, 20.0), "far off it at {y} m");
+        }
+        let allocated = grid.allocated_bounds().expect("an island");
+        assert!(
+            allocated.min.y > -20.0 && allocated.max.x < 20.0,
+            "chunks are allocated only round the island: {allocated:?}"
+        );
+    }
+
+    /// The island's edge and underside are encoded as distances, so marching
+    /// cubes draws them where the keel puts them, between samples, and not
+    /// where the lattice switches columns on and off: the coast of a warped
+    /// outline is then a curve, not a staircase.
+    #[test]
+    fn a_keels_side_and_underside_lie_where_it_puts_them() {
+        let terrain = hung_island();
+        let step = terrain.voxel_size;
+        let grid = generated(&terrain);
+
+        let side = crossing(&grid, Point3::new(8.0, 2.0, 0.0), 0, step);
+        assert!((side - 8.1).abs() < 0.02, "side at x = {side}");
+        let underside = crossing(&grid, Point3::new(0.0, -8.5, 0.0), 1, step);
+        assert!(
+            (underside + 8.1).abs() < 0.02,
+            "underside at y = {underside}"
+        );
+    }
+
+    /// What lies nearer the underside than the surface is the keel's
+    /// material; the surface's own layers lay the rest, turf on top. The
+    /// bedrock band at the floor of the bounds is far below and lays nothing.
+    #[test]
+    fn a_keels_underside_is_its_own_material() {
+        let terrain = hung_island();
+        let grid = generated(&terrain);
+        let material = |x: f32, y: f32| grid.get(Point3::new(x, y, 0.0)).material;
+
+        assert_eq!(material(0.0, 2.5), VoxelMaterial::Grass);
+        assert_eq!(material(0.0, -1.0), VoxelMaterial::Dirt);
+        assert_eq!(material(0.0, -7.5), VoxelMaterial::Slate);
+        // 0.6 m in from the rim the belly is down at -0.7 m: soil over the
+        // keel's stone, parted halfway.
+        assert_eq!(material(7.5, 2.0), VoxelMaterial::Dirt);
+        assert_eq!(material(7.5, -0.5), VoxelMaterial::Slate);
     }
 
     /// A column partway down a sheer flank takes its layers from the top of

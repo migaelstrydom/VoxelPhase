@@ -1646,6 +1646,7 @@ mod tests {
         for voxel_size in [1.0_f32, 0.5, 0.25] {
             let terrain = crate::level::Terrain {
                 bedrock_thickness: 0.0,
+                underside: Vec::new(),
                 voxel_size,
                 bounds: crate::level::Extent {
                     min: (-24.0, -12.0, -24.0),
@@ -1764,6 +1765,7 @@ mod tests {
     fn flat_terrain(voxel_size: f32, base_height: f32) -> crate::level::Terrain {
         crate::level::Terrain {
             bedrock_thickness: 0.0,
+            underside: Vec::new(),
             voxel_size,
             bounds: crate::level::Extent {
                 min: (0.0, 0.0, 0.0),

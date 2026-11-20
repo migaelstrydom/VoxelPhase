@@ -650,6 +650,47 @@ Two terrain-level settings go with them:
   half-voxel steps. It also leans a plateau's wall across the voxel at its
   edge; `smooth_slopes: false` stands it at the voxel's middle again.
 
+### Pass 1b: The underside — floating land
+
+Without an `underside`, every column is solid from the floor of `bounds` up
+to its surface, so the land is a slab filling its bounds, cut sheer at their
+sides. A terrain's `underside` hangs it in the air instead: a column is solid
+only from the underside up to its surface, and only inside an underside
+shape's outline. Around and below the land there is nothing.
+
+| Shape | Effect | Parameters |
+|-------|--------|------------|
+| **Keel** | The rock under a floating island: a sheer side on its outline from the surface down to `rim`, then a belly leaning in like a mountain upside down, steepest at the rim and level `taper` inland, at `bottom` | outline (xz polygon), rim, bottom, taper, warp, roughness, seed, material (default `Rock`) |
+
+```ron
+base_height: 3.0,        // the shore's height: the surface runs on past the coast
+bedrock_thickness: 0.0,  // nothing reaches the floor of the bounds
+features: [ Landmass(outline: [...], shore_height: 3.0, height: 6.0, rise: 10.0, warp: 3.0, seed: 1) ],
+underside: [
+    Keel(outline: [...], rim: 1.0, bottom: -24.0, taper: 24.0,
+         warp: 3.0, roughness: 3.0, seed: 1, material: Limestone),
+],
+```
+
+- **Set `base_height` at the shore's height.** The keel's side is a distance
+  marching cubes places between samples, so the coast is as smooth as the
+  outline, but only where the surface runs on past it. A surface that drops
+  away at the coast takes the edge back to the lattice's steps.
+- **Share the landmass's outline, `warp` and `seed`** and the keel's edge is
+  that landmass's coast.
+- **`rim` sets the edge's thickness:** the surface on the coast less `rim`.
+  The solid nearer the underside than the surface is the keel's `material`;
+  the terrain's layers lay the rest, so the edge shows the turf and soil over
+  the stone.
+- **`roughness`** moves the belly in and out (ribs and gullies down its
+  flanks) and up and down (crags under its flat). A rib reaching the outline
+  leaves a sheer face under the coast, deep in proportion to the rib over
+  `taper`, so keep it well short of `taper`.
+- **Keels union.** A narrow, deep keel under a wide one hangs the island to a
+  point; keels with separate outlines are separate islands in one segment.
+
+`levels/floating_island.level.ron` is built this way.
+
 ### Pass 2: Volumetric Features
 
 After the heightfield is filled, volumetric features directly set or clear voxels in 3D space. This enables geometry that a pure heightfield cannot express.

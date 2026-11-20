@@ -33,6 +33,7 @@ mod split_race;
 pub mod surface;
 pub(crate) mod svo;
 pub mod traversal;
+mod underside;
 mod voxel;
 mod voxel_block;
 mod world;

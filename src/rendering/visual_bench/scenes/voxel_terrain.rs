@@ -231,6 +231,7 @@ fn description() -> Terrain {
             },
         ],
         bedrock_thickness: 0.0,
+        underside: Vec::new(),
         surface_bands: Vec::new(),
         smooth_slopes: true,
         features: vec![

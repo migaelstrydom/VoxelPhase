@@ -12,6 +12,9 @@
 //!   Channel               ── the stream out of the tarn, falling where its bed steps
 //! ```
 //!
+//! A [`Keel`] is the same kind of shape from below: the underside a floating
+//! island hangs on, which `terrain::underside` reads column by column.
+//!
 //! Outlines are kept from looking drawn by a domain warp: the sample point is
 //! moved by smooth noise before its distance to the outline is measured, so a
 //! straight edge wanders by up to `warp` metres.
@@ -27,6 +30,12 @@ const RELIEF_WAVELENGTH: f32 = 16.0;
 const WARP_AXIS_SEED: u32 = 101;
 /// Seed offset of the relief from the warp.
 const RELIEF_SEED: u32 = 211;
+/// Wavelength of a keel's crags' coarsest octave, in metres.
+const CRAG_WAVELENGTH: f32 = 7.0;
+/// Seed offset of a keel's crags from its warp.
+const CRAG_SEED: u32 = 307;
+/// Seed offset of a keel's ribs from its warp.
+const RIB_SEED: u32 = 409;
 
 /// Land rising inside an outline. See `TerrainFeature::Landmass`.
 pub struct Landmass<'a> {
@@ -117,6 +126,78 @@ impl Basin {
         let half = self.radius * 0.5;
         let weight = 1.0 - ramp(distance - half, half);
         (weight * (self.floor - current)).min(0.0)
+    }
+}
+
+/// The rock an island hangs on, inside an outline. See
+/// `UndersideFeature::Keel`.
+pub struct Keel<'a> {
+    pub outline: &'a [(f32, f32)],
+    pub rim: f32,
+    pub bottom: f32,
+    pub taper: f32,
+    pub warp: f32,
+    pub roughness: f32,
+    pub seed: u32,
+}
+
+/// A keel over one point (x, z).
+#[derive(Debug, Clone, Copy)]
+pub struct KeelSample {
+    /// Height of the underside: `rim` on the outline and beyond it.
+    pub underside: f32,
+    /// Distance inside the (warped) outline, m; negative outside it.
+    pub inland: f32,
+}
+
+impl Keel<'_> {
+    /// The underside and the edge over (x, z).
+    ///
+    /// The underside falls from `rim` to `bottom` along a parabola of the
+    /// distance inland, steepest at the outline and level at `taper`, so the
+    /// belly leans in under the rim like a mountain upside down:
+    ///
+    /// ```text
+    ///   rim    ─┐
+    ///            ╲
+    ///             ╲_
+    ///   bottom      ╲____________
+    ///           0         taper     inland
+    /// ```
+    ///
+    /// Roughness moves the belly both ways. Inwards and outwards, it is ribs
+    /// and gullies down the steep flanks under the rim, where a move up or
+    /// down would hardly show; up and down, crags under the flat of the
+    /// belly. Neither moves the outline, so the coast stays where the outline
+    /// puts it, and a gully under it leaves the rim overhanging.
+    pub fn sample(&self, x: f32, z: f32) -> KeelSample {
+        let (wx, wz) = warp(x, z, self.warp, self.seed);
+        let inland = signed_distance_to_outline(wx, wz, self.outline);
+        let (ribs, crags) = if self.roughness > 0.0 {
+            let f = 1.0 / CRAG_WAVELENGTH;
+            let noise = |seed| (fbm_2d_periodic(x * f, z * f, 4, 0.5, 2.0, seed, None) - 0.5) * 2.0;
+            (
+                noise(self.seed + RIB_SEED) * self.roughness,
+                noise(self.seed + CRAG_SEED) * self.roughness,
+            )
+        } else {
+            (0.0, 0.0)
+        };
+        let reach = inland + ribs;
+        let along = if self.taper <= 0.0 {
+            if reach > 0.0 {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            (reach / self.taper).clamp(0.0, 1.0)
+        };
+        let hang = 1.0 - (1.0 - along) * (1.0 - along);
+        KeelSample {
+            underside: self.rim + (self.bottom - self.rim + crags) * hang,
+            inland,
+        }
     }
 }
 
@@ -220,6 +301,31 @@ mod tests {
             0.0,
             "below the bed it is left alone"
         );
+    }
+
+    #[test]
+    fn a_keel_hangs_from_its_rim_on_the_outline_to_its_bottom_past_its_taper() {
+        let keel = Keel {
+            outline: &SQUARE,
+            rim: 2.0,
+            bottom: -10.0,
+            taper: 6.0,
+            warp: 0.0,
+            roughness: 0.0,
+            seed: 0,
+        };
+        let edge = keel.sample(10.0, 0.0);
+        assert!(edge.inland.abs() < 1e-4);
+        assert!((edge.underside - 2.0).abs() < 1e-4);
+        assert!((keel.sample(0.0, 0.0).underside + 10.0).abs() < 1e-4);
+        let outside = keel.sample(12.0, 0.0);
+        assert!((outside.inland + 2.0).abs() < 1e-4);
+        assert!((outside.underside - 2.0).abs() < 1e-4);
+        // Steepest at the rim, level at the end: the first quarter of the
+        // taper falls seven times as far as the last.
+        let fallen = |inland: f32| 2.0 - keel.sample(10.0 - inland, 0.0).underside;
+        let (first, last) = (fallen(1.5), fallen(6.0) - fallen(4.5));
+        assert!((first / last - 7.0).abs() < 1e-3, "{first} then {last}");
     }
 
     #[test]
