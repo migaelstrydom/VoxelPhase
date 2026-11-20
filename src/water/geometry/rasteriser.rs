@@ -303,7 +303,7 @@ impl SpanRasteriser {
                     old.first().map_or(0.0, |s| s.floor_c),
                     z,
                 ));
-                let new = &mut columns[column.local_index()].spans;
+                let new = &mut columns[column.local_index()];
                 self.remap_column(*column, &old, new, voxel, &mut remap);
             }
             self.commit(graph, coord, columns, generation);
@@ -435,10 +435,10 @@ impl SpanRasteriser {
         );
     }
 
-    /// Map each old span to the new span it has become (`most_shared`: the
+    /// Map each old span to the new span it has become ([`successor`]: the
     /// one containing `(centre, floor_c + ε)`, but for a floor lifted over a
-    /// pocket's roof), and hold the new span's floor no higher than the old
-    /// span it rests on.
+    /// pocket's roof, and none for a floor blown away over the void), and
+    /// hold the new span's floor no higher than the old span it rests on.
     ///
     /// Two things can lift a floor without adding material. Re-triangulation
     /// can raise `floor_c` by a fraction of a voxel (see
@@ -455,14 +455,15 @@ impl SpanRasteriser {
         &mut self,
         column: Column,
         old: &[Span],
-        new: &mut [Span],
+        new: &mut PairedColumn,
         voxel_size: f32,
         remap: &mut SpanRemap,
     ) {
         let mut claimed = [false; u8::MAX as usize + 1];
         for (ordinal, span) in old.iter().enumerate() {
             let y = span.floor_c + REMAP_EPSILON;
-            let new_ordinal = most_shared(span, y, new);
+            let new_ordinal = successor(span, y, new);
+            let new = &mut new.spans;
             let rests = new_ordinal.is_none_or(|n| {
                 let sliver = span.ceiling - span.floor_c < voxel_size;
                 !(sliver && new[n].floor_c > y)
@@ -522,6 +523,19 @@ impl SpanRasteriser {
         );
         debug_assert!(false, "removal-only invariant broken at {column:?}");
     }
+}
+
+/// The new span an old one becomes ([`most_shared`]), or none where the edit
+/// blew away every floor under it. Its floor's height then lies below the
+/// column's underside, in air with nothing under it, which only land hung
+/// over the void has: a ledge under a floating island's rim blown out from
+/// under the pocket over it. The span above shares none of that air, and
+/// taking it for the pocket's would raise the pocket's floor to the lawn.
+fn successor(old: &Span, y: f32, new: &PairedColumn) -> Option<usize> {
+    if y < new.underside {
+        return None;
+    }
+    most_shared(old, y, &new.spans)
 }
 
 /// The new span an old one becomes: of those reaching over `y`, just over
@@ -887,6 +901,35 @@ mod tests {
     }
 
     #[test]
+    fn a_floor_blown_away_over_the_void_opens_its_span_onto_it() {
+        let hung = |spans: Vec<Span>, underside: f32| PairedColumn {
+            spans,
+            underside,
+            repaired: false,
+        };
+        // A pocket under an island's rim, on a ledge, with the lawn over the
+        // rim. The ledge blown away, the rim is the lowest ground left.
+        let pocket = Span {
+            ceiling: 0.8,
+            ..top_span(-0.9)
+        };
+        let new = hung(vec![top_span(3.0)], 1.4);
+        assert_eq!(successor(&pocket, -0.9 + REMAP_EPSILON, &new), None);
+        assert_eq!(
+            successor(&top_span(3.0), 3.0 + REMAP_EPSILON, &new),
+            Some(0)
+        );
+        // A sliver the re-mesh closed, over ground still hanging under it:
+        // the span above takes its air.
+        let sliver = Span {
+            ceiling: 1.2,
+            ..top_span(1.0)
+        };
+        let new = hung(vec![top_span(3.0)], -2.0);
+        assert_eq!(successor(&sliver, 1.0 + REMAP_EPSILON, &new), Some(0));
+    }
+
+    #[test]
     fn a_ceiling_that_comes_back_lower_is_held_as_far_as_the_floor_above() {
         let cave = |ceiling: f32| Span {
             ceiling,
@@ -974,5 +1017,51 @@ mod tests {
         ];
         fold_floor_bands(Column::new(0, 0), &mut spans, &pieces);
         assert_eq!(spans[0].quarters, [6.0, 7.5, 6.0, 7.5]);
+    }
+}
+
+#[cfg(all(test, feature = "water_scenarios"))]
+mod in_a_level {
+    use std::path::Path;
+
+    use nalgebra::Point3;
+
+    use super::*;
+    use crate::level::load_level;
+    use crate::level_check::build_terrain;
+    use crate::terrain::BlastConfig;
+
+    /// Two grenades in one spot on the Floating Island's coast: the first
+    /// blows a pocket under the rim, the second its floor away, leaving the
+    /// pocket's air over the void. No floor may rise, and the pocket's water
+    /// goes out of the world.
+    #[test]
+    fn a_ledge_blown_from_under_the_rim_raises_no_floor() {
+        let level = load_level(Path::new("levels/floating_island.level.ron")).unwrap();
+        for at in [(22.0, 0.0, 21.0), (23.0, 0.0, 27.0), (25.0, -2.0, 20.0)] {
+            let at = Point3::new(at.0, at.1, at.2);
+            let mut terrain = build_terrain(&level);
+            let (mut rasteriser, mut graph) = SpanRasteriser::build(&terrain);
+            let mut opened = 0;
+            for _ in 0..2 {
+                terrain.detonate(at, &BlastConfig::default());
+                terrain.update();
+                let rebuilt = terrain.rebuilt_chunks().to_vec();
+                let changed = terrain.changed_regions().to_vec();
+                let remap = rasteriser.rebuild(&terrain, &mut graph, &rebuilt, &changed);
+                opened += remap
+                    .entries
+                    .iter()
+                    .filter(|e| e.new_ordinal.is_none())
+                    .count();
+            }
+            let stats = rasteriser.stats();
+            assert_eq!(
+                stats.invariant_violations, 0,
+                "blasts at {at:?} raised a floor: {:?}",
+                stats.last_violation
+            );
+            assert!(opened > 0, "blasts at {at:?} opened nothing onto the void");
+        }
     }
 }
