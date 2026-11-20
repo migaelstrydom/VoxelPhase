@@ -182,13 +182,14 @@ mod in_a_level {
     use std::path::Path;
 
     use nalgebra::Point3;
+    use smallvec::{smallvec, SmallVec};
 
     use super::*;
     use crate::level::load_level;
     use crate::level_check::build_terrain;
     use crate::rendering::water::field_sources::VertexSource;
     use crate::terrain::BlastConfig;
-    use crate::water::geometry::{CHUNK_COLUMNS, COLUMN_SIZE};
+    use crate::water::geometry::{SpanIndex, CHUNK_COLUMNS, COLUMN_SIZE};
     use crate::water::WaterWorld;
 
     /// Farthest a surface read again may stand from one built afresh, m:
@@ -378,5 +379,54 @@ mod in_a_level {
             }
         }
         (parted, worst)
+    }
+
+    /// Every cell a level's surfaces read again lies in a chunk whose
+    /// layout the surface notes, so a blast that lays that chunk out again
+    /// has the surface built afresh instead of read from a cell gone.
+    #[test]
+    fn every_cell_a_surface_reads_again_is_in_a_layout_it_notes() {
+        for level in [
+            "levels/water_park.level.ron",
+            "levels/rooms/c11_washed_off.level.ron",
+            "levels/rooms/o2_raft.level.ron",
+        ] {
+            let level = load_level(Path::new(level)).unwrap();
+            let terrain = build_terrain(&level);
+            let water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+            let mut parts = RiverParts::default();
+            parts.set_budget(None);
+            parts.sync(&water);
+            for (id, part) in &parts.parts {
+                let sources = &part.mesh.sources;
+                let noted = |c: &SpanIndex| sources.layouts.iter().any(|&(s, _)| s == c.slot);
+                for source in &sources.vertices {
+                    let read: SmallVec<[SpanIndex; 4]> = match source {
+                        VertexSource::Corner { cells, .. } => cells.clone(),
+                        VertexSource::Skirt { dry, .. } => dry.clone(),
+                        VertexSource::Jet { landing, .. }
+                        | VertexSource::JetPlunge { landing, .. } => smallvec![*landing],
+                        _ => SmallVec::new(),
+                    };
+                    let unnoted = read.iter().find(|c| !noted(c));
+                    assert!(
+                        unnoted.is_none(),
+                        "{}: {id:?} reads {unnoted:?} through {source:?}",
+                        level.name
+                    );
+                }
+                for curtain in &sources.curtains {
+                    let ends = curtain.beside.iter().flatten().map(|&(from, _)| from);
+                    let unnoted = std::iter::once(curtain.fall.0)
+                        .chain(ends)
+                        .find(|c| !noted(c));
+                    assert!(
+                        unnoted.is_none(),
+                        "{}: {id:?}'s curtain reads {unnoted:?}",
+                        level.name
+                    );
+                }
+            }
+        }
     }
 }

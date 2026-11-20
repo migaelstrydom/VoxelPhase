@@ -322,7 +322,12 @@ impl<'a> FieldScene<'a> {
             if owned.is_empty() {
                 continue;
             }
+            // The skirt stands while its dry cells stay dry, and those it
+            // passed on its way out may lie a chunk further on.
             mesh.sources.reads_slot(self.field.cells(), slot);
+            for &c in owned.iter().flat_map(|(_, passed)| passed) {
+                mesh.sources.reads(self.field.cells(), c);
+            }
             // A column the cell lays whole is one quad, not four.
             let pieces: SmallVec<[(Option<(i32, i32)>, SmallVec<[SpanIndex; 4]>); 4]> =
                 if owned.len() == QUARTERS.len() {
