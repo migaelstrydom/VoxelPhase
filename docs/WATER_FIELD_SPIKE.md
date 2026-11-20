@@ -115,7 +115,8 @@ below its old height.
   bursts out as a jet from the middle of the opening at the speed its head
   gives it, thinner than the opening by as much; jets side by side even out
   how thick they are and how high their tops stand, as falls do their
-  velocities. A jet that meets the water outside before its top has dropped a
+  velocities, though none is drawn down below its own hole's floor (round a
+  corner, a jet's neighbour may come out of a hole a metre lower). A jet that meets the water outside before its top has dropped a
   quarter metre does not fly: its water runs on into that water, which the
   hole's head must then push aside. While the top of the hole it fills
   still stands clear of that water it is kept as a fall that is *drowned*
@@ -128,16 +129,47 @@ below its old height.
   leaves over any face is no higher than the opening's roof. What draws a
   fall, what it strikes and where it sprays all read the same `Fall`.
 
+  Falls that fly at each other across a gap, as water pouring into a hole off
+  all its sides does, meet in the air and come down together (`Falls::meet`):
+  each is slowed to land no further out than a point across the gap that
+  splits it as their level momenta do. Flown through each other, they crossed
+  and landed beyond the far side: out under the roof, where the hole opens
+  into a cave, as a fan of arcs.
+
+  A fall is judged afresh each step against a few lines (a least step, a
+  jet's clearance over the water outside, whether the water behind a jet
+  stands against its hole's roof), and the field at a brink rocks across them
+  from step to step: by centimetres, and by tens of centimetres where a
+  torrent bursts out into the water heaped at its mouth. Judged so, a fall was
+  drawn one way and the other on alternate frames. So a fall found again is
+  held to what it was by a margin past each line (`HELD_STEP`, `JetLines`);
+  one whose face still pours its way, though it no longer meets its lines, is
+  kept on as it was for 0.15 s (`GRACE`); and a fall found again takes up the
+  discharge over its face over 0.05 s (`POUR_EASE`), since that rocks by a few
+  hundredths on alternate steps and a jet's thickness and top are taken from
+  it. Easing the fall's whole shape instead fed what its neighbours had evened
+  it to back into it, and a jet's top crept down under its hole's floor.
+
   Water in the air comes down where there is room for it. Nothing falls into
   a cell filled to its roof, an arc that meets such water under a roof comes
   down before it as it would before a wall, and a cell under a roof takes no
   more than it has room for: the rest goes to the other cells the fall lands
   in, or stays in the air. A face sends no more into the air than has room
-  to land (`Flight::room`: the room under the roofs its fall lands under,
-  shared between the falls landing there, less what is already in the air),
-  so a jet into a full cave stops as any face into a full cell does. The
+  to land (`Flight::room`): the falls landing in one body of roofed cells
+  (those where they land and the roofed cells with room joined to them, but
+  for the cells the falls leave and fly through) share its room as they ask
+  for it, each less what it already has in the air; a body that opens onto a
+  cell under the sky has room without end. So a jet into a full cave stops
+  as any face into a full cell does, while a fall into a cave that carries
+  off what lands in it pours unchecked. Counted only in the cells it lands
+  in, the room choked every fall into a cave: a second's water in the air is
+  more than a few cells hold, so the solver cut the face to nothing, the fall
+  was not found the next step, and it came back the step after. The
   last water of a fall that has stopped backs up into the nearest cells with
-  room. A fall holds its water in the air as one amount,
+  room, as a sheet a hand deep ring by ring (`BACKED_UP`), and what they
+  still have no room for is shared out over all of them: poured whole into
+  the first open cell it reached, it stood there as a column metres high. A
+  fall holds its water in the air as one amount,
   brought down over the time it takes to fall; when its landing comes
   suddenly nearer that time shrinks no faster than time passes
   (`Fall::settling`), or seconds' worth of a torrent would come down in one
@@ -229,6 +261,8 @@ seiche.
 | A river running diagonally stood 11 cm deeper than the same river along the lattice | θ blended each face towards the dry bank ahead of it | A dry neighbour face counts as the face itself, as a wall does (`bearing` scenario) |
 | A cave filling from its blind end stood up to 16 cm over its roof | A full cell's room counted what it passed on, though the cell beyond took none | Inflows are fitted again against what the cells beyond take |
 | Metres of water stood over the roof of a hole in a dam (`water_fuzz`) | A jet shut in by rock kept sending water into the air with nowhere to land, and its last water was forced into a full cell | A face sends up no more than has room to land; a spent fall's last water backs up to the nearest room |
+| Water draining through a hole in a pond's floor into the cave below was drawn as a fan of arcs flying out under the roof, flickering, and on some frames not at all (water_park's undercroft, in play) | Streams off the hole's opposite sides flew through each other; landing under the roof, each fall's room was only that of the few cells it landed in, so the solver cut its face to nothing every other step | Falls flying at each other meet; the room is that of the body of roofed cells the water spreads through |
+| A breach's jets flickered at 30 Hz (W1, in play) | The water at the hole's mouth rocks by centimetres to tens of centimetres from step to step, across the lines a jet is judged by | A fall found again is held to by a margin, kept on through a surge for 0.15 s, and eases into its new shape |
 | A cave's water stood 20 cm over its roof after a blast nearby | The re-mesh brought its ceiling back lower | A re-paired span's ceiling is held, as its floor is |
 | A lake poured into a slot at its foot for ever and the pocket beyond never filled | The water left as a fall off the top of the lake and was set down on the lake again | Water leaves no higher than the opening's roof, as a jet where open water stands over it |
 | The curtains' index list grew with every rebuild of the drawn rivers, six times too long after ten seconds over a breach, and all of it was uploaded (`water_fuzz`'s mesh audit; on main since 2026-10-12) | `RiverParts::join` cleared every list but the sheets' | It clears that one too |

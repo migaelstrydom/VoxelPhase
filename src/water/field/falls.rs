@@ -27,12 +27,17 @@
 //! out, a trickle at the cliff's foot, and the ledges an arc clears stay
 //! dry. Everything that shows a fall (the drawn curtain, the streams that
 //! strike bodies, the spray where it lands) reads the same `Fall`, so the
-//! water is seen to come down where it does.
+//! water is seen to come down where it does. Streams flying at each other,
+//! as into a hole off all its sides, meet in the air and come down
+//! together.
 //!
 //! A fall has a life. New, its water has only fallen as far as its age lets
 //! it, and none has landed. Once its water stops going over, what is
 //! already in the air goes on falling: the fall is `spent`, and is kept
-//! until the last of it is down.
+//! until the last of it is down. Where the water rocks across a line a fall
+//! is judged by, as it does where a torrent bursts out, a fall holds to
+//! what it was: it would otherwise be drawn one way and the other on
+//! alternate frames.
 
 use nalgebra::{Point3, Vector2};
 use rustc_hash::FxHashMap;
@@ -56,6 +61,32 @@ const MIN_POUR: f32 = 0.005;
 /// Least step between two cells' surfaces that water can fall or burst
 /// across, m: under both `falls`' step and a jet's clearance.
 const LEAST_STEP: f64 = 0.25;
+
+/// How far past each line a fall is judged by the water must go for a
+/// fall found the step before to be judged otherwise: the least step it is
+/// still found across, m, and how far a jet's top must pass its clearance,
+/// and the water behind it fall from its hole's roof, m (`JetLines`). The
+/// water at a brink rocks from one step to the next, by a hand's depth
+/// where a torrent bursts out into the water heaped at its mouth, and
+/// judged each time against one line, a fall near it would be drawn one
+/// way and the other on alternate frames.
+const HELD_STEP: f64 = 0.1;
+const HELD_CLEARANCE: f32 = 0.2;
+const HELD_FILL: f64 = 0.1;
+
+/// How long a fall is kept on as it was while the water over its face,
+/// still pouring its way, no longer meets the lines it is judged by, s.
+/// Where a torrent bursts out the water surges and ebbs by more than any
+/// margin from one step to the next, and a fall lost and found again over
+/// a few frames would be drawn flickering.
+const GRACE: f32 = 0.15;
+
+/// How quickly a fall found again takes up the discharge its face carries
+/// now, from what it carried, s: the time over which it closes all but a
+/// third of the difference. The discharge over a torrent's lip rocks by a
+/// few hundredths from one step to the next, and a jet's thickness and the
+/// height of its top, taken from it, would shimmer.
+const POUR_EASE: f32 = 0.05;
 
 /// Least depth a face's discharge is divided by for the speed its water
 /// leaves at, m, so a film's trickle is not launched as a torrent.
@@ -109,8 +140,22 @@ const WAKE_DEPTH: f64 = 1.0e-5;
 const UNDER_ROOF: f32 = 0.01;
 
 /// How many cells out from where it lands a spent fall's last water looks
-/// for room.
+/// for room, and how deep it lies in each before it looks further, m.
 const SPILL_REACH: usize = 48;
+const BACKED_UP: f64 = 0.1;
+
+/// Most cells under roofs counted as where falls' water spreads to from
+/// where it lands (`fill`).
+const BODY_REACH: usize = 512;
+
+/// How many times what the falls landing under roofs ask for (`Roofed::need`)
+/// the room found for them is looked for: where there is that much, each
+/// one's share holds what it has in the air and as much again.
+const ROOM_TO_SPARE: f64 = 2.0;
+
+/// Most columns out across the gap it falls into that a fall looks for one
+/// flying back at it (`Falls::meet`).
+const MEET_REACH: i32 = 16;
 
 /// Water going over one edge of a cell into the air.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -135,6 +180,9 @@ pub struct Fall {
     /// Its depth, for water going over a lip, or out of a hole it does not
     /// fill.
     pub opening: f32,
+    /// Whether the water behind its mouth stands against the opening's
+    /// roof, so that it fills its hole there (`opening`).
+    pub fills: bool,
     /// What it carries over each metre of its lip, m²/s.
     pub pour: f32,
     /// Whether it bursts out of a hole, driven by open water standing over
@@ -156,6 +204,9 @@ pub struct Fall {
     /// How long its water has been going over, s: its water has fallen no
     /// further than that lets it.
     pub age: f32,
+    /// How long it has been kept on as it was, its water going over
+    /// without meeting the lines a fall is judged by (`GRACE`), s.
+    pub lapsed: f32,
     /// How long ago its water stopped going over, s, while the last of it
     /// is still in the air. None while it pours.
     pub spent: Option<f32>,
@@ -213,6 +264,11 @@ impl Fall {
     /// the air is down, s.
     fn coming_down(&self) -> f32 {
         self.flight_time().max(self.settling)
+    }
+
+    /// Whether its water flies: it pours, and does not come out drowned.
+    pub fn flies(&self) -> bool {
+        self.spent.is_none() && !self.drowned
     }
 
     /// Whether its water is coming down at its foot.
@@ -421,8 +477,15 @@ impl Falls {
     /// followed down.
     ///
     /// A fall found where one was before is that fall, older, with the
-    /// water it had in the air. One no longer found is spent, and kept
-    /// while its water is still coming down.
+    /// water it had in the air, and is held to by a margin (`HELD_STEP`,
+    /// `JetLines`). One whose face still pours its way, though the water no
+    /// longer meets the lines a fall is judged by, is kept on as it was for
+    /// a moment (`GRACE`). One no longer found is spent, and kept while its
+    /// water is still coming down.
+    ///
+    /// Falls that fly at each other across a gap meet there (`meet`), and
+    /// a fall landing under roofs sends no more into the air than the body
+    /// of cells it lands in has room for (`make_room`).
     ///
     /// `brinks` are the faces to look at: those the solver found a step
     /// across as it last stepped. None looks at every awake chunk's faces,
@@ -454,14 +517,17 @@ impl Falls {
                 &every
             }
         };
-        for &FaceRef { slot, index } in brinks {
+        // The faces of the falls found the step before are looked at again
+        // whatever the solver saw across them, so each is held to by a
+        // margin (`HELD_STEP`).
+        let laid_again = self.laid_again(cells);
+        let held = self.held_faces(&laid_again);
+        for &FaceRef { slot, index } in brinks.iter().chain(&held) {
             let chunk = &cells.chunks[slot as usize];
             let Some(face) = chunk.faces.get(index as usize).filter(|_| chunk.awake) else {
                 continue;
             };
-            // Water falls only where it pours between surfaces a step apart.
-            let step = chunk.surface(face.a as usize) - cells.surface(face.b);
-            if face.q.abs() < MIN_POUR || step.abs() < LEAST_STEP {
+            if face.q.abs() < MIN_POUR {
                 continue;
             }
             let owner = SpanIndex { slot, flat: face.a };
@@ -470,22 +536,43 @@ impl Falls {
             } else {
                 (face.b, owner, -1.0)
             };
+            let direction = direction_of(face.axis, sign);
+            let was = self.was(&laid_again, upper, lower, direction);
+            // Water falls only where it pours between surfaces a step apart.
+            // A jet found the step before is judged by its lines alone: the
+            // step out of a hole run full is the height its top stands clear.
+            let step = chunk.surface(face.a as usize) - cells.surface(face.b);
+            let least = match was {
+                Some(was) if was.driven => 0.0,
+                Some(_) => HELD_STEP,
+                None => LEAST_STEP,
+            };
+            if step.abs() < least {
+                continue;
+            }
             // Nor into water pressed against a roof, which has no surface
             // to fall to: the two are one body, run full.
             if cells.full(lower) {
                 continue;
             }
-            let direction = direction_of(face.axis, sign);
             let head = driving_head(cells, upper, face, face.q > 0.0);
-            let pour = face.q.abs();
-            let Some(mut fall) = over_face(graph, cells, upper, lower, direction, pour, head)
+            let pour = match was {
+                Some(was) => {
+                    let take = 1.0 - (-dt / POUR_EASE).exp();
+                    was.pour + (face.q.abs() - was.pour) * take
+                }
+                None => face.q.abs(),
+            };
+            let lines = JetLines::after(was);
+            let Some(mut fall) =
+                over_face(graph, cells, upper, lower, direction, pour, head, lines)
             else {
                 continue;
             };
             if fall.driven && !fall.drowned {
-                match met(graph, cells, &fall, lower) {
+                match met(graph, cells, &fall, lower, lines.flies) {
                     None => {}
-                    Some(level) if fall.roof() - level >= JET_CLEARANCE => fall.drowned = true,
+                    Some(level) if fall.roof() - level >= lines.seen => fall.drowned = true,
                     Some(_) => continue,
                 }
             }
@@ -504,6 +591,7 @@ impl Falls {
                 None => list.push((fall, edge)),
             }
         }
+        self.keep_lapsed(cells, &laid_again, &mut found, dt);
         for (slot, (chunk, list)) in cells.chunks.iter().zip(&mut found).enumerate() {
             if !chunk.awake {
                 continue;
@@ -526,17 +614,129 @@ impl Falls {
             list.sort_unstable_by_key(key);
             list.dedup_by_key(|held| key(held));
             let before = std::mem::take(&mut self.chunks[slot]);
-            let relaid = self.generations[slot] != cells.generation(slot);
             self.generations[slot] = cells.generation(slot);
-            lost += carry_on(graph, cells, before, &mut list, relaid, dt);
+            lost += carry_on(graph, cells, before, &mut list, laid_again[slot], dt);
             list.sort_unstable_by_key(key);
             (self.chunks[slot], self.edges[slot]) = list.into_iter().unzip();
         }
+        // How low each fall's water may lie as it leaves: the floor of the
+        // hole a jet fills, the underside of one that does not, the bed
+        // under water going over a lip.
+        let floors: Vec<Vec<f32>> = (self.chunks.iter())
+            .map(|list| list.iter().map(|fall| fall.roof() - fall.opening).collect())
+            .collect();
         for _ in 0..EVENINGS {
-            self.even_out(graph, cells);
+            self.even_out(graph, cells, &floors);
         }
         self.land(graph, cells, dt);
         lost + self.bring_down(graph, cells, dt)
+    }
+
+    /// Which chunk slots have been laid out again since the falls were
+    /// last found: what was found there names cells and faces that may be
+    /// others now.
+    fn laid_again(&self, cells: &FieldCells) -> Vec<bool> {
+        (0..cells.chunks.len())
+            .map(|slot| self.generations.get(slot) != Some(&cells.generation(slot)))
+            .collect()
+    }
+
+    /// Keep on, as it was, each pouring fall found the step before and not
+    /// found again, while the water over its face still pours its way into
+    /// a cell with room for it, for no longer than `GRACE` in all. None is
+    /// kept across a chunk laid out again (`laid_again`).
+    fn keep_lapsed(
+        &self,
+        cells: &FieldCells,
+        laid_again: &[bool],
+        found: &mut [Vec<(Fall, Edge)>],
+        dt: f32,
+    ) {
+        for (list, edges) in self.chunks.iter().zip(&self.edges) {
+            for (fall, edge) in list.iter().zip(edges) {
+                let Edge::Face {
+                    slot, index, below, ..
+                } = *edge
+                else {
+                    continue;
+                };
+                let lapsed = fall.lapsed + dt;
+                let stale = [slot, fall.from.slot, below.slot]
+                    .iter()
+                    .any(|&s| laid_again[s as usize]);
+                if fall.spent.is_some() || lapsed > GRACE || stale {
+                    continue;
+                }
+                let again = &mut found[fall.from.slot as usize];
+                if again
+                    .iter()
+                    .any(|(f, _)| f.from == fall.from && f.direction == fall.direction)
+                {
+                    continue;
+                }
+                let chunk = &cells.chunks[slot as usize];
+                let Some(face) = chunk.faces.get(index as usize) else {
+                    continue;
+                };
+                let owner = SpanIndex { slot, flat: face.a };
+                let pouring = if (owner, face.b) == (fall.from, below) {
+                    face.q
+                } else if (owner, face.b) == (below, fall.from) {
+                    -face.q
+                } else {
+                    continue;
+                };
+                if !chunk.awake || pouring < MIN_POUR || cells.full(below) {
+                    continue;
+                }
+                let edge = Edge::Face {
+                    slot,
+                    index,
+                    below,
+                    flight: None,
+                };
+                let fall = Fall {
+                    pour: pouring,
+                    age: 0.0,
+                    lapsed,
+                    aloft: 0.0,
+                    ..*fall
+                };
+                again.push((fall, edge));
+            }
+        }
+    }
+
+    /// The faces of the pouring falls found the step before, but for those
+    /// in chunks laid out again since (`laid_again`).
+    fn held_faces(&self, laid_again: &[bool]) -> Vec<FaceRef> {
+        (self.chunks.iter().zip(&self.edges))
+            .flat_map(|(list, edges)| list.iter().zip(edges))
+            .filter(|(fall, _)| fall.spent.is_none())
+            .filter_map(|(_, edge)| match *edge {
+                Edge::Face { slot, index, .. } if !laid_again[slot as usize] => {
+                    Some(FaceRef { slot, index })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The fall found the step before from `cell` over its edge in
+    /// `direction`, to `across`, if it poured and neither cell's chunk has
+    /// been laid out again since (`laid_again`).
+    fn was(
+        &self,
+        laid_again: &[bool],
+        cell: SpanIndex,
+        across: SpanIndex,
+        direction: u8,
+    ) -> Option<&Fall> {
+        if laid_again[cell.slot as usize] || laid_again[across.slot as usize] {
+            return None;
+        }
+        self.get(cell, direction as usize)
+            .filter(|fall| fall.spent.is_none())
     }
 
     /// Take what each fall's face has sent into the air since the falls
@@ -568,11 +768,14 @@ impl Falls {
     /// on into: half its own, a quarter each of theirs, its own again where
     /// its lip ends. Jets side by side even out how thick they are and how
     /// high their tops stand as well, and how high they fill their holes
-    /// at the mouth, which only ever comes up to the jets' beside: each hole's water is driven its own
-    /// way, by the flow law or as a column run full, and drawn each at its
-    /// own height a row of them is a row of teeth. A spent fall's water is
-    /// already in the air, and keeps what it left with.
-    fn even_out(&mut self, graph: &SpanGraph, cells: &FieldCells) {
+    /// at the mouth, which only ever comes up to the jets' beside: each
+    /// hole's water is driven its own way, by the flow law or as a column
+    /// run full, and drawn each at its own height a row of them is a row of
+    /// teeth. None sinks below its `floors`, the floor of its hole: round a
+    /// corner, a jet's neighbour may come out of a hole a metre lower. A
+    /// spent fall's water is already in the air, and keeps what it left
+    /// with.
+    fn even_out(&mut self, graph: &SpanGraph, cells: &FieldCells, floors: &[Vec<f32>]) {
         let evened: Vec<Vec<(Vector2<f32>, [f32; 3])>> = self
             .chunks
             .iter()
@@ -600,11 +803,14 @@ impl Falls {
                     .collect()
             })
             .collect();
-        for (list, evened) in self.chunks.iter_mut().zip(evened) {
-            for (fall, (velocity, [top, depth, roof])) in list.iter_mut().zip(evened) {
+        for ((list, evened), floors) in self.chunks.iter_mut().zip(evened).zip(floors) {
+            for ((fall, (velocity, [top, depth, roof])), floor) in
+                list.iter_mut().zip(evened).zip(floors)
+            {
                 // The top of its body at the mouth comes up to its
                 // neighbours', and never down from the roof of its own hole.
                 let roof = roof.max(fall.roof());
+                let top = top.max(floor + depth);
                 fall.velocity = velocity;
                 fall.lip.y = top;
                 fall.depth = depth;
@@ -614,61 +820,139 @@ impl Falls {
     }
 
     /// Follow every pouring fall down from its lip to where it lands, `dt`
-    /// seconds after it was last followed, and give the face it goes over
-    /// its flight.
+    /// seconds after it was last followed, bring together those that fly
+    /// at each other (`meet`), and give the face each goes over its flight.
     fn land(&mut self, graph: &SpanGraph, cells: &mut FieldCells, dt: f32) {
+        for (list, edges) in self.chunks.iter_mut().zip(&self.edges) {
+            for (fall, edge) in list.iter_mut().zip(edges) {
+                follow(graph, cells, fall, edge);
+            }
+        }
+        self.meet(graph, cells);
         for (list, edges) in self.chunks.iter_mut().zip(&mut self.edges) {
             for (fall, edge) in list.iter_mut().zip(edges) {
-                match edge {
-                    Edge::Face {
-                        slot,
-                        index,
-                        below,
-                        flight,
-                    } => {
-                        let (lip, velocity) = (fall.lip, fall.velocity);
-                        let landed = land(
-                            graph,
-                            cells,
-                            lip,
-                            velocity,
-                            fall.face(),
-                            *below,
-                            MAX_COLUMNS,
-                        );
-                        fall.foot = landed.foot;
-                        fall.landing = landed.at;
-                        fall.into = landed.into;
-                        fall.settling = fall.flight_time().max(fall.settling - dt);
-                        // A drowned jet's water goes over its face as over
-                        // any other: none of it flies.
-                        if fall.drowned {
-                            continue;
-                        }
-                        *flight = Some(cells.flights.len() as u32);
-                        let face = &mut cells.chunks[*slot as usize].faces[*index as usize];
-                        face.flight = *flight;
-                        let from_owner = fall.from.slot == *slot && fall.from.flat == face.a;
-                        cells.flights.push(Flight {
-                            face: FaceRef {
-                                slot: *slot,
-                                index: *index,
-                            },
-                            from_owner,
-                            aloft: 0.0,
-                            room: f64::INFINITY,
-                        });
-                    }
-                    Edge::Map { level } => {
-                        let out = fall.velocity * fall_time(fall.lip.y - *level);
-                        fall.foot = Point3::new(fall.lip.x + out.x, *level, fall.lip.z + out.y);
-                        fall.landing = fall.foot;
-                        fall.settling = fall.flight_time().max(fall.settling - dt);
-                    }
-                    Edge::Spent => {}
+                if matches!(edge, Edge::Spent) {
+                    continue;
+                }
+                fall.settling = fall.flight_time().max(fall.settling - dt);
+                let Edge::Face {
+                    slot,
+                    index,
+                    flight,
+                    ..
+                } = edge
+                else {
+                    continue;
+                };
+                // A drowned jet's water goes over its face as over any
+                // other: none of it flies.
+                if fall.drowned {
+                    continue;
+                }
+                *flight = Some(cells.flights.len() as u32);
+                let face = &mut cells.chunks[*slot as usize].faces[*index as usize];
+                face.flight = *flight;
+                let from_owner = fall.from.slot == *slot && fall.from.flat == face.a;
+                cells.flights.push(Flight {
+                    face: FaceRef {
+                        slot: *slot,
+                        index: *index,
+                    },
+                    from_owner,
+                    aloft: 0.0,
+                    room: f64::INFINITY,
+                });
+            }
+        }
+    }
+
+    /// Bring together the falls that fly at each other across a gap, as
+    /// water pouring into a hole off all its sides does, or into a ditch
+    /// off both its banks. Two such streams meet in the air and come down
+    /// together from there, neither carried on past the other: each is
+    /// slowed to come down no further out than where they meet, a point
+    /// across the gap that splits it as their level momenta do. Flown on
+    /// through each other, they would cross and land beyond the far side:
+    /// out under its roof, where the gap is a hole down into a cave.
+    fn meet(&mut self, graph: &SpanGraph, cells: &FieldCells) {
+        // How far out along its edge's facing a fall meets the world, and
+        // its arc flown free comes down; and the level momentum it carries
+        // out that way per metre of its lip.
+        let out = |fall: &Fall, to: Point3<f32>| {
+            Vector2::new(to.x - fall.lip.x, to.z - fall.lip.z)
+                .dot(&fall.face())
+                .max(0.0)
+        };
+        let thrust = |fall: &Fall| fall.pour * fall.velocity.dot(&fall.face()).max(0.0);
+        let mut slowed = Vec::new();
+        for (slot, (list, edges)) in self.chunks.iter().zip(&self.edges).enumerate() {
+            for (index, (fall, edge)) in list.iter().zip(edges).enumerate() {
+                let Edge::Face { below, .. } = *edge else {
+                    continue;
+                };
+                if !fall.flies() {
+                    continue;
+                }
+                let Some(other) = self.facing(graph, cells, fall, below) else {
+                    continue;
+                };
+                let across = other.lip - fall.lip;
+                let gap = Vector2::new(across.x, across.z).dot(&fall.face());
+                let (own, theirs) = (out(fall, fall.landing), out(other, other.landing));
+                if gap <= 0.0 || own + theirs <= gap {
+                    continue;
+                }
+                let (push, against) = (thrust(fall), thrust(other));
+                let share = if push + against > 0.0 {
+                    push / (push + against)
+                } else {
+                    0.5
+                };
+                let meets = (share * gap).clamp(gap - theirs, own);
+                let free = out(fall, fall.foot);
+                if meets < own && free > 0.0 {
+                    slowed.push((slot, index, meets / free));
                 }
             }
         }
+        for (slot, index, by) in slowed {
+            let edge = self.edges[slot][index];
+            let fall = &mut self.chunks[slot][index];
+            fall.velocity *= by;
+            follow(graph, cells, fall, &edge);
+        }
+    }
+
+    /// The fall that flies back at `fall` across the gap it falls into,
+    /// `below` being the cell across its edge: the nearest along its row
+    /// going over the opposite edge of its cell, out to `MEET_REACH`
+    /// columns.
+    fn facing(
+        &self,
+        graph: &SpanGraph,
+        cells: &FieldCells,
+        fall: &Fall,
+        below: SpanIndex,
+    ) -> Option<&Fall> {
+        let step = fall.step();
+        let back = direction_index(Step {
+            di: -step.di,
+            dk: -step.dk,
+        });
+        let start = span_of(cells, below).column;
+        for n in 1..=MEET_REACH {
+            let column = start.offset(step.di * n, step.dk * n);
+            if !graph.contains_column(column) {
+                return None;
+            }
+            let found = (0..graph.spans(column).len())
+                .filter_map(|ordinal| cells.index(graph, column, ordinal as u8))
+                .find_map(|cell| self.get(cell, back).filter(|other| other.flies()));
+            if found.is_some() {
+                return found;
+            }
+        }
+        None
     }
 
     /// Bring down what each fall's water is due over `dt` seconds (`due`),
@@ -700,59 +984,218 @@ impl Falls {
                     let power = landing_power(fall.pour, speed, height) / into.len() as f32;
                     self.landings.extend(into.iter().map(|&cell| (cell, power)));
                 }
-                let flown = fall.spent.is_none() && !fall.drowned;
-                if flown && fall.lands() && fall.landing == fall.foot {
+                if fall.flies() && fall.lands() && fall.landing == fall.foot {
                     push(graph, cells, fall, &into);
                 }
+                // A drowned jet throws nothing into the air to land.
                 let all_roofed = into.iter().all(|&cell| cells.ceiling(cell).is_finite());
-                if !into.is_empty() && all_roofed {
+                if !into.is_empty() && all_roofed && !fall.drowned {
+                    // A spent fall sends no more: it asks only for what it
+                    // still has in the air.
+                    let pouring = fall.pour as f64 * COLUMN_SIZE as f64;
+                    let steady = match fall.spent {
+                        None => pouring * fall.coming_down() as f64,
+                        Some(_) => 0.0,
+                    };
                     roofed.push(Roofed {
+                        behind: behind(graph, cells, fall),
                         flight: edge.flight(),
                         aloft: fall.aloft,
+                        need: fall.aloft.max(steady),
                         into,
                     });
                 }
             }
         }
-        make_room(cells, &roofed);
+        make_room(graph, cells, &roofed);
         lost
     }
 }
 
 /// A fall that comes down under roofs, as its landing's room is shared out.
 struct Roofed {
+    /// The cell it leaves, and those its arc flies through on its way
+    /// down: its water does not spread back into them, which the water
+    /// behind it fills as soon as it stops.
+    behind: SmallVec<[SpanIndex; 8]>,
     /// Its face's flight, while it pours.
     flight: Option<u32>,
     /// The water it has in the air, m³.
     aloft: f64,
+    /// The room it asks of where it lands, m³: the water it has in the
+    /// air, or, while it pours, as much as it holds there pouring as it
+    /// pours now, if more.
+    need: f64,
     /// The cells it lands in, every one under a roof.
     into: SmallVec<[SpanIndex; 4]>,
 }
 
+/// The room under roofs that falls' water spreads through from where it
+/// lands, and what the falls landing there ask of it.
+struct Body {
+    room: f64,
+    need: f64,
+}
+
+/// What `fill` found from where a fall lands: room of its own, or the
+/// cells of a body found from another fall's landing.
+enum Filled {
+    Room(f64),
+    Joins(usize),
+}
+
 /// Tell each pouring fall's flight that comes down under roofs how much
-/// more of its water has room to: its share of the room in the cells it
-/// lands in, each cell's shared equally between the falls landing in it,
-/// less what the fall already has in the air.
-fn make_room(cells: &mut FieldCells, roofed: &[Roofed]) {
+/// more of its water has room to: its share of the room in the body of
+/// roofed cells it lands in (`fill`), which the falls landing there share
+/// as they ask for it, less what it already has in the air. A cave that
+/// carries off what lands in it has room to spare for every one of them;
+/// one filling up holds them back.
+fn make_room(graph: &SpanGraph, cells: &mut FieldCells, roofed: &[Roofed]) {
     if roofed.is_empty() {
         return;
     }
-    let mut sharing: FxHashMap<SpanIndex, u32> = FxHashMap::default();
-    for cell in roofed.iter().flat_map(|fall| &fall.into) {
-        *sharing.entry(*cell).or_default() += 1;
-    }
+    let need: f64 = roofed.iter().map(|fall| fall.need).sum();
+    let enough = ROOM_TO_SPARE * need;
+    let leaving: SmallVec<[SpanIndex; 16]> = (roofed.iter())
+        .flat_map(|fall| fall.behind.iter().copied())
+        .collect();
+    let mut body_of: FxHashMap<SpanIndex, usize> = FxHashMap::default();
+    let mut bodies: Vec<Body> = Vec::new();
+    let mut joins = Vec::with_capacity(roofed.len());
+    let mut reached = Vec::new();
     for fall in roofed {
-        let Some(flight) = fall.flight else {
+        let body = match fall.into.iter().find_map(|cell| body_of.get(cell)) {
+            Some(&body) => body,
+            None => {
+                let body = bodies.len();
+                let filled = fill(
+                    graph,
+                    cells,
+                    &fall.into,
+                    &leaving,
+                    enough,
+                    body,
+                    &mut body_of,
+                    &mut reached,
+                );
+                match filled {
+                    Filled::Room(room) => {
+                        bodies.push(Body { room, need: 0.0 });
+                        body
+                    }
+                    Filled::Joins(other) => {
+                        for cell in &reached {
+                            body_of.insert(*cell, other);
+                        }
+                        other
+                    }
+                }
+            }
+        };
+        bodies[body].need += fall.need;
+        joins.push(body);
+    }
+    for (fall, body) in roofed.iter().zip(joins) {
+        let (Some(flight), body) = (fall.flight, &bodies[body]) else {
             continue;
         };
-        let room: f64 = (fall.into.iter())
-            .map(|cell| cells.room(*cell).max(0.0) * CELL_AREA / sharing[cell] as f64)
-            .sum();
-        cells.flights[flight as usize].room = (room - fall.aloft).max(0.0);
+        if body.room.is_finite() && body.need > 0.0 {
+            let share = body.room * fall.need / body.need;
+            cells.flights[flight as usize].room = (share - fall.aloft).max(0.0);
+        }
     }
 }
 
-/// Carry the falls of one chunk, as they were `before`, on into those
+/// Mark as body `body` the cells under roofs that water landing in `into`
+/// spreads through: those, and the roofed cells with room joined to them,
+/// but for the cells falls leave and fly through (`leaving`), each put in
+/// `reached`. Finds their room, m³, until it covers `enough` or
+/// `BODY_REACH` cells have been taken in; without end where they open onto
+/// a cell under the sky, up which the water can rise. Where they reach a body already marked,
+/// they are part of it. Counted only where it lands, the room would choke
+/// a fall into a cave: a second's water in the air is more than the few
+/// cells it lands in hold, while the cave round them carries it off as it
+/// lands.
+#[allow(clippy::too_many_arguments)]
+fn fill(
+    graph: &SpanGraph,
+    cells: &FieldCells,
+    into: &[SpanIndex],
+    leaving: &[SpanIndex],
+    enough: f64,
+    body: usize,
+    body_of: &mut FxHashMap<SpanIndex, usize>,
+    reached: &mut Vec<SpanIndex>,
+) -> Filled {
+    reached.clear();
+    reached.extend_from_slice(into);
+    for &cell in into {
+        body_of.insert(cell, body);
+    }
+    let mut room = 0.0;
+    let mut at = 0;
+    while at < reached.len() {
+        let cell = reached[at];
+        at += 1;
+        room += cells.room(cell).max(0.0) * CELL_AREA;
+        if room >= enough || reached.len() >= BODY_REACH {
+            continue;
+        }
+        for beside in graph.orthogonal_neighbours(span_of(cells, cell)) {
+            let Some(beside) = graph.index_of(beside.span) else {
+                continue;
+            };
+            if leaving.contains(&beside) {
+                continue;
+            }
+            match body_of.get(&beside) {
+                Some(&other) if other != body => return Filled::Joins(other),
+                Some(_) => continue,
+                None => {}
+            }
+            if !cells.ceiling(beside).is_finite() {
+                return Filled::Room(f64::INFINITY);
+            }
+            if !cells.full(beside) {
+                body_of.insert(beside, body);
+                reached.push(beside);
+            }
+        }
+    }
+    Filled::Room(room)
+}
+
+/// The cell `fall` leaves, and the cells its arc flies through from its lip
+/// to where it meets the world, sampled every half column.
+fn behind(graph: &SpanGraph, cells: &FieldCells, fall: &Fall) -> SmallVec<[SpanIndex; 8]> {
+    let mut behind: SmallVec<[SpanIndex; 8]> = smallvec::smallvec![fall.from];
+    let lip = Vector2::new(fall.lip.x, fall.lip.z);
+    let speed = fall.velocity.norm();
+    let far = (Vector2::new(fall.landing.x, fall.landing.z) - lip).norm();
+    if speed <= 0.0 {
+        return behind;
+    }
+    let paces = ((far / (0.5 * COLUMN_SIZE)).ceil() as usize).min(MAX_COLUMNS);
+    let along = fall.velocity / speed;
+    for k in 0..paces {
+        let out = (k as f32 + 0.5) * far / paces as f32;
+        let at = lip + along * (out + NUDGE);
+        let height = fall.lip.y - 0.5 * GRAVITY * (out / speed).powi(2);
+        let column = Column::containing(at.x, at.y);
+        if !graph.contains_column(column) {
+            continue;
+        }
+        let cell = graph
+            .span_at(column, height)
+            .and_then(|span| cells.index(graph, column, span.ordinal));
+        if let Some(cell) = cell.filter(|cell| !behind.contains(cell)) {
+            behind.push(cell);
+        }
+    }
+    behind
+}
+
+/// Carry the falls of chunk `slot`, as they were `before`, on into those
 /// `found` there now (in order of cell and direction), `dt` seconds later.
 /// One found again is the same fall, older, with the water it had in the
 /// air. One not found is spent: it is added to `found` while its water is
@@ -830,6 +1273,33 @@ fn carry_on(
     lost
 }
 
+/// Follow `fall`'s arc from its lip over what it falls over, `edge`, to
+/// where it comes down. A spent fall keeps the arc it had.
+fn follow(graph: &SpanGraph, cells: &FieldCells, fall: &mut Fall, edge: &Edge) {
+    match *edge {
+        Edge::Face { below, .. } => {
+            let landed = land(
+                graph,
+                cells,
+                fall.lip,
+                fall.velocity,
+                fall.face(),
+                below,
+                MAX_COLUMNS,
+            );
+            fall.foot = landed.foot;
+            fall.landing = landed.at;
+            fall.into = landed.into;
+        }
+        Edge::Map { level } => {
+            let out = fall.velocity * fall_time(fall.lip.y - level);
+            fall.foot = Point3::new(fall.lip.x + out.x, level, fall.lip.z + out.y);
+            fall.landing = fall.foot;
+        }
+        Edge::Spent => {}
+    }
+}
+
 /// The cell under where a spent fall's water lands, as the ground stands
 /// now: the cells it was found landing in may have been laid out again
 /// since. Where it struck a wall, the column it came down the side of; and
@@ -858,16 +1328,24 @@ fn cell_under(graph: &SpanGraph, cells: &FieldCells, fall: &Fall) -> Option<Span
 /// more into a cell under a roof than it has room for: what one cannot
 /// take, the others share. Returns what none of them had room for.
 fn pour_into(cells: &mut FieldCells, into: &[SpanIndex], volume: f64) -> f64 {
+    pour_up_to(cells, into, volume, f64::INFINITY)
+}
+
+/// `pour_into`, but no cell taking more than `most` m deep.
+fn pour_up_to(cells: &mut FieldCells, into: &[SpanIndex], volume: f64, most: f64) -> f64 {
     let mut left = volume.max(0.0);
-    let mut taking: SmallVec<[SpanIndex; 8]> = into.iter().copied().collect();
+    // Each cell, and how deep it may still take, m.
+    let mut taking: SmallVec<[(SpanIndex, f64); 8]> = (into.iter())
+        .map(|&cell| (cell, cells.room(cell).max(0.0).min(most)))
+        .collect();
     while left > 0.0 && !taking.is_empty() {
         let each = left / taking.len() as f64 / CELL_AREA;
         let offered = taking.len();
         let mut given = 0.0;
-        taking.retain(|cell| {
-            let cell = *cell;
-            let taken = each.min(cells.room(cell).max(0.0));
-            *cells.depth_mut(cell) += taken;
+        taking.retain(|(cell, room)| {
+            let taken = each.min(*room);
+            *room -= taken;
+            *cells.depth_mut(*cell) += taken;
             given += taken * CELL_AREA;
             if taken > WAKE_DEPTH && !cells.chunks[cell.slot as usize].awake {
                 cells.wake(cell.slot as usize);
@@ -884,10 +1362,13 @@ fn pour_into(cells: &mut FieldCells, into: &[SpanIndex], volume: f64) -> f64 {
 
 /// Bring the last `volume` m³ of a fall down into the cells `into`, with
 /// no fall left to hold in the air what they have no room for: that backs
-/// up into the nearest cells joined to them that have room, ring by ring.
-/// Only where none within `SPILL_REACH` cells has does it stand in `into`
-/// over their roofs, until the solver has carried it off. Returns what came
-/// down outside the world: all of it where there are no cells.
+/// up into the nearest cells joined to them that have room, ring by ring,
+/// as a sheet no deeper than `BACKED_UP` in each, and what they still have
+/// no room for is shared out over all of them. Poured whole into the first
+/// open cell it reached, it would stand there as a column metres high.
+/// Only where none within `SPILL_REACH` cells has room does it stand in
+/// `into` over their roofs, until the solver has carried it off. Returns
+/// what came down outside the world: all of it where there are no cells.
 fn set_down(graph: &SpanGraph, cells: &mut FieldCells, into: &[SpanIndex], volume: f64) -> f64 {
     if into.is_empty() {
         return volume.max(0.0);
@@ -908,8 +1389,9 @@ fn set_down(graph: &SpanGraph, cells: &mut FieldCells, into: &[SpanIndex], volum
             }
         }
         ring = outer..reached.len();
-        left = pour_into(cells, &reached[ring.clone()], left);
+        left = pour_up_to(cells, &reached[ring.clone()], left, BACKED_UP);
     }
+    left = pour_into(cells, &reached[into.len()..], left);
     if left > 0.0 {
         let over = left / into.len() as f64 / CELL_AREA;
         for &cell in into {
@@ -1067,6 +1549,43 @@ fn driving_head(
     None
 }
 
+/// The lines a jet is judged by: fixed for a new one, and for one found
+/// the step before moved each way from what it was by a margin, so that it
+/// holds to it.
+#[derive(Debug, Clone, Copy)]
+struct JetLines {
+    /// How far its top must stand over the water outside for it to fly, m.
+    flies: f32,
+    /// How far its top, or the top of the hole it fills, must stand over
+    /// the water outside for it to be seen at all, m.
+    seen: f32,
+    /// How near its opening's roof the water behind must stand for it to
+    /// fill its hole at the mouth, m.
+    fills: f64,
+}
+
+impl JetLines {
+    /// The lines for a jet that was `was` the step before.
+    fn after(was: Option<&Fall>) -> Self {
+        match was.filter(|was| was.driven) {
+            None => Self {
+                flies: JET_CLEARANCE,
+                seen: JET_CLEARANCE,
+                fills: FULL_SLACK,
+            },
+            Some(was) => Self {
+                flies: if was.drowned {
+                    JET_CLEARANCE + HELD_CLEARANCE
+                } else {
+                    JET_CLEARANCE - HELD_CLEARANCE
+                },
+                seen: JET_CLEARANCE - HELD_CLEARANCE,
+                fills: if was.fills { HELD_FILL } else { FULL_SLACK },
+            },
+        }
+    }
+}
+
 /// How water leaves a lip.
 struct Leaving {
     /// The top of the water as it leaves.
@@ -1075,6 +1594,8 @@ struct Leaving {
     depth: f32,
     /// How tall the opening it leaves by is.
     opening: f32,
+    /// Whether it fills its hole at the mouth (`Fall::fills`).
+    fills: bool,
     /// Its level velocity.
     velocity: Vector2<f32>,
     /// Whether open water behind it drives it out.
@@ -1101,6 +1622,7 @@ fn leaving(
     face: Vector2<f32>,
     pour: f32,
     head: Option<f32>,
+    lines: JetLines,
 ) -> Option<Leaving> {
     if cells.depth(upper) <= WET_DEPTH {
         return None;
@@ -1125,16 +1647,17 @@ fn leaving(
         // fills the hole to its mouth, however thin it flies: it is seen
         // there, drowned, for as long as the top of the hole stands clear
         // of the water outside, though its own top does not.
-        let pressed = cells.surface(upper) >= roof - FULL_SLACK;
-        let clear = |top: f32| top - below as f32 >= JET_CLEARANCE;
-        let seen = clear(top) || (pressed && clear(floor + opening));
+        let pressed = cells.surface(upper) >= roof - lines.fills;
+        let clear = |top: f32, by: f32| top - below as f32 >= by;
+        let seen = clear(top, lines.seen) || (pressed && clear(floor + opening, lines.seen));
         (opening >= JET_OPENING && seen).then(|| Leaving {
             top,
             depth: thickness,
             opening: if pressed { opening } else { thickness },
+            fills: pressed,
             velocity: launch(face, speed, Vector2::zeros()),
             driven: true,
-            drowned: !clear(top),
+            drowned: !clear(top, lines.flies),
         })
     });
     if jet.as_ref().is_some_and(|jet| !jet.drowned) {
@@ -1145,6 +1668,7 @@ fn leaving(
         top: level as f32,
         depth: depth as f32,
         opening: depth as f32,
+        fills: false,
         velocity: launch(face, running, flow),
         driven: false,
         drowned: false,
@@ -1155,7 +1679,8 @@ fn leaving(
 /// The fall from cell `upper` over its edge in `direction` to the cell
 /// `lower` across it, carrying `pour` m²/s, if its water falls there: as it
 /// leaves its lip, not yet followed down. `head` is the open water driving
-/// it, if any (`driving_head`).
+/// it, if any (`driving_head`); `lines` what a jet is judged by.
+#[allow(clippy::too_many_arguments)]
 fn over_face(
     graph: &SpanGraph,
     cells: &FieldCells,
@@ -1164,10 +1689,11 @@ fn over_face(
     direction: u8,
     pour: f32,
     head: Option<f32>,
+    lines: JetLines,
 ) -> Option<Fall> {
     let step = ORTHOGONAL[direction as usize];
     let face = Vector2::new(step.di as f32, step.dk as f32);
-    let leaving = leaving(cells, upper, lower, face, pour, head)?;
+    let leaving = leaving(cells, upper, lower, face, pour, head, lines)?;
     // Where the column below carries the ledge on, the water leaves where
     // the ledge really ends.
     let lower_span = graph.span(span_of(cells, lower));
@@ -1184,6 +1710,7 @@ fn over_face(
         velocity: leaving.velocity,
         depth: leaving.depth,
         opening: leaving.opening,
+        fills: leaving.fills,
         pour,
         driven: leaving.driven,
         drowned: leaving.drowned,
@@ -1191,6 +1718,7 @@ fn over_face(
         landing: lip,
         into: None,
         age: 0.0,
+        lapsed: 0.0,
         spent: None,
         aloft: 0.0,
         settling: 0.0,
@@ -1227,6 +1755,7 @@ fn off_edge(
         velocity: launch(face, speed, flow),
         depth: depth as f32,
         opening: depth as f32,
+        fills: false,
         pour,
         driven: false,
         drowned: false,
@@ -1234,6 +1763,7 @@ fn off_edge(
         landing: lip,
         into: None,
         age: 0.0,
+        lapsed: 0.0,
         spent: None,
         aloft: 0.0,
         settling: 0.0,
@@ -1251,11 +1781,17 @@ fn off_edge(
 const DROWNED_REACH: usize = 6;
 
 /// The level of the water outside that the jet `fall`, bursting towards
-/// the cell `below`, meets before its top has dropped any way: water
+/// the cell `below`, meets before its top has dropped `clearance`: water
 /// heaped at the hole's mouth, or a pool risen to it. It is then no jet
 /// flying but the hole's water running on into the water outside, which
 /// its head must push aside. None for a jet that comes out into the air.
-fn met(graph: &SpanGraph, cells: &FieldCells, fall: &Fall, below: SpanIndex) -> Option<f32> {
+fn met(
+    graph: &SpanGraph,
+    cells: &FieldCells,
+    fall: &Fall,
+    below: SpanIndex,
+    clearance: f32,
+) -> Option<f32> {
     let landed = land(
         graph,
         cells,
@@ -1266,7 +1802,7 @@ fn met(graph: &SpanGraph, cells: &FieldCells, fall: &Fall, below: SpanIndex) -> 
         DROWNED_REACH,
     );
     let into = landed.into?;
-    (fall.lip.y - landed.foot.y < JET_CLEARANCE).then(|| cells.surface(into) as f32)
+    (fall.lip.y - landed.foot.y < clearance).then(|| cells.surface(into) as f32)
 }
 
 /// How far above the level its water lands at a cell's floor may stand for
@@ -1508,6 +2044,97 @@ mod tests {
     }
 
     #[test]
+    fn a_fall_its_water_still_pours_over_is_kept_on_through_a_surge_and_ends_after_it() {
+        let (graph, mut cells) = cliff();
+        *cells.depth_mut(cell(3, 5)) = 0.5;
+        pour(&mut cells, 3, 5, 1.0);
+        let mut found = Falls::default();
+        let dt = 1.0 / 60.0;
+        found.find(&graph, &mut cells, None, dt);
+        let lip = found.get(cell(3, 5), 0).expect("it falls").lip;
+        // The water below the cliff surges up to 0.3 m under its lip: no
+        // fall would be found there, but this one is kept on as it was...
+        for i in 4..CHUNK_COLUMNS {
+            *cells.depth_mut(cell(i, 5)) = 4.2;
+        }
+        found.find(&graph, &mut cells, None, dt);
+        let kept = found.get(cell(3, 5), 0).expect("kept on");
+        assert!(kept.spent.is_none() && kept.lip == lip);
+        // ...until the water has stood there longer than a surge would.
+        for _ in 0..=(GRACE / dt) as usize {
+            found.find(&graph, &mut cells, None, dt);
+        }
+        let ended = found.get(cell(3, 5), 0);
+        assert!(ended.is_none_or(|fall| fall.spent.is_some()));
+    }
+
+    #[test]
+    fn falls_into_a_gap_off_both_its_sides_meet_and_come_down_together() {
+        // Ground at 4 m but for a gap 2 m wide, from x = 2 m to 4 m, with
+        // water 0.5 m deep pouring into it off both sides.
+        let land_from = |left: f32, right: f32| -> (Fall, Fall) {
+            let (graph, mut cells) = terrace(|i| if (4..8).contains(&i) { 0.0 } else { 4.0 });
+            for i in [3, 8] {
+                *cells.depth_mut(cell(i, 5)) = 0.5;
+            }
+            pour(&mut cells, 3, 5, left);
+            pour(&mut cells, 7, 5, -right);
+            let mut found = Falls::default();
+            found.find(&graph, &mut cells, None, 0.0);
+            let left = *found
+                .get(cell(3, 5), 0)
+                .expect("water falls in off the left");
+            let right = *found.get(cell(8, 5), 2).expect("and off the right");
+            (left, right)
+        };
+        // Alone, each would fly 1.9 m: on past where the other comes down.
+        // Pouring alike, they meet in the middle...
+        let (left, right) = land_from(1.0, 1.0);
+        for fall in [left, right] {
+            assert!((fall.foot.x - 3.0).abs() < 0.02, "{:?}", fall.foot);
+            assert!(fall.foot.y.abs() < 1.0e-5);
+        }
+        // ...and the one carrying four times the momentum carries the
+        // meeting four fifths of the way across.
+        let (left, right) = land_from(2.0, 1.0);
+        for fall in [left, right] {
+            assert!((fall.foot.x - 3.6).abs() < 0.02, "{:?}", fall.foot);
+        }
+    }
+
+    #[test]
+    fn a_fall_into_a_cave_wider_than_where_it_lands_pours_on_unchecked() {
+        // A ledge at 4 m over the mouth of a cave 6 m high and 6 m deep
+        // that runs the chunk's width: a second's water in the air is more
+        // than the cells it lands in hold, but nothing to the cave.
+        let (graph, mut cells) = chunk_of(|i, _| match i {
+            0..=3 => open(4.0),
+            _ => roofed(0.0, 6.0),
+        });
+        let ledge: Vec<SpanIndex> = (4..=6).map(|k| cell(3, k)).collect();
+        let mut solver = FieldSolver::default();
+        let mut found = Falls::default();
+        let dt = 1.0 / 60.0;
+        let mut poured = 0;
+        for _ in 0..(3.0 / dt) as usize {
+            for &at in &ledge {
+                *cells.depth_mut(at) = 1.0;
+            }
+            solver.step(&mut cells, dt);
+            found.find(&graph, &mut cells, Some(solver.brinks()), dt);
+            let pouring = |at: &SpanIndex| found.get(*at, 0).is_some_and(|f| f.spent.is_none());
+            if poured > 0 || ledge.iter().all(pouring) {
+                assert!(
+                    ledge.iter().all(pouring),
+                    "a fall stopped after {poured} steps"
+                );
+                poured += 1;
+            }
+        }
+        assert!(poured > 150, "it poured for {poured} steps");
+    }
+
+    #[test]
     fn a_thick_stream_comes_down_over_the_ground_between_its_underside_and_its_top() {
         let (graph, mut cells) = cliff();
         *cells.depth_mut(cell(3, 5)) = 2.0;
@@ -1686,12 +2313,47 @@ mod tests {
         let jet = *found.get(cell(4, 5), 0).expect("the hole's top is clear");
         assert!(jet.driven && jet.drowned && jet.spent.is_none());
         assert!(cells.flights.is_empty(), "its water runs on over its face");
-        // Water up to the hole's roof: nothing of it is left to see.
+        // Water up to the hole's roof: nothing of it is left to see, once
+        // it has stood there longer than a surge would.
         for i in 5..CHUNK_COLUMNS {
-            *cells.depth_mut(cell(i, 5)) = 2.4;
+            *cells.depth_mut(cell(i, 5)) = 2.5;
         }
-        found.find(&graph, &mut cells, None, 0.0);
+        found.find(&graph, &mut cells, None, 2.0 * GRACE);
         assert!(found.iter().all(|fall| fall.spent.is_some()));
+    }
+
+    #[test]
+    fn a_jet_found_before_holds_to_how_it_was_until_the_water_outside_passes_its_line_by_a_margin()
+    {
+        // Each case: the water outside the hole as the jet is first found,
+        // then as it is found again; and whether a jet found afresh in the
+        // second is seen, and drowned.
+        let found_at = |first: Option<f64>, then: f64| -> Option<Fall> {
+            let (graph, mut cells) = holed_dam(4.0);
+            let mut found = Falls::default();
+            for outside in first.into_iter().chain([then]) {
+                for i in 5..CHUNK_COLUMNS {
+                    *cells.depth_mut(cell(i, 5)) = outside;
+                }
+                found.find(&graph, &mut cells, None, 0.0);
+            }
+            found
+                .get(cell(4, 5), 0)
+                .filter(|jet| jet.spent.is_none())
+                .copied()
+        };
+        // The jet's top stands at 2.01 m and its hole's roof at 2.5 m. With
+        // the water outside 0.2 m under its top, a new jet is drowned...
+        let fresh = found_at(None, 1.8).expect("seen");
+        assert!(fresh.drowned);
+        // ...but one that was flying flies on.
+        let flew = found_at(Some(1.7), 1.8).expect("seen");
+        assert!(!flew.drowned);
+        // With the water 0.1 m under the hole's roof, a new jet is not seen
+        // at all, but one that was drowned under it still is.
+        assert!(found_at(None, 2.4).is_none());
+        let kept = found_at(Some(2.1), 2.4).expect("still seen");
+        assert!(kept.drowned);
     }
 
     #[test]
@@ -1708,11 +2370,12 @@ mod tests {
             .get(cell(4, 5), 0)
             .expect("it is seen running into it");
         assert!(jet.drowned && cells.flights.is_empty());
-        // Up to the hole's roof, and it is no fall at all.
+        // Up to the hole's roof, and once it has stood there longer than a
+        // surge would, it is no fall at all.
         for i in 6..CHUNK_COLUMNS {
-            *cells.depth_mut(cell(i, 5)) = 2.4;
+            *cells.depth_mut(cell(i, 5)) = 2.5;
         }
-        found.find(&graph, &mut cells, None, 0.0);
+        found.find(&graph, &mut cells, None, 2.0 * GRACE);
         assert!(found.iter().all(|fall| fall.spent.is_some()));
     }
 
@@ -1769,7 +2432,9 @@ mod tests {
         // Water 4 m deep behind a dam holed 1 m to 1.5 m up, and beyond the
         // dam a cave under the same ground, its roof no higher than the
         // hole's: two columns long, so the jet has more in the air than
-        // the cave has room for before the first of it is down.
+        // the cave has room for before the first of it is down. What lands
+        // in the cave does not spread back into the hole it came through:
+        // that fills from the lake as soon as the jet stops.
         let (graph, mut cells) = stacked(|i, k| match i {
             1..=6 if k == 5 => vec![open(0.0)],
             7..=8 if k == 5 => vec![roofed(1.0, 1.5), open(6.0)],
@@ -1797,7 +2462,11 @@ mod tests {
             let room: f64 = (cave.iter())
                 .map(|&at| cells.room(at).max(0.0) * CELL_AREA)
                 .sum();
-            let aloft: f64 = found.iter().map(|fall| fall.aloft).sum::<f64>()
+            // What a jet that has stopped still has in the air was sent
+            // while there was room for it; the lake, driving its water on
+            // through the hole, may fill the cave under it before it lands.
+            let pouring = found.iter().filter(|fall| fall.spent.is_none());
+            let aloft: f64 = pouring.map(|fall| fall.aloft).sum::<f64>()
                 + cells.flights.iter().map(|f| f.aloft).sum::<f64>();
             if found.iter().any(|fall| fall.driven) {
                 jetted += aloft;
@@ -1809,6 +2478,7 @@ mod tests {
         }
         assert!(jetted > 0.0, "a jet flew into the cave");
         assert!(cave.iter().all(|&at| cells.full(at)), "and filled it");
+        assert!(found.aloft() < 1.0e-9, "and all it threw came down");
     }
 
     #[test]
@@ -1866,11 +2536,16 @@ mod tests {
         let lost = set_down(&graph, &mut cells, &[cell(4, 5)], 0.5);
         assert_eq!(lost, 0.0);
         assert!(cells.room(cell(4, 5)).abs() < 1.0e-9 && cells.room(cell(5, 5)).abs() < 1.0e-9);
-        assert!(
-            (cells.depth(cell(6, 5)) - 2.0).abs() < 1.0e-9,
-            "the nearest cell with room takes it"
-        );
-        assert_eq!(cells.depth(cell(7, 5)), 0.0);
+        // It spreads out of the cave as a sheet over the nearest cells
+        // with room, not a column in the first of them.
+        let held: f64 = cells.chunks[0].depth.iter().sum::<f64>() * CELL_AREA;
+        assert!((held - 1.0).abs() < 1.0e-9, "all of it is down: {held}");
+        let outside = (0..CHUNK_COLUMNS).flat_map(|i| (0..CHUNK_COLUMNS).map(move |k| (i, k)));
+        for (i, k) in outside.filter(|&(i, k)| k != 5 || !(4..=5).contains(&i)) {
+            assert!(cells.depth(cell(i, k)) <= BACKED_UP + 1.0e-9, "({i}, {k})");
+        }
+        assert!((cells.depth(cell(6, 5)) - BACKED_UP).abs() < 1.0e-9);
+        assert!((cells.depth(cell(7, 5)) - BACKED_UP).abs() < 1.0e-9);
 
         // With nowhere in reach to back up into, it stands over the roof.
         let (graph, mut cells) = chunk_of(|i, k| match i {
