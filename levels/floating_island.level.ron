@@ -2,13 +2,15 @@
 //
 // One island, about sixty metres across, on a keel of limestone that hangs
 // thirty metres below it to a point. A knoll stands on its north side; a
-// spring in the knoll's face fills a pond, and the pond's overflow runs east
-// in a brook and pours off the rim. There is nothing around the island and
-// nothing under it: walk off the edge and the level begins again.
+// spring in the face of a crag on its flank fills a pond with fish in it,
+// and the pond's overflow runs north-east in a brook and pours off the rim. Fruit
+// lies in a glade by the grove; an egg walker keeps the north-west corner.
+// There is nothing around the island and nothing under it: walk off the
+// edge and the level begins again.
 //
 //                       north (−z)
-//               ░░░ knoll ░░░  ▶ spring
-//             ░░░░░░░░░░░ pond ──brook──▶ falls off the rim
+//               ░░░ knoll ░░░  ▶ spring    ╱ falls off the rim
+//             ░░░░░░░░░░░ pond ──brook──╯
 //          meadow                       ▒
 //               trees    spawn    crates on a terrace at the rim
 //
@@ -39,6 +41,18 @@ Level(
                 surface_bands: [
                     // Cliffs are bare stone.
                     (steeper_than: Some(1.5), layers: [(depth: 999.0, material: Limestone)]),
+                    // The pond's and the brook's beds are sand, up past the
+                    // water's edge...
+                    (cut_deeper_than: Some(0.5), layers: [
+                        (depth: 0.5,   material: Sand),
+                        (depth: 2.5,   material: Dirt),
+                        (depth: 999.0, material: Limestone),
+                    ]),
+                    // ...and the foot of their banks bare earth.
+                    (cut_deeper_than: Some(0.15), layers: [
+                        (depth: 2.5,   material: Dirt),
+                        (depth: 999.0, material: Limestone),
+                    ]),
                 ],
 
                 features: [
@@ -62,6 +76,19 @@ Level(
                         shore_height: 6.0, height: 12.0, rise: 5.0, skirt: 4.0,
                         warp: 2.0, relief: 1.5, seed: 2,
                     ),
+                    // A crag on the knoll's east flank, sheer over the pond:
+                    // the spring comes out of its face.
+                    Landmass(
+                        outline: [(1.5, -17.5), (5.5, -18.0), (7.0, -15.0), (6.5, -11.5), (3.0, -11.0), (1.0, -14.0)],
+                        shore_height: 6.0, height: 10.5, rise: 1.2,
+                        warp: 0.6, relief: 0.6, seed: 7,
+                    ),
+                    // A level glade by the grove, where the fruit has fallen.
+                    Landmass(
+                        outline: [(-17.5, 0.0), (-8.5, 0.5), (-5.5, 6.5), (-10.5, 10.5), (-17.5, 8.0)],
+                        shore_height: 6.0, height: 7.4, rise: 2.0, skirt: 3.0,
+                        warp: 1.0, seed: 8,
+                    ),
                     // A low terrace by the east rim, level for the crates.
                     Landmass(
                         outline: [(23.5, 5.5), (29.0, 5.0), (29.5, 10.0), (26.0, 12.5), (23.0, 10.0)],
@@ -70,13 +97,14 @@ Level(
                     ),
                     // The pond under the knoll's east face, held by its lip.
                     Basin(center: (12.0, -12.0), radius: 5.0, floor: 4.0, warp: 1.5, seed: 11),
-                    // Its brook, east out of it and through a notch in the rim.
+                    // Its brook, down the lawn's fall to the north-east rim, through a
+                    // notch in it.
                     Channel(
                         points: [
-                            (14.5, 4.6, -11.5), (18.0, 4.5, -10.0), (24.0, 4.0, -8.0),
-                            (30.0, 3.2, -5.5), (38.0, 2.4, -3.0),
+                            (14.5, 4.6, -11.5), (18.5, 4.2, -11.0), (21.5, 3.2, -12.0),
+                            (24.0, 2.3, -13.0), (29.0, 1.6, -16.0),
                         ],
-                        width: 1.6, bank: 1.2, warp: 1.0, seed: 12,
+                        width: 1.6, bank: 1.0, warp: 1.0, seed: 12,
                     ),
                 ],
 
@@ -115,6 +143,17 @@ Level(
                 // Cypresses on the knoll.
                 Cypress(pos: (-6.0, -18.0), height: 5.6, radius: 0.65),
                 Cypress(pos: (-10.0, -15.0), height: 4.6, radius: 0.55),
+                // Windfall in the glade.
+                Dropped(Fruit(pos: (-12.0, 9.0, 4.5), kind: Peach, radius: 0.6)),
+                Dropped(Fruit(pos: (-10.5, 9.0, 6.0), kind: Cherry, radius: 0.4)),
+                Dropped(Fruit(pos: (-13.4, 9.0, 5.4), kind: Blackberry)),
+                Dropped(Banana(pos: (-10.2, 9.0, 4.2))),
+                // Fish in the pond.
+                Fish(pos: (11.0, -12.5)),
+                Fish(pos: (12.8, -11.2)),
+                Fish(pos: (12.2, -13.4)),
+                // An egg walker, out in the north-west corner.
+                EggWalker(pos: (-22.0, -11.0)),
                 // Crates on the terrace by the east rim, to shove off.
                 Dropped(Crate(pos: (25.5, 7.0, 7.8), size: 0.5)),
                 Dropped(Crate(pos: (27.0, 7.0, 8.4), size: 0.5)),
@@ -141,8 +180,9 @@ Level(
     water: Some((
         bodies: [
             Pool(seed: (12.0, -12.0), surface_level: 4.7),
-            // Out of the knoll's east face into the pond.
-            Spring(position: (5.0, 9.0, -14.0), direction: (5.0, 0.0, 0.0), discharge: 1.5),
+            // Out of the crag's face into the pond: set just inside the
+            // rock, and moved out along its way to the face.
+            Spring(position: (6.0, 8.5, -14.0), direction: (4.0, 0.0, 0.0), discharge: 1.5),
         ],
     )),
 )
