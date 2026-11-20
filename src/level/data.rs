@@ -365,15 +365,22 @@ pub struct SurfaceBand {
     /// where soil would not stay.
     #[serde(default)]
     pub steeper_than: Option<f32>,
+    /// Depth (m) a `Channel` or `Basin` must have cut the column's surface
+    /// down by: a watercourse's bed and the lower part of its banks, laid
+    /// unlike the ground it was cut into wherever that lies.
+    #[serde(default)]
+    pub cut_deeper_than: Option<f32>,
     /// Layers by depth, as `Terrain::material_layers`.
     pub layers: Vec<MaterialLayer>,
 }
 
 impl SurfaceBand {
-    /// Whether a surface at `height` with `slope` lies in this band.
-    pub fn holds(&self, height: f32, slope: f32) -> bool {
+    /// Whether a surface at `height` with `slope`, cut down `cut` m by
+    /// watercourses, lies in this band.
+    pub fn holds(&self, height: f32, slope: f32, cut: f32) -> bool {
         self.below.is_none_or(|below| height < below)
             && self.steeper_than.is_none_or(|steepest| slope > steepest)
+            && self.cut_deeper_than.is_none_or(|deepest| cut > deepest)
     }
 }
 

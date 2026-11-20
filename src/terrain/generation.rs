@@ -266,7 +266,8 @@ impl<'a> Column<'a> {
         // Debiased before anything is derived from it: an authored height
         // that lands exactly on a lattice plane degenerates marching cubes, and
         // the column's indices must describe the height actually encoded.
-        let height = debias_height(height_at(x, z, terrain), step);
+        let surface = surface_at(x, z, terrain);
+        let height = debias_height(surface.height, step);
         let needs_slope = terrain.smooth_slopes
             || terrain
                 .surface_bands
@@ -287,7 +288,7 @@ impl<'a> Column<'a> {
         let top = top_voxel_index(height, step).max(iy0);
         // The last lattice plane within one voxel's distance above the surface.
         let air_top = ((((height + step * stretch) / step).ceil() as i32) - 1).max(top + 1);
-        let layers = surface_layers(height, slope, terrain);
+        let layers = surface_layers(height, slope, surface.cut, terrain);
         let face_below =
             neighbours.map_or(height, |around| around.into_iter().fold(height, f32::min));
         let face_slope = (height - face_below) / step;
@@ -306,7 +307,7 @@ impl<'a> Column<'a> {
             air_top,
             stretch,
             layers,
-            face_layers: surface_layers(height, face_slope.max(slope), terrain),
+            face_layers: surface_layers(height, face_slope.max(slope), surface.cut, terrain),
             face_below,
             depth_origin: top_voxel_index(face_above.unwrap_or(height), step) as f32 * step,
             under_face: face_above.is_some(),
@@ -385,20 +386,54 @@ fn div_floor(a: i32, b: i32) -> i32 {
 /// Compute the terrain surface height at a given (x, z) position by
 /// accumulating all heightfield feature contributions.
 fn height_at(x: f32, z: f32, terrain: &Terrain) -> f32 {
-    let mut h = terrain.base_height;
+    surface_at(x, z, terrain).height
+}
+
+/// The heightfield's surface over one point.
+#[derive(Debug, Clone, Copy)]
+struct Surface {
+    /// Height, every feature's contribution accumulated.
+    height: f32,
+    /// How far channels and basins have cut it down, m, less what later
+    /// features have filled back in.
+    cut: f32,
+}
+
+/// The heightfield's surface at (x, z).
+fn surface_at(x: f32, z: f32, terrain: &Terrain) -> Surface {
+    let mut surface = Surface {
+        height: terrain.base_height,
+        cut: 0.0,
+    };
     for feature in &terrain.features {
-        h += contribute(feature, x, z, h);
+        let change = contribute(feature, x, z, surface.height);
+        surface.cut = if cuts_a_bed(feature) {
+            surface.cut - change
+        } else {
+            (surface.cut - change.max(0.0)).max(0.0)
+        };
+        surface.height += change;
     }
-    h
+    surface
+}
+
+/// Whether a feature cuts a watercourse's bed: only ever lowers the ground,
+/// to where water runs or stands.
+fn cuts_a_bed(feature: &TerrainFeature) -> bool {
+    matches!(
+        feature,
+        TerrainFeature::Channel { .. } | TerrainFeature::Basin { .. }
+    )
 }
 
 /// The layers that lay a column whose surface stands at `height` with
-/// `slope`: the first surface band holding it, or the terrain's own.
-fn surface_layers(height: f32, slope: f32, terrain: &Terrain) -> &[MaterialLayer] {
+/// `slope`, cut down `cut` m by watercourses: the first surface band holding
+/// it, or the terrain's own.
+fn surface_layers(height: f32, slope: f32, cut: f32, terrain: &Terrain) -> &[MaterialLayer] {
     terrain
         .surface_bands
         .iter()
-        .find(|band| band.holds(height, slope))
+        .find(|band| band.holds(height, slope, cut))
         .map_or(&terrain.material_layers, |band| &band.layers)
 }
 
@@ -1733,6 +1768,7 @@ mod tests {
             surface_bands: vec![SurfaceBand {
                 below: None,
                 steeper_than: Some(1.5),
+                cut_deeper_than: None,
                 layers: vec![MaterialLayer {
                     depth: 999.0,
                     material: VoxelMaterialId::Rock,
@@ -1909,6 +1945,74 @@ mod tests {
         // keel's stone, parted halfway.
         assert_eq!(material(7.5, 2.0), VoxelMaterial::Dirt);
         assert_eq!(material(7.5, -0.5), VoxelMaterial::Slate);
+    }
+
+    /// A brook cut 1 m into a lawn at 3 m, and beside it a crater no
+    /// watercourse cut, as deep: only the brook's bed is laid as a bed.
+    fn brook_and_crater() -> Terrain {
+        let layers = |material| {
+            vec![
+                MaterialLayer {
+                    depth: 0.6,
+                    material,
+                },
+                MaterialLayer {
+                    depth: 999.0,
+                    material: VoxelMaterialId::Dirt,
+                },
+            ]
+        };
+        Terrain {
+            bedrock_thickness: 0.0,
+            underside: Vec::new(),
+            voxel_size: 0.5,
+            bounds: Extent {
+                min: (0.0, 0.0, -8.0),
+                max: (24.0, 6.0, 8.0),
+            },
+            base_height: 3.0,
+            material_layers: layers(VoxelMaterialId::Grass),
+            surface_bands: vec![SurfaceBand {
+                below: None,
+                steeper_than: None,
+                cut_deeper_than: Some(0.25),
+                layers: layers(VoxelMaterialId::Sand),
+            }],
+            smooth_slopes: true,
+            features: vec![
+                TerrainFeature::Crater {
+                    center: (18.0, 0.0),
+                    radius: 4.0,
+                    depth: 1.0,
+                },
+                TerrainFeature::Channel {
+                    points: vec![(0.0, 2.0, -4.0), (12.0, 2.0, -4.0)],
+                    width: 2.0,
+                    bank: 1.0,
+                    warp: 0.0,
+                    seed: 0,
+                },
+            ],
+            volumes: Vec::new(),
+        }
+    }
+
+    /// A band can lay what watercourses cut, wherever it lies: a brook's
+    /// bed is sand, the lawn it runs through and a hollow as deep that no
+    /// watercourse cut are turf.
+    #[test]
+    fn a_watercourse_bed_is_laid_by_the_band_for_what_is_cut() {
+        let terrain = brook_and_crater();
+        let grid = generated(&terrain);
+        let top = |x: f32, z: f32| {
+            let height = debias_height(height_at(x, z, &terrain), terrain.voxel_size);
+            let y = top_voxel_index(height, terrain.voxel_size) as f32 * terrain.voxel_size;
+            grid.get(Point3::new(x, y, z)).material
+        };
+        assert_eq!(top(6.0, -4.0), VoxelMaterial::Sand, "the brook's bed");
+        assert_eq!(top(6.0, 4.0), VoxelMaterial::Grass, "the lawn");
+        assert_eq!(top(18.0, 0.0), VoxelMaterial::Grass, "the crater's floor");
+        assert!(height_at(18.0, 0.0, &terrain) < height_at(6.0, -4.0, &terrain) + 0.1);
     }
 
     /// A column partway down a sheer flank takes its layers from the top of

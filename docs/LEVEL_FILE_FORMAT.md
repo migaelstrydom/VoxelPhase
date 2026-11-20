@@ -643,8 +643,10 @@ Two terrain-level settings go with them:
 
 - `surface_bands` lays a column with other layers by where its surface lies:
   `below` a height (sand under a coast line), `steeper_than` a slope (bare
-  rock on cliffs), or both. The first band that holds a column wins; columns
-  no band holds take `material_layers`.
+  rock on cliffs), `cut_deeper_than` a depth a `Channel` or `Basin` cut it
+  down by (a brook's or a pond's bed and the foot of its banks, wherever it
+  lies), or any of them together. The first band that holds a column wins;
+  columns no band holds take `material_layers`.
 - `smooth_slopes` (on by default) encodes the surface by its distance across
   the slope, so steep heightfield slopes mesh as smooth faces rather than
   half-voxel steps. It also leans a plateau's wall across the voxel at its
