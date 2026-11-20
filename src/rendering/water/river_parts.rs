@@ -381,6 +381,80 @@ mod in_a_level {
         (parted, worst)
     }
 
+    /// After a blast, two cells of a surface that each count the other in
+    /// the group at a corner they share lay that corner at the same height,
+    /// to the last bit: two corners a hair apart open a crack between the
+    /// quads. W1's breach and water_park's undercroft have water in a hole
+    /// under a roof beside open water, whose columns hold dry ground over
+    /// the hole's water.
+    #[test]
+    fn a_corner_shared_by_cells_of_one_surface_is_laid_once() {
+        for (level, at, frames) in [
+            ("w1", Point3::new(12.2, 8.0, 20.0), 600),
+            ("water_park", Point3::new(-64.0, 6.0, -6.0), 1800),
+        ] {
+            let (apart, worst) = corners_laid_apart(level, at, frames);
+            assert_eq!(apart, 0, "{level}: corners laid up to {worst:e} m apart");
+        }
+    }
+
+    /// Run a level's water through a blast at `at` for `frames`, as the game
+    /// draws it, and count the corners two cells of one group laid apart in
+    /// the surfaces up to date, and the worst.
+    fn corners_laid_apart(level: &str, at: Point3<f32>, frames: usize) -> (usize, f32) {
+        let path = match level {
+            "w1" => "levels/rooms/w1_flood_the_hollow.level.ron".to_string(),
+            level => format!("levels/{level}.level.ron"),
+        };
+        let level = load_level(Path::new(&path)).unwrap();
+        let mut terrain = build_terrain(&level);
+        let mut water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+        let mut parts = RiverParts::default();
+        let (mut apart, mut worst) = (0, 0.0f32);
+        for frame in 0..frames {
+            if frame == 30 {
+                terrain.detonate(at, &BlastConfig::default());
+            }
+            terrain.update();
+            water.on_terrain_update(&terrain);
+            water.step(1.0 / 60.0);
+            parts.sync(&water);
+            // A surface waiting to be built again keeps the shapes it was
+            // built with while its heights move on.
+            let versions: BTreeMap<SurfaceId, u32> = water.river_key().into_iter().collect();
+            let current = (parts.parts.iter()).filter(|(id, part)| part.version == versions[*id]);
+            for (_, part) in current {
+                // Each corner by where it lies: the height it was laid at,
+                // the cell that laid it, and the cells of its group.
+                let mut laid: BTreeMap<(u32, u32), Vec<(f32, SpanIndex, Vec<SpanIndex>)>> =
+                    BTreeMap::new();
+                for (v, source) in part.mesh.vertices.iter().zip(&part.mesh.sources.vertices) {
+                    if let VertexSource::Corner { cells, shape } = source {
+                        let group = (cells.iter().enumerate())
+                            .filter(|&(i, _)| shape.joins(i))
+                            .map(|(_, &c)| c)
+                            .collect();
+                        laid.entry((v.xz.x.to_bits(), v.xz.y.to_bits()))
+                            .or_default()
+                            .push((v.surface, cells[0], group));
+                    }
+                }
+                for corners in laid.values() {
+                    for (i, (a, a_cell, a_group)) in corners.iter().enumerate() {
+                        for (b, b_cell, b_group) in &corners[i + 1..] {
+                            let one = a_group.contains(b_cell) && b_group.contains(a_cell);
+                            if one && a != b {
+                                apart += 1;
+                                worst = worst.max((a - b).abs());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        (apart, worst)
+    }
+
     /// Every cell a level's surfaces read again lies in a chunk whose
     /// layout the surface notes, so a blast that lays that chunk out again
     /// has the surface built afresh instead of read from a cell gone.

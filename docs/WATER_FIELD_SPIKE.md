@@ -263,6 +263,7 @@ seiche.
 | Metres of water stood over the roof of a hole in a dam (`water_fuzz`) | A jet shut in by rock kept sending water into the air with nowhere to land, and its last water was forced into a full cell | A face sends up no more than has room to land; a spent fall's last water backs up to the nearest room |
 | Water draining through a hole in a pond's floor into the cave below was drawn as a fan of arcs flying out under the roof, flickering, and on some frames not at all (water_park's undercroft, in play) | Streams off the hole's opposite sides flew through each other; landing under the roof, each fall's room was only that of the few cells it landed in, so the solver cut its face to nothing every other step | Falls flying at each other meet; the room is that of the body of roofed cells the water spreads through |
 | A pocket a blast carved under W4's spring filled over its roof at the spring's rate (`water_fuzz`) | A source poured its share into each landing cell whatever room it had | A source pours as falls do, no deeper than a cell's roof; a pocket full to its roof chokes it, and it pours only as fast as the pocket lets water out |
+| A hairline crack ran across the water from a cave's mouth (water_park's courtyard, in play), and dark wedges opened under W1's breach | A cell found the diagonal across a corner by its x side first: where a column round the corner held water under a roof and dry ground over it, one cell met the corner's water and its neighbour the ground, and the two laid their shared corner apart, by 0.4 mm to 0.8 m | Each column round a corner is reached from either side, and the soonest met taken |
 | A breach's jets flickered at 30 Hz (W1, in play) | The water at the hole's mouth rocks by centimetres to tens of centimetres from step to step, across the lines a jet is judged by | A fall found again is held to by a margin, kept on through a surge for 0.15 s, and eases into its new shape |
 | A cave's water stood 20 cm over its roof after a blast nearby | The re-mesh brought its ceiling back lower | A re-paired span's ceiling is held, as its floor is |
 | A lake poured into a slot at its foot for ever and the pocket beyond never filled | The water left as a fall off the top of the lake and was set down on the lake again | Water leaves no higher than the opening's roof, as a jet where open water stands over it |
@@ -282,7 +283,11 @@ pipeline, with no new shader:
   split where one falls to the next: a step over 0.5 m where the upper
   water's bed stands above the lower water, which a slope would cut through.
   Water whose bed lies below the water beside it slopes down to it however
-  high the step: a front running out over a floor has no edge to fall over;
+  high the step: a front running out over a floor has no edge to fall over.
+  Every cell meeting at a corner lays its own copy of it, so each must find
+  the same cells there: in each column round the corner, the span reached
+  from either side (`round_corner`), and the same sum to the last bit, or
+  the quads part by a hairline;
 - a curtain for each of the field's falls (section 4), hung from the cell's
   edge along the fall's arc down to where it lands, out at the lip where the
   lower column's own floor carries the ledge on (each span keeps a bed per

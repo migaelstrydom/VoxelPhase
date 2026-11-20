@@ -282,6 +282,13 @@ pub(super) struct Shape {
     grouped: u8,
 }
 
+impl Shape {
+    /// Whether meeting `i` joined the group whose surface the corner takes.
+    pub(super) fn joins(&self, i: usize) -> bool {
+        self.grouped & (1 << i) != 0
+    }
+}
+
 /// A corner from the cells meeting there, the cell's own first, for a cell
 /// whose surface stands at `level`.
 ///
@@ -298,7 +305,15 @@ pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
         .iter()
         .filter_map(|m| Some((m.surface?, m.weight, m.bed, m.roof)))
         .collect();
-    surfaces.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // In an order every cell meeting at the corner sorts them into alike,
+    // whichever it lists first, so each sums them alike to the last bit:
+    // two corners a hair apart open a crack between their quads.
+    surfaces.sort_by(|a, b| {
+        (a.0.total_cmp(&b.0))
+            .then_with(|| a.1.total_cmp(&b.1))
+            .then_with(|| a.2.total_cmp(&b.2))
+            .then_with(|| a.3.total_cmp(&b.3))
+    });
     let mut group: SmallVec<[(f64, f64); 4]> = SmallVec::new();
     // The lowest roof over the group's water: water standing higher is not
     // of the group, but lies over that roof.
@@ -366,7 +381,7 @@ pub(super) struct Carried {
 pub(super) fn corner_carried(field: &WaterField, cells: &[SpanIndex], shape: Shape) -> Carried {
     let (mut flow, mut foam, mut count) = (Vector2::zeros(), 0.0, 0.0);
     for (i, &c) in cells.iter().enumerate() {
-        if shape.grouped & (1 << i) != 0 {
+        if shape.joins(i) {
             flow += field.velocity(c);
             foam += field.foam(c);
             count += 1.0;

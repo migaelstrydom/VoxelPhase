@@ -124,33 +124,107 @@ impl<'a> FieldScene<'a> {
         Some(Meeting::of(&self.drawn_cells(), self.cell(span)?))
     }
 
+    /// How soon a surface at `level` would meet the water in `span`: wet
+    /// water before dry ground, then the nearer its surface, or its floor,
+    /// stands to `level`. None for a span with no cell.
+    fn reach(&self, span: SpanRef, level: f64) -> Option<(bool, f64)> {
+        let m = self.meeting(span)?;
+        Some((
+            m.surface.is_none(),
+            (m.surface.unwrap_or(m.bed) - level).abs(),
+        ))
+    }
+
+    /// Of `spans`, the one a surface at `level` would meet soonest (`reach`).
+    fn soonest(&self, spans: impl IntoIterator<Item = SpanRef>, level: f64) -> Option<SpanRef> {
+        spans
+            .into_iter()
+            .filter_map(|s| Some((self.reach(s, level)?, s)))
+            .min_by(|((a_dry, a), _), ((b_dry, b), _)| a_dry.cmp(b_dry).then(a.total_cmp(b)))
+            .map(|(_, s)| s)
+    }
+
     /// The span joined to `span` across one orthogonal step whose water a
     /// surface at `level` would meet: the wet one whose surface stands
     /// nearest, else the one whose floor does.
     fn across(&self, span: SpanRef, di: i32, dk: i32, level: f64) -> Option<SpanRef> {
-        let near = |m: &Meeting| (m.surface.unwrap_or(m.bed) - level).abs();
-        let mut wet: Option<(f64, SpanRef)> = None;
-        let mut any: Option<(f64, SpanRef)> = None;
-        for n in self.field.graph().joined(span, Step { di, dk }) {
-            let key = SpanRef::key(n.span.column, n.span.ordinal);
-            let Some(m) = self.meeting(key) else {
-                continue;
-            };
-            let d = near(&m);
-            if m.surface.is_some() && wet.is_none_or(|(best, _)| d < best) {
-                wet = Some((d, key));
+        let joined = self.field.graph().joined(span, Step { di, dk });
+        self.soonest(
+            joined
+                .iter()
+                .map(|n| SpanRef::key(n.span.column, n.span.ordinal)),
+            level,
+        )
+    }
+
+    /// The spans meeting at the corner of `span`'s column on the (sx, sz)
+    /// side, for a cell whose surface stands at `level`: in each of the
+    /// three columns round the corner, the span joined to a neighbour round
+    /// it that the surface would meet soonest (`across`), from whichever
+    /// side it is reached. Reached one way only, a column with water under
+    /// a roof and dry ground over it is met at one by a cell on one side of
+    /// the corner and at the other by the cell beside it, and the two lay
+    /// the corner they share apart, by a crack.
+    fn round_corner(&self, span: SpanRef, level: f64, sx: i32, sz: i32) -> [Option<SpanRef>; 4] {
+        // Each step taken, and where it led: going round again asks most
+        // of them again.
+        let mut taken: SmallVec<[(SpanRef, (i32, i32), Option<SpanRef>); 8]> = SmallVec::new();
+        let mut step = |from: Option<SpanRef>, (di, dk): (i32, i32)| -> Option<SpanRef> {
+            let from = from?;
+            if let Some(&(_, _, to)) = taken.iter().find(|t| t.0 == from && t.1 == (di, dk)) {
+                return to;
             }
-            if any.is_none_or(|(best, _)| d < best) {
-                any = Some((d, key));
+            let to = self.across(from, di, dk, level);
+            taken.push((from, (di, dk), to));
+            to
+        };
+        // Round the corner from the cell's own column: across x,
+        // diagonally, across z, and back.
+        let steps = [(sx, 0), (0, sz), (-sx, 0), (0, -sz)];
+        let x = step(Some(span), steps[0]);
+        let mut round = [Some(span), x, step(x, steps[1]), step(Some(span), (0, sz))];
+        // Where each column round the corner holds one span, open to the
+        // sky, every step between them is taken and finds it: the first
+        // way round finds what any other would.
+        let graph = self.field.graph();
+        let open = |s: &Option<SpanRef>| {
+            s.is_some_and(|s| matches!(graph.spans(s.column), [only] if only.ceiling.is_infinite()))
+        };
+        if round.iter().all(open) {
+            return round;
+        }
+        // A span found the long way round, by a wall, may be a better one
+        // to have reached from its other side: round again until nothing
+        // changes, at most once per column.
+        for _ in 0..steps.len() {
+            let before = round;
+            for c in 1..round.len() {
+                let (di, dk) = steps[c];
+                let found = [
+                    round[c],
+                    step(round[c - 1], steps[c - 1]),
+                    step(round[(c + 1) % round.len()], (-di, -dk)),
+                ];
+                let mut found = found.into_iter().flatten();
+                let first = found.next();
+                round[c] = match first {
+                    Some(first) if found.clone().any(|s| s != first) => {
+                        self.soonest(std::iter::once(first).chain(found), level)
+                    }
+                    first => first,
+                };
+            }
+            if round == before {
+                break;
             }
         }
-        wet.or(any).map(|(_, key)| key)
+        round
     }
 
     /// The corner of `span`'s column on the (sx, sz) side, for a cell whose
     /// surface stands at `level`, what its water carries, and where it
     /// reads from: the cell and the cells across from it on each side and
-    /// diagonally, as `gather` joins them.
+    /// diagonally (`round_corner`), as `gather` joins them.
     fn corner(
         &self,
         span: SpanRef,
@@ -158,12 +232,8 @@ impl<'a> FieldScene<'a> {
         sx: i32,
         sz: i32,
     ) -> (Corner, Carried, VertexSource) {
-        let x = self.across(span, sx, 0, level);
-        let z = self.across(span, 0, sz, level);
-        let diagonal = x
-            .and_then(|n| self.across(n, 0, sz, level))
-            .or_else(|| z.and_then(|n| self.across(n, sx, 0, level)));
-        let cells: SmallVec<[SpanIndex; 4]> = [Some(span), x, z, diagonal]
+        let [own, x, diagonal, z] = self.round_corner(span, level, sx, sz);
+        let cells: SmallVec<[SpanIndex; 4]> = [own, x, z, diagonal]
             .into_iter()
             .flatten()
             .filter_map(|s| self.cell(s))
