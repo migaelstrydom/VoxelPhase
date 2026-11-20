@@ -27,24 +27,24 @@ pub const VERSO_SPAN: f32 = SHEET_HEIGHT;
 
 /// Papyrus, fresh and aged, and the fibres' darker and lighter streaks.
 const PAPYRUS: Rgb = Rgb {
-    r: 0.87,
-    g: 0.77,
-    b: 0.57,
+    r: 0.8,
+    g: 0.67,
+    b: 0.45,
 };
 const PAPYRUS_AGED: Rgb = Rgb {
-    r: 0.72,
-    g: 0.56,
-    b: 0.34,
+    r: 0.62,
+    g: 0.46,
+    b: 0.27,
 };
 const FIBRE_DARK: Rgb = Rgb {
-    r: 0.74,
-    g: 0.62,
-    b: 0.41,
+    r: 0.66,
+    g: 0.52,
+    b: 0.32,
 };
 const FIBRE_LIGHT: Rgb = Rgb {
-    r: 0.93,
-    g: 0.86,
-    b: 0.68,
+    r: 0.88,
+    g: 0.78,
+    b: 0.58,
 };
 
 /// Carbon ink faded to sepia, and how much of the papyrus it hides: a
@@ -70,6 +70,15 @@ const LETTER_WIDTH: f32 = 0.0039;
 const LETTER_GAP: f32 = 0.0012;
 const LINE_PITCH: f32 = 0.0092;
 const PEN: f32 = 0.00068;
+
+/// Where one sheet is glued over the next (a kollesis), m from the
+/// recto's left edge, how wide the overlap is, how much darker, and how
+/// far along its strips the next sheet's pattern is moved, m, so the two
+/// are seen to be different sheets.
+const KOLLESEIS: [f32; 2] = [0.064, 0.418];
+const KOLLESIS_WIDTH: f32 = 0.007;
+const KOLLESIS_SHADE: f32 = 0.28;
+const KOLLESIS_SHIFT: f32 = 0.0113;
 
 /// Where the pith strips lie, m: one every so far across the fibres, and
 /// how wide the darker seam is where one overlaps the next.
@@ -153,7 +162,16 @@ pub fn recto_texture(seed: u32) -> Vec<u8> {
             let along = (x as f32 + 0.5) / RECTO_WIDTH as f32 * SHEET_WIDTH;
             let down = (y as f32 + 0.5) / RECTO_HEIGHT as f32 * SHEET_HEIGHT;
             let edge = down.min(SHEET_HEIGHT - down);
-            let papyrus = surface.at(along, down, edge);
+            let sheet = KOLLESEIS.iter().filter(|&&k| along > k).count();
+            let mut papyrus = surface.at(along, down + sheet as f32 * KOLLESIS_SHIFT, edge);
+            let seam = KOLLESEIS
+                .iter()
+                .map(|&k| (along - k).abs())
+                .fold(f32::MAX, f32::min);
+            if seam < 0.5 * KOLLESIS_WIDTH {
+                let depth = 1.0 - seam / (0.5 * KOLLESIS_WIDTH);
+                papyrus = papyrus.lerp(FIBRE_DARK, KOLLESIS_SHADE * depth.sqrt());
+            }
             let cover = ink[(y * RECTO_WIDTH + x) as usize];
             papyrus.lerp(INK, cover).write_rgba(&mut pixels);
         }
@@ -165,7 +183,7 @@ pub fn recto_texture(seed: u32) -> Vec<u8> {
 /// Tiles, since it is wound round the rolls. RGBA, sRGB.
 pub fn verso_texture(seed: u32) -> Vec<u8> {
     let rng = &mut TextureRng::new(seed);
-    let surface = Surface::new(rng).tiling();
+    let surface = Surface::new(rng).verso();
 
     let mut pixels = Vec::with_capacity((VERSO_SIZE * VERSO_SIZE * 4) as usize);
     for y in 0..VERSO_SIZE {
@@ -187,15 +205,19 @@ struct Surface {
     mottle_seed: u32,
     /// Whether it must wrap at [`VERSO_SPAN`] both ways.
     tiles: bool,
+    /// How strongly its fibres show.
+    contrast: f32,
 }
 
 /// Fibres to a metre, across them and along: fine and long; and how
-/// strongly they show. The layer beneath, its fibres crossing these,
-/// shows through faintly.
+/// strongly they show, on the recto and on the verso. The verso's are
+/// fainter, so the rolls read as wound sheet and not as grained wood. The
+/// layer beneath, its fibres crossing these, shows through faintly.
 const FIBRES_ACROSS: f32 = 900.0;
 const FIBRES_ALONG: f32 = 55.0;
-const FIBRE_CONTRAST: f32 = 0.42;
-const CROSS_CONTRAST: f32 = 0.14;
+const FIBRE_CONTRAST: f32 = 0.38;
+const VERSO_FIBRE_CONTRAST: f32 = 0.2;
+const CROSS_CONTRAST: f32 = 0.12;
 /// Patches of age to a metre.
 const MOTTLE: f32 = 9.0;
 /// How far in from a cut edge the papyrus has darkened, m.
@@ -209,6 +231,7 @@ impl Surface {
             strip_seed: rng.u32(),
             mottle_seed: rng.u32(),
             tiles: false,
+            contrast: FIBRE_CONTRAST,
         }
     }
 
@@ -227,9 +250,12 @@ impl Surface {
         }
     }
 
-    fn tiling(self) -> Self {
+    /// As the verso: wrapping, since it is wound round the rolls, and its
+    /// fibres fainter.
+    fn verso(self) -> Self {
         Self {
             tiles: true,
+            contrast: VERSO_FIBRE_CONTRAST,
             ..self
         }
     }
@@ -266,7 +292,7 @@ impl Surface {
         );
 
         // Noise about its middle spans about a quarter either way.
-        let streak = (fibre * FIBRE_CONTRAST + cross * CROSS_CONTRAST) * 4.0;
+        let streak = (fibre * self.contrast + cross * CROSS_CONTRAST) * 4.0;
         let mut colour = if streak > 0.0 {
             PAPYRUS.lerp(FIBRE_LIGHT, streak.min(1.0))
         } else {

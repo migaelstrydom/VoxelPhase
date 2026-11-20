@@ -27,15 +27,15 @@ use crate::rendering::material::MaterialId;
 use crate::rendering::vertex::Vertex;
 
 /// The open sheet, from one roll to the other and from edge to edge, m.
-pub const SHEET_WIDTH: f32 = 0.42;
-pub const SHEET_HEIGHT: f32 = 0.3;
+pub const SHEET_WIDTH: f32 = 0.5;
+pub const SHEET_HEIGHT: f32 = 0.36;
 
 /// The square the figure is drawn in, m, in the sheet's middle.
-pub const FIGURE_SIZE: f32 = 0.22;
+pub const FIGURE_SIZE: f32 = 0.26;
 
 /// How far the sheet's middle stands back from its ends, m: enough that it
 /// reads as a sheet held open, not a board.
-const BOW: f32 = 0.028;
+const BOW: f32 = 0.033;
 
 /// The sheet's thickness, m: far more than papyrus, so its edge is seen.
 const THICKNESS: f32 = 0.0012;
@@ -44,19 +44,23 @@ const THICKNESS: f32 = 0.0012;
 const SHEET_COLUMNS: usize = 32;
 
 /// The rolls' radii, m: more of the book is wound on the left.
-const LEFT_ROLL: f32 = 0.044;
-const RIGHT_ROLL: f32 = 0.034;
+const LEFT_ROLL: f32 = 0.05;
+const RIGHT_ROLL: f32 = 0.039;
 
 /// Sides round a roll.
 const ROLL_SIDES: usize = 48;
 
-/// One turn of the sheet on a roll, as seen at its end, m: far thicker than
-/// papyrus, so the spiral reads at a glance.
-const LAYER: f32 = 0.0045;
+/// One turn of the sheet on a roll, as seen at its end, m: thicker than
+/// papyrus, so the spiral is seen, but fine enough not to be a log's rings.
+const LAYER: f32 = 0.0028;
 
 /// How dark the gap between two turns is at its deepest, as a share of the
 /// papyrus.
-const LAYER_GAP: f32 = 0.5;
+const LAYER_GAP: f32 = 0.22;
+
+/// Rings of the roll's end to a turn of the spiral, so the gap between
+/// turns is drawn and not lost between two rings.
+const RINGS_PER_LAYER: f32 = 4.0;
 
 /// The rod each roll is wound on: its radius, m, where it shows in the end
 /// of the roll.
@@ -66,24 +70,44 @@ const ROD_RADIUS: f32 = 0.0065;
 /// the end of the roll, m, and the radius there. A collar over the end of
 /// the roll, a neck, a bulb and a point.
 const KNOB: [(f32, f32); 9] = [
-    (-0.001, 0.0115),
-    (0.0025, 0.0115),
-    (0.0045, 0.006),
-    (0.009, 0.0062),
-    (0.016, 0.0105),
-    (0.023, 0.0098),
-    (0.029, 0.0056),
-    (0.034, 0.0034),
-    (0.037, 0.0),
+    (-0.001, 0.013),
+    (0.003, 0.013),
+    (0.005, 0.0068),
+    (0.01, 0.007),
+    (0.018, 0.012),
+    (0.026, 0.0112),
+    (0.033, 0.0064),
+    (0.039, 0.0039),
+    (0.042, 0.0),
 ];
 
 /// The gold figure: the radius of its lines, how far their middles stand
 /// off the sheet, m, and the dot at each point it names, flattened to the
 /// sheet; none reaches through to the verso.
-const LINE_RADIUS: f32 = 0.0021;
-const LINE_LIFT: f32 = 0.0012;
-const DOT_RADIUS: f32 = 0.0042;
-const DOT_DEPTH: f32 = 0.0017;
+const LINE_RADIUS: f32 = 0.0017;
+const LINE_LIFT: f32 = 0.0008;
+const DOT_RADIUS: f32 = 0.0045;
+const DOT_DEPTH: f32 = 0.0016;
+
+/// The figure seen through the sheet from behind: thinner, and barely
+/// standing off the verso, as the gold's light through backlit papyrus.
+const THROUGH_RADIUS: f32 = 0.0011;
+const THROUGH_LIFT: f32 = 0.0002;
+
+/// The sillybos, the title tag hung from the end of a Greek roll: its
+/// size, m, how far below the top of the left roll it hangs, the cord's
+/// radius, and its dye (multiplying the papyrus): vermilion, the one spot
+/// of the garden's colour on a thing of reason.
+const TAG_WIDTH: f32 = 0.034;
+const TAG_HEIGHT: f32 = 0.07;
+const TAG_DROP: f32 = 0.016;
+const TAG_CORD: f32 = 0.0011;
+const TAG_DYE: Vector3<f32> = Vector3::new(0.9, 0.16, 0.07);
+const CORD_COLOUR: Vector3<f32> = Vector3::new(0.32, 0.1, 0.05);
+
+/// Which way the tag hangs from the roll's axis: out to the left and a
+/// little forward, so it is seen from the front.
+const TAG_OUT: Vector3<f32> = Vector3::new(-0.94, 0.0, 0.34);
 
 /// A line on the sheet is laid in pieces no longer than this, m, so it
 /// follows the sheet's bow.
@@ -230,7 +254,57 @@ pub fn verso_mesh(material: MaterialId) -> MeshPrimitive {
             roll_end(&mut mesh, axis, radius, end);
         }
     }
+    let [(left, left_radius), _] = rolls();
+    sillybos(&mut mesh, left, left_radius);
     mesh
+}
+
+/// The sillybos: a tag of papyrus dyed vermilion, hung by a cord from the
+/// end of the roll about `axis` of `radius`, down its outside.
+fn sillybos(mesh: &mut MeshPrimitive, axis: Vector3<f32>, radius: f32) {
+    let out = TAG_OUT.normalize();
+    let across = Vector3::y().cross(&out);
+    let top =
+        axis + out * (radius + 0.002 + THICKNESS) + Vector3::y() * (0.5 * SHEET_HEIGHT - TAG_DROP);
+    let dye = Vector4::new(TAG_DYE.x, TAG_DYE.y, TAG_DYE.z, 1.0);
+    let corner = |a: f32, b: f32, inset: f32, normal: Vector3<f32>| {
+        let pos =
+            top + across * (a * 0.5 * TAG_WIDTH) - Vector3::y() * (b * TAG_HEIGHT) - out * inset;
+        let mut v = vertex(
+            pos,
+            normal,
+            Vector2::new(a * TAG_WIDTH / VERSO_SPAN, b * TAG_HEIGHT / VERSO_SPAN),
+        );
+        v.color = dye;
+        v
+    };
+    for (inset, normal) in [(0.0, out), (THICKNESS, -out)] {
+        quad(
+            mesh,
+            [
+                corner(-1.0, 0.0, inset, normal),
+                corner(1.0, 0.0, inset, normal),
+                corner(1.0, 1.0, inset, normal),
+                corner(-1.0, 1.0, inset, normal),
+            ],
+        );
+    }
+
+    // The cord: from the tag's top, up over the end of the roll, to the rod.
+    let rod = axis + Vector3::y() * (0.5 * SHEET_HEIGHT + 0.003);
+    let path = vec![
+        (top + out * 0.0008, TAG_CORD),
+        (
+            axis + out * (radius + 0.002) + Vector3::y() * (0.5 * SHEET_HEIGHT + 0.002),
+            TAG_CORD,
+        ),
+        (rod + out * (radius * 0.5), TAG_CORD),
+        (rod + out * 0.012, TAG_CORD),
+    ];
+    Strand::through(path)
+        .sides(5)
+        .rings(3)
+        .lay(mesh, |_| (CORD_COLOUR, 1.0));
 }
 
 /// The side of a roll about `axis` of `radius`: the verso, wound round.
@@ -266,15 +340,13 @@ fn roll_side(mesh: &mut MeshPrimitive, axis: Vector3<f32>, radius: f32) {
 fn roll_end(mesh: &mut MeshPrimitive, axis: Vector3<f32>, radius: f32, up: f32) {
     let normal = Vector3::new(0.0, up, 0.0);
     let level = axis + normal * 0.5 * SHEET_HEIGHT;
-    // Five rings to a turn, so the gap between turns is drawn and not lost
-    // between two rings.
-    let rings = (((radius - ROD_RADIUS) / LAYER) * 5.0).ceil() as usize;
+    let rings = (((radius - ROD_RADIUS) / LAYER) * RINGS_PER_LAYER).ceil() as usize;
     let at = |ring: usize, side: usize| {
         let r = ROD_RADIUS + (radius - ROD_RADIUS) * ring as f32 / rings as f32;
         let a = TAU * side as f32 / ROLL_SIDES as f32;
         let offset = Vector3::new(a.cos(), 0.0, a.sin()) * r;
         let turn = ((radius - r) / LAYER + a / TAU).fract();
-        let gap = (1.0 - (turn - 0.5).abs() / 0.2).clamp(0.0, 1.0);
+        let gap = (1.0 - (turn - 0.5).abs() / 0.25).clamp(0.0, 1.0);
         let shade = 1.0 - LAYER_GAP * gap;
         let mut v = vertex(
             level + offset,
@@ -319,13 +391,30 @@ pub fn knobs_mesh(material: MaterialId) -> MeshPrimitive {
     mesh
 }
 
-/// `figure` laid on the sheet in gold, in its square in the sheet's middle:
-/// its lines, and a dot at every point it names.
-pub fn figure_mesh(figure: &Figure, material: MaterialId) -> MeshPrimitive {
+/// Which face of the sheet a figure is laid on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Face {
+    /// The recto, in gold, with a dot at every point the figure names.
+    Recto,
+    /// The verso: the recto's gold seen through the sheet, so the figure is
+    /// never lost as the scroll turns its back.
+    Verso,
+}
+
+/// `figure` laid on `face` of the sheet, in its square in the sheet's
+/// middle.
+pub fn figure_mesh(figure: &Figure, face: Face, material: MaterialId) -> MeshPrimitive {
     let mut mesh = mesh_in(material);
+    let (radius, lift) = match face {
+        Face::Recto => (LINE_RADIUS, LINE_LIFT),
+        Face::Verso => (THROUGH_RADIUS, THROUGH_LIFT),
+    };
     let on_sheet = |p: Vector2<f32>, lift: f32| {
         let (pos, front) = sheet_at(p.x * 0.5 * FIGURE_SIZE, p.y * 0.5 * FIGURE_SIZE);
-        pos + front * lift
+        match face {
+            Face::Recto => pos + front * lift,
+            Face::Verso => pos - front * (THICKNESS + lift),
+        }
     };
     for stroke in &figure.strokes {
         let mut path = vec![stroke[0]];
@@ -336,16 +425,19 @@ pub fn figure_mesh(figure: &Figure, material: MaterialId) -> MeshPrimitive {
         }
         Strand::through(
             path.into_iter()
-                .map(|p| (on_sheet(p, LINE_LIFT), LINE_RADIUS))
+                .map(|p| (on_sheet(p, lift), radius))
                 .collect(),
         )
         .sides(6)
         .rings(1)
         .lay(&mut mesh, |_| (GOLD, 1.0));
     }
+    if face == Face::Verso {
+        return mesh;
+    }
     let bead = Colour::new(GOLD_BEAD.x, GOLD_BEAD.y, GOLD_BEAD.z, 1.0);
     for &point in &figure.points {
-        let at = on_sheet(point, LINE_LIFT);
+        let at = on_sheet(point, lift);
         append(
             &mut mesh,
             Ellipsoid::new((DOT_RADIUS, DOT_RADIUS, DOT_DEPTH), (at.x, at.y, at.z))
@@ -370,17 +462,30 @@ mod tests {
         }
     }
 
-    /// The gold stays on the recto: nothing of the figure reaches through
-    /// the sheet to its back.
+    /// Each face's gold stays on its face: nothing of the figure reaches
+    /// through the sheet to the other.
     #[test]
-    fn the_figure_stays_on_the_recto() {
+    fn the_figure_stays_on_its_face() {
         for proposition in crate::app::spawnables::Proposition::ALL {
-            let mesh = figure_mesh(&proposition.figure(), MaterialId(0));
-            for vertex in &mesh.vertices {
-                let (on, front) = sheet_at(vertex.pos.x, vertex.pos.y);
-                let depth = (vertex.pos - on).dot(&front);
-                assert!(depth > -THICKNESS, "{proposition:?}: {depth}");
-            }
+            let figure = proposition.figure();
+            let depths = |face| {
+                figure_mesh(&figure, face, MaterialId(0))
+                    .vertices
+                    .iter()
+                    .map(|vertex| {
+                        let (on, front) = sheet_at(vertex.pos.x, vertex.pos.y);
+                        (vertex.pos - on).dot(&front)
+                    })
+                    .collect::<Vec<f32>>()
+            };
+            assert!(
+                depths(Face::Recto).iter().all(|&d| d > -THICKNESS),
+                "{proposition:?}"
+            );
+            assert!(
+                depths(Face::Verso).iter().all(|&d| d < 0.0),
+                "{proposition:?}"
+            );
         }
     }
 

@@ -7,7 +7,7 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::figure::Proposition;
-use super::mesh::{figure_mesh, knobs_mesh, recto_mesh, verso_mesh};
+use super::mesh::{figure_mesh, knobs_mesh, recto_mesh, verso_mesh, Face};
 use super::texture::{recto_texture, verso_texture, RECTO_HEIGHT, RECTO_WIDTH, VERSO_SIZE};
 use crate::app::spawnables::shared::gilt::{gilt, GILT_FINISH};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
@@ -34,6 +34,7 @@ const RECTO: usize = 0;
 const VERSO: usize = 1;
 const GILT: usize = 2;
 const FIGURE: usize = 3;
+const FIGURE_THROUGH: usize = 4;
 
 /// The papyrus is the same on every scroll, as one book's pages are.
 const PAPYRUS_SEED: u32 = 0x0e0c_1d00;
@@ -44,21 +45,34 @@ const PAPYRUS_FINISH: SurfaceFinish = SurfaceFinish {
     metallic: 0.0,
 };
 
+/// The gold's light caught in the papyrus, faint and warm, a little more
+/// at its edges: enough that a sheet turned from the sun stays papyrus and
+/// does not go grey.
+const PAPYRUS_GLOW: Emission = Emission {
+    colour: Colour::rgb(1.0, 0.8, 0.55),
+    strength: 0.04,
+    rim_strength: 0.2,
+    rim_power: 3.0,
+};
+
 /// The figure is in gold ink, as an illuminated book's are, and it shines:
 /// what tells a scroll from across a level, and what is taken. Its glow,
 /// as luminance, over the bloom threshold so its lines bloom, and brighter
 /// at its edges.
-const FIGURE_GLOW: Colour = Colour::rgb(1.0, 0.58, 0.18);
+const FIGURE_GLOW: Colour = Colour::rgb(1.0, 0.68, 0.3);
 const FIGURE_GLOW_STRENGTH: f32 = 1.35;
 const FIGURE_RIM_STRENGTH: f32 = 1.0;
 const FIGURE_RIM_POWER: f32 = 2.0;
+
+/// The figure seen through the verso: the same light, dimmed by the sheet.
+const THROUGH_GLOW_STRENGTH: f32 = 0.55;
 
 /// A slower turn than a solid's, so the figure is seen for a while each
 /// time it comes round.
 const SPIN_RATE: f32 = 0.16;
 
 /// How close the player has to get, m: wider than the scroll itself.
-const REACH: f32 = 1.1;
+const REACH: f32 = 1.2;
 
 /// It lights its surroundings a little, warm as the gold, so one in a
 /// corner is findable; less than a solid, which it must not be taken for.
@@ -84,7 +98,8 @@ pub struct ScrollDef {
 
 impl ScrollDef {
     /// The scrolls' materials, one to a slot: the recto, the verso and
-    /// rolls, the knobs' gilt and the gold figure.
+    /// rolls, the knobs' gilt, the gold figure and its light through the
+    /// verso.
     pub fn materials(textures: &TextureManager) -> EngineResult<Vec<Material>> {
         let recto = textures.create_from_rgba(
             RECTO_WIDTH,
@@ -98,9 +113,14 @@ impl ScrollDef {
             &verso_texture(PAPYRUS_SEED),
             true,
         )?;
+        let papyrus = |texture| {
+            Material::textured(texture)
+                .with_finish(PAPYRUS_FINISH)
+                .with_emission(PAPYRUS_GLOW)
+        };
         Ok(vec![
-            Material::textured(recto).with_finish(PAPYRUS_FINISH),
-            Material::textured(verso).with_finish(PAPYRUS_FINISH),
+            papyrus(recto),
+            papyrus(verso),
             gilt(),
             Material::coloured(Colour::WHITE)
                 .with_finish(GILT_FINISH)
@@ -111,19 +131,24 @@ impl ScrollDef {
                     rim_strength: FIGURE_RIM_STRENGTH,
                     rim_power: FIGURE_RIM_POWER,
                 }),
+            Material::coloured(Colour::WHITE)
+                .with_finish(PAPYRUS_FINISH)
+                .with_emission(Emission::glow(FIGURE_GLOW, THROUGH_GLOW_STRENGTH)),
         ])
     }
 
     /// The model of a scroll open on `proposition`, about the middle of its
     /// sheet, in the palette whose ids are `ids`.
     pub fn model(proposition: Proposition, ids: &[MaterialId]) -> Model {
+        let figure = proposition.figure();
         Model::flat(vec![ModelPart {
             local_transform: Transform::default(),
             primitives: vec![
                 recto_mesh(ids[RECTO]),
                 verso_mesh(ids[VERSO]),
                 knobs_mesh(ids[GILT]),
-                figure_mesh(&proposition.figure(), ids[FIGURE]),
+                figure_mesh(&figure, Face::Recto, ids[FIGURE]),
+                figure_mesh(&figure, Face::Verso, ids[FIGURE_THROUGH]),
             ],
         }])
     }
@@ -138,7 +163,7 @@ impl ScrollDef {
 
 impl Spawnable for ScrollDef {
     fn material_count(&self) -> usize {
-        4
+        5
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
@@ -190,7 +215,7 @@ mod tests {
     /// reach of its middle.
     #[test]
     fn every_model_is_whole_and_within_reach() {
-        let ids: Vec<MaterialId> = (0..4).map(MaterialId).collect();
+        let ids: Vec<MaterialId> = (0..5).map(MaterialId).collect();
         for proposition in Proposition::ALL {
             let model = ScrollDef::model(proposition, &ids);
             for mesh in model.parts.iter().flat_map(|part| &part.primitives) {

@@ -7,11 +7,13 @@
 //!   ScrollDef ──model──▶ recto: the open sheet, papyrus with two columns of
 //!                       │        script (texture.rs)
 //!                       ├──▶ verso: the sheet's back, its edges, the two
-//!                       │        rolls it is wound on and the spiral in
-//!                       │        their ends
+//!                       │        rolls it is wound on, the spiral in
+//!                       │        their ends, and the vermilion tag
+//!                       │        (sillybos) hung from one
 //!                       ├──▶ knobs: gilt, turned, on the rods' ends
 //!                       └──▶ figure: the proposition's figure laid on the
-//!                                sheet in gold that shines (mesh.rs)
+//!                                recto in gold that shines, and its light
+//!                                through the verso (mesh.rs)
 //!   ScrollDef ──spawn──▶ Hover (no rigid body), Collectable, PointLight,
 //!                        motes
 //! ```

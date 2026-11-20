@@ -61,8 +61,10 @@ In code (`app/spawnables/scroll/`), a scroll is a `Scroll(pos, proposition)`
 in a level. The open sheet carries one proposition's figure, drawn as Euclid
 drew it (lines, circles, a dot for each lettered point), laid in gold that
 shines, as an illuminated book's chrysography does; two columns of faded
-uncial script frame it, unreadable, since the game is wordless. Its knobs
-are the solids' gilt. Four propositions exist: I.1 (the equilateral
+uncial script frame it, unreadable, since the game is wordless. The gold's
+light shows faintly through the verso, so the figure is never lost as the
+scroll turns. Its knobs are the solids' gilt, and a vermilion title tag (a
+*sillybos*) hangs from one roll: the one spot of the garden's colour on it. Four propositions exist: I.1 (the equilateral
 triangle from two circles), I.47 (Pythagoras), IV.5 (the circle about a
 triangle) and IV.11 (the pentagon in a circle). `visual_bench scrolls` shows
 them.
