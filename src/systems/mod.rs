@@ -1,9 +1,10 @@
-//! ECS systems that glue subsystems together: input, character control, camera, physics sync, terrain, water, drawing the parts of breakable bodies, and rendering.
+//! ECS systems that glue subsystems together: input, character control, camera, physics sync, terrain, water, drawing the parts of breakable bodies, the bottom of the world, and rendering.
 
 mod camera;
 mod character_control;
 mod fall_spray;
 mod front_spray;
+mod out_of_world;
 mod part_draw;
 mod physics_sync;
 mod player_input;
@@ -15,6 +16,7 @@ mod water;
 
 pub use camera::CameraControlSystem;
 pub use character_control::{resolve_ground_speed, CharacterControlSystem};
+pub use out_of_world::{LevelRestart, OutOfWorldSystem};
 pub use part_draw::PartDrawSystem;
 pub use physics_sync::{PhysicsResource, PhysicsSyncSystem};
 pub use player_input::PlayerInputSystem;

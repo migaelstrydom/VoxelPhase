@@ -124,6 +124,11 @@ pub fn run(scenario: &Scenario, config: &RunConfig) -> EngineResult<Take> {
         let (eye, look) = scenario.camera.frame(body, surface);
         harness.place_camera(eye, look);
         harness.step();
+        // Without its `Player` marker, a character that falls out of the
+        // world is taken out of it (`OutOfWorldSystem`), and its run ends.
+        if !harness.world().is_alive(character) {
+            break;
+        }
 
         let record = record(
             &harness,

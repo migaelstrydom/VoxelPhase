@@ -688,6 +688,9 @@ underside: [
   `taper`, so keep it well short of `taper`.
 - **Keels union.** A narrow, deep keel under a wide one hangs the island to a
   point; keels with separate outlines are separate islands in one segment.
+- **The world ends 4 m below the level's lowest terrain** (`OutOfWorldSystem`).
+  Anything that falls past it is taken out of the world, and the player
+  falling past it restarts the level, as R does.
 
 `levels/floating_island.level.ron` is built this way.
 

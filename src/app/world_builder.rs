@@ -53,7 +53,7 @@ use crate::resources::textures::TextureManager;
 use crate::rubble::RubbleQueue;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::sled::HoverSled;
-use crate::systems::{FrameStart, PhysicsResource};
+use crate::systems::{FrameStart, LevelRestart, PhysicsResource};
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
 use crate::trampoline::Trampoline;
@@ -202,6 +202,7 @@ impl WorldBuilder {
         self.world.insert(FrameStart::default());
         self.world.insert(PhysicsImpulseQueue::default());
         self.world.insert(DebrisBudget::default());
+        self.world.insert(LevelRestart::default());
         self.world.insert(PieceSplits::default());
         self.world.insert(RubbleQueue::default());
         self.world.insert(ActiveLights::default());

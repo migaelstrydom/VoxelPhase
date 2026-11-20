@@ -17,7 +17,7 @@ use crate::input::GameplayActions;
 use crate::level::load_level;
 use crate::rendering::renderer::Renderer;
 use crate::resources::manager::ResourceManager;
-use crate::systems::FrameStart;
+use crate::systems::{FrameStart, LevelRestart};
 use crate::time::Time;
 
 use super::event_handler::{set_mouse_captured, EventHandler, EventResult};
@@ -152,7 +152,9 @@ impl<'a, 'b> App<'a, 'b> {
 
                 run_frame(world, dispatcher);
 
-                if world.read_resource::<GameplayActions>().restart_room {
+                let restart = world.read_resource::<GameplayActions>().restart_room
+                    || world.read_resource::<LevelRestart>().requested;
+                if restart {
                     match load_level(level_path) {
                         Err(e) => log::warn!("Level did not load, keeping the room: {}", e),
                         Ok(level) => match restart_level(world, dispatcher, &level, viewport) {

@@ -13,7 +13,8 @@
 //! `contour` and `run_uphill`, on Island Sea's hillside: along it with the
 //! ground falling away on the right, and straight up it at a run, and
 //! `swim_off_edge` off its ocean's south edge at z = 56, where the world
-//! ends. And
+//! ends, falling until it passes the bottom of the world and its run ends.
+//! And
 //! `air_reverse`, `jump_straight`, `jump_standing`, `run_reverse` and
 //! `crouch_walk`, on the
 //! Traversal Garden's open ground,
@@ -257,7 +258,8 @@ pub fn catalogue() -> Vec<Scenario> {
         },
         Scenario {
             name: "swim_off_edge",
-            summary: "Island Sea: swim south off the edge of the world and fall",
+            summary: "Island Sea: swim south off the edge of the world and fall, until it \
+                      passes the bottom of the world and is gone",
             level: ISLAND,
             start: (0.0, 50.0),
             yaw: 0.0,

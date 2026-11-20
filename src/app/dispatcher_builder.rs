@@ -41,9 +41,9 @@ use crate::rubble::{BoulderCullSystem, RubbleSpawnSystem, ScreeSystem};
 use crate::sensing::SensorProbeSystem;
 use crate::sled::HoverSledSystem;
 use crate::systems::{
-    AnchorShareSystem, CameraControlSystem, CharacterControlSystem, PartDrawSystem,
-    PhysicsSyncSystem, PlayerInputSystem, RenderSystem, TerrainAnchorSystem, TerrainUpdateSystem,
-    WaterSystem,
+    AnchorShareSystem, CameraControlSystem, CharacterControlSystem, OutOfWorldSystem,
+    PartDrawSystem, PhysicsSyncSystem, PlayerInputSystem, RenderSystem, TerrainAnchorSystem,
+    TerrainUpdateSystem, WaterSystem,
 };
 use crate::trampoline::TrampolineBedSystem;
 use crate::traversal::TraversalPlanSystem;
@@ -131,6 +131,9 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(PlumbingShareSystem, "plumbing_share", &["fracture"])
         // Pieces the fracture freed and the level's budget will not keep.
         .with(DebrisCullSystem, "debris_cull", &["fracture"])
+        // Whatever has fallen past the bottom of the world is gone; the
+        // player past it asks for the level to begin again.
+        .with(OutOfWorldSystem, "out_of_world", &["debris_cull"])
         // Breakable bodies drawn as their parts now stand, after everything
         // that cut, split or re-centred them this frame.
         .with(
