@@ -57,6 +57,13 @@ const float SHEET_RELIEF = 0.9;
 const float PLUNGE_OPACITY = 0.8;
 // Pour depth at which falling water is a full curtain, not a few strands, m.
 const float SHEET_FULL_POUR = 0.12;
+// Whether the pipeline only lays the depth of falling water where it is
+// solid enough to hide what is behind it, before the sheets are blended:
+// then the nearest solid fall hides those behind it, whatever order they
+// are drawn in. Clearer water is blended over what is behind it unhidden.
+layout(constant_id = 0) const bool SHEET_DEPTHS = false;
+// How opaque falling water must be to hide another fall behind it.
+const float SHEET_SOLID = 0.6;
 // Share of the way from a fall's middle out to its frayed end past which it
 // frays away.
 const float FRAY_SHARE = 0.5;
@@ -366,41 +373,92 @@ float flying(float seconds, float ragged) {
     return smoothstep(0.0, FLYING_EDGE, head) * smoothstep(0.0, FLYING_EDGE, tail);
 }
 
+// Falling water at a fragment, as its look and how much it hides both take
+// it.
+struct Sheet {
+    // How far it has fallen from its lip, and how far its foot lies below
+    // it, m.
+    float drop;
+    float fall;
+    // Where across its lip it lies, 0 in the middle to 1 at an end.
+    float across;
+    // The face seen: the pipeline culls the one turned away.
+    vec3 face;
+    // Its streaks: the coarse layer, and both layers blended into ropes.
+    float coarse;
+    float strands;
+    // How long its water has been falling, s.
+    float seconds;
+    // How white it is, 0 for glass to 1 for white water.
+    float aerated;
+    // How full a curtain it pours, and how much of its glass's depth it
+    // has, 0 to 1.
+    float pour;
+    float body;
+};
+
+Sheet sheetHere(float time) {
+    Sheet s;
+    s.drop = max(fragSheet.x, 0.0);
+    s.fall = max(fragSheet.y, 1.0e-3);
+    s.across = abs(fragSheet.z);
+    s.face = normalize(fragNormal);
+    vec2 facing = dot(fragFace, fragFace) > 1.0e-6 ? normalize(fragFace) : vec2(1.0, 0.0);
+    vec2 streaks = sheetStreaks(fragFlow, facing, fragWorldPos.y, time);
+    s.coarse = streaks.x;
+    s.strands = 0.6 * streaks.x + 0.4 * streaks.y;
+
+    // It takes in air as it falls; a jet bursts out white already, and so
+    // does the head of water that has only just begun to fall.
+    s.seconds = sqrt(2.0 * s.drop / FALL_GRAVITY);
+    float head = 1.0 - smoothstep(0.0, FLYING_HEAD, fragLife.x - s.seconds);
+    float air = max(clamp(fragAir, 0.0, 1.0), head);
+    // Its under face springs clear of the ledge torn and white: only its
+    // top slides over the lip as glass.
+    bool under = s.face.y < -1.0e-3;
+    air = under ? 1.0 : air;
+    s.aerated = 1.0 - (1.0 - air) * (1.0 - smoothstep(0.0, SHEET_GLASS_DROP, s.drop));
+    s.pour = smoothstep(0.0, SHEET_FULL_POUR, fragWetDepth);
+    // Thick glass is deep green and hides what is behind it.
+    float thickness = max(fragSheet.w, 0.0);
+    s.body = 1.0 - exp(-thickness / SHEET_GLASS_THICKNESS);
+    return s;
+}
+
+// How much of what is behind falling water it hides, 0 to 1: its alpha,
+// with `fresnel` of the sky mirrored in its glass, `behindDepth` m in front
+// of what is behind it.
+float sheetCover(Sheet s, float fresnel, float behindDepth) {
+    // Glass is clear where it is thin and deep where it is thick; white
+    // water is ropes with air between them, closing up where much pours and
+    // where the body is thick.
+    float glassAlpha = min(mix(0.25, 0.96, s.body) + 0.25 * fresnel, 1.0) * mix(0.4, 1.0, s.pour);
+    float full = max(s.pour, s.body);
+    float strandAlpha = smoothstep(0.62 - 0.4 * full, 0.82 - 0.35 * full, s.strands + 0.12 * s.aerated);
+    float alpha = mix(glassAlpha, mix(0.92, 0.98, s.body) * strandAlpha, s.aerated);
+    // It breaks up over the white water at its foot.
+    alpha *= smoothstep(0.0, SHEET_FOOT_FADE * (0.5 + s.coarse), s.fall - s.drop);
+    // A frayed end thins out into strands and is gone.
+    float frayed = s.across + (s.coarse - 0.5) * FRAY_SHARE;
+    alpha *= 1.0 - fragFray * smoothstep(1.0 - FRAY_SHARE, 1.0, frayed);
+    // Where it runs against rock, it fades into it rather than cutting it.
+    alpha *= smoothstep(0.0, 0.12, behindDepth);
+    alpha *= flying(s.seconds, s.strands - 0.5);
+    return alpha;
+}
+
 // Water falling over an edge, a body with a top face and an under face:
 // clear glass where it leaves the lip, as deep as it is thick; white water in
 // ropes as it falls and takes in air; breaking up over the pool at its foot.
 // Blended over what is drawn, by alpha.
 vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
-    float drop = max(fragSheet.x, 0.0);
-    float fall = max(fragSheet.y, 1.0e-3);
-    float thickness = max(fragSheet.w, 0.0);
-    float across = abs(fragSheet.z);
-    // The face seen: the pipeline culls the one turned away.
-    vec3 face = normalize(fragNormal);
-    vec2 facing = dot(fragFace, fragFace) > 1.0e-6 ? normalize(fragFace) : vec2(1.0, 0.0);
-    vec2 streaks = sheetStreaks(fragFlow, facing, fragWorldPos.y, time);
-    float coarse = streaks.x;
-    float strands = 0.6 * streaks.x + 0.4 * streaks.y;
-
-    // It takes in air as it falls; a jet bursts out white already, and so
-    // does the head of water that has only just begun to fall.
-    float seconds = sqrt(2.0 * drop / FALL_GRAVITY);
-    float head = 1.0 - smoothstep(0.0, FLYING_HEAD, fragLife.x - seconds);
-    float air = max(clamp(fragAir, 0.0, 1.0), head);
-    // Its under face springs clear of the ledge torn and white: only its
-    // top slides over the lip as glass.
-    bool under = face.y < -1.0e-3;
-    air = under ? 1.0 : air;
-    float aerated = 1.0 - (1.0 - air) * (1.0 - smoothstep(0.0, SHEET_GLASS_DROP, drop));
-    float pour = smoothstep(0.0, SHEET_FULL_POUR, fragWetDepth);
-    // Thick glass is deep green and hides what is behind it.
-    float body = 1.0 - exp(-thickness / SHEET_GLASS_THICKNESS);
+    Sheet s = sheetHere(time);
 
     // Lit by its own shape, so the curl over the lip and the round of the
     // curtain show; its ropes stand out of it as it turns white (the coarse
     // ones: the fine layer's would comb its highlights into hairs), and the
     // noise ruffles it.
-    vec3 sheetN = embossed(face, coarse, SHEET_RELIEF * aerated);
+    vec3 sheetN = embossed(s.face, s.coarse, SHEET_RELIEF * s.aerated);
     sheetN = normalize(sheetN + 0.35 * vec3(noiseN.x, 0.0, noiseN.z));
     float lit = dot(sheetN, L);
     float wrapped = clamp((max(lit, -SHEET_THROUGH * lit) + SHEET_WRAP) / (1.0 + SHEET_WRAP), 0.0, 1.0);
@@ -409,31 +467,15 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     float NdotH = max(dot(sheetN, H), 0.0);
     float fresnel = min(0.02 + 0.98 * pow(1.0 - max(dot(sheetN, V), 0.0), 5.0), SHEET_MAX_MIRROR);
     vec3 sky = mix(vec3(0.6, 0.7, 0.8), vec3(0.25, 0.4, 0.7), max(reflect(-V, sheetN).y, 0.0));
-    vec3 tint = mix(vec3(0.10, 0.30, 0.32), vec3(0.03, 0.15, 0.17), body);
+    vec3 tint = mix(vec3(0.10, 0.30, 0.32), vec3(0.03, 0.15, 0.17), s.body);
     vec3 glass = mix(tint, sky, 0.1 + 0.6 * fresnel)
         + vec3(1.0, 0.95, 0.8) * pow(NdotH, 96.0) * 0.6;
     // White water is brightest on its ropes and bluer in the hollows between.
-    vec3 white = mix(vec3(0.62, 0.78, 0.9), vec3(0.94, 0.97, 1.0), smoothstep(0.25, 0.7, strands))
+    vec3 white = mix(vec3(0.62, 0.78, 0.9), vec3(0.94, 0.97, 1.0), smoothstep(0.25, 0.7, s.strands))
         * (0.5 + 0.42 * wrapped + 0.15 * skyward)
         + vec3(1.0, 0.95, 0.8) * pow(NdotH, 24.0) * 0.15;
-    vec3 color = mix(glass, white, aerated * (0.6 + 0.4 * strands));
-
-    // Glass is clear where it is thin and deep where it is thick; white
-    // water is ropes with air between them, closing up where much pours and
-    // where the body is thick.
-    float glassAlpha = min(mix(0.25, 0.96, body) + 0.25 * fresnel, 1.0) * mix(0.4, 1.0, pour);
-    float full = max(pour, body);
-    float strandAlpha = smoothstep(0.62 - 0.4 * full, 0.82 - 0.35 * full, strands + 0.12 * aerated);
-    float alpha = mix(glassAlpha, mix(0.92, 0.98, body) * strandAlpha, aerated);
-    // It breaks up over the white water at its foot.
-    alpha *= smoothstep(0.0, SHEET_FOOT_FADE * (0.5 + coarse), fall - drop);
-    // A frayed end thins out into strands and is gone.
-    float frayed = across + (coarse - 0.5) * FRAY_SHARE;
-    alpha *= 1.0 - fragFray * smoothstep(1.0 - FRAY_SHARE, 1.0, frayed);
-    // Where it runs against rock, it fades into it rather than cutting it.
-    alpha *= smoothstep(0.0, 0.12, behindDepth);
-    alpha *= flying(seconds, strands - 0.5);
-    return vec4(color, alpha);
+    vec3 color = mix(glass, white, s.aerated * (0.6 + 0.4 * s.strands));
+    return vec4(color, sheetCover(s, fresnel, behindDepth));
 }
 
 // Foam churned up where falling water lands, lying on the water round its
@@ -488,6 +530,19 @@ void main() {
     float waterDist = linearizeDepth(waterDepthRaw, near, far);
     vec3 behindPos = fpc.cameraPos.xyz + (fragWorldPos - fpc.cameraPos.xyz) * (terrainDist / waterDist);
     float groundDepth = fragWorldPos.y - behindPos.y;
+
+    // Laying falling water's depth needs only how much it hides, and that
+    // at its least: without the sky its glass mirrors, which only adds to
+    // it. Water pouring past its foot is foam lying on the pool, which
+    // hides no other fall.
+    if (SHEET_DEPTHS) {
+        bool poured = fragWetDepth >= fragWetRange.x && fragWetDepth <= fragWetRange.y;
+        float behind = max(terrainDist - waterDist, 0.0);
+        if (fragSheet.x > fragSheet.y || !poured || sheetCover(sheetHere(time), 0.0, behind) < SHEET_SOLID) {
+            discard;
+        }
+        return;
+    }
     float fieldSlope = fwidth(fragWetDepth) / max(footprint, 1.0e-4);
     float slope = groundSlope(screenUV, fragWorldPos, waterDist, behindPos, near, far);
 

@@ -132,6 +132,8 @@ enum WaterSurface {
     Ripples,
     /// The falling sheets of the river surfaces, drawn last and blended.
     Sheets,
+    /// The same sheets' solid parts, laid in depth before they are blended.
+    SheetDepths,
 }
 
 /// One draw of the frame's plan, with every constant it pushes.
@@ -578,14 +580,17 @@ impl WaterRenderer {
         }
 
         // Falling sheets are drawn over every surface, so they blend over
-        // the pool they fall into: they write no depth to hide it by.
+        // the pool they fall into, after every one's solid parts are laid
+        // in depth: blended in the order they come, a far fall drawn after
+        // a near one would be drawn over it.
         let sheet_base = self.rivers.sheet_base();
+        let sheets_from = self.plan.len();
         for draw in &self.rivers.mesh().draws {
             if draw.sheet_index_count == 0 {
                 continue;
             }
             self.plan.push(PlannedDraw {
-                surface: WaterSurface::Sheets,
+                surface: WaterSurface::SheetDepths,
                 constants: [
                     -1.0,
                     swell.amplitude,
@@ -600,6 +605,14 @@ impl WaterRenderer {
                 index_count: draw.sheet_index_count,
             });
         }
+        let blended: Vec<PlannedDraw> = self.plan[sheets_from..]
+            .iter()
+            .map(|draw| PlannedDraw {
+                surface: WaterSurface::Sheets,
+                ..*draw
+            })
+            .collect();
+        self.plan.extend(blended);
 
         self.view = Some(*view);
         Ok(WaterFrame { patches, footprint })
@@ -682,7 +695,7 @@ impl WaterRenderer {
         match surface {
             WaterSurface::Basins => self.slots[self.slot].buffers.as_ref(),
             WaterSurface::Ocean => self.ocean_slots[self.slot].buffers.as_ref(),
-            WaterSurface::Rivers | WaterSurface::Sheets => {
+            WaterSurface::Rivers | WaterSurface::Sheets | WaterSurface::SheetDepths => {
                 self.river_slots[self.slot].buffers.as_ref()
             }
             WaterSurface::Ripples => Some(&self.fine_grid),
@@ -695,6 +708,7 @@ impl WaterRenderer {
             WaterSurface::Rivers => self.pipeline.river_pipeline(),
             WaterSurface::Ripples => self.pipeline.fine_pipeline(),
             WaterSurface::Sheets => self.pipeline.sheet_pipeline(),
+            WaterSurface::SheetDepths => self.pipeline.sheet_depth_pipeline(),
         }
     }
 }

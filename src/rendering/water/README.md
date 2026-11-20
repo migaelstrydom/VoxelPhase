@@ -48,7 +48,14 @@ jets are drawn after every surface by a second pipeline that blends by alpha
 and writes no depth (`Composite` in `pipeline.rs`), so a curtain of strands
 shows the pool it falls into, which the copy does not hold. It culls back
 faces: falling water is a body with a top face and an under face, and only
-the one turned to the eye is drawn.
+the one turned to the eye is drawn. Falls side by side, or one inside
+another's arc, would be blended in the order they come, a far one over a
+near one; so first a depth-only pass (`SHEET_DEPTHS` in `water.frag`) lays
+the depth of every curtain where it hides at least `SHEET_SOLID` of what is
+behind it, and only the nearest solid water is blended there. It reads only
+how much the water hides (`sheetCover`), not how it is lit, so it costs a
+fraction of the blended pass, and saves as much again in falls not shaded
+behind it. Clearer water hides nothing and is blended in order, as before.
 
 ## Meshes
 

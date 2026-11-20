@@ -1,11 +1,13 @@
 //! Water rendering pipelines.
 //!
-//! Three pipelines over one layout, sharing the water fragment shader: the
-//! coarse surface (a quad per column), the fine surface of an awake ripple
-//! tile (a static grid displaced from the ripple storage buffer) and a river
-//! surface (each vertex at the water's own height). All are drawn in the HDR scene pass and depth-test against it
-//! without writing depth, read the refraction copy's depth for volumetric
-//! tint, and sample its colour at offset UVs for refraction.
+//! Pipelines over one layout, sharing the water fragment shader: the coarse
+//! surface (a quad per column), the fine surface of an awake ripple tile (a
+//! static grid displaced from the ripple storage buffer), a river surface
+//! (each vertex at the water's own height), and a river surface's falling
+//! sheets, blended over the surfaces once their solid parts are laid in
+//! depth. All are drawn in the HDR scene pass and depth-test against it,
+//! read the refraction copy's depth for volumetric tint, and sample its
+//! colour at offset UVs for refraction.
 
 use std::sync::Arc;
 
@@ -33,6 +35,11 @@ enum Composite {
     /// back faces: falling water, a body whose far face must not show
     /// through its near one.
     Blend,
+    /// Write depth alone, where falling water is solid enough to hide what
+    /// is behind it (`SHEET_DEPTHS` in `water.frag`), culling back faces as
+    /// `Blend` does: laid before the sheets are blended, so the nearest
+    /// solid one hides those behind it whatever order they are drawn in.
+    Depth,
 }
 
 /// Where the fragment stage's constants start.
@@ -42,7 +49,8 @@ pub const FRAGMENT_PUSH_OFFSET: u32 = BODY_PUSH_OFFSET + BODY_PUSH_SIZE;
 ///
 /// Configured with:
 /// - Surfaces that composite with the copy themselves, replace the pixel and
-///   write depth; falling sheets blended over them, writing none (`Composite`)
+///   write depth; falling sheets blended over them, writing none, after
+///   their solid parts are laid in depth (`Composite`)
 /// - Depth test enabled (water occluded by terrain)
 /// - No backface culling on surfaces (visible from both sides); falling
 ///   water culls its far face
@@ -57,6 +65,9 @@ pub struct WaterPipeline {
     river_pipeline: vk::Pipeline,
     /// A river surface's falling sheets, blended over every surface.
     sheet_pipeline: vk::Pipeline,
+    /// The depth of the falling sheets' solid parts, laid before they are
+    /// blended.
+    sheet_depth_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
     /// Set 1: the ripple storage buffer and the wind map.
@@ -120,6 +131,16 @@ impl WaterPipeline {
             ShaderManager::load_water_fragment(&device)?,
             Composite::Blend,
         )?;
+        let sheet_depth_pipeline = Self::create_pipeline(
+            &device,
+            render_pass,
+            pipeline_layout,
+            ShaderManager::load_river_vertex(&device)?,
+            RiverVertex::binding_description(),
+            &RiverVertex::attribute_descriptions(),
+            ShaderManager::load_water_fragment(&device)?,
+            Composite::Depth,
+        )?;
         let descriptor_pool = Self::create_descriptor_pool(&device)?;
 
         let descriptor_set =
@@ -139,6 +160,7 @@ impl WaterPipeline {
             fine_pipeline,
             river_pipeline,
             sheet_pipeline,
+            sheet_depth_pipeline,
             pipeline_layout,
             descriptor_set_layout,
             ripple_set_layout,
@@ -358,6 +380,16 @@ impl WaterPipeline {
         composite: Composite,
     ) -> EngineResult<vk::Pipeline> {
         let entry_name = c"main";
+        // `SHEET_DEPTHS`, constant 0 of `water.frag`.
+        let depths_only = vk::Bool32::from(composite == Composite::Depth).to_ne_bytes();
+        let entries = [vk::SpecializationMapEntry {
+            constant_id: 0,
+            offset: 0,
+            size: depths_only.len(),
+        }];
+        let specialization = vk::SpecializationInfo::default()
+            .map_entries(&entries)
+            .data(&depths_only);
         let shader_stages = [
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::VERTEX)
@@ -366,7 +398,8 @@ impl WaterPipeline {
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::FRAGMENT)
                 .module(frag_module)
-                .name(entry_name),
+                .name(entry_name)
+                .specialization_info(&specialization),
         ];
 
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
@@ -384,7 +417,7 @@ impl WaterPipeline {
             .polygon_mode(vk::PolygonMode::FILL)
             .cull_mode(match composite {
                 Composite::Replace => vk::CullModeFlags::NONE,
-                Composite::Blend => vk::CullModeFlags::BACK,
+                Composite::Blend | Composite::Depth => vk::CullModeFlags::BACK,
             })
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .line_width(1.0);
@@ -396,10 +429,10 @@ impl WaterPipeline {
         // two surfaces overlap, the nearer must be the one seen, whichever is
         // drawn first. What is beyond it reaches it through the copy. A
         // falling sheet is drawn after every surface and blended over them,
-        // so it writes none.
+        // so it writes none: its solid parts were laid in depth first.
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(true)
-            .depth_write_enable(composite == Composite::Replace)
+            .depth_write_enable(composite != Composite::Blend)
             .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
 
         let color_blend_attachment = match composite {
@@ -420,6 +453,11 @@ impl WaterPipeline {
                 dst_alpha_blend_factor: vk::BlendFactor::ONE,
                 alpha_blend_op: vk::BlendOp::ADD,
                 color_write_mask: vk::ColorComponentFlags::RGBA,
+            },
+            Composite::Depth => vk::PipelineColorBlendAttachmentState {
+                blend_enable: vk::FALSE,
+                color_write_mask: vk::ColorComponentFlags::empty(),
+                ..Default::default()
             },
         };
 
@@ -476,6 +514,11 @@ impl WaterPipeline {
     /// The pipeline for a river surface's falling sheets.
     pub fn sheet_pipeline(&self) -> vk::Pipeline {
         self.sheet_pipeline
+    }
+
+    /// The pipeline laying the depth of the falling sheets' solid parts.
+    pub fn sheet_depth_pipeline(&self) -> vk::Pipeline {
+        self.sheet_depth_pipeline
     }
 
     /// A descriptor set pointing set 1 at a ripple storage buffer. One per
@@ -552,6 +595,9 @@ impl Drop for WaterPipeline {
             self.device
                 .device
                 .destroy_pipeline(self.sheet_pipeline, None);
+            self.device
+                .device
+                .destroy_pipeline(self.sheet_depth_pipeline, None);
             self.device
                 .device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
