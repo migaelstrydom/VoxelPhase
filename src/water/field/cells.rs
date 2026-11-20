@@ -8,6 +8,7 @@
 
 use nalgebra::Vector2;
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use crate::water::geometry::{
     Column, SpanChunk, SpanChunkCoord, SpanGraph, SpanIndex, CHUNK_COLUMNS, COLUMNS_PER_CHUNK,
@@ -23,6 +24,10 @@ pub const CELL_AREA: f64 = (COLUMN_SIZE * COLUMN_SIZE) as f64;
 /// How near its ceiling a cell's water must stand for the cell to be full,
 /// m.
 pub const FULL_SLACK: f64 = 5.0e-3;
+
+/// Depth water poured into a sleeping chunk's cell must add to wake the
+/// chunk, m.
+const WAKE_DEPTH: f64 = 1.0e-5;
 
 /// One span chunk's cells and the faces they own.
 #[derive(Debug, Clone)]
@@ -251,5 +256,62 @@ impl FieldCells {
         let chunk = &mut self.chunks[slot];
         chunk.awake = true;
         chunk.calm_for = 0.0;
+    }
+
+    /// Pour `volume` m³ into the cells `into`, each an equal share, but no
+    /// more into a cell under a roof than it has room for: what one cannot
+    /// take, the others share. Returns what none of them had room for.
+    pub fn pour_into(&mut self, into: &[SpanIndex], volume: f64) -> f64 {
+        self.pour_up_to(into, volume, f64::INFINITY)
+    }
+
+    /// `pour_into`, but no cell taking more than `most` m deep.
+    pub fn pour_up_to(&mut self, into: &[SpanIndex], volume: f64, most: f64) -> f64 {
+        let mut left = volume.max(0.0);
+        // Each cell, and how deep it may still take, m.
+        let mut taking: SmallVec<[(SpanIndex, f64); 8]> = (into.iter())
+            .map(|&cell| (cell, self.room(cell).max(0.0).min(most)))
+            .collect();
+        while left > 0.0 && !taking.is_empty() {
+            let each = left / taking.len() as f64 / CELL_AREA;
+            let offered = taking.len();
+            let mut given = 0.0;
+            taking.retain(|(cell, room)| {
+                let taken = each.min(*room);
+                *room -= taken;
+                *self.depth_mut(*cell) += taken;
+                given += taken * CELL_AREA;
+                if taken > WAKE_DEPTH && !self.chunks[cell.slot as usize].awake {
+                    self.wake(cell.slot as usize);
+                }
+                taken == each
+            });
+            if taking.len() == offered {
+                return 0.0;
+            }
+            left -= given;
+        }
+        left.max(0.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::water::field::testing::{cell, chunk_of, open, roofed};
+
+    #[test]
+    fn water_poured_under_a_roof_stands_no_deeper_than_it_has_room_for() {
+        let (_, mut cells) = chunk_of(|i, _| if i == 5 { roofed(0.0, 1.0) } else { open(0.0) });
+        // 1 m³ over two cells is 2 m in each; the roofed one has room for 1.
+        let left = cells.pour_into(&[cell(5, 5), cell(6, 5)], 1.0);
+        assert_eq!(left, 0.0);
+        assert!((cells.depth(cell(5, 5)) - 1.0).abs() < 1.0e-9);
+        assert!(
+            (cells.depth(cell(6, 5)) - 3.0).abs() < 1.0e-9,
+            "the open one takes what the other could not"
+        );
+        let left = cells.pour_into(&[cell(5, 5)], 0.5);
+        assert!((left - 0.5).abs() < 1.0e-9, "none where there is no room");
+        assert!(cells.full(cell(5, 5)) && cells.room(cell(5, 5)).abs() < 1.0e-9);
     }
 }

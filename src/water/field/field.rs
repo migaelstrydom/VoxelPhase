@@ -289,16 +289,10 @@ impl WaterField {
     pub fn step(&mut self, dt: f32) {
         let started = Instant::now();
         for source in &self.sources {
-            let volume = source.discharge as f64 * dt as f64;
-            self.ledger.sourced += volume;
+            let sent = source.pour(&mut self.cells, dt);
+            self.ledger.sourced += sent;
             if source.landing.is_empty() {
-                self.ledger.sunk += volume;
-                continue;
-            }
-            let share = volume / source.landing.len() as f64 / CELL_AREA;
-            for &at in &source.landing {
-                *self.cells.depth_mut(at) += share;
-                self.cells.wake(at.slot as usize);
+                self.ledger.sunk += sent;
             }
         }
         self.ledger.sunk += self.pumps.run(&mut self.cells, dt);

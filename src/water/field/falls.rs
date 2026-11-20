@@ -131,10 +131,6 @@ const PUSHED_SPEED: f32 = 1.0;
 /// found before it may lie for the two to be the same fall, m.
 const SAME_LIP: f32 = 0.5 * COLUMN_SIZE;
 
-/// Depth landing water must add to a sleeping chunk's cell to wake the
-/// chunk, m.
-const WAKE_DEPTH: f64 = 1.0e-5;
-
 /// How far under the roof of the cell it comes out into an arc starts, at
 /// the highest, m.
 const UNDER_ROOF: f32 = 0.01;
@@ -976,7 +972,7 @@ impl Falls {
                     fall.aloft -= due;
                     lost += due;
                 } else {
-                    fall.aloft -= due - pour_into(cells, &into, due);
+                    fall.aloft -= due - cells.pour_into(&into, due);
                 }
                 if fall.lands() && !into.is_empty() {
                     let speed = fall.velocity.norm();
@@ -1324,42 +1320,6 @@ fn cell_under(graph: &SpanGraph, cells: &FieldCells, fall: &Fall) -> Option<Span
     })
 }
 
-/// Pour `volume` m³ into the cells `into`, each an equal share, but no
-/// more into a cell under a roof than it has room for: what one cannot
-/// take, the others share. Returns what none of them had room for.
-fn pour_into(cells: &mut FieldCells, into: &[SpanIndex], volume: f64) -> f64 {
-    pour_up_to(cells, into, volume, f64::INFINITY)
-}
-
-/// `pour_into`, but no cell taking more than `most` m deep.
-fn pour_up_to(cells: &mut FieldCells, into: &[SpanIndex], volume: f64, most: f64) -> f64 {
-    let mut left = volume.max(0.0);
-    // Each cell, and how deep it may still take, m.
-    let mut taking: SmallVec<[(SpanIndex, f64); 8]> = (into.iter())
-        .map(|&cell| (cell, cells.room(cell).max(0.0).min(most)))
-        .collect();
-    while left > 0.0 && !taking.is_empty() {
-        let each = left / taking.len() as f64 / CELL_AREA;
-        let offered = taking.len();
-        let mut given = 0.0;
-        taking.retain(|(cell, room)| {
-            let taken = each.min(*room);
-            *room -= taken;
-            *cells.depth_mut(*cell) += taken;
-            given += taken * CELL_AREA;
-            if taken > WAKE_DEPTH && !cells.chunks[cell.slot as usize].awake {
-                cells.wake(cell.slot as usize);
-            }
-            taken == each
-        });
-        if taking.len() == offered {
-            return 0.0;
-        }
-        left -= given;
-    }
-    left.max(0.0)
-}
-
 /// Bring the last `volume` m³ of a fall down into the cells `into`, with
 /// no fall left to hold in the air what they have no room for: that backs
 /// up into the nearest cells joined to them that have room, ring by ring,
@@ -1373,7 +1333,7 @@ fn set_down(graph: &SpanGraph, cells: &mut FieldCells, into: &[SpanIndex], volum
     if into.is_empty() {
         return volume.max(0.0);
     }
-    let mut left = pour_into(cells, into, volume);
+    let mut left = cells.pour_into(into, volume);
     let mut reached: SmallVec<[SpanIndex; 32]> = into.iter().copied().collect();
     let mut ring = 0..reached.len();
     while left > 0.0 && !ring.is_empty() && reached.len() < SPILL_REACH {
@@ -1389,9 +1349,9 @@ fn set_down(graph: &SpanGraph, cells: &mut FieldCells, into: &[SpanIndex], volum
             }
         }
         ring = outer..reached.len();
-        left = pour_up_to(cells, &reached[ring.clone()], left, BACKED_UP);
+        left = cells.pour_up_to(&reached[ring.clone()], left, BACKED_UP);
     }
-    left = pour_into(cells, &reached[into.len()..], left);
+    left = cells.pour_into(&reached[into.len()..], left);
     if left > 0.0 {
         let over = left / into.len() as f64 / CELL_AREA;
         for &cell in into {
@@ -2409,22 +2369,6 @@ mod tests {
         assert!(thick.lip.y > thin.lip.y);
         assert!(thick.lip.y - thin.lip.y < 0.3 * apart);
         assert!(thick.depth - thin.depth < 0.3 * 2.0 * apart);
-    }
-
-    #[test]
-    fn water_lands_under_a_roof_no_deeper_than_it_has_room_for() {
-        let (_, mut cells) = chunk_of(|i, _| if i == 5 { roofed(0.0, 1.0) } else { open(0.0) });
-        // 1 m³ over two cells is 2 m in each; the roofed one has room for 1.
-        let left = pour_into(&mut cells, &[cell(5, 5), cell(6, 5)], 1.0);
-        assert_eq!(left, 0.0);
-        assert!((cells.depth(cell(5, 5)) - 1.0).abs() < 1.0e-9);
-        assert!(
-            (cells.depth(cell(6, 5)) - 3.0).abs() < 1.0e-9,
-            "the open one takes what the other could not"
-        );
-        let left = pour_into(&mut cells, &[cell(5, 5)], 0.5);
-        assert!((left - 0.5).abs() < 1.0e-9, "none where there is no room");
-        assert!(cells.full(cell(5, 5)) && cells.room(cell(5, 5)).abs() < 1.0e-9);
     }
 
     #[test]
