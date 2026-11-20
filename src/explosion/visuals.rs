@@ -130,7 +130,7 @@ impl Default for ExplosionVisuals {
                 // Late enough that the fire is already cooling when the column
                 // starts, so the smoke looks like the fire's residue rather
                 // than something that was there all along.
-                Stage::sustained(Smoke, 6, 18.0, 0.7).after(0.22),
+                Stage::sustained(Smoke, 5, 14.0, 0.7).after(0.22),
             ],
             light: BlastLightSpec::default(),
         }

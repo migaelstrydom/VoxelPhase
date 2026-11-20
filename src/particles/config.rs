@@ -336,22 +336,22 @@ fn motes() -> ParticleSpec {
 /// cloud this large appearing at full opacity in one frame is the single most
 /// obvious particle artefact there is, and the fade-in costs nothing.
 ///
-/// After that it thins as fast as it spreads, and is gone within three
-/// seconds. Dense smoke the size this cloud grows to curtains off the fight
+/// It never closes to full opacity, and after the fade-in it thins as fast as
+/// it spreads, so two seconds after the blast it is a faint veil. Dense smoke the size this cloud grows to curtains off the fight
 /// that follows the blast; it should mark where the blast was, not hide what
 /// comes next. `explosion_preview --times` reports how much of the view it
 /// hides at each moment.
 fn smoke() -> ParticleSpec {
     ParticleSpec {
-        lifetime: Spread::new(1.5, 3.0),
+        lifetime: Spread::new(1.3, 2.6),
         size: Spread::new(0.8, 1.7),
         speed: Spread::new(2.0, 6.5),
         launch: LaunchPattern::Upward { up_bias: 0.35 },
         spawn_radius: 0.9,
         ramp: ColourRamp::new(&[
             ColourStop::new(0.0, rgba(0.018, 0.016, 0.015, 0.0)),
-            ColourStop::new(0.10, rgba(0.024, 0.022, 0.020, 0.85)),
-            ColourStop::new(0.45, rgba(0.055, 0.052, 0.050, 0.35)),
+            ColourStop::new(0.10, rgba(0.024, 0.022, 0.020, 0.6)),
+            ColourStop::new(0.45, rgba(0.055, 0.052, 0.050, 0.2)),
             ColourStop::new(1.0, rgba(0.115, 0.110, 0.105, 0.0)),
         ]),
         growth: 3.4,
