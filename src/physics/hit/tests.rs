@@ -234,6 +234,43 @@ fn a_head_on_pair_shares_the_blow_by_its_effective_mass() {
     assert_eq!(hit.patch, Patch::Point);
     let speed = bench.world.body(left).unwrap().linear_velocity().x;
     assert_near(2.0 - speed, hit.delta_v(mass), 0.05, "change of speed");
+    assert!(
+        hit.push_on(left).unwrap().x < -0.99,
+        "the left ball is pushed back"
+    );
+    assert!(
+        hit.push_on(right).unwrap().x > 0.99,
+        "the right ball is pushed on"
+    );
+}
+
+/// Landing at 6 m/s 0.4 of a frame's travel late, a crate is caught at the
+/// end of one frame and stopped in the next: two hits, the second the rest
+/// of the first.
+#[test]
+fn a_stop_split_across_two_frames_is_one_blow_continued() {
+    let mut bench = Bench::new();
+    let speed = 6.0;
+    let fall = speed * speed / (2.0 * GRAVITY) + 0.4 * speed * FRAME_DT;
+    let body = bench.body(
+        RigidBodyDesc::dynamic().position(Point3::new(3.0, fall + 0.25, 1.0)),
+        crate_box(),
+    );
+    let first = bench.first_hits(body, 2.0);
+    assert_eq!(first.len(), 1);
+    assert!(!first[0].continues);
+    bench.step(&[]);
+    let rest = bench.hits_on(body);
+    assert_eq!(rest.len(), 1, "the stop was not split: {rest:?}");
+    assert!(rest[0].continues);
+    assert!(rest[0].approach < first[0].approach);
+
+    bench.count_hits(body, 1.0);
+    bench
+        .world
+        .set_body_velocity(body, Vector3::new(0.0, 4.0, 0.0), Vector3::zeros());
+    let again = bench.first_hits(body, 2.0);
+    assert!(!again[0].continues, "a second landing is a new blow");
 }
 
 /// A blast is recorded as what it gave the body.

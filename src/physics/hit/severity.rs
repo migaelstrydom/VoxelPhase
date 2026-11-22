@@ -83,6 +83,7 @@ mod tests {
             bluntness: 0.01,
             effective_mass,
             patch,
+            continues: false,
         }
     }
 

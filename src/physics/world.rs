@@ -1620,6 +1620,11 @@ impl PhysicsWorld {
         &self.shoves
     }
 
+    /// What this frame's blasts gave `body`.
+    pub fn shoves_on(&self, body: RigidBodyHandle) -> impl Iterator<Item = &Shove> {
+        self.shoves.iter().filter(move |shove| shove.body == body)
+    }
+
     /// Work contacts did on each body over the current frame, and which body
     /// did it. Empty unless [`PhysicsWorld::record_contact_work`] switched it
     /// on.

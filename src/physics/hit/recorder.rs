@@ -1,6 +1,6 @@
 use generational_arena::Arena;
 use nalgebra::{Point3, Vector3};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::event::Hit;
 use super::patch::Patch;
@@ -52,6 +52,8 @@ pub(crate) struct HitRecorder {
     hits: Vec<Hit>,
     /// Where each pair's hit is in `hits`.
     index: FxHashMap<PairKey, usize>,
+    /// The pairs hit the frame before.
+    previous: FxHashSet<PairKey>,
     /// This solve's fast pairs, kept for their capacity.
     pending: Vec<Pending>,
     /// Where each pending pair is in `pending`.
@@ -71,8 +73,11 @@ struct Pending {
 }
 
 impl HitRecorder {
-    /// Drop the last frame's hits. Called once per frame, before any solve.
+    /// Drop the last frame's hits, remembering which pairs they were. Called
+    /// once per frame, before any solve.
     pub(crate) fn clear(&mut self) {
+        self.previous.clear();
+        self.previous.extend(self.index.keys().copied());
         self.hits.clear();
         self.index.clear();
     }
@@ -121,7 +126,10 @@ impl HitRecorder {
         }
         let pending = std::mem::take(&mut self.pending);
         for pair in &pending {
-            let hit = hit_of(pair, bodies, colliders);
+            let hit = Hit {
+                continues: self.previous.contains(&pair.key),
+                ..hit_of(pair, bodies, colliders)
+            };
             self.keep_fastest(pair.key, hit);
         }
         self.pending = pending;
@@ -217,6 +225,7 @@ fn hit_of(pair: &Pending, bodies: &Arena<RigidBody>, colliders: &Arena<Collider>
         )),
         effective_mass: effective_mass(bodies, [body_a, Some(body_b)], &point, &pair.normal),
         patch: Patch::spanned(&pair.points, &pair.normal),
+        continues: false,
     }
 }
 
