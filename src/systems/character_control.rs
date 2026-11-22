@@ -15,7 +15,7 @@ use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::rendering::colour::Colour;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use specs::{Join, LendJoin, Read, ReadExpect, ReadStorage, System, Write, WriteStorage};
 
 /// Owns all `CharacterState` transitions (locomotion and arm) and applies
@@ -144,7 +144,10 @@ impl<'a> System<'a> for CharacterControlSystem {
                     immersion,
                     position: Point3::from(pos.0),
                     velocity: motion.linear,
-                    tilt: (rotation.0 * Vector3::y()).y.clamp(-1.0, 1.0).acos(),
+                    tilt: physics_res
+                        .world
+                        .body(character_body)
+                        .map_or(0.0, |body| tilt_of(&body.rotation())),
                     since_contact: state.conditioning.since_contact(),
                 },
                 requests,
@@ -641,6 +644,12 @@ fn set_velocity_for_entry(
     }
 }
 
+/// How far a body at `rotation` leans off upright, in radians, whichever
+/// way it faces.
+fn tilt_of(rotation: &UnitQuaternion<f32>) -> f32 {
+    (rotation * Vector3::y()).y.clamp(-1.0, 1.0).acos()
+}
+
 /// How slow, in m/s, the ground a character leaves must be moving to count
 /// as still: above a resting body's settling, below anything that moves.
 const STILL_GROUND: f32 = 0.05;
@@ -679,6 +688,20 @@ mod tests {
     use traversal_planner::section::Footing;
 
     /// The gait rule the FSM hands to the driver while walking east.
+    /// The lean is the body's, not the way it faces.
+    #[test]
+    fn tilt_is_the_bodys_lean_whatever_its_heading() {
+        for yaw in [0.0f32, 0.5, 1.0, 3.0] {
+            let facing = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), yaw);
+            assert!(tilt_of(&facing) < 1e-3, "upright at yaw {yaw}");
+            let leaning = facing * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 1.2);
+            assert!(
+                (tilt_of(&leaning) - 1.2).abs() < 1e-3,
+                "leaning at yaw {yaw}"
+            );
+        }
+    }
+
     fn walk_east(steer_accel: f32) -> MovementRule {
         MovementRule {
             target: Vector3::new(5.0, 0.0, 0.0),
