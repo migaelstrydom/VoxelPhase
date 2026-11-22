@@ -342,6 +342,12 @@ impl<'a> FieldScene<'a> {
         match cell {
             Some(cell) if self.drawn_cells().drawn(cell) => Beside::Wet,
             _ if self.run_full_at(column, level) => Beside::Wet,
+            // No ground at the water's height nor anywhere under it: the
+            // void past a floating island's rim. No bank stands there for a
+            // skirt to end against, and nothing would hide one.
+            None if graph.spans(column).is_empty() || (level as f32) < graph.underside(column) => {
+                Beside::Below
+            }
             // Dry ground a fall below the water all over the column: no
             // bank the water could end against, but the foot of a drop its
             // water goes over.
@@ -555,7 +561,8 @@ enum Beside {
     /// No water: the column's slot, and its dry cell at the water's height,
     /// none where the column is rock there.
     Dry(u32, Option<SpanIndex>),
-    /// Dry ground far below the water: the foot of a drop.
+    /// Dry ground far below the water, or none at all under it: the foot of
+    /// a drop, or the void.
     Below,
     /// Past the map's edge.
     Outside,

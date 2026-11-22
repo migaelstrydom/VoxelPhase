@@ -391,7 +391,10 @@ its quad out over the slope below it. Surfaces with no field depth of their
 own (sea and ripple tiles) are taken as deep.
 
 A skirt can lie over a dry hollow beside the water only where a ridge
-thinner than a column parts them; it is not dropped there.
+thinner than a column parts them; it is not dropped there. None is laid
+over a drop (`Beside::Below`), whose floor lies well under the water, nor
+over the void past a floating island's rim, where nothing would hide it: a
+lip pouring into the void stood a shelf of flat water out over the fall.
 
 Wherever a surface thins out it fades into the copy rather than being cut:
 

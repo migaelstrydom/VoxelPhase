@@ -181,7 +181,7 @@ impl RiverParts {
 mod in_a_level {
     use std::path::Path;
 
-    use nalgebra::Point3;
+    use nalgebra::{Point3, Vector3};
     use smallvec::{smallvec, SmallVec};
 
     use super::*;
@@ -189,7 +189,7 @@ mod in_a_level {
     use crate::level_check::build_terrain;
     use crate::rendering::water::field_sources::VertexSource;
     use crate::terrain::BlastConfig;
-    use crate::water::geometry::{SpanIndex, CHUNK_COLUMNS, COLUMN_SIZE};
+    use crate::water::geometry::{Column, SpanIndex, CHUNK_COLUMNS, COLUMN_SIZE};
     use crate::water::WaterWorld;
 
     /// Farthest a surface read again may stand from one built afresh, m:
@@ -453,6 +453,61 @@ mod in_a_level {
             }
         }
         (apart, worst)
+    }
+
+    /// Floating Island's brook pours off its rim into the void, and no
+    /// surface's skirt is laid out over the void beside its lip: no ground
+    /// stands there to hide one, and it stood as a shelf of flat water over
+    /// the fall.
+    #[test]
+    fn no_skirt_is_laid_over_the_void() {
+        let level = load_level(Path::new("levels/floating_island.level.ron")).unwrap();
+        let mut terrain = build_terrain(&level);
+        let mut water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+        for _ in 0..60 {
+            terrain.update();
+            water.on_terrain_update(&terrain);
+            water.step(1.0 / 60.0);
+        }
+        let mut parts = RiverParts::default();
+        parts.set_budget(None);
+        parts.sync(&water);
+        let field = water.field();
+        assert!(
+            field.falls().iter().any(|fall| fall.into_void),
+            "nothing pours into the void"
+        );
+        let graph = field.graph();
+        let mut skirts = 0;
+        for part in parts.parts.values() {
+            let mesh = &part.mesh;
+            let skirt = |v: u32| {
+                matches!(
+                    mesh.sources.vertices[v as usize],
+                    VertexSource::Skirt { .. }
+                )
+            };
+            for triangle in mesh.indices.chunks(3) {
+                if !triangle.iter().all(|&v| skirt(v)) {
+                    continue;
+                }
+                skirts += 1;
+                let centre = triangle
+                    .iter()
+                    .map(|&v| {
+                        let v = &mesh.vertices[v as usize];
+                        Vector3::new(v.xz.x, v.surface, v.xz.y)
+                    })
+                    .sum::<Vector3<f32>>()
+                    / 3.0;
+                let column = Column::containing(centre.x, centre.z);
+                assert!(
+                    !graph.spans(column).is_empty() && centre.y >= graph.underside(column),
+                    "a skirt over the void at {centre:?}"
+                );
+            }
+        }
+        assert!(skirts > 0, "no skirts laid at all");
     }
 
     /// Every cell a level's surfaces read again lies in a chunk whose
