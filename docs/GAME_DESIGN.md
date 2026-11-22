@@ -97,8 +97,8 @@ Two thresholds price everything, with no special cases:
 - **Blasts, the player's own included,** shove, knock down or kill by how
   close they are. Nothing stops a blast throwing the player upward, and the
   physics is not cheated to prevent it. The heavy band prices it instead:
-  it starts below the player's own jump takeoff speed (about 4.4 m/s for a
-  1 m jump), so any blast that throws them higher than they can jump also
+  it starts below the player's own jump takeoff speed (7 m/s for a full
+  jump), so any blast that throws them higher than they can jump also
   knocks them down. They fly uncontrolled, and the fall law judges the
   landing. Blast-jumping is a desperate gamble, never a trick: a room's
   heights must allow for a player who tries it.

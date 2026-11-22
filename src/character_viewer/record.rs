@@ -18,6 +18,9 @@ pub struct FrameRecord {
     pub pose: &'static str,
     /// The upper-body animation FSM's state.
     pub upper: String,
+    /// What harm has befallen the character: its last blow's band and how
+    /// sudden it was, m/s; `restart` once a deadly blow's beat has run out.
+    pub harm: String,
     /// Physics body centre.
     pub body: Point3<f32>,
     pub velocity: Vector3<f32>,

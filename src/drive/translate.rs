@@ -12,7 +12,9 @@
 //! put the two halves of one entity's frame into one struct.
 
 use crate::drive::components::{Actuator, DriveIntent};
-use crate::physics::{DriveCommand, PhysicsWorld, RigidBodyHandle, VerticalVerbs};
+use crate::physics::{
+    AllowanceCommand, DriveCommand, PhysicsWorld, RigidBodyHandle, VerticalVerbs,
+};
 
 /// Hand one body's frame of command to the engine: what it may grip where
 /// nothing holds it up, and what it drives toward. Consumes the frame's
@@ -43,13 +45,20 @@ pub fn resolve_drive(
         angular_target: intent.angular_target,
         max_accel: actuator.max_accel,
         angular_max_accel: actuator.angular_max_accel,
-        drive_gain: if intent.slack {
+        drive_gain: if intent.slack || intent.limp {
             1.0
         } else {
             actuator.drive_gain
         },
         patch_radius: actuator.support_patch_radius,
-        allowance: actuator.allowance_command(verbs, intent.steer_accel),
+        allowance: if intent.limp {
+            AllowanceCommand {
+                verbs,
+                ..AllowanceCommand::default()
+            }
+        } else {
+            actuator.allowance_command(verbs, intent.steer_accel)
+        },
     }
 }
 

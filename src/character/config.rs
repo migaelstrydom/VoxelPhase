@@ -2,6 +2,7 @@ use specs::{Component, DenseVecStorage};
 
 use super::drop_probe::DropProbe;
 use super::ledge::LedgeConfig;
+use super::locomotion::DownConfig;
 use super::swim::SwimConfig;
 
 /// Movement tuning for one character.
@@ -112,6 +113,8 @@ pub struct LocomotionConfig {
     /// What the hands catch, and how the character hangs and climbs. Only a
     /// body with a `LedgeSensor` finds edges at all.
     pub ledge: LedgeConfig,
+    /// How the character lies when knocked down, and gets up.
+    pub down: DownConfig,
     /// How the character finds it stands over a drop, past the brink holding
     /// it up, and how hard it is steered off (`Grounding::over_drop`). `None`
     /// never looks, and a body held by a brink stays there.
@@ -147,6 +150,7 @@ impl LocomotionConfig {
             collider_half_height: 0.5,
             swim: SwimConfig::default(),
             ledge: LedgeConfig::default(),
+            down: DownConfig::default(),
             drop_probe: Some(DropProbe::default()),
         }
     }

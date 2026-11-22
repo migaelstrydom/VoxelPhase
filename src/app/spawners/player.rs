@@ -10,8 +10,8 @@ use crate::character::{
 use crate::components::{
     Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
 };
-use crate::damage::{Health, Ragdoll};
 use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
+use crate::harm::{Harm, FLESH_GIVE};
 use crate::physics::{
     BulkShape, ColliderDesc, ColliderShape, ConstraintHandle, ConstraintKind, FrictionModel,
     PhysicsWorld, RigidBodyDesc, RigidBodyHandle, Volume,
@@ -82,16 +82,16 @@ pub fn create_player_body(
         ColliderDesc::capsule(locomotion.collider_half_height, locomotion.collider_radius)
             .restitution(0.0)
             .friction_model(FrictionModel::Isotropic(0.8))
+            .give(FLESH_GIVE)
             .bulk(figure(locomotion.collider_half_height));
     physics.attach_collider(body, collider_desc);
     physics
         .body_mut(body)
         .unwrap()
         .scale_local_inertia(Vector3::new(1.0, 50.0, 1.0));
-    // Upright on land, laid over to swim: `CharacterControlSystem` sets
-    // the pitch through `AttitudeControl`. Held so `DeathSystem` can
-    // release it. Without that the corpse stays rigidly upright, which
-    // reads as a bug rather than a death.
+    // Upright on land, laid over to swim, let go when knocked down:
+    // `CharacterControlSystem` sets the pitch and how firmly it is held
+    // through `AttitudeControl`.
     let upright = physics.create_constraint(ConstraintKind::KeepAttitude {
         body,
         pitch: 0.0,
@@ -171,10 +171,7 @@ pub fn spawn_player(world: &mut World, initial_pos: Point3<f32>) -> Entity {
         .with(AttitudeControl {
             constraint: upright_handle,
         })
-        // The player's corpse is never despawned — death should be a state to
-        // recover from, not an entity disappearing out from under the camera.
-        .with(Health::persistent(100.0))
-        .with(Ragdoll::new(vec![upright_handle]))
+        .with(Harm::default())
         .with(animator)
         .with(Position(Vector3::new(
             initial_pos.x,

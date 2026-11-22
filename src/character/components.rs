@@ -71,8 +71,10 @@ impl CharacterState {
     pub fn arm_state_allowed(&self, arm: &ArmState) -> bool {
         match self.locomotion {
             // A swimmer's arms are stroking and a hanger's are on the edge:
-            // nothing can be held.
-            LocomotionState::Swim(_) | LocomotionState::Ledge(_) => matches!(arm, ArmState::Idle),
+            // nothing can be held. A body knocked down lets go.
+            LocomotionState::Swim(_) | LocomotionState::Ledge(_) | LocomotionState::Down(_) => {
+                matches!(arm, ArmState::Idle)
+            }
             LocomotionState::OnFoot(_)
             | LocomotionState::Hop(_)
             | LocomotionState::Jump(_)

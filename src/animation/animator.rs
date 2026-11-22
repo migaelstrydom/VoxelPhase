@@ -805,7 +805,9 @@ fn map_upper_state(arm: &ArmState, state: &LocomotionState) -> UpperState {
                     UpperState::Braced
                 }
             }
-            LocomotionState::Jump(_) | LocomotionState::Fall(_) => UpperState::Braced,
+            LocomotionState::Jump(_) | LocomotionState::Fall(_) | LocomotionState::Down(_) => {
+                UpperState::Braced
+            }
             LocomotionState::Ledge(_) => UpperState::Gripping,
             LocomotionState::Swim(_) => UpperState::Stroking,
         },
@@ -841,7 +843,8 @@ fn leg_mode(state: &LocomotionState) -> LegMode {
         LocomotionState::Jump(_)
         | LocomotionState::Fall(_)
         | LocomotionState::Swim(_)
-        | LocomotionState::Ledge(_) => LegMode::Off,
+        | LocomotionState::Ledge(_)
+        | LocomotionState::Down(_) => LegMode::Off,
     }
 }
 
@@ -924,7 +927,9 @@ fn next_pose_state(
                 },
             },
         },
-        LocomotionState::Fall(_) => PoseState::Airborne {
+        // Knocked down, the figure is a falling one until the limbs are
+        // drawn trailing the body's motion.
+        LocomotionState::Fall(_) | LocomotionState::Down(_) => PoseState::Airborne {
             kind: AirKind::Fall,
             takeoff,
         },

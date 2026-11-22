@@ -27,6 +27,7 @@ pub fn report(take: &Take, every: usize, feet: bool) -> String {
                 ),
                 ("pose", p.pose, frame.pose),
                 ("upper", p.upper.as_str(), frame.upper.as_str()),
+                ("harm", p.harm.as_str(), frame.harm.as_str()),
             ] {
                 if before != after {
                     let _ = writeln!(

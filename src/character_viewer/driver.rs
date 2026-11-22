@@ -29,11 +29,12 @@ use crate::animation::{CharacterAnimator, CharacterRigConfig, FootSide};
 use crate::character::{CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig};
 use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::core::error::{EngineError, EngineResult};
+use crate::harm::{Band, Harm};
 use crate::level::load_level;
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::player::Player;
 use crate::render_perf::GameHarness;
-use crate::systems::{resolve_ground_speed, PhysicsResource};
+use crate::systems::{resolve_ground_speed, LevelRestart, PhysicsResource};
 use crate::terrain::TerrainWorld;
 use crate::traversal::{carriers, PathFrame, PhysicsCaster, TraversalPlanState};
 use crate::water::WaterWorld;
@@ -350,6 +351,10 @@ fn record(
         .read_storage::<Immersion>()
         .get(character)
         .and_then(|i| i.water);
+    let harm = harm_of(
+        world.read_storage::<Harm>().get(character),
+        world.read_resource::<LevelRestart>().requested,
+    );
 
     Ok(FrameRecord {
         index,
@@ -358,6 +363,7 @@ fn record(
         locomotion: state.locomotion.tag().to_string(),
         pose: animator.pose_state.tag(),
         upper: format!("{:?}", animator.upper_state.transition_key()).to_lowercase(),
+        harm,
         body: position,
         velocity: body.linear_velocity(),
         body_pitch: tilt_degrees(&body.rotation()),
@@ -516,4 +522,23 @@ fn caption(record: &FrameRecord) -> String {
         "{:.2}s {} | {} {} | {:.0}°",
         record.time, record.beat, record.locomotion, record.pose, record.body_pitch
     )
+}
+
+/// The harm column: the last blow's band and how sudden it was, or
+/// `restart` once the room has been asked to begin again.
+fn harm_of(harm: Option<&Harm>, restart: bool) -> String {
+    if restart {
+        return "restart".to_string();
+    }
+    match harm.and_then(|harm| harm.last_blow) {
+        Some((sudden, band)) => {
+            let band = match band {
+                Band::Light => "light",
+                Band::Heavy => "heavy",
+                Band::Deadly => "deadly",
+            };
+            format!("{band} {sudden:.1}")
+        }
+        None => "-".to_string(),
+    }
 }

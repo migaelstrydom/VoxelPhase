@@ -2,6 +2,7 @@
 
 mod contract;
 mod driver;
+mod harm_scenarios;
 mod ledge_scenarios;
 mod pilot;
 mod pose_audit;

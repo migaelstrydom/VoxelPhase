@@ -10,6 +10,7 @@ use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::debug::DebugOverlays;
 use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::foliage::{leaf_depth, Foliage, LeafDrag};
+use crate::harm::Harm;
 use crate::physics::constraint::keep_attitude;
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::rendering::colour::Colour;
@@ -55,6 +56,7 @@ impl<'a> System<'a> for CharacterControlSystem {
         ReadStorage<'a, Throws>,
         Write<'a, DebugOverlays>,
         ReadStorage<'a, Foliage>,
+        WriteStorage<'a, Harm>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -77,6 +79,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             throws,
             mut debug_overlays,
             foliage,
+            mut harms,
         ) = data;
         let dt = time.delta_seconds();
 
@@ -104,6 +107,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             immersion,
             attitude,
             throws,
+            harm,
         ) in (
             &mut intents,
             &mut character_states,
@@ -118,6 +122,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             (&immersions).maybe(),
             (&attitudes).maybe(),
             (&throws).maybe(),
+            (&mut harms).maybe(),
         )
             .join()
         {
@@ -149,6 +154,7 @@ impl<'a> System<'a> for CharacterControlSystem {
                         .body(character_body)
                         .map_or(0.0, |body| tilt_of(&body.rotation())),
                     since_contact: state.conditioning.since_contact(),
+                    knocked: harm.and_then(|harm| harm.knock.take()),
                 },
                 requests,
                 config,
@@ -171,7 +177,15 @@ impl<'a> System<'a> for CharacterControlSystem {
                 &effects,
                 is_grounded,
             );
+            if effects.buckle {
+                buckle(
+                    &mut physics_res.world,
+                    character_body,
+                    config.down.buckle_rate,
+                );
+            }
             let hanging = matches!(state.locomotion, LocomotionState::Ledge(_));
+            let in_control = state.locomotion.in_control();
             Grip::reconcile(
                 &mut state.grip,
                 &mut physics_res.world,
@@ -212,7 +226,14 @@ impl<'a> System<'a> for CharacterControlSystem {
                 })
                 .unwrap_or(rotation.0)
             };
-            rotation.0 = current_yaw;
+            // Knocked down, the character faces the way its body leans, so
+            // the figure is drawn lying as the body lies.
+            rotation.0 = physics_res
+                .world
+                .body(character_body)
+                .filter(|_| !in_control)
+                .and_then(|b| lean_heading(&b.rotation()))
+                .map_or(current_yaw, |lean| keep_attitude::yaw_of(&lean));
 
             // A hanger faces the wall it hangs on, whichever way the stick
             // shimmies it; a thrower faces its throw, whichever way it is
@@ -234,6 +255,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             .filter(|planar| planar.magnitude() > 0.5)
             .map(|planar| planar.normalize());
             let heading = match (wall, throws.and_then(Throws::facing), flight) {
+                _ if !in_control => None,
                 (Some(wall), _, _) => Some((wall, config.turn_aggression)),
                 (None, Some(aim), _) => Some((aim, config.throw_turn_aggression)),
                 (None, None, Some(flight)) => Some((flight, config.turn_aggression)),
@@ -319,7 +341,11 @@ impl<'a> System<'a> for CharacterControlSystem {
                 approach(state.body_pitch, target_pitch, rate, dt)
             };
             if let Some(attitude) = attitude {
-                attitude.hold(&mut physics_res.world, state.body_pitch);
+                attitude.hold(
+                    &mut physics_res.world,
+                    state.body_pitch,
+                    state.locomotion.attitude_hold(config),
+                );
             }
 
             // --- Arm state transitions ---
@@ -333,9 +359,13 @@ impl<'a> System<'a> for CharacterControlSystem {
                     state.arm = ArmState::Idle;
                 }
             }
+            // Knocked down, the hands stop reaching.
+            if !in_control {
+                state.arm = ArmState::Idle;
+            }
             state.arm = match state.arm {
                 ArmState::Idle => {
-                    if target.grab_just_pressed && !swimming {
+                    if target.grab_just_pressed && !swimming && in_control {
                         grab::begin_reach(
                             &physics_res.world,
                             character_pos,
@@ -419,7 +449,7 @@ impl<'a> System<'a> for CharacterControlSystem {
 
             // Resolve throw intent: if throw wasn't consumed by a grab-throw
             // (arm was Holding), pass it through as a grenade throw.
-            if target.throw && !was_holding {
+            if target.throw && !was_holding && in_control {
                 target.throw_grenade = true;
             }
 
@@ -598,6 +628,7 @@ fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule, left_still_g
     drive.linear_target = rule.target;
     drive.steer_accel = rule.steer_accel;
     drive.slack = rule.slack;
+    drive.limp = rule.limp;
     if rule.clamp_up && left_still_ground {
         drive.clamp_rise();
     }
@@ -642,6 +673,36 @@ fn set_velocity_for_entry(
         let reaction = -(after - before) * mass;
         world.apply_impulse_at_point(edge_body, reaction, sensed.at.grip());
     }
+}
+
+/// The legs giving way under a body knocked down: one still standing pitches
+/// forward at `rate`, rad/s. One already leaning falls on its own.
+fn buckle(world: &mut PhysicsWorld, body: RigidBodyHandle, rate: f32) {
+    /// The lean, as the cosine of its angle, past which a body is no longer
+    /// standing.
+    const STANDING: f32 = 0.87;
+    let Some((rotation, linear, angular)) = world
+        .body(body)
+        .map(|b| (b.rotation(), b.linear_velocity(), b.angular_velocity()))
+    else {
+        return;
+    };
+    let up = rotation * Vector3::y();
+    if up.y < STANDING {
+        return;
+    }
+    let front = keep_attitude::heading(&rotation, 0.0);
+    world.set_body_velocity(body, linear, angular + up.cross(&front) * rate);
+}
+
+/// Which way across the ground a body at `rotation` leans, if it leans far
+/// enough for that to be plain.
+fn lean_heading(rotation: &UnitQuaternion<f32>) -> Option<Vector3<f32>> {
+    /// The least lean, as the sine of its angle, whose way is taken.
+    const PLAIN_LEAN: f32 = 0.35;
+    let up = rotation * Vector3::y();
+    let across = Vector3::new(up.x, 0.0, up.z);
+    (across.norm() >= PLAIN_LEAN).then(|| across.normalize())
 }
 
 /// How far a body at `rotation` leans off upright, in radians, whichever
@@ -708,6 +769,7 @@ mod tests {
             steer_accel: Some(steer_accel),
             clamp_up: false,
             slack: false,
+            limp: false,
         }
     }
 
@@ -800,6 +862,7 @@ mod tests {
         world.register::<Immersion>();
         world.register::<Foliage>();
         world.register::<AttitudeControl>();
+        world.register::<Harm>();
         world.register::<Throws>();
         world.register::<Position>();
         world.register::<RigidBodyComponent>();

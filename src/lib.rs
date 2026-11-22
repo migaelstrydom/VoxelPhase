@@ -21,6 +21,7 @@ pub mod force_field;
 pub mod fracture;
 pub mod geometry;
 pub mod glass;
+pub mod harm;
 pub mod hud;
 pub mod input;
 pub mod level;

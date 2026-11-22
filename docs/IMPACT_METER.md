@@ -159,12 +159,14 @@ per frame, from the substep it closed fastest in.
 | `bluntness` | radius of the sharper side's feature, m |
 | `effective_mass` | the pair's mass along the normal at `point`, kg: `1 / Σ (1/m + (r×n)·I⁻¹(r×n))` over the sides that can move |
 | `patch` | `Point`, `Line { length }` or `Face { area }` |
+| `continues` | the pair was hit the frame before too: the rest of a stop the solver split across two frames (it lets a body reach the surface still closing, and stops it the next frame), not a new blow. Readers that count blows skip it |
 
 - **A hit is confirmed, not predicted**: a contact closing faster than
   `HitConfig::speed` (0.5 m/s) that took impulse, as Box2D v3's hit events
   are. A resting contact closes at one substep of gravity (0.04 m/s), a
   waking body at about the same, a joint pushing into a contact at none;
-  none is a hit, and nothing has to tell one blow from the next.
+  none is a hit. A stop split across two frames is one blow, its second
+  hit marked `continues`; no deadband has to tell one blow from the next.
 - **The patch** is the pair's contacts that took impulse or are within the
   pair's give of touching, measured across the normal. A pair's contacts
   against static geometry merge across manifolds.
@@ -242,7 +244,7 @@ without changing what it records.
 | Reader | Judges by hits as | Status |
 |---|---|---|
 | Grenade detonation | its side's Δv ≥ its detonation speed, so a glancing blow or a light body it strikes does not set it off | moved over (`projectile/detonation.rs`) |
-| Harm (the player) | the player's side of every hit and shove | not built; designed in `GAME_DESIGN.md` *Harm* |
+| Harm (the player) | the player's Δv from every hit and shove, judged by how sudden it was over the pair's give (and the limbs', braced) | moved over (`src/harm/`); being tuned in play |
 | Glass | pressure: a local crack; force: bending fatigue | its own meters: impulse over `dt` against a bearing (`glass/fatigue.rs`), and velocity change and jerk (`glass/jolt.rs`) |
 | Cleave | force at the struck block | its own meter: fracture's spike, or m × Δv frame to frame (`BlowMeasure`, `cleave/`) |
 | Fracture | force at a part, into `BondLoads` | its own meter: frame-to-frame rise in impulse less deadbands (`fracture/contact_load.rs`) |

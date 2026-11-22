@@ -116,6 +116,7 @@ column gives the request or fact that causes each transition.
 | `Fall { steering }` | OnFoot (`grace` runs out), Hop (landing missed), Swim (out over a drop), Ledge (drop) | OnFoot (down), Swim, Ledge (an edge at the hands) | Off | Off | Brace |
 | `Swim` | OnFoot, Fall, Jump falling, once the water is deep | OnFoot, Fall, Jump, Ledge | Off | Off | Stroke |
 | `Ledge { edge, phase }` | Jump, Fall, Swim (an edge at the hands) | Fall (drop, edge lost), Jump (back-jump), OnFoot (pull-up done) | Off | Off | Grip |
+| `Down { phase }` | any (knocked down) | OnFoot (righted), Swim (time up, deep water) | Off | Off | Brace |
 
 ### Takeoffs: Hop and Jump
 
@@ -216,6 +217,24 @@ sensor of its own, not the planner, because most grabs start in a Jump or a
 Fall, where the planner is off. Which edges count, the sensor, the grip joint
 and the input timing: `docs/LEDGE_GRABS.md`.
 
+### Down
+
+Knocked down by a heavy blow (`src/harm/`, `docs/GAME_DESIGN.md` *Harm*).
+The knock is a fact (`Facts::knocked`) and takes the body from any state,
+first in the tick. `phase` is one of:
+- `Limp { remaining }`: no control at all (`MovementRule::limp`: nothing at
+  the supports, nothing conjured in the air) and the attitude let go, so the
+  body tumbles as the blow and the world turn it. It lasts at least
+  `remaining`, then until the body lies still on something.
+- `Rising`: the attitude sprung back upright, still with no control, until
+  the body stands within `DownConfig::upright_tilt`.
+
+The hands let go and reach for nothing, and nothing is thrown. A knock while
+limp keeps the longer time down; a knock while rising goes down again. Deep
+water takes a body only once its time is up: until then it floats as it
+lies. The figure is drawn as a fall, faced the way the body leans, until the
+limbs are drawn trailing its motion.
+
 ## The consumers
 
 ### Planner (`src/traversal/`)
@@ -285,7 +304,7 @@ they are allowed, as today. Otherwise:
 | State | Arms |
 |---|---|
 | OnFoot, a Hop the legs stride through | Swing |
-| Jump, Fall, a Hop too long to stride through | Brace |
+| Jump, Fall, a Hop too long to stride through, Down | Brace |
 | Swim | Stroke |
 | Ledge | Grip (`UpperState::Gripping`) |
 

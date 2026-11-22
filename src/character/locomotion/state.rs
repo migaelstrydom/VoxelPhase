@@ -2,6 +2,7 @@ use std::mem::discriminant;
 
 use nalgebra::Vector3;
 
+use super::down::{Down, DownPhase};
 use super::effects::EntryEffects;
 use super::fall::Fall;
 use super::hop::Hop;
@@ -12,6 +13,8 @@ use super::on_foot::OnFoot;
 use super::rule::{MovementRule, RuleSpeeds};
 use super::swim::Swim;
 use super::takeoff::TakeoffPhase;
+use crate::character::attitude::AttitudeHold;
+use crate::character::config::LocomotionConfig;
 
 /// What the character is doing. Only [`tick`](Self::tick) changes it, and
 /// only [`enter`](Self::enter) says what changing it does.
@@ -29,6 +32,8 @@ use super::takeoff::TakeoffPhase;
 ///   OnFoot ──(stick into a climbable edge at the chest)──► Ledge (a mantle)
 ///   Ledge ──(drop, edge lost)──► Fall    Ledge ──(jump)──► Jump (back-jump)
 ///   Ledge ──(pull-up done)──► OnFoot
+///   any ──(knocked down)──► Down ──(limp, then righted)──► OnFoot
+///   Down, its time up ──(deep water)──► Swim
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LocomotionState {
@@ -38,6 +43,7 @@ pub enum LocomotionState {
     Fall(Fall),
     Swim(Swim),
     Ledge(Ledge),
+    Down(Down),
 }
 
 impl Default for LocomotionState {
@@ -47,11 +53,14 @@ impl Default for LocomotionState {
 }
 
 impl LocomotionState {
-    /// The next state. An edge the free hands catch comes first, the water
-    /// out of; then water too deep to stand in takes whichever states
-    /// [`water_takes`](Self::water_takes); otherwise each state's own exits
-    /// decide.
+    /// The next state. A knockdown comes first, whatever the state; then an
+    /// edge the free hands catch, the water out of; then water too deep to
+    /// stand in takes whichever states [`water_takes`](Self::water_takes);
+    /// otherwise each state's own exits decide.
     pub fn tick(self, input: &LocomotionInput) -> Self {
+        if let Some(seconds) = input.facts.knocked {
+            return Self::Down(Down::knocked(&self, seconds));
+        }
         if let Some(ledge) = Ledge::caught(&self, input) {
             return Self::Ledge(ledge);
         }
@@ -73,6 +82,7 @@ impl LocomotionState {
             Self::Fall(state) => state.tick(input),
             Self::Swim(state) => state.tick(input),
             Self::Ledge(state) => state.tick(input),
+            Self::Down(state) => state.tick(input),
         }
     }
 
@@ -108,6 +118,12 @@ impl LocomotionState {
             },
             Self::Swim(_) => EntryEffects::default(),
             Self::Ledge(_) => Ledge::entry(requests),
+            // A jump pressed before the blow is not taken on getting up.
+            Self::Down(_) => EntryEffects {
+                consume_jump: true,
+                buckle: true,
+                ..EntryEffects::default()
+            },
         }
     }
 
@@ -129,6 +145,7 @@ impl LocomotionState {
             Self::Fall(state) => state.movement_rule(move_dir, speeds),
             Self::Swim(state) => state.movement_rule(move_dir, speeds),
             Self::Ledge(state) => state.movement_rule(),
+            Self::Down(state) => state.movement_rule(),
         }
     }
 
@@ -141,6 +158,7 @@ impl LocomotionState {
             Self::Fall(state) => state.water_takes(),
             Self::Swim(state) => state.water_takes(),
             Self::Ledge(state) => state.water_takes(),
+            Self::Down(state) => state.water_takes(),
         }
     }
 
@@ -151,7 +169,21 @@ impl LocomotionState {
         match self {
             Self::OnFoot(_) | Self::Fall(_) | Self::Swim(_) => true,
             Self::Jump(jump) => matches!(jump.phase, TakeoffPhase::Flight),
-            Self::Hop(_) | Self::Ledge(_) => false,
+            Self::Hop(_) | Self::Ledge(_) | Self::Down(_) => false,
+        }
+    }
+
+    /// Whether the character acts at all: grabs, throws, steers. Not while
+    /// knocked down.
+    pub fn in_control(&self) -> bool {
+        !matches!(self, Self::Down(_))
+    }
+
+    /// How firmly the body's attitude is held: rigidly, unless knocked down.
+    pub fn attitude_hold(&self, config: &LocomotionConfig) -> AttitudeHold {
+        match self {
+            Self::Down(down) => down.attitude_hold(&config.down),
+            _ => AttitudeHold::Rigid,
         }
     }
 
@@ -159,9 +191,12 @@ impl LocomotionState {
     pub fn allows_jump_cutoff(&self) -> bool {
         match self {
             Self::Jump(jump) => jump.allows_cutoff(),
-            Self::OnFoot(_) | Self::Hop(_) | Self::Fall(_) | Self::Swim(_) | Self::Ledge(_) => {
-                false
-            }
+            Self::OnFoot(_)
+            | Self::Hop(_)
+            | Self::Fall(_)
+            | Self::Swim(_)
+            | Self::Ledge(_)
+            | Self::Down(_) => false,
         }
     }
 
@@ -178,6 +213,10 @@ impl LocomotionState {
                 LedgePhase::Grab { .. } => "ledge_grab",
                 LedgePhase::Hang { .. } => "ledge_hang",
                 LedgePhase::PullUp { .. } => "ledge_pull_up",
+            },
+            Self::Down(Down { phase }) => match phase {
+                DownPhase::Limp { .. } => "down",
+                DownPhase::Rising { .. } => "rising",
             },
         }
     }

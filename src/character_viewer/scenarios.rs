@@ -34,7 +34,9 @@ use nalgebra::Vector3;
 use crate::anim_viewer::{Beat, Script};
 
 use super::scenario::{CameraRig, Judged, Scenario};
-use super::{ledge_scenarios, room_scenarios, shrub_scenarios, traversal_scenarios, turning};
+use super::{
+    harm_scenarios, ledge_scenarios, room_scenarios, shrub_scenarios, traversal_scenarios, turning,
+};
 
 const LEVEL: &str = "levels/swim_test.level.ron";
 const GARDEN: &str = "levels/rubble_garden.level.ron";
@@ -522,6 +524,7 @@ pub fn catalogue() -> Vec<Scenario> {
             judged: Judged::Motion,
         },
     ];
+    scenarios.extend(harm_scenarios::catalogue());
     scenarios.extend(ledge_scenarios::catalogue());
     scenarios.extend(shrub_scenarios::catalogue());
     scenarios.extend(room_scenarios::catalogue());

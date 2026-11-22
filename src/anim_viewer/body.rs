@@ -149,6 +149,7 @@ impl Body {
                 tilt: 0.0,
                 // No plan takes off here, and nothing else reads it.
                 since_contact: 0.0,
+                knocked: None,
             },
             requests,
             config: &self.config,
@@ -215,7 +216,10 @@ impl Body {
     /// reads grounding separately; this is for the report's pose column.
     pub fn is_airborne(&self) -> bool {
         match self.state.locomotion {
-            LocomotionState::Hop(_) | LocomotionState::Jump(_) | LocomotionState::Fall(_) => true,
+            LocomotionState::Hop(_)
+            | LocomotionState::Jump(_)
+            | LocomotionState::Fall(_)
+            | LocomotionState::Down(_) => true,
             LocomotionState::OnFoot(_) | LocomotionState::Swim(_) | LocomotionState::Ledge(_) => {
                 false
             }

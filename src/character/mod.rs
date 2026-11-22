@@ -30,7 +30,7 @@ pub mod locomotion;
 mod swim;
 mod throws;
 
-pub use attitude::{approach, AttitudeControl};
+pub use attitude::{approach, AttitudeControl, AttitudeHold};
 pub use components::{ArmState, CharacterIntent, CharacterState};
 pub use config::LocomotionConfig;
 pub use drop_probe::DropProbe;

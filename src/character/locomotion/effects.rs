@@ -32,4 +32,6 @@ pub struct EntryEffects {
     pub cut_rise: bool,
     /// Landing from a long jump: a still-held crouch is ignored for a while.
     pub arm_crouch_lockout: bool,
+    /// Knocked down: the legs give way under a body still standing.
+    pub buckle: bool,
 }

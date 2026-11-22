@@ -31,6 +31,7 @@ use crate::foliage::Foliage;
 use crate::force_field::ForceFieldVisual;
 use crate::fracture::{CompoundFracture, Debris, DebrisBudget, PieceSplits};
 use crate::glass::BrittleSheet;
+use crate::harm::Harm;
 use crate::input::{GameplayActions, InputState};
 use crate::light_shaft::LightShaft;
 use crate::lighting::{ActiveLights, PointLight};
@@ -96,6 +97,7 @@ impl WorldBuilder {
         world.register::<Health>();
         world.register::<Dead>();
         world.register::<Ragdoll>();
+        world.register::<Harm>();
         world.register::<LastVelocity>();
         world.register::<Brain>();
         world.register::<Perception>();

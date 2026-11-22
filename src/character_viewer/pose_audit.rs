@@ -578,6 +578,7 @@ mod tests {
             locomotion: "on_foot".to_string(),
             pose: "",
             upper: String::new(),
+            harm: String::new(),
             body: pelvis,
             velocity: Vector3::zeros(),
             body_pitch: 0.0,

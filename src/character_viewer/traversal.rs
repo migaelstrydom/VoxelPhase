@@ -512,6 +512,7 @@ mod tests {
             locomotion: String::new(),
             pose: "",
             upper: String::new(),
+            harm: String::new(),
             body: Point3::new(x, 0.75, 0.0),
             velocity: Vector3::new(speed, vy, 0.0),
             body_pitch: 0.0,

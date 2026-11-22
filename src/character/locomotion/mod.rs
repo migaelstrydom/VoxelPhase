@@ -1,5 +1,5 @@
 //! The character's locomotion state machine: what the character is doing
-//! (`OnFoot`, `Hop`, `Jump`, `Fall`, `Swim`, `Ledge`), when that changes, and what
+//! (`OnFoot`, `Hop`, `Jump`, `Fall`, `Swim`, `Ledge`, `Down`), when that changes, and what
 //! changing it does. Design: `docs/LOCOMOTION_STATES.md`.
 //!
 //! ```text
@@ -16,6 +16,7 @@
 //! its answers to the questions that cut across states.
 
 mod conditioning;
+mod down;
 mod effects;
 mod fall;
 mod hop;
@@ -35,6 +36,7 @@ mod ledge_tests;
 mod tests;
 
 pub use conditioning::Conditioning;
+pub use down::{Down, DownConfig, DownPhase};
 pub use effects::EntryEffects;
 pub use fall::Fall;
 pub use hop::Hop;

@@ -50,6 +50,10 @@ pub struct DriveIntent {
     /// own friction (the actuator's drive gain is set aside). For a body
     /// something else moves, such as a grip on a ledge.
     pub slack: bool,
+    /// No authority at all: slack at the supports, and nothing conjured in
+    /// the air (no steering, turning or jump shaping out of the allowance).
+    /// A body knocked down, which goes where the blow and the world take it.
+    pub limp: bool,
 }
 
 impl DriveIntent {

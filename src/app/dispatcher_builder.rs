@@ -24,6 +24,7 @@ use crate::foliage::{
 use crate::force_field::ForceFieldSystem;
 use crate::fracture::{DebrisCullSystem, FractureSystem};
 use crate::glass::{GlassCrackSystem, SheetShareSystem};
+use crate::harm::HarmSystem;
 use crate::input::InputActionSystem;
 use crate::light_shaft::LightShaftSystem;
 use crate::lighting::LightCollectionSystem;
@@ -134,6 +135,9 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // Whatever has fallen past the bottom of the world is gone; the
         // player past it asks for the level to begin again.
         .with(OutOfWorldSystem, "out_of_world", &["debris_cull"])
+        // The step's blows on the player, judged: a knockdown the next
+        // frame's control takes, a deadly one the room's restart a beat on.
+        .with(HarmSystem, "harm", &["physics_sync"])
         // Breakable bodies drawn as their parts now stand, after everything
         // that cut, split or re-centred them this frame.
         .with(

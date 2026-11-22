@@ -12,14 +12,16 @@ pub enum PlanRole {
 
 impl PlanRole {
     /// The planner's role in `state`: on the ground and in the flights it
-    /// took off on; off in a jump the player pressed, a fall and the water.
+    /// took off on; off in a jump the player pressed, a fall, the water and
+    /// a knockdown.
     pub fn of(state: &LocomotionState) -> Self {
         match state {
             LocomotionState::OnFoot(_) | LocomotionState::Hop(_) => Self::On,
             LocomotionState::Jump(_)
             | LocomotionState::Fall(_)
             | LocomotionState::Swim(_)
-            | LocomotionState::Ledge(_) => Self::Off,
+            | LocomotionState::Ledge(_)
+            | LocomotionState::Down(_) => Self::Off,
         }
     }
 }

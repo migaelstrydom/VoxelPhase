@@ -60,6 +60,7 @@ fn frame(grounded: bool) -> Frame {
             velocity: Vector3::zeros(),
             tilt: 0.0,
             since_contact: 0.0,
+            knocked: None,
         },
         requests: Requests::default(),
     }

@@ -83,6 +83,9 @@ pub struct MovementRule {
     /// own friction, with no drive pushing through them, and `target` is
     /// zero. For a body something else moves (a grip on a ledge).
     pub slack: bool,
+    /// Slack, and nothing conjured in the air either: no steering, no turning.
+    /// A body knocked down.
+    pub limp: bool,
 }
 
 impl MovementRule {
@@ -95,6 +98,7 @@ impl MovementRule {
             steer_accel: Some(accel),
             clamp_up: false,
             slack: false,
+            limp: false,
         }
     }
 
@@ -106,6 +110,7 @@ impl MovementRule {
             steer_accel: None,
             clamp_up: false,
             slack: false,
+            limp: false,
         }
     }
 
@@ -117,6 +122,17 @@ impl MovementRule {
             steer_accel: None,
             clamp_up: false,
             slack: true,
+            limp: false,
+        }
+    }
+
+    /// No authority of any kind: slack at the supports and nothing conjured
+    /// in the air. A body knocked down goes where the blow and the world take
+    /// it.
+    pub fn limp() -> Self {
+        Self {
+            limp: true,
+            ..Self::slack()
         }
     }
 

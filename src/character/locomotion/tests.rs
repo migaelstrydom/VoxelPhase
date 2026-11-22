@@ -1,7 +1,7 @@
 use nalgebra::{Point3, Vector3};
 
 use super::*;
-use crate::character::{Immersion, LocomotionConfig, WaterAtBody};
+use crate::character::{AttitudeHold, Immersion, LocomotionConfig, WaterAtBody};
 
 const DT: f32 = 1.0 / 60.0;
 
@@ -22,6 +22,7 @@ fn ground() -> Frame {
             velocity: Vector3::zeros(),
             tilt: 0.0,
             since_contact: 0.0,
+            knocked: None,
         },
         requests: Requests::default(),
     }
@@ -75,6 +76,14 @@ impl Frame {
     }
     fn moving(mut self, velocity: Vector3<f32>) -> Self {
         self.facts.velocity = velocity;
+        self
+    }
+    fn knocked(mut self, seconds: f32) -> Self {
+        self.facts.knocked = Some(seconds);
+        self
+    }
+    fn tilted(mut self, tilt: f32) -> Self {
+        self.facts.tilt = tilt;
         self
     }
     /// In the sea `depth` deep, the body's centre at `y`.
@@ -666,4 +675,136 @@ fn a_hop_counts_its_flight_from_leaving_the_ground() {
         panic!("still a hop");
     };
     assert!((hop.flown - (0.05 + DT)).abs() < 1e-6);
+}
+
+fn limp(remaining: f32) -> LocomotionState {
+    LocomotionState::Down(Down {
+        phase: DownPhase::Limp { remaining },
+    })
+}
+
+fn rising(elapsed: f32) -> LocomotionState {
+    LocomotionState::Down(Down {
+        phase: DownPhase::Rising { elapsed },
+    })
+}
+
+fn is_limp(state: LocomotionState) -> bool {
+    matches!(
+        state,
+        LocomotionState::Down(Down {
+            phase: DownPhase::Limp { .. }
+        })
+    )
+}
+
+fn is_rising(state: LocomotionState) -> bool {
+    matches!(
+        state,
+        LocomotionState::Down(Down {
+            phase: DownPhase::Rising { .. }
+        })
+    )
+}
+
+/// A knockdown takes the body from whatever it was doing, a jump pressed
+/// with it and an edge or deep water at hand notwithstanding, and a jump
+/// pressed before it is not kept for getting up.
+#[test]
+fn a_knockdown_takes_every_state() {
+    let from = [
+        on_foot(),
+        grace(0.05),
+        jump(JumpKind::Jump, TakeoffPhase::Flight),
+        LocomotionState::Fall(Fall),
+        LocomotionState::Swim(Swim),
+    ];
+    for state in from {
+        let (next, effects) = advance(state, air().in_sea(3.0, -0.2).jump().knocked(2.0));
+        assert_eq!(next, limp(2.0), "from {}", state.tag());
+        assert!(
+            effects.consume_jump && effects.buckle,
+            "from {}",
+            state.tag()
+        );
+    }
+}
+
+/// Knocked again while limp, a body stays down for whichever is longer;
+/// knocked while getting up, it goes down again.
+#[test]
+fn a_second_knock_keeps_the_longer_time_down() {
+    assert_eq!(advance(limp(1.5), ground().knocked(1.0)).0, limp(1.5));
+    assert_eq!(advance(limp(0.5), ground().knocked(2.0)).0, limp(2.0));
+    assert_eq!(advance(rising(0.3), ground().knocked(2.0)).0, limp(2.0));
+}
+
+/// Down, a body does nothing of its own: its rule asks nothing of the
+/// supports or the air, its hands catch nothing, a jump is not taken and
+/// its attitude is let go.
+#[test]
+fn a_body_knocked_down_has_no_control() {
+    let config = LocomotionConfig::player();
+    let speeds = RuleSpeeds {
+        ground: 5.0,
+        air: 5.0,
+        air_accel: 8.0,
+        swim: 2.0,
+        swim_accel: 4.0,
+    };
+    for state in [limp(1.0), rising(0.1)] {
+        assert!(!state.in_control());
+        assert!(!state.hands_free());
+        let rule = state.movement_rule(Vector3::x(), &speeds);
+        assert!(rule.limp && rule.slack && rule.steer_accel.is_none());
+        let lying = ground().tilted(1.2).jump();
+        assert!(matches!(advance(state, lying).0, LocomotionState::Down(_)));
+    }
+    assert_eq!(limp(1.0).attitude_hold(&config), AttitudeHold::Released);
+    assert!(matches!(
+        rising(0.1).attitude_hold(&config),
+        AttitudeHold::Sprung { .. }
+    ));
+    assert_eq!(on_foot().attitude_hold(&config), AttitudeHold::Rigid);
+}
+
+/// A body gets up once its time is up and it lies still on something: not
+/// in the air, nor while it slides, unless it has slid on past its time
+/// by `settle_limit`.
+#[test]
+fn a_body_gets_up_once_its_time_is_up_and_it_lies_still() {
+    let config = LocomotionConfig::player().down;
+    assert!(
+        is_limp(advance(limp(1.0), ground()).0),
+        "its time is not up"
+    );
+    assert!(is_rising(advance(limp(DT / 2.0), ground()).0));
+    assert!(
+        is_limp(advance(limp(DT / 2.0), air()).0),
+        "still in the air"
+    );
+    let sliding = ground().moving(Vector3::new(2.0, 0.0, 0.0));
+    assert!(is_limp(advance(limp(DT / 2.0), sliding).0), "still sliding");
+    let overdue = -config.settle_limit;
+    assert!(is_rising(advance(limp(overdue), sliding).0));
+}
+
+/// Getting up ends on its feet once the body stands within `upright_tilt`,
+/// or after `rise_limit` however it lies.
+#[test]
+fn getting_up_ends_on_its_feet() {
+    let config = LocomotionConfig::player().down;
+    let lying = ground().tilted(1.2);
+    assert!(is_rising(advance(rising(0.2), lying).0));
+    assert_eq!(advance(rising(0.2), ground()).0, on_foot());
+    assert_eq!(advance(rising(config.rise_limit), lying).0, on_foot());
+}
+
+/// Deep water takes a body whose time down is up, and not one still limp:
+/// that one floats as it lies.
+#[test]
+fn the_water_takes_a_knocked_body_once_its_time_is_up() {
+    let deep = air().in_sea(3.0, -0.2);
+    assert!(is_limp(advance(limp(1.0), deep).0));
+    assert_eq!(advance(limp(0.0), deep).0, LocomotionState::Swim(Swim));
 }

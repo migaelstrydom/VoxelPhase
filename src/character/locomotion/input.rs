@@ -30,6 +30,9 @@ pub struct Facts {
     /// Seconds since the contacts last held the body up, forgiven or not;
     /// zero in contact.
     pub since_contact: f32,
+    /// A blow this frame knocked the body down, for at least this many
+    /// seconds (`harm`).
+    pub knocked: Option<f32>,
 }
 
 impl Facts {
