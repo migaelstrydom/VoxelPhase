@@ -33,6 +33,7 @@ use super::fluid_drag::DragArea;
 use super::force_provider::{ForceContext, ForceOutput, MediumDrag, SubstepForceProvider};
 use super::grounding::{GroundedBodies, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
+use super::hit::{Hit, HitConfig, HitRecorder, Shove};
 use super::impact::ImpactLedger;
 use super::impulses::PhysicsImpulse;
 use super::narrowphase::{
@@ -138,6 +139,8 @@ pub struct PhysicsConfig {
     pub speculative_relative_speed_gate: bool,
     /// Configuration for the sleep system.
     pub sleep: SleepManagerConfig,
+    /// When a contact is a hit.
+    pub hits: HitConfig,
     /// Debug rendering configuration.
     pub debug: PhysicsDebugConfig,
 }
@@ -191,6 +194,7 @@ impl Default for PhysicsConfig {
             speculative_margin_multiplier: 2.0,
             speculative_relative_speed_gate: true,
             sleep: SleepManagerConfig::default(),
+            hits: HitConfig::default(),
             debug: PhysicsDebugConfig::default(),
         }
     }
@@ -208,6 +212,10 @@ pub struct PhysicsWorld {
     last_contacts: Vec<ContactEvent>,
     /// Normal impulses delivered to each body this frame.
     impacts: ImpactLedger,
+    /// Contacts that closed fast this frame.
+    hits: HitRecorder,
+    /// What this frame's blasts gave each body.
+    shoves: Vec<Shove>,
     /// Work contacts did on each body this frame, when an audit asks for it.
     contact_work: ContactWorkLedger,
     debugger: PhysicsDebugger,
@@ -325,6 +333,8 @@ impl PhysicsWorld {
             manifold_cache,
             last_contacts: Vec::new(),
             impacts: ImpactLedger::default(),
+            hits: HitRecorder::default(),
+            shoves: Vec::new(),
             contact_work: ContactWorkLedger::default(),
             debugger,
             frame_index: 0,
@@ -519,6 +529,7 @@ impl PhysicsWorld {
 
     /// Apply one-shot impulses to all dynamic bodies.
     fn apply_impulses(&mut self, impulses: &[PhysicsImpulse]) {
+        self.shoves.clear();
         for (idx, body) in self.bodies.iter_mut() {
             if !body.is_dynamic() {
                 continue;
@@ -528,6 +539,11 @@ impl PhysicsWorld {
             for impulse in impulses {
                 if let Some(v) = blast_on(body, &self.colliders, impulse) {
                     body.apply_impulse(v);
+                    self.shoves.push(Shove {
+                        body: RigidBodyHandle(idx),
+                        impulse: v,
+                        point: body.position(),
+                    });
                     wake = true;
                 }
             }
@@ -1294,6 +1310,7 @@ impl PhysicsWorld {
 
         self.last_contacts.clear();
         self.impacts.clear();
+        self.hits.clear();
         self.contact_work.clear();
         for manifold in &solver_manifolds {
             for contact in &manifold.contacts {
@@ -1455,6 +1472,13 @@ impl PhysicsWorld {
             dt,
         );
         self.impacts.record_solved(&self.cached_active_manifolds);
+        self.hits.record_solved(
+            &self.config.hits,
+            &self.cached_active_manifolds,
+            &self.bodies,
+            &self.colliders,
+            dt,
+        );
         self.contact_work.record_solved(
             &self.bodies,
             &self.cached_active_manifolds,
@@ -1515,6 +1539,8 @@ impl PhysicsWorld {
                 colliders: &self.colliders,
                 contact_events: &mut self.last_contacts,
                 impacts: &mut self.impacts,
+                hits: &mut self.hits,
+                hit_config: self.config.hits,
                 narrowphase_ownership: &narrowphase_ownership,
                 sleeping,
                 pre_states: &pre_states,
@@ -1574,6 +1600,19 @@ impl PhysicsWorld {
     /// contact occurred.
     pub fn impacts(&self) -> &ImpactLedger {
         &self.impacts
+    }
+
+    /// Contacts that closed faster than [`HitConfig::speed`] this frame and
+    /// took impulse: one per pair, from the substep it closed fastest in.
+    /// What a blow was is read here, not from [`Self::impacts`], which is
+    /// the load contacts carried.
+    pub fn hits(&self) -> &[Hit] {
+        self.hits.hits()
+    }
+
+    /// What this frame's blasts gave each body, one per blast and body.
+    pub fn shoves(&self) -> &[Shove] {
+        &self.shoves
     }
 
     /// Work contacts did on each body over the current frame, and which body

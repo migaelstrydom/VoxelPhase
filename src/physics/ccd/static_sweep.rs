@@ -10,7 +10,7 @@ use nalgebra::{Point3, Vector3};
 use crate::collision::continuous::{gjk_raycast, swept_sphere_triangle, SweptContact};
 use crate::collision::shape_view::ShapeView;
 use crate::collision::AABB;
-use crate::physics::collider::ColliderShape;
+use crate::physics::collider::{ColliderShape, HARD_GIVE};
 use crate::physics::pipeline::pair::PairHeader;
 use crate::physics::static_geometry::StaticGeometry;
 
@@ -49,6 +49,9 @@ pub(super) fn sweep_against_static(
             collider_b: None,
             restitution: candidate.material.restitution,
             friction: candidate.material.friction(),
+            // The sweep does not ask what the ground is made of: hard, as
+            // its restitution and friction take it to be.
+            give: candidate.material.give + HARD_GIVE,
         },
         toi: hit.t,
         point: hit.point,

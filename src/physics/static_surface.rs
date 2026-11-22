@@ -19,7 +19,7 @@
 //! Geometry with no surface of its own (`None`) leaves the collider's values
 //! as they are.
 
-use super::collider::{ColliderMaterial, FrictionModel};
+use super::collider::{ColliderMaterial, FrictionModel, HARD_GIVE};
 
 /// How a static surface meets a collider resting on or sliding over it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +42,14 @@ pub struct StaticSurface {
     pub restitution: f32,
     /// Whether the surface gives way under what touches it.
     pub response: SurfaceResponse,
+    /// How far it yields under a blow before it stops it, m. See
+    /// [`ColliderMaterial::give`].
+    pub give: f32,
 }
+
+/// How far ground that gives way yields under a blow, m: a few centimetres of
+/// soil or sand pushed aside.
+pub const YIELDING_GIVE: f32 = 0.03;
 
 impl StaticSurface {
     /// Ground that gives way under a load.
@@ -51,6 +58,7 @@ impl StaticSurface {
             friction,
             restitution,
             response: SurfaceResponse::Yielding,
+            give: YIELDING_GIVE,
         }
     }
 
@@ -60,7 +68,20 @@ impl StaticSurface {
             friction,
             restitution,
             response: SurfaceResponse::Rigid,
+            give: HARD_GIVE,
         }
+    }
+
+    /// The same surface, yielding `give` m under a blow.
+    pub const fn with_give(mut self, give: f32) -> Self {
+        self.give = give;
+        self
+    }
+
+    /// How far the pair yields where `collider` strikes this surface: both
+    /// gives, in series.
+    pub fn give_with(&self, collider: &ColliderMaterial) -> f32 {
+        self.give + collider.give
     }
 
     /// Restitution and friction where `collider` touches this surface, in
@@ -75,6 +96,7 @@ impl StaticSurface {
                 &ColliderMaterial {
                     restitution: self.restitution,
                     friction: FrictionModel::Isotropic(self.friction),
+                    give: self.give,
                 },
             ),
         }
@@ -89,6 +111,7 @@ mod tests {
         ColliderMaterial {
             restitution,
             friction: FrictionModel::Isotropic(friction),
+            give: HARD_GIVE,
         }
     }
 

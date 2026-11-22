@@ -112,6 +112,7 @@ fn pressed(bodies: Option<(Option<usize>, usize)>) -> impl Iterator<Item = (usiz
 
 #[cfg(test)]
 mod tests {
+    use crate::physics::collider::HARD_GIVE;
     use generational_arena::Arena;
     use nalgebra::{Point3, Vector3};
     use smallvec::smallvec;
@@ -136,6 +137,7 @@ mod tests {
             raw_depth: 0.0,
             gap: 0.0,
             closing_allowance: 0.0,
+            approach_speed: 0.0,
             feature_id: FeatureId::SINGLE,
             warm_normal_impulse: 0.0,
             warm_friction_impulse_ws: Vector3::zeros(),
@@ -162,6 +164,7 @@ mod tests {
                 collider_b: None,
                 restitution: 0.0,
                 friction: 0.5,
+                give: HARD_GIVE,
             },
             contacts: smallvec![contact(-0.4, y, normal), contact(0.4, y, normal)],
         }

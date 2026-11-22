@@ -53,6 +53,7 @@ pub mod fluid_drag;
 mod force_provider;
 pub mod grounding;
 mod handle;
+mod hit;
 mod impact;
 mod impulses;
 mod math;
@@ -75,7 +76,10 @@ pub use atmosphere::Atmosphere;
 pub use body::{BodyType, RigidBody, RigidBodyDesc};
 pub use bulk::{BulkShape, Envelope, EnvelopePart, MassPartRef, MassParts, Volume};
 pub use ccd::{CcdStrategy, SweepClampCcd};
-pub use collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape, FrictionModel};
+pub use collider::{
+    Collider, ColliderDesc, ColliderMaterial, ColliderShape, FrictionModel, CORNER_ROUNDING,
+    HARD_GIVE,
+};
 pub use collision_filter::{CollisionFilter, Layers};
 pub use constraint::spring::Spring;
 pub use constraint::spring_slider::SpringSlider;
@@ -93,6 +97,7 @@ pub use drive::{
 pub use energy_audit::{energy_per_kg, EnergyAudit};
 pub use force_provider::{ForceContext, ForceOutput, MediumDrag, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
+pub use hit::{Hit, HitConfig, Patch, Shove};
 pub use impact::{Impact, ImpactLedger};
 pub use impulses::{Loading, PhysicsImpulse, PhysicsImpulseQueue};
 pub use profile::{FrameProfile, PhysicsStage};
@@ -104,7 +109,7 @@ pub use solver::{
 pub use sphere_cast::{CastObstacles, SphereCast, SphereCastHit};
 pub use split::{BodyTraits, Split};
 pub use static_geometry::StaticGeometry;
-pub use static_surface::{StaticSurface, SurfaceResponse};
+pub use static_surface::{StaticSurface, SurfaceResponse, YIELDING_GIVE};
 pub use stepping::{FixedTimestep, SequentialStepper, Stepper};
 pub use sweep::{BodySweep, SweepHit, SweepObstacle, SweptSurface};
 pub use world::{BodyProbeHit, PhysicsConfig, PhysicsWorld};

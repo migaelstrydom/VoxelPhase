@@ -251,6 +251,7 @@ impl ManifoldCache {
                     raw_depth: contact_point.raw_depth,
                     gap: contact_point.gap,
                     closing_allowance: 0.0,
+                    approach_speed: 0.0,
                     feature_id,
                     warm_normal_impulse: warm_normal,
                     warm_friction_impulse_ws: warm_friction_ws,
@@ -468,6 +469,7 @@ fn pair_to_solver_cold(pair: &PairManifold) -> SolverManifold {
             raw_depth: cp.raw_depth,
             gap: cp.gap,
             closing_allowance: 0.0,
+            approach_speed: 0.0,
             feature_id: cp.feature_id,
             warm_normal_impulse: 0.0,
             warm_friction_impulse_ws: Vector3::zeros(),
@@ -534,6 +536,7 @@ fn compare_optional_collider(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physics::collider::HARD_GIVE;
     use generational_arena::Index;
 
     fn test_body(idx: usize) -> crate::physics::handle::RigidBodyHandle {
@@ -552,6 +555,7 @@ mod tests {
             collider_b: Some(test_collider(20)),
             restitution: 0.0,
             friction: 0.5,
+            give: HARD_GIVE,
         }
     }
 
@@ -655,6 +659,7 @@ mod tests {
                 raw_depth: 0.2,
                 gap: 0.0,
                 closing_allowance: 0.0,
+                approach_speed: 0.0,
                 feature_id: feature,
                 warm_normal_impulse: 0.0,
                 warm_friction_impulse_ws: Vector3::zeros(),
@@ -672,6 +677,7 @@ mod tests {
                 raw_depth: 0.2,
                 gap: 0.0,
                 closing_allowance: 0.0,
+                approach_speed: 0.0,
                 feature_id: feature,
                 warm_normal_impulse: 0.0,
                 warm_friction_impulse_ws: Vector3::zeros(),

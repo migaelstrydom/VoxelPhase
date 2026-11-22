@@ -9,6 +9,15 @@ use super::collision_filter::CollisionFilter;
 use super::math::{box_inertia_tensor, capsule_inertia_tensor, sphere_inertia_tensor};
 use crate::collision::ConvexHull;
 
+/// How far a hard material (stone, glass, metal, wood) yields under a blow
+/// before it stops it, m: the default [`ColliderMaterial::give`].
+pub const HARD_GIVE: f32 = 1.0e-3;
+
+/// How round a box's or a hull's corners and edges are, m, unless its
+/// collider says otherwise: nothing made is knife-sharp. See
+/// [`ColliderDesc::bluntness`].
+pub const CORNER_ROUNDING: f32 = 0.01;
+
 /// Shape of a collider.
 #[derive(Debug, Clone)]
 pub enum ColliderShape {
@@ -25,6 +34,16 @@ pub enum ColliderShape {
 }
 
 impl ColliderShape {
+    /// Radius of the shape's sharpest feature, m, if its collider does not
+    /// declare one: a ball and a capsule meet things with their own curve, a
+    /// box and a hull with a corner rounded by [`CORNER_ROUNDING`].
+    pub fn default_bluntness(&self) -> f32 {
+        match self {
+            ColliderShape::Sphere { radius } | ColliderShape::Capsule { radius, .. } => *radius,
+            ColliderShape::Box { .. } | ColliderShape::ConvexHull { .. } => CORNER_ROUNDING,
+        }
+    }
+
     /// Compute the mass from shape and density.
     pub fn compute_mass(&self, density: f32) -> f32 {
         match self {
@@ -145,6 +164,11 @@ pub struct ColliderMaterial {
     pub restitution: f32,
     /// Friction law for this material.
     pub friction: FrictionModel,
+    /// How far it yields under a blow before it stops it, m. A pair's gives
+    /// add (two springs in series), and set how hard a hit is: the same
+    /// closing speed stops over a centimetre of soil far more gently than
+    /// over a millimetre of stone.
+    pub give: f32,
 }
 
 impl ColliderMaterial {
@@ -166,6 +190,7 @@ impl Default for ColliderMaterial {
         Self {
             restitution: 0.3,
             friction: FrictionModel::Isotropic(0.5),
+            give: HARD_GIVE,
         }
     }
 }
@@ -183,6 +208,9 @@ pub struct ColliderDesc {
     /// What weighs the collider and what fluids and blasts see of it, in its
     /// own frame, where that is not its shape. See [`BulkShape`].
     pub bulk: Option<BulkShape>,
+    /// Radius of its sharpest feature, m, where that is not its shape's
+    /// [`default_bluntness`](ColliderShape::default_bluntness).
+    pub bluntness: Option<f32>,
 }
 
 impl ColliderDesc {
@@ -193,6 +221,7 @@ impl ColliderDesc {
             density: 1000.0,
             material: ColliderMaterial::default(),
             bulk: None,
+            bluntness: None,
         }
     }
 
@@ -203,6 +232,7 @@ impl ColliderDesc {
             density: 1000.0,
             material: ColliderMaterial::default(),
             bulk: None,
+            bluntness: None,
         }
     }
 
@@ -213,6 +243,7 @@ impl ColliderDesc {
             density: 1000.0,
             material: ColliderMaterial::default(),
             bulk: None,
+            bluntness: None,
         }
     }
 
@@ -226,6 +257,7 @@ impl ColliderDesc {
             density: 1000.0,
             material: ColliderMaterial::default(),
             bulk: None,
+            bluntness: None,
         }
     }
 
@@ -243,6 +275,20 @@ impl ColliderDesc {
     /// friction use [`Self::friction_model`].
     pub fn friction(mut self, friction: f32) -> Self {
         self.material.friction = FrictionModel::Isotropic(friction);
+        self
+    }
+
+    /// Set how far the material yields under a blow, m. See
+    /// [`ColliderMaterial::give`].
+    pub fn give(mut self, give: f32) -> Self {
+        self.material.give = give;
+        self
+    }
+
+    /// Set the radius of the collider's sharpest feature, m: what it presses
+    /// into whatever it strikes with a corner or an edge.
+    pub fn bluntness(mut self, bluntness: f32) -> Self {
+        self.bluntness = Some(bluntness);
         self
     }
 
@@ -295,6 +341,8 @@ pub struct Collider {
     /// Its body's filter ([`super::RigidBody::filter`]), carried here for
     /// the narrowphase and casts, which meet colliders.
     filter: CollisionFilter,
+    /// Radius of its sharpest feature, m.
+    bluntness: f32,
 }
 
 impl Collider {
@@ -309,7 +357,11 @@ impl Collider {
             (mass, desc.shape.compute_inertia(mass))
         });
 
+        let bluntness = desc
+            .bluntness
+            .unwrap_or_else(|| desc.shape.default_bluntness());
         Self {
+            bluntness,
             shape: desc.shape,
             offset: desc.offset,
             material: desc.material,
@@ -330,6 +382,12 @@ impl Collider {
 
     pub fn filter(&self) -> &CollisionFilter {
         &self.filter
+    }
+
+    /// Radius of its sharpest feature, m: what a corner or edge of it
+    /// presses into whatever it strikes.
+    pub fn bluntness(&self) -> f32 {
+        self.bluntness
     }
 
     /// What the collider weighs: its declared mass parts' total if its bulk

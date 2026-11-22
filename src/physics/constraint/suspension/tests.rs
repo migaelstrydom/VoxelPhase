@@ -57,6 +57,7 @@ fn foot(friction: f32) -> ColliderMaterial {
     ColliderMaterial {
         restitution: 0.0,
         friction: FrictionModel::isotropic(friction),
+        ..ColliderMaterial::default()
     }
 }
 

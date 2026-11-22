@@ -51,6 +51,7 @@ pub(super) fn cold_solver_contact(
         raw_depth,
         gap: 0.0,
         closing_allowance: 0.0,
+        approach_speed: 0.0,
         feature_id,
         warm_normal_impulse: 0.0,
         warm_friction_impulse_ws: Vector3::zeros(),

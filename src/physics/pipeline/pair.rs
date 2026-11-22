@@ -28,6 +28,9 @@ pub struct PairHeader {
     pub restitution: f32,
     /// Combined friction coefficient for this pair.
     pub friction: f32,
+    /// How far the pair yields under a blow before it stops, m: both sides'
+    /// gives, in series. See [`ColliderMaterial::give`](crate::physics::ColliderMaterial::give).
+    pub give: f32,
 }
 
 /// A contact manifold tagged with its pair metadata.
@@ -70,6 +73,10 @@ pub struct SolverContact {
     /// contact whose shapes already meet, which the solver then arrests
     /// outright as it always has.
     pub closing_allowance: f32,
+    /// How fast the pair was closing along the normal here just before the
+    /// latest solve, m/s; zero when separating. Written by the solver each
+    /// substep, from the velocity it decides restitution from.
+    pub approach_speed: f32,
     /// Feature pair that produced this contact, used for impulse cache matching.
     pub feature_id: FeatureId,
     /// Normal impulse inherited from the previous frame's cache (warm-start).

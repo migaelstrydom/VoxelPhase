@@ -70,6 +70,7 @@ impl IslandSolver {
         config: &PgsNgsConfig,
     ) {
         self.prepare(bodies, manifolds, constraint_rows, conditions, origins);
+        self.note_approach(manifolds);
         self.warm_start(manifolds, constraint_rows, config);
 
         self.budget.measure(
@@ -126,6 +127,17 @@ impl IslandSolver {
         self.coupled_slots.clear();
         self.coupled_slots
             .extend(resolve_coupled_slots(constraint_rows));
+    }
+
+    /// Write each contact's closing speed, as its row was prepared, onto the
+    /// contact, where the impact ledger reads it after the solve.
+    fn note_approach(&self, manifolds: &mut [IslandManifold]) {
+        for (i, (_, manifold)) in manifolds.iter_mut().enumerate() {
+            let pre_solve_vn = self.contact_rows.pre_solve_normal_velocities(i);
+            for (contact, vn) in manifold.contacts.iter_mut().zip(pre_solve_vn) {
+                contact.approach_speed = (-vn).max(0.0);
+            }
+        }
     }
 
     /// Apply the impulses cached from the previous frame: joints first, then

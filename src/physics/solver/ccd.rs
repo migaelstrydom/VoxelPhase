@@ -35,6 +35,7 @@ pub(crate) fn solve_contacts(
             let pre_solve_vn = row.map_or(0.0, |row| {
                 row.relative_velocity(&solver_bodies).dot(&contact.normal)
             });
+            contact.approach_speed = (-pre_solve_vn).max(0.0);
             solve_normal_impulse(
                 &mut solver_bodies,
                 row.as_ref(),

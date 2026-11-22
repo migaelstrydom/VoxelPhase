@@ -7,6 +7,7 @@ use crate::physics::body::RigidBody;
 use crate::physics::collider::Collider;
 use crate::physics::contact_event::ContactEvent;
 use crate::physics::handle::RigidBodyHandle;
+use crate::physics::hit::{HitConfig, HitRecorder};
 use crate::physics::impact::ImpactLedger;
 use crate::physics::static_geometry::StaticGeometry;
 
@@ -19,6 +20,10 @@ pub struct CcdContext<'a> {
     pub contact_events: &'a mut Vec<ContactEvent>,
     /// Post-solve impulse ledger, fed by the CCD solve pass.
     pub impacts: &'a mut ImpactLedger,
+    /// The frame's hits, fed by the CCD solve pass.
+    pub(crate) hits: &'a mut HitRecorder,
+    /// When a contact is a hit.
+    pub hit_config: HitConfig,
     /// Bodies the narrowphase currently owns (excluded from CCD while its
     /// frame-start manifold still describes them).
     pub narrowphase_ownership: &'a NarrowphaseOwnership,

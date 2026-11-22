@@ -96,6 +96,7 @@ pub(crate) fn solve_torsional_impulse(
 
 #[cfg(test)]
 mod tests {
+    use crate::physics::collider::HARD_GIVE;
     use generational_arena::Arena;
     use nalgebra::{Matrix3, Point3, Vector3};
 
@@ -117,6 +118,7 @@ mod tests {
             raw_depth: 0.0,
             gap: 0.0,
             closing_allowance: 0.0,
+            approach_speed: 0.0,
             feature_id: FeatureId(0),
             warm_normal_impulse: 0.0,
             warm_friction_impulse_ws: Vector3::zeros(),
@@ -141,6 +143,7 @@ mod tests {
             collider_b: None,
             restitution: 0.0,
             friction: 0.5,
+            give: HARD_GIVE,
         };
         (bodies, header)
     }

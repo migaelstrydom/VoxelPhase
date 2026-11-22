@@ -183,6 +183,7 @@ mod tests {
     use crate::collision::contact::FeatureId;
     use crate::debug::DebugLines;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
+    use crate::physics::collider::HARD_GIVE;
     use crate::physics::drive::plan::TractionRow;
     use crate::physics::pipeline::pair::{PairHeader, SolverContact};
     use crate::physics::stepping::{SequentialStepper, Stepper};
@@ -202,6 +203,7 @@ mod tests {
             raw_depth: 0.0,
             gap: 0.0,
             closing_allowance: 0.0,
+            approach_speed: 0.0,
             feature_id: FeatureId::SINGLE,
             warm_normal_impulse: 0.0,
             warm_friction_impulse_ws: Vector3::zeros(),
@@ -226,6 +228,7 @@ mod tests {
                 collider_b: None,
                 restitution: 0.0,
                 friction: 0.0,
+                give: HARD_GIVE,
             },
             contacts: impulses.iter().map(|i| contact(*i)).collect(),
         }

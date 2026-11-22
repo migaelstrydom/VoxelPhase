@@ -118,7 +118,7 @@ fn collider_vs_static(
     if manifold.is_empty() {
         return None;
     }
-    let (restitution, friction) =
+    let (restitution, friction, give) =
         static_coefficients(collider.material(), &manifold, static_geometry);
     Some(PairManifold {
         header: PairHeader {
@@ -128,34 +128,39 @@ fn collider_vs_static(
             collider_b: Some(collider_handle),
             restitution,
             friction,
+            give,
         },
         manifold,
     })
 }
 
-/// Restitution and friction of a manifold against static geometry: what the
-/// collider meets at each contact's surface, averaged over the contacts.
+/// Restitution, friction and give of a manifold against static geometry:
+/// what the collider meets at each contact's surface, averaged over the
+/// contacts.
 ///
-/// Per manifold rather than per contact because the solver holds one pair of
-/// coefficients per manifold. The two differ only for a body straddling two
+/// Per manifold rather than per contact because the solver holds one set of
+/// coefficients per manifold. They differ only for a body straddling two
 /// materials, where the mean is what its contacts share between them.
 fn static_coefficients(
     material: &ColliderMaterial,
     manifold: &ContactManifold,
     static_geometry: &dyn StaticGeometry,
-) -> (f32, f32) {
-    let own = (material.restitution, material.friction());
-    let (restitution, friction) = manifold
+) -> (f32, f32, f32) {
+    let own = (material.restitution, material.friction(), material.give);
+    let (restitution, friction, give) = manifold
         .points
         .iter()
         .map(|cp| {
-            static_geometry
-                .surface(cp.surface)
-                .map_or(own, |surface| surface.meet(material))
+            static_geometry.surface(cp.surface).map_or(own, |surface| {
+                let (r, f) = surface.meet(material);
+                (r, f, surface.give_with(material))
+            })
         })
-        .fold((0.0, 0.0), |sum, (r, f)| (sum.0 + r, sum.1 + f));
+        .fold((0.0, 0.0, 0.0), |sum, (r, f, g)| {
+            (sum.0 + r, sum.1 + f, sum.2 + g)
+        });
     let count = manifold.points.len() as f32;
-    (restitution / count, friction / count)
+    (restitution / count, friction / count, give / count)
 }
 
 /// Generate contacts between a convex shape and static geometry via the mesh pipeline.
@@ -177,8 +182,8 @@ mod tests {
     use super::*;
     use crate::collision::contact::{ContactPoint, FeatureId};
     use crate::collision::{MeshPatch, SurfaceId, AABB};
-    use crate::physics::collider::FrictionModel;
-    use crate::physics::static_surface::StaticSurface;
+    use crate::physics::collider::{FrictionModel, HARD_GIVE};
+    use crate::physics::static_surface::{StaticSurface, YIELDING_GIVE};
 
     /// Geometry whose only material is grass, under id 1.
     struct Lawn;
@@ -209,24 +214,30 @@ mod tests {
     const ICE: ColliderMaterial = ColliderMaterial {
         restitution: 0.15,
         friction: FrictionModel::Isotropic(0.06),
+        give: HARD_GIVE,
     };
 
     #[test]
     fn a_manifold_takes_the_surface_under_it() {
-        let (_, friction) = static_coefficients(&ICE, &manifold_on(&[SurfaceId(1); 2]), &Lawn);
+        let (_, friction, give) =
+            static_coefficients(&ICE, &manifold_on(&[SurfaceId(1); 2]), &Lawn);
         assert_eq!(friction, 0.45);
+        assert!((give - (YIELDING_GIVE + HARD_GIVE)).abs() < 1e-6);
     }
 
     #[test]
     fn unspecified_ground_leaves_the_collider_as_it_is() {
         let manifold = manifold_on(&[SurfaceId::UNSPECIFIED]);
-        assert_eq!(static_coefficients(&ICE, &manifold, &Lawn), (0.15, 0.06));
+        assert_eq!(
+            static_coefficients(&ICE, &manifold, &Lawn),
+            (0.15, 0.06, HARD_GIVE)
+        );
     }
 
     #[test]
     fn a_manifold_straddling_two_surfaces_takes_their_mean() {
         let manifold = manifold_on(&[SurfaceId(1), SurfaceId::UNSPECIFIED]);
-        let (_, friction) = static_coefficients(&ICE, &manifold, &Lawn);
+        let (_, friction, _) = static_coefficients(&ICE, &manifold, &Lawn);
         assert!((friction - (0.45 + 0.06) / 2.0).abs() < 1e-6);
     }
 }

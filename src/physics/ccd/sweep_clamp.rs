@@ -128,6 +128,13 @@ impl CcdStrategy for SweepClampCcd {
                 ctx.restitution_velocity_threshold,
             );
             ctx.impacts.record_solved(std::slice::from_ref(&manifold));
+            ctx.hits.record_solved(
+                &ctx.hit_config,
+                std::slice::from_ref(&manifold),
+                ctx.bodies,
+                ctx.colliders,
+                dt,
+            );
 
             corrections += 1;
         }
@@ -298,6 +305,7 @@ fn retain_earliest_per_body(impacts: &mut Vec<(usize, SweptImpact)>) {
 
 #[cfg(test)]
 mod tests {
+    use crate::physics::collider::HARD_GIVE;
     use nalgebra::UnitQuaternion;
 
     use crate::physics::handle::RigidBodyHandle;
@@ -320,6 +328,7 @@ mod tests {
                     collider_b: None,
                     restitution: 0.0,
                     friction: 0.0,
+                    give: HARD_GIVE,
                 },
                 toi,
                 point: Point3::origin(),

@@ -299,6 +299,7 @@ fn make_pair_header(a: &ColliderState, b: &ColliderState) -> PairHeader {
         collider_b: Some(b.collider_handle),
         restitution,
         friction,
+        give: a.material.give + b.material.give,
     }
 }
 

@@ -201,6 +201,7 @@ pub(super) fn build(
                 friction: Some(ColliderMaterial {
                     restitution: 0.0,
                     friction: FrictionModel::isotropic(POD_FRICTION),
+                    ..ColliderMaterial::default()
                 }),
                 torsion_radius: 0.0,
             })

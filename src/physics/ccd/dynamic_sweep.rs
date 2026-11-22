@@ -272,6 +272,7 @@ fn sweep_pair(
             collider_b: None,
             restitution,
             friction,
+            give: target.material.give + swept.material.give,
         },
         toi: hit.t,
         point: hit.point,

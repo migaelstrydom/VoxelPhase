@@ -321,6 +321,7 @@ fn normalised_mean(sum: Vector3<f32>, weight_sum: f32) -> Option<Vector3<f32>> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::physics::collider::HARD_GIVE;
     use generational_arena::Index;
     use nalgebra::Point3;
 
@@ -351,6 +352,7 @@ pub(crate) mod tests {
                 collider_b: None,
                 restitution: 0.0,
                 friction: 1.0,
+                give: HARD_GIVE,
             },
             contacts: normals
                 .iter()
@@ -362,6 +364,7 @@ pub(crate) mod tests {
                     raw_depth: 0.01,
                     gap: 0.0,
                     closing_allowance: 0.0,
+                    approach_speed: 0.0,
                     feature_id: FeatureId::from_face(0),
                     warm_normal_impulse: 0.0,
                     warm_friction_impulse_ws: Vector3::zeros(),

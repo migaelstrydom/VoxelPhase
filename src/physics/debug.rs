@@ -970,6 +970,7 @@ const COLLIDER_COLOUR: Colour = Colour::new(1.0, 0.4, 0.7, 0.25);
 
 #[cfg(test)]
 mod tests {
+    use crate::physics::collider::HARD_GIVE;
     use nalgebra::{Point3, Vector3};
 
     use super::*;
@@ -991,6 +992,7 @@ mod tests {
                 collider_b: None,
                 restitution: 0.0,
                 friction: 0.5,
+                give: HARD_GIVE,
             },
             manifold: ContactManifold::single(contact),
         };

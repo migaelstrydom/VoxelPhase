@@ -91,6 +91,7 @@ impl IslandBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::physics::collider::HARD_GIVE;
     use smallvec::SmallVec;
 
     use super::*;
@@ -114,6 +115,7 @@ mod tests {
                 collider_b: None,
                 restitution: 0.0,
                 friction: 0.5,
+                give: HARD_GIVE,
             },
             contacts: SmallVec::new(),
         }
