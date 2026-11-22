@@ -40,6 +40,7 @@
 use nalgebra::{Vector2, Vector3, Vector4};
 use smallvec::SmallVec;
 
+use crate::water::falling::{along_edge, edge_ends};
 use crate::water::field::{DrawnDepths, Fall, WaterField};
 use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE};
 use crate::water::ids::SurfaceId;
@@ -629,10 +630,12 @@ const CORNER_EDGES: [[usize; 2]; 4] = [[2, 3], [3, 0], [0, 1], [1, 2]];
 /// over, the vertices along that lip: its two ends (`edge_ends`) and,
 /// between them, its middle.
 ///
-/// A corner where the water goes over both edges is cut off between their
-/// middles, and those edges' lips end at the middle of the cut: a lip
-/// running across the lattice is a staircase of such corners, and cut so it
-/// is straight.
+/// A corner where the water goes over both edges is cut off at the middle
+/// of the line between their middles, and those edges' lips end there: a
+/// lip running across the lattice is a staircase of such corners, and cut
+/// so it is straight. Each lip runs straight from end to end, with its
+/// middle halfway, as its curtain hangs (`Curtain::new`); the surface ends
+/// along it.
 fn lay_cell(
     mesh: &mut RiverMesh,
     column: Column,
@@ -666,23 +669,22 @@ fn lay_cell(
         let [before, after] = CORNER_EDGES[corner];
         Some(between(mesh, middles[before]?, middles[after]?))
     });
-    let mut outline: SmallVec<[u32; 8]> = SmallVec::new();
-    for corner in 0..4 {
-        match (cuts[corner], CORNER_EDGES[corner]) {
-            (Some(_), [before, after]) => {
-                outline.extend(middles[before].into_iter().chain(middles[after]))
-            }
-            _ => outline.push(base + corner as u32),
-        }
-    }
+    let outline: [u32; 4] =
+        std::array::from_fn(|corner| cuts[corner].unwrap_or(base + corner as u32));
     for pair in outline[1..].windows(2) {
         mesh.indices
             .extend_from_slice(&[outline[0], pair[1], pair[0]]);
     }
     std::array::from_fn(|direction| {
-        let end = |corner: usize| cuts[corner].unwrap_or(base + corner as u32);
+        let middle = middles[direction]?;
         let [a, b] = EDGE_CORNERS[direction];
-        Some([end(a), middles[direction]?, end(b)])
+        let (start, end) = (outline[a], outline[b]);
+        let middle = if cuts[a].is_none() && cuts[b].is_none() {
+            middle
+        } else {
+            between(mesh, start, end)
+        };
+        Some([start, middle, end])
     })
 }
 
@@ -698,48 +700,58 @@ fn between(mesh: &mut RiverMesh, a: u32, b: u32) -> u32 {
     mesh.vertices.len() as u32 - 1
 }
 
-/// How far past its cell's edge the lip of `fall` stands at its end `end`,
-/// in columns, running on there into the fall `beside` it: the mean of the
-/// two where they go over the same way, so both hang from one point; none
-/// where the lip turns a corner.
-fn end_reach(fall: &Fall, end: usize, beside: Option<(&Fall, usize)>) -> f32 {
-    match beside {
+/// How far from the end `end` of its cell's edge the lip of `fall` really
+/// ends, level, m, running on there into the fall `beside` it: out past
+/// the edge as far as the ledge runs, the mean of the two where they go
+/// over the same way, so both hang from one point; round an inner corner,
+/// halfway across it to the middle of the other fall's edge, so the lip
+/// cuts the corner as `lay_cell` cuts an outer one and a lip running
+/// across the lattice has no notch at each step of its staircase; round
+/// an outer corner, nowhere, since its end is the cut already.
+fn end_offset(fall: &Fall, end: usize, beside: Option<(&Fall, usize)>) -> Vector2<f32> {
+    let reach = match beside {
         None => fall.reach[end],
         Some((other, meets)) if other.direction == fall.direction => {
             0.5 * (fall.reach[end] + other.reach[meets])
         }
+        Some((other, _)) if other.from != fall.from => {
+            let along = along_edge(fall.step(), edge_ends(fall.step())[end]);
+            let along = Vector2::new(along.di as f32, along.dk as f32);
+            return (fall.face() - along) * (0.25 * COLUMN_SIZE);
+        }
         Some(_) => 0.0,
-    }
+    };
+    fall.face() * (reach * COLUMN_SIZE)
 }
 
 /// Where the curtain of `fall` hangs from: the surface vertices along its
-/// lip, `lip`, or where the column below carries the ledge on past the
-/// cell's edge, copies of them out where the ledge really ends, with the
-/// cell's surface carried out over the ledge to meet them.
+/// lip, `lip`, or, where the lip really ends elsewhere (`end_offset`: the
+/// column below carries the ledge on past the cell's edge, or the lip cuts
+/// an inner corner), copies of them moved there, with the cell's surface
+/// carried out to meet them.
 fn carried_out(
     mesh: &mut RiverMesh,
     fall: &Fall,
     beside: &[Option<(&Fall, usize)>; 2],
     lip: [u32; 3],
 ) -> [u32; 3] {
-    let reach = [
-        end_reach(fall, 0, beside[0]),
-        0.5 * (fall.reach[0] + fall.reach[1]),
-        end_reach(fall, 1, beside[1]),
-    ];
-    if reach.iter().all(|&r| r == 0.0) {
-        return lip;
-    }
-    let base = mesh.vertices.len() as u32;
-    for (from, reach) in lip.into_iter().zip(reach) {
+    let ends = [0, 1].map(|end| end_offset(fall, end, beside[end]));
+    // The middle stays halfway, so the lip still runs straight.
+    let offsets = [ends[0], 0.5 * (ends[0] + ends[1]), ends[1]];
+    let out: [u32; 3] = std::array::from_fn(|i| {
+        let from = lip[i];
+        if offsets[i] == Vector2::zeros() {
+            return from;
+        }
         let top = mesh.vertices[from as usize];
         mesh.vertices.push(RiverVertex {
-            xz: top.xz + fall.face() * (reach * COLUMN_SIZE),
+            xz: top.xz + offsets[i],
             ..top
         });
         mesh.sources.vertices.push(VertexSource::Edge { from });
-    }
-    let out = [base, base + 1, base + 2];
+        mesh.vertices.len() as u32 - 1
+    });
+    // Triangles whose corners did not move have no area and are left out.
     for triangle in [
         [lip[0], out[0], out[1]],
         [lip[0], out[1], lip[1]],

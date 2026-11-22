@@ -117,13 +117,20 @@ the mesher only draws it.
 ```
 
 Two falls side by side share the strand between them, straight on or round a
-corner, so the falls of one lip are one watertight body, and a lip running
-across the lattice (a staircase of edges facing two ways) is a straight
-curtain from its second row. Its first row hangs from the surface: the middle
-of each edge, the cell's corners, and where the water goes over both edges at
-a corner, the middle of the cut that takes the corner off (`lay_cell`).
-Where the lower column's own floor carries the ledge on, the surface is
-carried out over it to where the water really leaves.
+corner, so the falls of one lip are one watertight body. A fall's middle
+strand is the mean of its two ends, so each fall's curtain runs straight
+from end to end and a lip running across the lattice (a staircase of edges
+facing two ways) is smoothed fall by fall: where it runs on at both ends,
+half the fall's own water and a quarter of each beside it. Its first row
+hangs from the surface, which ends along the same straight lips: at a
+corner where the water goes over both edges, the cut halfway between their
+middles (`lay_cell`); at an inner corner, where the lip turns into the fall
+of the cell across the corner, halfway between the two falls' middles, the
+notch filled with surface (`end_offset`). Where the lower column's own
+floor carries the ledge on, the surface is carried out over it to where the
+water really leaves (`carried_out`). Hung from each fall's own water and
+the cells' edges, a lip at two columns to one stood out and back by a
+fifth of a metre at every step, a row of teeth.
 
 Each strand's top face follows its arc in `CURTAIN_ROWS` rows; its under face
 lies below by the water's thickness, the flow over the lip by its speed,

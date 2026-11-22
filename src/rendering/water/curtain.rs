@@ -12,9 +12,10 @@
 //! ```
 //!
 //! A lip running across the lattice is a staircase of edges facing two
-//! ways. Its falls' middles lie on a straight line, and so do the strands
-//! between them: the curtain hangs from the staircase along its first row
-//! and is smooth from the second. Each strand's top face follows its arc;
+//! ways. The strands between its falls lie halfway between their middles,
+//! and each fall's middle strand halfway between its ends, so each fall's
+//! curtain runs straight from end to end and the staircase is smoothed
+//! fall by fall. Each strand's top face follows its arc;
 //! its under face lies below by the water's thickness, the flow over the
 //! lip by its speed there, thinning as it falls. Where a fall ends and no
 //! other runs on from it, the body is closed by a cap between the two, so
@@ -184,13 +185,14 @@ impl Tongue {
 }
 
 /// One line of vertices down a curtain: the water of one fall, or between
-/// two whose lips run on into each other, the mean of theirs.
+/// two whose lips run on into each other, the mean of theirs; down a
+/// curtain's middle, the mean of its two ends.
 #[derive(Debug, Clone)]
 struct Strand {
-    tongues: SmallVec<[Tongue; 2]>,
-    /// How far its water is moved from its tongues', level: a free end's
-    /// strand is its fall's arc moved to the end of the lip.
-    shift: Vector2<f32>,
+    /// The water it follows: tongues, each with its share of the strand
+    /// and how far its water is moved from the tongue's own, level (a free
+    /// end's strand is its fall's arc moved to the end of the lip).
+    tongues: SmallVec<[Weighed; 4]>,
     /// Which side of the curtain's middle it lies on: -1 or 1 at an end,
     /// along the level direction square to its flight; 0 in the middle.
     side: f32,
@@ -203,27 +205,64 @@ struct Strand {
     hung: Option<(Vector2<f32>, f32)>,
 }
 
+/// A tongue's share of a strand, and how far the strand moves its water.
+#[derive(Debug, Clone, Copy)]
+struct Weighed {
+    tongue: Tongue,
+    weight: f32,
+    shift: Vector2<f32>,
+}
+
 impl Strand {
+    /// A strand following `tongues` in equal shares, unmoved.
+    fn of(tongues: &[Tongue]) -> Self {
+        let weight = 1.0 / tongues.len() as f32;
+        Self::following(tongues.iter().map(|&tongue| Weighed {
+            tongue,
+            weight,
+            shift: Vector2::zeros(),
+        }))
+    }
+
+    /// The strand halfway between `a` and `b`: half the water of each.
+    fn between(a: &Strand, b: &Strand) -> Self {
+        let tongues = [a, b].into_iter().flat_map(|strand| &strand.tongues);
+        Self::following(tongues.map(|&w| Weighed {
+            weight: 0.5 * w.weight,
+            ..w
+        }))
+    }
+
+    /// A strand in a curtain's middle following `tongues`.
+    fn following(tongues: impl IntoIterator<Item = Weighed>) -> Self {
+        Self {
+            tongues: tongues.into_iter().collect(),
+            side: 0.0,
+            fray: 0.0,
+            free: false,
+            hung: None,
+        }
+    }
+
     fn section(&self, share: f32) -> Section {
-        let n = self.tongues.len() as f32;
         let mut top = Vector3::zeros();
         let mut velocity = Vector3::zeros();
         let mut thickness = 0.0;
-        for tongue in &self.tongues {
-            let section = tongue.at(share);
-            top += section.top.coords;
-            velocity += section.velocity;
-            thickness += section.thickness;
+        for w in &self.tongues {
+            let section = w.tongue.at(share);
+            top += w.weight * (section.top.coords + Vector3::new(w.shift.x, 0.0, w.shift.y));
+            velocity += w.weight * section.velocity;
+            thickness += w.weight * section.thickness;
         }
         Section {
-            top: Point3::from(top / n) + Vector3::new(self.shift.x, 0.0, self.shift.y),
-            velocity: velocity / n,
-            thickness: thickness / n,
+            top: Point3::from(top),
+            velocity,
+            thickness,
         }
     }
 
     fn mean(&self, of: impl Fn(&Tongue) -> f32) -> f32 {
-        self.tongues.iter().map(of).sum::<f32>() / self.tongues.len() as f32
+        self.tongues.iter().map(|w| w.weight * of(&w.tongue)).sum()
     }
 
     /// The way its water flies, level, `share` of the way down.
@@ -368,25 +407,15 @@ impl Curtain {
             let along = along_edge(step, edge_ends(step)[end]);
             let along = Vector2::new(along.di as f32, along.dk as f32);
             let mut strand = match beside[end] {
-                Some(other) => Strand {
-                    tongues: smallvec::smallvec![own, Tongue::of(other)],
-                    shift: Vector2::zeros(),
-                    side: 0.0,
-                    fray: 0.0,
-                    free: false,
-                    hung: None,
-                },
+                Some(other) => Strand::of(&[own, Tongue::of(other)]),
                 None => {
                     let corner = edge_middle + along * (0.5 * COLUMN_SIZE);
                     let at = corner + face * (fall.reach[end] * COLUMN_SIZE);
-                    Strand {
-                        tongues: smallvec::smallvec![own],
-                        shift: at - Vector2::new(fall.lip.x, fall.lip.z),
-                        side: 0.0,
-                        fray: thin,
-                        free: true,
-                        hung: None,
-                    }
+                    let mut strand = Strand::of(&[own]);
+                    strand.tongues[0].shift = at - Vector2::new(fall.lip.x, fall.lip.z);
+                    strand.fray = thin;
+                    strand.free = true;
+                    strand
                 }
             };
             let out = strand.out(&strand.section(0.0));
@@ -395,19 +424,21 @@ impl Curtain {
             strand.hung = hung.map(|h| h[2 * end]);
             strand
         };
+        let [first, last] = [end(0), end(1)];
+        // Its middle is the mean of its ends, so the curtain runs straight
+        // from one to the other: where its lip runs on at both, half its own
+        // water and a quarter of each fall beside it. Hung from its own
+        // water alone, the curtains of a lip running across the lattice
+        // stood out and back fall by fall, a row of teeth.
         let middle = Strand {
-            tongues: smallvec::smallvec![own],
-            shift: Vector2::zeros(),
-            side: 0.0,
-            fray: 0.0,
-            free: false,
             hung: hung.map(|h| h[1]),
+            ..Strand::between(&first, &last)
         };
         let stopped = fall
             .spent
             .map_or(RiverVertex::ALWAYS.y, |spent| clock - spent);
         Self {
-            strands: [end(0), middle, end(1)],
+            strands: [first, middle, last],
             life: Vector2::new(clock - fall.age, stopped),
             void: fall.into_void,
         }
@@ -603,6 +634,34 @@ mod tests {
             assert_eq!(ours.normal, theirs.normal, "row {row}");
         }
         assert_eq!(vertices.len(), Curtain::vertex_count([true, false]));
+    }
+
+    #[test]
+    fn running_on_at_both_ends_its_middle_runs_straight_between_them() {
+        // Its own water stands higher than either neighbour's and leaves
+        // faster: its middle is pulled in line with its ends all the way
+        // down.
+        let (before, after) = (fall(-0.25), fall(0.75));
+        let own = Fall {
+            lip: Point3::new(2.0, 10.4, 0.25),
+            velocity: Vector2::new(3.0, 0.0),
+            ..fall(0.25)
+        };
+        let vertices = Curtain::new(&own, [Some(&before), Some(&after)], None, 0.0).vertices();
+        let rows = CURTAIN_ROWS as usize + 1;
+        for row in 0..rows {
+            let [first, middle, last] = [0, 1, 2].map(|strand| at(&vertices[strand * rows + row]));
+            assert!(
+                (middle - 0.5 * (first + last)).norm() < 1e-4,
+                "row {row}: {middle:?} between {first:?} and {last:?}"
+            );
+        }
+        let lip = at(&vertices[rows]);
+        assert!(
+            (lip.y - 10.2).abs() < 1e-4,
+            "half its own height, a quarter of each neighbour's: {}",
+            lip.y
+        );
     }
 
     #[test]
