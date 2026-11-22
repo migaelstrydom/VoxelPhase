@@ -475,7 +475,21 @@ impl PhysicsWorld {
         impulse: &PhysicsImpulse,
     ) -> Option<Vector3<f32>> {
         let body = self.body(handle)?;
-        blast_on(body, &self.colliders, impulse)
+        blast_on(body, &self.colliders, impulse).map(|(shove, _)| shove)
+    }
+
+    /// Shove `handle` with `impulse` as a step would: by the area its
+    /// envelope shows the blast, at the blast's centre of pressure on it,
+    /// waking it. For tools that blast a world outside its step. Returns
+    /// false for no body, or one out of reach.
+    pub fn apply_blast(&mut self, handle: RigidBodyHandle, impulse: &PhysicsImpulse) -> bool {
+        let Some((shove, point)) = self
+            .body(handle)
+            .and_then(|body| blast_on(body, &self.colliders, impulse))
+        else {
+            return false;
+        };
+        self.apply_impulse_at_point(handle, shove, point)
     }
 
     /// The impulse `impulse` gives `colliders` of `handle` alone, struck at
@@ -537,12 +551,12 @@ impl PhysicsWorld {
             let mut wake = false;
 
             for impulse in impulses {
-                if let Some(v) = blast_on(body, &self.colliders, impulse) {
-                    body.apply_impulse(v);
+                if let Some((v, point)) = blast_on(body, &self.colliders, impulse) {
+                    body.apply_impulse_at_point(v, point);
                     self.shoves.push(Shove {
                         body: RigidBodyHandle(idx),
                         impulse: v,
-                        point: body.position(),
+                        point,
                     });
                     wake = true;
                 }
@@ -2303,15 +2317,21 @@ impl PhysicsWorld {
 }
 
 /// The impulse `impulse` gives `body`, by the area its envelope shows it,
-/// each part weighed by its solidity ([`silhouette::struck_area`]).
+/// each part weighed by its solidity ([`silhouette::struck_area`]), and the
+/// point it acts at ([`PhysicsImpulse::centre_of_pressure`]).
 fn blast_on(
     body: &RigidBody,
     colliders: &Arena<Collider>,
     impulse: &PhysicsImpulse,
-) -> Option<Vector3<f32>> {
-    impulse.impulse_on(body.position(), |travel| {
+) -> Option<(Vector3<f32>, Point3<f32>)> {
+    let shove = impulse.impulse_on(body.position(), |travel| {
         silhouette::struck_area(body.envelope(colliders), body.rotation().inverse() * travel)
-    })
+    })?;
+    let pose = Isometry3::from_parts(body.position().coords.into(), body.rotation());
+    let point = impulse
+        .centre_of_pressure(body.envelope(colliders), &pose)
+        .unwrap_or(body.position());
+    Some((shove, point))
 }
 
 #[cfg(test)]

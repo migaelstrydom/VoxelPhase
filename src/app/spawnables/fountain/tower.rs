@@ -115,7 +115,7 @@ const ANCHOR_PROBE: f32 = 0.1;
 /// Blast loading that breaks a neck, N·s/m², and the knock that does,
 /// N·s: a grenade beside a neck breaks it, one across the lake does not,
 /// and nothing a body does by walking into it comes near.
-const NECK_STRENGTH: f32 = 1500.0;
+const NECK_STRENGTH: f32 = 1340.0;
 const NECK_TOUGHNESS: f32 = 6000.0;
 /// The same for an arm's root, which is a tenth as thick.
 const ARM_TOUGHNESS: f32 = 1500.0;
@@ -890,16 +890,19 @@ mod tests {
             .is_some()
     }
 
+    /// A grenade against the bulb loads what stands on the column's neck
+    /// all but as hard as the bulb's own: it throws the column off whole as
+    /// it shatters the bulb, and the water wells out of the base.
     #[test]
-    fn a_blast_against_the_bulb_shatters_it_and_the_column_wells() {
+    fn a_blast_against_the_bulb_shatters_it_and_throws_the_column_off() {
         let mut world = world();
         let tower = tower(&mut world);
         blast(&mut world, Point3::new(BULB_RADIUS + 0.2, BULB_HEIGHT, 0.0));
         assert!(!section_stands(&world, tower, 2), "the bulb is whole");
-        assert!(section_stands(&world, tower, 1), "the column went too");
+        assert!(section_stands(&world, tower, 1), "the column shattered");
         let outlets = outlets(&world, tower);
         assert_eq!(outlets.len(), 1);
-        assert!((outlets[0] - COLUMN.1).abs() < 0.02);
+        assert!(outlets[0] < COLUMN.0 + 0.5, "it wells out at {outlets:?}");
     }
 
     #[test]

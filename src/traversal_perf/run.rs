@@ -18,9 +18,6 @@ const FRAME: f32 = 1.0 / 60.0;
 /// How far above the level anything could stand, in metres: where the
 /// search for the body's floor starts.
 const SKY: f32 = 100.0;
-/// Upward share of a blast's shove, as a grenade gives.
-const BLAST_UPWARD_BOOST: f32 = 0.5;
-
 /// What to run.
 #[derive(Clone, Debug)]
 pub struct PerfSpec {
@@ -114,12 +111,9 @@ pub fn run(spec: &PerfSpec) -> Result<PerfRun, String> {
         let handles = trial.handles();
         let mut physics = trial.physics_mut();
         for blast in &spec.blasts {
-            let impulse =
-                PhysicsImpulse::radial(blast.at, blast.radius, blast.strength, BLAST_UPWARD_BOOST);
+            let impulse = PhysicsImpulse::radial(blast.at, blast.radius, blast.strength);
             for &handle in &handles {
-                if let Some(shove) = physics.world.impulse_on(handle, &impulse) {
-                    physics.world.apply_impulse(handle, shove);
-                }
+                physics.world.apply_blast(handle, &impulse);
             }
         }
     }

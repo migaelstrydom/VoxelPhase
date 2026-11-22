@@ -604,7 +604,7 @@ mod tests {
     /// A blast this frame, as the physics step leaves it for the systems after.
     fn blast_at(world: &mut World, at: Point3<f32>, radius: f32) {
         let mut queue = PhysicsImpulseQueue::default();
-        queue.push(PhysicsImpulse::radial(at, radius, 5_000.0, 0.0));
+        queue.push(PhysicsImpulse::radial(at, radius, 5_000.0));
         let _ = queue.drain().count();
         world.insert(queue);
     }

@@ -86,7 +86,7 @@ mod tests {
         let mut world = PhysicsWorld::new(PhysicsConfig::default());
         let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
         world.attach_collider(body, ColliderDesc::sphere(0.5).density(1000.0));
-        let blast = PhysicsImpulse::radial(Point3::new(-1.0, 0.0, 0.0), 5.0, 500.0, 0.0);
+        let blast = PhysicsImpulse::radial(Point3::new(-1.0, 0.0, 0.0), 5.0, 500.0);
 
         let mut stepper = SequentialStepper::new(FIXED_DT, 12);
         let mut lines = DebugLines::default();

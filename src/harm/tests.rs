@@ -116,8 +116,8 @@ fn a_limp_body_is_knocked_down_by_a_jumps_landing() {
     assert_eq!(blow.band(&yard.config), Band::Heavy);
 }
 
-/// A grenade's blast kills close in (within about 1.8 m), knocks the body
-/// down further out (to 3 m) and only shoves it out to the edge of its
+/// A grenade's blast kills close in (within about 1.4 m), knocks the body
+/// down further out (to 2.75 m) and only shoves it out to the edge of its
 /// reach (5 m).
 #[test]
 fn a_blast_kills_close_knocks_down_further_and_shoves_at_its_edge() {

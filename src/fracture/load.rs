@@ -317,7 +317,6 @@ mod tests {
             Fork::LEFT_CROWN + Vector3::new(-1.5, 0.0, 0.0),
             3.0,
             100.0,
-            0.0,
         )];
         let loads = fork.loads([], &blasts);
         assert!(loads.blast_load(&fork.left) > fork.left.threshold);
@@ -388,7 +387,6 @@ mod tests {
             Point3::new(0.0, 0.0, -4.0),
             2.0,
             100.0,
-            0.0,
         )];
         let loads = at_anchors(&graph, [], &blasts, Isometry3::identity(), Some(1_000.0));
         assert!(loads.blast_load(&near) > near.threshold);
@@ -406,7 +404,6 @@ mod tests {
             Point3::new(10.0, 0.0, -3.5),
             1.0,
             100.0,
-            0.0,
         )];
         let moved = Isometry3::translation(10.0, 0.0, 0.0);
         let loads = at_anchors(&graph, [], &blasts, moved, None);

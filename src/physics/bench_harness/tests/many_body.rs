@@ -93,8 +93,8 @@ fn grenade_like_impulses_keep_states_finite() {
     for step in 0..num_steps {
         let impulses = if step > 30 && step % 15 == 0 {
             vec![
-                PhysicsImpulse::radial(Point3::new(0.0, 0.8, 0.0), 10.0, 26000.0, 0.6),
-                PhysicsImpulse::radial(Point3::new(0.0, 0.2, 0.0), 8.0, 22000.0, 0.4),
+                PhysicsImpulse::radial(Point3::new(0.0, 0.8, 0.0), 10.0, 26000.0),
+                PhysicsImpulse::radial(Point3::new(0.0, 0.2, 0.0), 8.0, 22000.0),
             ]
         } else {
             Vec::new()

@@ -424,7 +424,7 @@ mod tests {
 
     /// A blast from 3 m along +Z of the origin, travelling down -Z there.
     fn blast() -> PhysicsImpulse {
-        PhysicsImpulse::radial(Point3::new(0.0, 0.0, 3.0), 10.0, 100.0, 0.0)
+        PhysicsImpulse::radial(Point3::new(0.0, 0.0, 3.0), 10.0, 100.0)
     }
 
     /// A body at the origin holding `colliders`.

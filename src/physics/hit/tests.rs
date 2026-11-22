@@ -286,7 +286,6 @@ fn a_blast_is_a_shove_of_the_impulse_it_gave() {
         Point3::new(-2.0, 5.0, 0.0),
         6.0,
         2000.0,
-        0.0,
     )]);
     let shoves: Vec<_> = bench
         .world

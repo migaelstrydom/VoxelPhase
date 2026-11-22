@@ -22,9 +22,6 @@ const SKY: f32 = 100.0;
 const SETTLE_SECONDS: f32 = 30.0;
 /// How many times the strip is sampled to time it.
 const TIMED_SAMPLES: usize = 10;
-/// Upward share of a blast's shove, as a grenade gives.
-const BLAST_UPWARD_BOOST: f32 = 0.5;
-
 /// A shove outward from a point, as a grenade gives every body in reach.
 #[derive(Clone, Copy, Debug)]
 pub struct Blast {
@@ -87,16 +84,9 @@ impl CaptureWorld {
             let handles = trial.handles();
             let mut physics = trial.physics_mut();
             for blast in blasts {
-                let impulse = PhysicsImpulse::radial(
-                    blast.at,
-                    blast.radius,
-                    blast.strength,
-                    BLAST_UPWARD_BOOST,
-                );
+                let impulse = PhysicsImpulse::radial(blast.at, blast.radius, blast.strength);
                 for &handle in &handles {
-                    if let Some(shove) = physics.world.impulse_on(handle, &impulse) {
-                        physics.world.apply_impulse(handle, shove);
-                    }
+                    physics.world.apply_blast(handle, &impulse);
                 }
             }
         }

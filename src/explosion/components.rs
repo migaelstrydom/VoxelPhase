@@ -6,9 +6,6 @@ use specs::{Component, VecStorage};
 use crate::physics::PhysicsImpulse;
 use crate::terrain::BlastConfig;
 
-/// Upward share of an explosion's shove, as a fraction of its outward strength.
-pub const UPWARD_BOOST: f32 = 0.5;
-
 /// Component representing an explosion event.
 ///
 /// When an explosion is created (e.g., from a grenade detonation),
@@ -47,8 +44,8 @@ impl Explosion {
     }
 
     /// The shove this explosion gives rigid bodies: outward from the centre
-    /// with linear falloff to the knockback radius, plus half again upward.
+    /// with linear falloff to the knockback radius.
     pub fn physics_impulse(&self) -> PhysicsImpulse {
-        PhysicsImpulse::radial(self.center, self.blast_radius, self.force, UPWARD_BOOST)
+        PhysicsImpulse::radial(self.center, self.blast_radius, self.force)
     }
 }
