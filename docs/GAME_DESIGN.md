@@ -45,8 +45,9 @@ What the world does back:
    that open doors. A weight does its work where it rests. The level's
    objective (solids, temple, brazier) sits outside this rule because it
    never changes the room ([WORLD_AND_STORY.md](WORLD_AND_STORY.md)).
-5. **Only lifters give height back:** trampolines, moving platforms, pumps and
-   springs, rising water, the hover sled. A room has a fixed few.
+5. **Only lifters give height back safely:** trampolines, moving platforms,
+   pumps and springs, rising water, the hover sled. A room has a fixed few.
+   A blast can throw the player up too, but never safely (see *Harm*).
 6. **Creatures follow their nature, always.** A roller rolls at whoever it
    sees; a piper throws at them; a bell-carrier walks at them and cannot be
    hurt; a mussel shuts on whatever steps in.
@@ -54,6 +55,9 @@ What the world does back:
    islands. Dig deep enough and the hole comes out underneath: the player,
    the water and anything loose fall through it. Digging under a problem
    is a way down, never a way round.
+8. **Only impacts harm.** Whatever strikes or stops the player (the ground
+   after a fall, a falling pillar, a blast, a roller) harms them by how hard
+   it hits, and by nothing else (see *Harm*).
 
 What is scarce, and so what a puzzle spends:
 
@@ -62,6 +66,57 @@ What is scarce, and so what a puzzle spends:
 - **Blast:** a room gives a few grenades.
 - **Lifters:** few, and each can be in one place.
 - **Safety:** ground a creature is crossing is not ground the player can use.
+
+## Harm
+
+Harm is the physics engine's verdict, like everything else in a room. The
+game is built around its physics, so what hurts the player is decided by
+the same simulation that moves every stone and every drop of water, with no
+rules of its own. A player who can read the physics can read the danger.
+
+There is no health bar. Every impact on the player is judged by one
+measure, the sudden change in their velocity (the impulse divided by their
+mass), whatever caused it, and falls into one of three bands:
+
+| Impact | Result |
+|---|---|
+| Light | Shoved; they stagger, and keep control |
+| Heavy | Knocked down: for a few seconds they tumble with no control, and land however physics lands them |
+| Deadly | The room restarts |
+
+Two thresholds price everything, with no special cases:
+
+- **Falls** are judged on landing. Water breaks a fall. The deadly height
+  sits well above anything a jump reaches, so a fatal fall is a clear
+  misjudgement, never a surprise.
+- **Heavy things:** a glancing blow from a falling pillar knocks the player
+  down; being pinned or crushed kills.
+- **Creatures** push, trap and knock down. They do not kill directly: the
+  danger is where their shove sends the player (off a ledge, into water,
+  under a falling stone).
+- **Blasts, the player's own included,** shove, knock down or kill by how
+  close they are. Nothing stops a blast throwing the player upward, and the
+  physics is not cheated to prevent it. The heavy band prices it instead:
+  it starts below the player's own jump takeoff speed (about 4.4 m/s for a
+  1 m jump), so any blast that throws them higher than they can jump also
+  knocks them down. They fly uncontrolled, and the fall law judges the
+  landing. Blast-jumping is a desperate gamble, never a trick: a room's
+  heights must allow for a player who tries it.
+
+### How a knock looks
+
+A heavy hit takes the player off their feet, and how they tumble is physics
+too:
+
+- **Spin comes from where the blow lands.** A blow far from the centre of
+  mass turns the body by its lever arm. A blow at the head or the feet sends
+  the player spinning; one at the middle shoves them flat with little turn.
+  A blast at their feet strikes the legs harder than the head and tips them
+  over.
+- **The limbs follow the motion.** They trail behind the change in velocity
+  and fling outward with the spin. A full frontal hit, with no spin, leaves
+  the limbs trailing back, splayed; a blow on an end gives a flailing,
+  spinning tumble.
 
 ## What makes a room a puzzle here
 
@@ -404,6 +459,8 @@ each hard one:
 | Need | For | State |
 |---|---|---|
 | Death and respawn | Any room with a creature | Death exists, switched off; no respawn |
+| Impact bands | *Harm*: shoves, knockdowns and deaths judged by the player's change in velocity | Not started |
+| Knocked-down state | *Harm*: a heavy hit tumbles the player out of control | Not started |
 | Room reset at a shrine | Every room, since actions are irreversible | R rebuilds the room from its file; no shrine |
 | Grenades as a limited pickup | E4 and the Blast economy | Grenades are free |
 | Room exit | Every room | A `Goal` object exists; its trigger reaches 3 m below it, to rework |
@@ -419,9 +476,5 @@ each hard one:
 1. **Is resetting a room free?** Free keeps experiments cheap; a cost makes
    the player think first. Draft assumes free.
 2. **Do creatures reset with the room?** Draft assumes yes.
-3. **Can the player be hurt by their own blast?** It changes how E-rooms feel.
-   It already comes up: a grenade thrown at something nearer than it flies
-   before arming bounces back and goes off at the thrower's feet. Fine for
-   now; to be tuned.
-4. **How big is a room?** Draft assumes one screen or two: the whole problem
+3. **How big is a room?** Draft assumes one screen or two: the whole problem
    visible from the shrine.
