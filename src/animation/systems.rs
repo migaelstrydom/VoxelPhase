@@ -156,6 +156,7 @@ impl<'a> System<'a> for CharacterAnimationSystem {
                     .get(entity)
                     .and_then(|s| s.ahead)
                     .map(|ahead| (ahead.hands, ahead.in_seconds)),
+                lying: (!character_state.locomotion.in_control()).then_some(orientation.0),
             };
             if let Some(throws) = throws.get(entity) {
                 animator.observe_throws(throws.this_frame(), dt);

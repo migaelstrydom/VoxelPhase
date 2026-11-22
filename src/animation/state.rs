@@ -4,6 +4,7 @@
 
 use nalgebra::{Point3, Vector2, Vector3};
 
+use crate::animation::humanoid::body_frame::BodyFrame;
 use crate::animation::humanoid::hang::Hang;
 use crate::animation::pose::PoseFragment;
 use crate::character::ThrowingHand;
@@ -247,6 +248,9 @@ pub struct AnimationState {
     /// radians, as measured — not as asked for. The rig is built in this
     /// frame (see `BodyFrame`), so it lies down and stands up with the body.
     pub body_pitch: f32,
+    /// The body's own frame, while it is drawn as it lies (knocked down)
+    /// rather than by its facing and pitch.
+    pub lying: Option<BodyFrame>,
     /// The body's velocity relative to whatever carries it.
     pub velocity: Vector3<f32>,
     /// The water's surface over the body, as drawn, if it is in or over any.
@@ -278,6 +282,13 @@ pub struct AnimationState {
 }
 
 impl AnimationState {
+    /// The frame the rig is built in: the body's own while it lies, else
+    /// its facing laid over by its pitch.
+    pub fn body_frame(&self) -> BodyFrame {
+        self.lying
+            .unwrap_or_else(|| BodyFrame::new(self.facing, self.body_pitch))
+    }
+
     /// Create initial state at the given pelvis position.
     pub fn new(pelvis_position: Point3<f32>, leg_length: f32) -> Self {
         let foot_y = pelvis_position.y - leg_length * 0.85;
@@ -309,6 +320,7 @@ impl AnimationState {
             is_grounded: false,
 
             body_pitch: 0.0,
+            lying: None,
             velocity: Vector3::zeros(),
             water_surface: None,
             stroke_phase: 0.0,

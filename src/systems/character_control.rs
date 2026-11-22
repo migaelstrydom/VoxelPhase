@@ -1,3 +1,4 @@
+use crate::animation::humanoid::BodyFrame;
 use crate::character::grab::{self, GrabConfig, ReachFrame};
 use crate::character::ledge::{Grip, GripFrame, SensedEdge};
 use crate::character::locomotion::{AirSteering, Jump, JumpKind};
@@ -226,14 +227,15 @@ impl<'a> System<'a> for CharacterControlSystem {
                 })
                 .unwrap_or(rotation.0)
             };
-            // Knocked down, the character faces the way its body leans, so
-            // the figure is drawn lying as the body lies.
+            // Knocked down, the character heads the way its body lies, as
+            // its figure is drawn, and gets up facing that way.
             rotation.0 = physics_res
                 .world
                 .body(character_body)
                 .filter(|_| !in_control)
-                .and_then(|b| lean_heading(&b.rotation()))
-                .map_or(current_yaw, |lean| keep_attitude::yaw_of(&lean));
+                .map_or(current_yaw, |b| {
+                    keep_attitude::yaw_of(&BodyFrame::of(&b.rotation()).heading)
+                });
 
             // A hanger faces the wall it hangs on, whichever way the stick
             // shimmies it; a thrower faces its throw, whichever way it is
@@ -693,16 +695,6 @@ fn buckle(world: &mut PhysicsWorld, body: RigidBodyHandle, rate: f32) {
     }
     let front = keep_attitude::heading(&rotation, 0.0);
     world.set_body_velocity(body, linear, angular + up.cross(&front) * rate);
-}
-
-/// Which way across the ground a body at `rotation` leans, if it leans far
-/// enough for that to be plain.
-fn lean_heading(rotation: &UnitQuaternion<f32>) -> Option<Vector3<f32>> {
-    /// The least lean, as the sine of its angle, whose way is taken.
-    const PLAIN_LEAN: f32 = 0.35;
-    let up = rotation * Vector3::y();
-    let across = Vector3::new(up.x, 0.0, up.z);
-    (across.norm() >= PLAIN_LEAN).then(|| across.normalize())
 }
 
 /// How far a body at `rotation` leans off upright, in radians, whichever

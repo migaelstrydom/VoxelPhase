@@ -450,6 +450,9 @@ pub fn wade_lean(wade: f32) -> f32 {
 fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> PoseFragment {
     let rig = ctx.rig;
     let anim = ctx.anim;
+    if let Some(frame) = anim.lying {
+        return sample_limp(ctx, &frame);
+    }
     let right = anim.facing.cross(&Vector3::y());
     let left_hip = anim.pelvis_position - right * rig.hip_width;
     let right_hip = anim.pelvis_position + right * rig.hip_width;
@@ -515,6 +518,34 @@ fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> Pose
     }
 }
 
+/// A body knocked down, its legs gone limp: they lie along the body's own
+/// axis from the hips, a little apart, however the body lies.
+fn sample_limp(ctx: &SampleCtx<'_>, frame: &BodyFrame) -> PoseFragment {
+    let rig = ctx.rig;
+    let pelvis = ctx.anim.pelvis_position;
+    let reach = rig.leg_length() * LIMP_REACH;
+    let foot = |side: Vector3<f32>| pelvis + side * (rig.hip_width + LIMP_SPLAY) - frame.up * reach;
+    PoseFragment {
+        feet: Some(FeetPose {
+            left: foot(frame.left()),
+            right: foot(frame.right),
+            anchor: FootAnchor::Hips,
+        }),
+        hands: None,
+        pelvis_offset: None,
+        shoulder_twist: None,
+        head_tilt: Some(Vector2::new(0.0, 0.0)),
+        head_bob: Some(0.0),
+        torso_pitch: Some(0.0),
+    }
+}
+
+/// How far from the pelvis a limp body's feet lie, along its axis, as a
+/// share of its legs' length: just short of straight, so the knees give.
+const LIMP_REACH: f32 = 0.97;
+/// How much further apart than its hips a limp body's feet lie, in metres.
+const LIMP_SPLAY: f32 = 0.06;
+
 /// How far ahead of its hip the leading foot hangs through a flight at
 /// speed, and the trailing one behind, in metres.
 const AIR_STRIDE: f32 = 0.12;
@@ -551,7 +582,7 @@ fn sample_striding_hop(ctx: &SampleCtx<'_>) -> PoseFragment {
 fn kicked_out(ctx: &SampleCtx<'_>, mut fragment: PoseFragment, exit: &WaterExit) -> PoseFragment {
     let rig = ctx.rig;
     let anim = ctx.anim;
-    let frame = BodyFrame::new(anim.facing, anim.body_pitch);
+    let frame = anim.body_frame();
     let leg = rig.leg_length();
     let (gather, drive) = (exit_gather(exit), exit_drive(exit));
     let pelvis = anim.pelvis_position;
@@ -657,7 +688,7 @@ fn sample_launching(ctx: &SampleCtx<'_>, kind: AirKind, t: f32) -> PoseFragment 
 fn sample_swimming(ctx: &SampleCtx<'_>, stroke: Stroke) -> PoseFragment {
     let rig = ctx.rig;
     let anim = ctx.anim;
-    let frame = BodyFrame::new(anim.facing, anim.body_pitch);
+    let frame = anim.body_frame();
     let leg = rig.leg_length();
     let phase = anim.stroke_phase;
     let left_hip = anim.pelvis_position + frame.left() * rig.hip_width;

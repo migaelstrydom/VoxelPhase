@@ -164,6 +164,7 @@ pub fn run(spec: &Run<'_>) -> Take {
                 immersion: &Immersion::dry(),
                 ledge: None,
                 reach_for: None,
+                lying: None,
             },
             &body.state,
             &intent,

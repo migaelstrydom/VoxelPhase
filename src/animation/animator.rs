@@ -3,7 +3,7 @@
 //! This is the single source of truth for character animation.
 //! All animation logic flows through this animator.
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use specs::{Component, VecStorage};
 
 use super::config::{CharacterRigConfig, GaitPreset};
@@ -77,6 +77,9 @@ pub struct BodyReading<'a> {
     /// An edge the hands will reach along a jump's or fall's arc: where each
     /// hand will hold, and how soon, in seconds.
     pub reach_for: Option<([Point3<f32>; 2], f32)>,
+    /// The body's rotation, while it is out of the character's control
+    /// (knocked down) and drawn as it lies.
+    pub lying: Option<UnitQuaternion<f32>>,
 }
 
 /// The character animation driver.
@@ -238,6 +241,7 @@ impl CharacterAnimator {
         self.state.pelvis_position = pelvis_position;
         self.state.velocity = velocity;
         self.state.body_pitch = body.up.dot(&facing).atan2(body.up.y);
+        self.state.lying = body.lying.as_ref().map(BodyFrame::of);
         self.state.water_surface = body.immersion.water.map(|w| w.surface);
         self.state.left.normal = self.locomotion.ground(FootSide::Left).normal_or_up();
         self.state.right.normal = self.locomotion.ground(FootSide::Right).normal_or_up();

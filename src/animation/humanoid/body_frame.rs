@@ -1,6 +1,6 @@
 //! The torso's frame, laid over by the body's pitch.
 
-use nalgebra::Vector3;
+use nalgebra::{UnitQuaternion, Vector3};
 
 use crate::animation::rig::right_vector;
 
@@ -42,6 +42,24 @@ impl BodyFrame {
         }
     }
 
+    /// The frame of a body turned by `rotation`, however it lies: its own
+    /// up (local +Y), front (+Z) and right (−X), heading the way its front
+    /// points across the ground or, lying face up or down, its head. A body
+    /// held at a heading and pitch has the frame [`new`](Self::new) gives.
+    pub fn of(rotation: &UnitQuaternion<f32>) -> Self {
+        let up = rotation * Vector3::y();
+        let front = rotation * Vector3::z();
+        let across = |v: Vector3<f32>| Vector3::new(v.x, 0.0, v.z).try_normalize(0.3);
+        Self {
+            heading: across(front)
+                .or_else(|| across(up))
+                .unwrap_or_else(Vector3::z),
+            right: rotation * -Vector3::x(),
+            up,
+            front,
+        }
+    }
+
     /// The same frame leaned a further `pitch` radians forward — a torso
     /// hunched over hips that are not.
     pub fn leaned(&self, pitch: f32) -> Self {
@@ -76,6 +94,32 @@ mod tests {
         assert!((f.up - Vector3::x()).magnitude() < 1e-6, "head leads");
         assert!((f.front + Vector3::y()).magnitude() < 1e-6, "belly down");
         assert!(f.right.dot(&f.up).abs() < 1e-6);
+    }
+
+    /// A body held at a heading and pitch is drawn as `new` draws it; one
+    /// knocked onto its side lies with its right side up.
+    #[test]
+    fn a_body_is_drawn_as_it_lies() {
+        let held = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.6)
+            * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.4);
+        let a = BodyFrame::of(&held);
+        let b = BodyFrame::new(Vector3::new(0.6f32.sin(), 0.0, 0.6f32.cos()), 0.4);
+        for (x, y) in [
+            (a.up, b.up),
+            (a.front, b.front),
+            (a.right, b.right),
+            (a.heading, b.heading),
+        ] {
+            assert!((x - y).magnitude() < 1e-5, "{x} against {y}");
+        }
+        let on_its_side = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -FRAC_PI_2);
+        let lying = BodyFrame::of(&on_its_side);
+        assert!(
+            (lying.right - Vector3::y()).magnitude() < 1e-5,
+            "{}",
+            lying.right
+        );
+        assert!((lying.heading - Vector3::z()).magnitude() < 1e-5);
     }
 
     #[test]

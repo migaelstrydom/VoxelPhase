@@ -232,8 +232,11 @@ first in the tick. `phase` is one of:
 The hands let go and reach for nothing, and nothing is thrown. A knock while
 limp keeps the longer time down; a knock while rising goes down again. Deep
 water takes a body only once its time is up: until then it floats as it
-lies. The figure is drawn as a fall, faced the way the body leans, until the
-limbs are drawn trailing its motion.
+lies. The figure is drawn in the body's own frame (`BodyFrame::of`), so it
+lies on its back, its side or its face as the body does, with its legs and
+arms limp along it; it heads the way the body's front points and gets up
+facing that way. Limbs trailing the body's motion, and getting up as a
+motion rather than a spring, are still to come.
 
 ## The consumers
 

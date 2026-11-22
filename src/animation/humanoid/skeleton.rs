@@ -141,7 +141,7 @@ impl Skeleton {
     ) {
         self.left_foot = within_reach(self.left_hip, left, config.leg_length());
         self.right_foot = within_reach(self.right_hip, right, config.leg_length());
-        self.solve_knee_ik(&BodyFrame::new(state.facing, state.body_pitch), config);
+        self.solve_knee_ik(&state.body_frame(), config);
     }
 
     /// Update skeleton from a pose fragment, falling back to `state` for any
@@ -157,7 +157,7 @@ impl Skeleton {
         let pelvis_offset = fragment.pelvis_offset.unwrap_or_else(Vector3::zeros);
         self.pelvis = pelvis_base + pelvis_offset;
 
-        let frame = BodyFrame::new(state.facing, state.body_pitch);
+        let frame = state.body_frame();
         self.left_hip = self.pelvis + frame.left() * config.hip_width;
         self.right_hip = self.pelvis + frame.right * config.hip_width;
 

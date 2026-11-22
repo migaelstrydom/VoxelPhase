@@ -103,6 +103,7 @@ mod tests {
                 immersion: &immersion,
                 ledge: None,
                 reach_for: None,
+                lying: None,
             };
             animator.update(
                 DT,
