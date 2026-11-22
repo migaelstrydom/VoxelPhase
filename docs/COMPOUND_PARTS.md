@@ -209,11 +209,12 @@ A bond whose breaking alone frees something is now judged by what it
 tears off rather than at its anchor: see "Judging a bond by the part it
 tears off" below.
 
-The contact tracker's deadband, which keeps a body's own weight from
-reading as load, applies to a body free to move. A body held by ties to the
-world carries its weight through them, not through its colliders' contacts,
-so like a static body today (`contact_load.rs:124`) it gets none: the rule
-becomes "no deadband for a static or world-tied body".
+Contact is now read from the world's hits (`fracture::contact_blows`,
+`docs/IMPACT_METER.md`): each collider's hardest blow, the impulse the hit
+drove through it, which for a body welded or lying on something is the
+whole stop of what struck it. A body's own weight, a structure settling
+and an arch's thrust close no contact fast, so the contact tracker and its
+deadbands are gone.
 
 ### Ties: constraints that hold the compound
 
@@ -708,8 +709,8 @@ ones, is in a cycle through the world.
   enter the blast judgement; the blast's own fall-off from its centre to
   the side is the attenuation, and the lever a far side makes of its bond
   is, as before, left to the threshold.
-- **Contact:** the largest spike on any collider of the torn-off side,
-  felt at the anchor over `reach` as before. A spike on the kept side is
+- **Contact:** the hardest blow on any collider of the torn-off side,
+  felt at the anchor over `reach` as before. A blow on the kept side is
   left out: the kept side is the held or the heavier one, and a blow on
   it moves it, while what hangs off it follows at the share its own mass
   is of the whole. A landing on a branch's crown loads its fork; one on
@@ -750,8 +751,8 @@ side is ever listed. Each part's mass and centre are read
 from its colliders, O(colliders).
 
 It is computed per compound only in a frame where some bond could break:
-any blast in the frame, or a contact spike on the body larger than the
-least toughness of its bonds (a spike is felt at most at full strength,
+any blast in the frame, or a contact blow on the body larger than the
+least toughness of its bonds (a blow is felt at most at full strength,
 so nothing smaller can break anything). In every other frame, which is
 nearly all of them, a compound's bonds are not judged at all, which is
 cheaper than before. Nothing is cached, so no change to the graph (a
@@ -779,6 +780,10 @@ trunk's spikes counted); dropped lying on its side, 313 from 6 m, 317 from
 10 m, 663 from 20 m, unchanged, since those spikes land on the branches'
 crowns. `branch_toughness` stays 220. Values under "Step 5 as built" are
 superseded by these.
+
+Since contact moved onto hits (`contact_blows`), the same falls read: a
+felled tree at most 62 N·s at a fork; dropped lying, 189 from 6 m, 290 from
+10 m, 418 from 20 m, now rising with the height. `branch_toughness` is 120.
 
 ---
 

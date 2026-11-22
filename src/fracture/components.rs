@@ -4,7 +4,6 @@ use nalgebra::Vector3;
 use rustc_hash::FxHashMap;
 use specs::{Component, VecStorage};
 
-use super::contact_load::{ContactLoadTracker, Deadband};
 use super::parts::{PartGraph, PartId};
 use crate::physics::{BodyTraits, ColliderHandle, CollisionFilter, ConstraintHandle};
 
@@ -62,16 +61,14 @@ impl PieceTraits {
 /// - a blast, read as its loading per area at the torn-off side's centre of
 ///   mass (a bond in a cycle: at its anchor) and judged against the bond's
 ///   `threshold`; and
-/// - contact, read as the *spike* — the frame-over-frame increase in the
-///   impulse the solver pushed through a collider of the torn-off side —
-///   felt at the anchor over the bond's reach, and judged against the
-///   bond's `toughness`, or this compound's default.
+/// - contact, read as the hardest blow a collider of the torn-off side took
+///   ([`contact_blows`](super::contact_blows): the impulse of a hit, a
+///   contact that closed fast) felt at the anchor over the bond's reach,
+///   and judged against the bond's `toughness`, or this compound's
+///   default.
 ///
-/// Contact has to be read as a spike rather than a level because a heavy object
-/// standing still already pushes its own weight through its lowest parts
-/// every frame, which for anything massive exceeds a sensible fracture
-/// threshold outright. The spike is near zero for resting weight and for a
-/// player leaning on the object, and enormous for a landing.
+/// Resting weight, a structure settling and a player leaning on the object
+/// close no contact fast, so they deal no blow; a landing does.
 ///
 /// After breaking, the fracture system finds the groups of parts still
 /// bonded, keeps one on this body and splits each other off whole.
@@ -83,10 +80,7 @@ impl PieceTraits {
 pub struct CompoundFracture {
     /// The parts, bonds and ties.
     pub graph: PartGraph,
-    /// Per-collider contact load history, the baseline the impact spike is
-    /// measured against.
-    pub contact_load: ContactLoadTracker,
-    /// Contact spike at a bond, in N·s, above which a bond that states no
+    /// Contact blow at a bond, in N·s, above which a bond that states no
     /// [`toughness`](super::Bond::toughness) of its own lets go. `None`: such
     /// a bond never breaks on contact.
     ///
@@ -128,7 +122,6 @@ impl CompoundFracture {
     pub fn new(graph: PartGraph) -> Self {
         Self {
             graph,
-            contact_load: ContactLoadTracker::default(),
             default_toughness: None,
             kicks: FxHashMap::default(),
             untied: Vec::new(),
@@ -145,22 +138,15 @@ impl CompoundFracture {
         self
     }
 
-    /// The contact spike, in N·s, that breaks one of this compound's bonds
+    /// The contact blow, in N·s, that breaks one of this compound's bonds
     /// that states no toughness of its own.
     ///
     /// Measure it: run the object through the impacts it should and should not
-    /// survive and read the spikes off, as the tests beside its spawnable do.
+    /// survive and read the blows off, as the tests beside its spawnable do.
     /// Guessing gives either a structure that shatters when leaned on or one
     /// that cannot be broken by hand.
     pub fn breaking_on_impact_at(mut self, toughness: f32) -> Self {
         self.default_toughness = Some(toughness);
-        self
-    }
-
-    /// Judge contact spikes against each collider's own weight rather than
-    /// the whole body's.
-    pub fn with_deadband(mut self, deadband: Deadband) -> Self {
-        self.contact_load = std::mem::take(&mut self.contact_load).with_deadband(deadband);
         self
     }
 
@@ -214,16 +200,14 @@ impl CompoundFracture {
             .map(|part| part.id)
             .collect();
         self.graph = self.graph.share(&parts);
-        self.contact_load = self.contact_load.share(colliders);
         self.kicks.retain(|part, _| parts.contains(part));
     }
 
-    /// The compound of a piece split off with `parts` (whose colliders are
-    /// `colliders`): their graph, their contact baselines, the same rules.
-    pub fn share(&self, parts: &[PartId], colliders: &[ColliderHandle]) -> Self {
+    /// The compound of a piece split off with `parts`: their graph, the same
+    /// rules.
+    pub fn share(&self, parts: &[PartId]) -> Self {
         Self {
             graph: self.graph.share(parts),
-            contact_load: self.contact_load.share(colliders),
             default_toughness: self.default_toughness,
             kicks: FxHashMap::default(),
             untied: Vec::new(),

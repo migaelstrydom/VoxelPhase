@@ -6,14 +6,13 @@ use std::sync::Arc;
 use nalgebra::{Isometry3, Point3, Translation3, Vector3};
 use specs::{Join, Read, ReadStorage, System, WriteStorage};
 
-use super::components::{BlowMeasure, BrittleSolid};
+use super::components::BrittleSolid;
 use crate::components::RigidBodyComponent;
 use crate::debug::DebugLog;
-use crate::fracture::{replace_part, Bond, CompoundFracture, PieceSplits};
+use crate::fracture::{contact_blows, replace_part, Bond, CompoundFracture, PieceSplits};
 use crate::model::PartLooks;
 use crate::physics::{ColliderHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle};
 use crate::systems::PhysicsResource;
-use crate::time::Time;
 
 /// Fastest a freed wedge leaves, in m/s.
 ///
@@ -51,7 +50,6 @@ impl<'a> System<'a> for SolidCleaveSystem {
         WriteStorage<'a, PartLooks>,
         ReadStorage<'a, RigidBodyComponent>,
         Read<'a, PhysicsImpulseQueue>,
-        Read<'a, Time>,
         specs::Write<'a, DebugLog>,
     );
 
@@ -63,10 +61,8 @@ impl<'a> System<'a> for SolidCleaveSystem {
             mut looks,
             bodies,
             impulse_queue,
-            time,
             mut debug_log,
         ) = data;
-        let dt = time.delta_seconds();
         let blasts = impulse_queue.last_impulses();
         let mut loudest = 0.0f32;
 
@@ -74,7 +70,7 @@ impl<'a> System<'a> for SolidCleaveSystem {
             (&mut solids, &mut fractures, &mut looks, &bodies).join()
         {
             let body_handle = body_comp.0;
-            let hits = gather_hits(&physics, solid, body_handle, blasts, dt, &mut loudest);
+            let hits = gather_hits(&physics, solid, body_handle, blasts, &mut loudest);
             for hit in hits {
                 cleave(&mut physics, solid, fracture, looks, body_handle, &hit);
             }
@@ -141,16 +137,13 @@ struct Hit {
     kick: Vector3<f32>,
 }
 
-/// Read this frame's loads and pick out the blows that break a block.
-///
-/// Reads every tracker every frame whether or not anything happens: a
-/// baseline that stops advancing turns a quiet load into a spike later.
+/// Read this frame's blows and blasts and pick out the ones that break a
+/// block.
 fn gather_hits(
     physics: &PhysicsResource,
-    solid: &mut BrittleSolid,
+    solid: &BrittleSolid,
     body_handle: RigidBodyHandle,
     blasts: &[PhysicsImpulse],
-    dt: f32,
     loudest: &mut f32,
 ) -> Vec<Hit> {
     let world = &physics.world;
@@ -160,43 +153,21 @@ fn gather_hits(
     let body_pos = body.position();
     let body_rot = body.rotation();
     let handles: Vec<ColliderHandle> = body.colliders().to_vec();
-    let spikes = solid.contact_load.advance(world, body_handle, &handles, dt);
+    let blows = contact_blows(world, body_handle, &handles);
     let threshold = solid.cleaving.threshold;
 
-    // Both measures advance every frame, whichever is judged by, so that
-    // neither's baseline goes stale.
-    let gravity = world.config().gravity * body.gravity_scale() * dt;
-    let arrest = if world.is_sleeping(body_handle) {
-        solid.arrest(Vector3::zeros(), Vector3::zeros(), body.mass())
-    } else {
-        solid.arrest(body.linear_velocity(), gravity, body.mass())
-    };
-    // An arrest is the whole body's; it lands on the child that took the
-    // biggest share of the contact.
-    let struck = handles
-        .iter()
-        .zip(&spikes)
-        .max_by(|a, b| a.1.magnitude.total_cmp(&b.1.magnitude))
-        .map(|(handle, _)| *handle);
-
     let mut hits = Vec::new();
-    for (handle, spike) in handles.iter().zip(&spikes) {
+    for (handle, blow) in handles.iter().zip(&blows) {
         if !solid.is_brittle(*handle) {
             continue;
         }
-        let blow = match solid.measure {
-            BlowMeasure::ContactSpike => spike.magnitude,
-            BlowMeasure::Arrest if struck == Some(*handle) => arrest,
-            BlowMeasure::Arrest => 0.0,
-        };
-        *loudest = loudest.max(blow);
+        *loudest = loudest.max(blow.magnitude);
 
-        if blow > threshold {
-            let impact = world.impacts().for_collider(*handle);
+        if blow.magnitude > threshold {
             hits.push(Hit {
                 child: *handle,
-                point: impact.map_or(body_pos, |i| i.centre),
-                kick: impact.map_or(Vector3::zeros(), |i| i.normal) * blow,
+                point: blow.point,
+                kick: blow.push * blow.magnitude,
             });
             continue;
         }
@@ -372,7 +343,7 @@ mod tests {
     use crate::app::spawnables::shared::models::texture_seam;
     use crate::app::spawnables::{ice_cleaving, ice_texture_spread, ice_uvs, IceBlock};
     use crate::debug::DebugLines;
-    use crate::fracture::{ContactLoadTracker, PartGraph};
+    use crate::fracture::PartGraph;
     use crate::fracture::{FractureSystem, PieceSplits};
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
@@ -381,6 +352,7 @@ mod tests {
     };
     use crate::rendering::material::MaterialId;
     use crate::systems::PartDrawSystem;
+    use crate::time::Time;
 
     const FRAME_DT: f32 = 1.0 / 60.0;
     const BLOCK_HEIGHT: f32 = 1.0;
@@ -539,10 +511,6 @@ mod tests {
         }
         fracture.graph = graph;
         drop(fractures);
-        let mut solids = world.write_storage::<BrittleSolid>();
-        let solid = solids.get_mut(entity).expect("the row");
-        solid.contact_load = ContactLoadTracker::default();
-        drop(solids);
         (world, entity, body)
     }
 

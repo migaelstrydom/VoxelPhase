@@ -5,10 +5,9 @@ use specs::{Component, VecStorage};
 use super::crazing::CrazeRule;
 use super::fatigue::{FatigueRule, FatigueTracker};
 use super::held::HeldEdges;
-use super::jolt::JoltTracker;
 use super::pane::SheetFrame;
 use super::remnant::RemnantRule;
-use crate::fracture::{BreakDepths, ContactLoadTracker, Cuttable, Deadband};
+use crate::fracture::{BreakDepths, Cuttable};
 use crate::physics::{ColliderHandle, ConstraintHandle};
 
 /// A flat compound body whose children crack into webs where they are hit.
@@ -62,15 +61,10 @@ pub struct BrittleSheet {
     /// system's crazing, by a shard severed under a hit, or by a bond the
     /// fracture system broke on its own.
     pub last_census: (usize, usize),
-    /// Contact spikes per child, read on this component's own baseline so
-    /// crazing can run before the fracture system judges the same frame.
-    pub contact_load: ContactLoadTracker,
     /// Held-load damage per child.
     pub damage: FatigueTracker,
     /// How deep in the crazing each child was born.
     pub depths: BreakDepths,
-    /// The body's motion across frames, so a jarred frame loads its glass.
-    pub jolt: JoltTracker,
 }
 
 /// Cells crack once, by default: a whole pane breaks into a web, and a hit
@@ -97,18 +91,9 @@ impl BrittleSheet {
             remnant: RemnantRule::default(),
             whole_glass_area: None,
             last_census: (0, 0),
-            contact_load: ContactLoadTracker::default(),
             damage: FatigueTracker::default(),
             depths: BreakDepths::default(),
-            jolt: JoltTracker::default(),
         }
-    }
-
-    /// Judge the glass's contact spikes against each child's own weight, as
-    /// a sheet with a heavy frame must.
-    pub fn with_deadband(mut self, deadband: Deadband) -> Self {
-        self.contact_load = std::mem::take(&mut self.contact_load).with_deadband(deadband);
-        self
     }
 
     /// Whether `child` is glass rather than frame.
@@ -178,10 +163,8 @@ impl BrittleSheet {
             remnant: self.remnant,
             whole_glass_area: self.whole_glass_area,
             last_census: census,
-            contact_load: self.contact_load.share(children),
             damage: self.damage.share(children),
             depths: self.depths.share(children),
-            jolt: JoltTracker::default(),
         }
     }
 
@@ -190,7 +173,6 @@ impl BrittleSheet {
     pub fn retain(&mut self, children: &[ColliderHandle], welds: &[ConstraintHandle]) {
         self.glass.retain(children);
         self.held.retain(welds);
-        self.contact_load = self.contact_load.share(children);
         self.damage = self.damage.share(children);
         self.depths.retain(children);
     }

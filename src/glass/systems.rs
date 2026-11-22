@@ -9,11 +9,12 @@ use specs::{Join, Read, ReadStorage, System, WriteStorage};
 use super::components::BrittleSheet;
 use super::crazing::cells_within;
 use super::held::{weld_along, HeldEdge};
+use super::jolt::jolt_of;
 use super::polygon::ConvexPolygon;
 use super::remnant::Remnant;
 use crate::components::RigidBodyComponent;
 use crate::debug::DebugLog;
-use crate::fracture::{replace_part, Bond, CompoundFracture, PieceSplits};
+use crate::fracture::{contact_blows, replace_part, Bond, CompoundFracture, PieceSplits};
 use crate::model::PartLooks;
 use crate::physics::{
     ColliderHandle, ConstraintHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle,
@@ -23,8 +24,8 @@ use crate::time::Time;
 
 /// Fastest a knocked-out shard leaves, in m/s.
 ///
-/// The spike a held sheet records is the whole momentum of whatever hit
-/// it, and handing all of that to a few grams of glass would fire them like
+/// A blow on a held sheet is the whole momentum of whatever hit it, and
+/// handing all of that to a few grams of glass would fire them like
 /// bullets. Shards leave at about the speed of what came through.
 const MAX_SHARD_SPEED: f32 = 5.0;
 
@@ -105,11 +106,11 @@ impl<'a> System<'a> for GlassCrackSystem {
             }
         }
 
-        debug_log.add("Glass/MaxSpike", format!("{:.1} N·s", telemetry.spike));
+        debug_log.add("Glass/MaxBlow", format!("{:.1} N·s", telemetry.blow));
         debug_log.add("Glass/MaxJolt", format!("{:.1} N·s", telemetry.jolt));
         debug_log.add(
-            "Glass/MaxStoneSpike",
-            format!("{:.1} N·s", telemetry.stone_spike),
+            "Glass/MaxStoneBlow",
+            format!("{:.1} N·s", telemetry.stone_blow),
         );
     }
 }
@@ -182,12 +183,12 @@ type Standing = (Vec<ColliderHandle>, Vec<ConstraintHandle>, (usize, usize));
 /// numbers to read off when tuning a threshold.
 #[derive(Debug, Default, Clone, Copy)]
 struct GlassTelemetry {
-    /// Largest contact spike on a glass child, N·s.
-    spike: f32,
+    /// Hardest contact blow on a glass child, N·s.
+    blow: f32,
     /// Largest jolt on a glass child, N·s, scaled to `JOLT_REFERENCE_AREA`.
     jolt: f32,
-    /// Largest contact spike on a frame child, N·s.
-    stone_spike: f32,
+    /// Hardest contact blow on a frame child, N·s.
+    stone_blow: f32,
 }
 
 /// One thing that happened to one child this frame.
@@ -203,8 +204,8 @@ struct Hit {
 
 /// Read this frame's loads and pick out the ones that craze a cell.
 ///
-/// Reads every tracker every frame whether or not anything happens: a
-/// baseline that stops advancing turns a quiet load into a spike later.
+/// Advances the fatigue every frame whether or not anything happens: a held
+/// load wears a cell down for every second it is held.
 fn gather_hits(
     physics: &PhysicsResource,
     sheet: &mut BrittleSheet,
@@ -221,30 +222,25 @@ fn gather_hits(
     let body_rot = body.rotation();
     let handles: Vec<ColliderHandle> = body.colliders().to_vec();
 
-    let spikes = sheet.contact_load.advance(world, body_handle, &handles, dt);
-    let jolt = sheet
-        .jolt
-        .advance(body.linear_velocity(), body.angular_velocity());
+    let blows = contact_blows(world, body_handle, &handles);
+    let jolt = jolt_of(world, body_handle);
     // Where the frame was struck this frame, if it was: the glass cracks
-    // nearest to it. A jolt counts only then. The body is also yanked about
-    // by things that are not collisions — a grab's orientation lock has the
-    // torque to jerk a tonne of stone every frame — and glass carried in a
-    // frame is not glass hit by one.
+    // nearest to it.
     let threshold = sheet.crazing.threshold;
     let frame_struck = handles
         .iter()
-        .zip(&spikes)
+        .zip(&blows)
         .filter(|(handle, _)| !sheet.is_glass(**handle))
-        .map(|(_, spike)| *spike)
+        .map(|(_, blow)| *blow)
         .max_by(|a, b| a.magnitude.total_cmp(&b.magnitude))
-        .filter(|spike| spike.magnitude > threshold)
-        .map(|spike| spike.point);
-    telemetry.stone_spike = telemetry.stone_spike.max(
+        .filter(|blow| blow.magnitude > threshold)
+        .map(|blow| blow.point);
+    telemetry.stone_blow = telemetry.stone_blow.max(
         handles
             .iter()
-            .zip(&spikes)
+            .zip(&blows)
             .filter(|(handle, _)| !sheet.is_glass(**handle))
-            .map(|(_, spike)| spike.magnitude)
+            .map(|(_, blow)| blow.magnitude)
             .fold(0.0, f32::max),
     );
     let failed = match &sheet.fatigue {
@@ -269,30 +265,28 @@ fn gather_hits(
         if !sheet.is_glass(*handle) {
             continue;
         }
-        let impact = world.impacts().for_collider(*handle);
-        let spike = spikes[index];
-        telemetry.spike = telemetry.spike.max(spike.magnitude);
+        let blow = blows[index];
+        telemetry.blow = telemetry.blow.max(blow.magnitude);
 
         // Whatever came through opens a hole at least its own size, centred
         // on where it bore down: the energy rule alone let a crate straddle
         // the hole it had punched at one of its corners.
-        let impactor_radius = impact
-            .and_then(|i| i.other)
-            .and_then(|other| world.collider(other))
-            .map_or(0.0, |c| c.shape().footprint_radius());
-        let landed_at = impact.map_or(body_pos, |i| i.centre);
+        let radius_of = |other: Option<ColliderHandle>| {
+            other
+                .and_then(|other| world.collider(other))
+                .map_or(0.0, |c| c.shape().footprint_radius())
+        };
 
         let mut hit: Option<Hit> = None;
-        if spike.magnitude > threshold {
-            let normal = impact.map_or(Vector3::zeros(), |i| i.normal);
+        if blow.magnitude > threshold {
             hit = Some(Hit {
                 child: *handle,
-                point: landed_at,
+                point: blow.point,
                 hole_radius: sheet
                     .crazing
-                    .hole_radius(spike.magnitude)
-                    .max(impactor_radius),
-                kick: normal * spike.magnitude,
+                    .hole_radius(blow.magnitude)
+                    .max(radius_of(blow.by)),
+                kick: blow.push * blow.magnitude,
             });
         } else if let Some(collider) = world.collider(*handle) {
             let centre = Point3::from(
@@ -323,9 +317,9 @@ fn gather_hits(
                 }
             }
 
-            // A jarred body loads its glass through the bonds that carry it:
-            // the impulse it took to change the cell's velocity by more than
-            // it changed last frame. A window falling on its face shatters.
+            // A struck body loads its glass through the bonds that carry it:
+            // the impulse it took to change the cell's velocity as the blow
+            // changed the body's. A window falling on its face shatters.
             //
             // Unlike a blow, a jolt loads every square metre of glass alike,
             // so it is judged as one: the cell's inertial impulse scaled to
@@ -337,7 +331,7 @@ fn gather_hits(
                 .polygon_of(collider.shape(), collider.offset().translation.vector)
                 .map_or(0.0, |(polygon, _)| polygon.area());
             let jolted = if area > 0.0 {
-                collider.mass() * jolt.jerk.at(r).magnitude() * (JOLT_REFERENCE_AREA / area)
+                collider.mass() * jolt.at(r).magnitude() * (JOLT_REFERENCE_AREA / area)
             } else {
                 0.0
             };
@@ -351,15 +345,18 @@ fn gather_hits(
                         child: *handle,
                         point: struck,
                         hole_radius: 2.0 * collider.shape().bounding_radius() * excess,
-                        kick: -collider.mass() * jolt.delta.at(r),
+                        kick: -collider.mass() * jolt.at(r),
                     });
                 }
             }
         }
 
         if failed.contains(handle) {
-            let point = landed_at;
-            let hole_radius = sheet.fatigue_hole_radius.max(impactor_radius);
+            let held = world.impacts().for_collider(*handle);
+            let point = held.map_or(body_pos, |i| i.centre);
+            let hole_radius = sheet
+                .fatigue_hole_radius
+                .max(radius_of(held.and_then(|i| i.other)));
             hit = Some(match hit {
                 Some(mut hit) => {
                     hit.hole_radius = hit.hole_radius.max(hole_radius);

@@ -40,7 +40,7 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::fracture::{Bond, CompoundFracture, Cuttable, Deadband, FaceMesher, PartGraph};
+use crate::fracture::{Bond, CompoundFracture, Cuttable, FaceMesher, PartGraph};
 use crate::glass::{BrittleSheet, ConvexPolygon, CrackWeb, CrazeRule, SheetFrame};
 use crate::model::{Look, PartLooks};
 use crate::physics::{ColliderDesc, ColliderHandle, RigidBodyDesc};
@@ -502,15 +502,13 @@ impl Spawnable for FramedWindowDef {
 
         let fracture = CompoundFracture::new(graph)
             .breaking_on_impact_at(self.impact_threshold)
-            .with_deadband(Deadband::OwnWeight)
             .shedding_debris();
         let model = looks
             .drawn(&physics.world, body)
             .expect("a window has something to draw");
         drop(physics);
 
-        let sheet = BrittleSheet::whole(glass_frame, self.crazing(), self.blast_threshold, glass)
-            .with_deadband(Deadband::OwnWeight);
+        let sheet = BrittleSheet::whole(glass_frame, self.crazing(), self.blast_threshold, glass);
 
         vec![world
             .create_entity()

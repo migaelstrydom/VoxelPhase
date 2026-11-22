@@ -1324,7 +1324,12 @@ impl PhysicsWorld {
 
         self.last_contacts.clear();
         self.impacts.clear();
-        self.hits.clear();
+        self.hits.clear(
+            self.constraints
+                .iter()
+                .filter(|(_, constraint)| constraint.active)
+                .filter_map(|(_, constraint)| constraint.kind.anchored_body()),
+        );
         self.contact_work.clear();
         for manifold in &solver_manifolds {
             for contact in &manifold.contacts {

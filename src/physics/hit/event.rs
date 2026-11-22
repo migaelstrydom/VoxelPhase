@@ -35,6 +35,16 @@ pub struct Hit {
     /// The pair's mass along the normal at `point`, kg: what the contact had
     /// to stop. Infinite only if neither side can move.
     pub effective_mass: f32,
+    /// Each side's own mass along the normal at `point`, kg, `[a, b]`: what
+    /// the contact would have had to stop were the other side a wall.
+    /// Infinite for a side that cannot move.
+    pub side_masses: [f32; 2],
+    /// Whether each side, `[a, b]`, was backed against the blow: held
+    /// against the world (a weld), or pressed the other way by another of
+    /// its contacts in the same solve, as a block lying on the ground is
+    /// when it is struck from above. A backed side passes the blow on rather
+    /// than moving with it.
+    pub backed: [bool; 2],
     /// What the pair met over.
     pub patch: Patch,
     /// The pair was hit the frame before too and is still closing: the rest

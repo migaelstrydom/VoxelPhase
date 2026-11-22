@@ -23,6 +23,6 @@ mod components;
 mod plan;
 pub mod systems;
 
-pub use components::{BlowMeasure, BrittleSolid};
+pub use components::BrittleSolid;
 pub use plan::{CleavePiece, CleaveRule};
 pub use systems::{SolidCleaveSystem, SolidShareSystem};

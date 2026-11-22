@@ -19,7 +19,7 @@ use crate::components::{RigidBodyComponent, TerrainAnchored};
 use crate::debug::DebugLines;
 use crate::explosion::Explosion;
 use crate::foliage::Foliage;
-use crate::fracture::{Bond, BondLoads, CompoundFracture, ContactLoadTracker, TornSides};
+use crate::fracture::{contact_blows, Bond, BondLoads, CompoundFracture, TornSides};
 use crate::physics::bench_harness::geometry::FlatQuadGeometry;
 use crate::physics::{
     ColliderDesc, PhysicsImpulse, PhysicsImpulseQueue, PhysicsWorld, RigidBodyDesc,
@@ -220,7 +220,6 @@ impl Grove {
             let fracture = fractures.get_mut(self.tree).expect("a tree");
             fracture.default_toughness.replace(f32::INFINITY)
         };
-        let mut tracker = ContactLoadTracker::default();
         let mut peak: f32 = 0.0;
         for _ in 0..(seconds / FRAME_DT).round() as usize {
             self.step();
@@ -230,7 +229,7 @@ impl Grove {
             let rigid = physics.world.body(body).expect("a tree");
             let colliders = rigid.colliders().to_vec();
             let pose = Isometry3::from_parts(rigid.position().coords.into(), rigid.rotation());
-            let spikes = tracker.advance(&physics.world, body, &colliders, FRAME_DT);
+            let spikes = contact_blows(&physics.world, body, &colliders);
             let sides = TornSides::on_body(&physics.world, body, graph);
             let loads = BondLoads::new(
                 graph,

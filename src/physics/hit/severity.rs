@@ -7,6 +7,7 @@ use std::f32::consts::PI;
 
 use super::event::Hit;
 use super::patch::Patch;
+use crate::physics::handle::RigidBodyHandle;
 
 /// The least give a hit is judged over, m: a pair that claims none would
 /// stop in no time, at no finite force.
@@ -21,6 +22,32 @@ impl Hit {
             return 0.0;
         }
         (1.0 + self.restitution) * self.approach * self.effective_mass.min(mass) / mass
+    }
+
+    /// The impulse that stopped the pair, N·s, the same on either side:
+    /// `(1 + e) · approach · m_eff`.
+    pub fn impulse(&self) -> f32 {
+        (1.0 + self.restitution) * self.approach * self.effective_mass
+    }
+
+    /// The impulse the hit drove through `body`'s side, N·s: the pair's
+    /// ([`impulse`](Self::impulse)), unless that side was backed, when it
+    /// stopped the other side as a wall would. What breaks a block struck
+    /// where it lies: it barely moves, and passes the whole blow on to what
+    /// it lies on. `None` if the hit was not on `body`.
+    pub fn impulse_through(&self, body: RigidBodyHandle) -> Option<f32> {
+        let (own, other) = if self.body_b == body {
+            (1, 0)
+        } else if self.body_a == Some(body) {
+            (0, 1)
+        } else {
+            return None;
+        };
+        let stopped = match self.side_masses[other] {
+            wall if self.backed[own] && wall.is_finite() => wall.max(self.effective_mass),
+            _ => self.effective_mass,
+        };
+        Some((1.0 + self.restitution) * self.approach * stopped)
     }
 
     /// The greatest force between the pair, N: what stops the effective
@@ -67,7 +94,6 @@ mod tests {
     use nalgebra::{Point3, Vector3};
 
     use super::*;
-    use crate::physics::handle::RigidBodyHandle;
 
     fn hit(patch: Patch, approach: f32, effective_mass: f32, give: f32) -> Hit {
         Hit {
@@ -82,9 +108,35 @@ mod tests {
             give,
             bluntness: 0.01,
             effective_mass,
+            side_masses: [f32::INFINITY, effective_mass],
+            backed: [false; 2],
             patch,
             continues: false,
         }
+    }
+
+    /// A hammer on a block: the pair's impulse moves the block if nothing
+    /// is behind it; if the ground is, the block stops the hammer as a wall
+    /// would and passes the whole blow on.
+    #[test]
+    fn a_backed_side_takes_the_whole_stop_of_what_struck_it() {
+        let block = RigidBodyHandle(generational_arena::Index::from_raw_parts(0, 0));
+        let hammer = RigidBodyHandle(generational_arena::Index::from_raw_parts(1, 0));
+        let free = Hit {
+            body_a: Some(hammer),
+            side_masses: [400.0, 60.0],
+            ..hit(Patch::Point, 5.0, 400.0 * 60.0 / 460.0, 0.01)
+        };
+        let pair = free.impulse();
+        assert_eq!(free.impulse_through(block), Some(pair));
+        let lying = Hit {
+            backed: [false, true],
+            ..free
+        };
+        assert!((lying.impulse_through(block).unwrap() - 2000.0).abs() < 1e-2);
+        assert_eq!(lying.impulse_through(hammer), Some(pair));
+        let elsewhere = RigidBodyHandle(generational_arena::Index::from_raw_parts(2, 0));
+        assert_eq!(lying.impulse_through(elsewhere), None);
     }
 
     #[test]

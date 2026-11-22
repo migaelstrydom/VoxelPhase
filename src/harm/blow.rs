@@ -107,6 +107,8 @@ mod tests {
             give: FLESH_GIVE + surface_give,
             bluntness: 0.25,
             effective_mass: MASS,
+            side_masses: [f32::INFINITY, MASS],
+            backed: [false; 2],
             patch: Patch::Point,
             continues: false,
         }

@@ -933,7 +933,7 @@ mod contact_fracture {
     use super::tests::igloo;
     use super::*;
     use crate::debug::DebugLines;
-    use crate::fracture::ContactLoadTracker;
+    use crate::fracture::contact_blows;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
     use crate::physics::{ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc};
@@ -978,12 +978,11 @@ mod contact_fracture {
         let geometry = FlatQuadGeometry::new(80.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
         let mut debug = DebugLines::default();
-        let mut tracker = ContactLoadTracker::default();
         let mut peak = 0.0f32;
 
         for _ in 0..frames {
             stepper.step(&mut world, FRAME_DT, &geometry, &[], &[], &mut debug);
-            let spikes = tracker.advance(&world, body, &colliders, FRAME_DT);
+            let spikes = contact_blows(&world, body, &colliders);
             peak = peak.max(spikes.iter().fold(0.0f32, |m, s| m.max(s.magnitude)));
         }
         peak

@@ -1,7 +1,7 @@
 //! Brittle sheets: glass that cracks where it is hit.
 //!
 //! ```text
-//!   ImpactLedger / blasts / held load
+//!   hits / blasts / held load
 //!        │
 //!        ▼
 //!   GlassCrackSystem ── polygon_of(child) ──▶ CrazeRule ──▶ web of cells
@@ -32,7 +32,7 @@ pub use components::BrittleSheet;
 pub use crazing::CrazeRule;
 pub use fatigue::{FatigueRule, FatigueTracker};
 pub use held::{weld_along, HeldEdge, HeldEdges};
-pub use jolt::{BodyJolt, JoltTracker, Motion};
+pub use jolt::{jolt_of, Motion};
 pub use pane::SheetFrame;
 pub use polygon::ConvexPolygon;
 pub use remnant::{Remnant, RemnantRule};

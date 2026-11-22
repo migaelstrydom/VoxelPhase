@@ -18,7 +18,7 @@ use super::shared::models::{
 };
 use super::stone::stone_cleaving;
 use super::{MaterialCtx, Spawnable};
-use crate::cleave::{BlowMeasure, BrittleSolid, CleaveRule};
+use crate::cleave::{BrittleSolid, CleaveRule};
 use crate::collision::convex_hull::{cube_hull, ConvexHull};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -647,13 +647,10 @@ impl MarblePiece {
         graph.add_part([collider]);
         entity
             .with(CompoundFracture::new(graph))
-            .with(
-                BrittleSolid::new(
-                    rule,
-                    Cuttable::new(Arc::new(halves)).with(collider, Vector3::zeros()),
-                )
-                .measured_by(BlowMeasure::Arrest),
-            )
+            .with(BrittleSolid::new(
+                rule,
+                Cuttable::new(Arc::new(halves)).with(collider, Vector3::zeros()),
+            ))
             .build()
     }
 }

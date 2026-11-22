@@ -54,24 +54,24 @@
 use nalgebra::{Isometry3, Point3};
 use rustc_hash::FxHashMap;
 
-use super::contact_load::ContactSpike;
+use super::contact_blow::ContactBlow;
 use super::parts::{Bond, PartGraph, PartId};
 use super::torn_side::TornSides;
 use crate::physics::{ColliderHandle, PhysicsImpulse};
 
 /// The loads on one compound's bonds this frame.
 pub struct BondLoads<'a> {
-    /// This frame's contact spike on each collider.
-    spikes: FxHashMap<ColliderHandle, ContactSpike>,
-    /// The spikes that landed, each with the part it landed on.
-    landed: Vec<(PartId, ContactSpike)>,
+    /// The hardest blow each collider took this frame.
+    spikes: FxHashMap<ColliderHandle, ContactBlow>,
+    /// The blows that landed, each with the part it landed on.
+    landed: Vec<(PartId, ContactBlow)>,
     /// This frame's blasts.
     blasts: &'a [PhysicsImpulse],
     /// The body's pose, which places bond anchors in the world.
     pose: Isometry3<f32>,
     /// What each bond tears off, centres in the world.
     sides: TornSides,
-    /// Contact spike at a bond, N·s, above which a bond that states no
+    /// Contact blow at a bond, N·s, above which a bond that states no
     /// toughness of its own lets go. `None`: such a bond never breaks on
     /// contact.
     default_toughness: Option<f32>,
@@ -82,13 +82,13 @@ impl<'a> BondLoads<'a> {
     /// off `sides`.
     pub fn new(
         graph: &PartGraph,
-        spikes: impl IntoIterator<Item = (ColliderHandle, ContactSpike)>,
+        spikes: impl IntoIterator<Item = (ColliderHandle, ContactBlow)>,
         blasts: &'a [PhysicsImpulse],
         pose: Isometry3<f32>,
         sides: TornSides,
         default_toughness: Option<f32>,
     ) -> Self {
-        let spikes: FxHashMap<ColliderHandle, ContactSpike> = spikes.into_iter().collect();
+        let spikes: FxHashMap<ColliderHandle, ContactBlow> = spikes.into_iter().collect();
         let landed = graph
             .parts()
             .iter()
@@ -130,7 +130,7 @@ impl<'a> BondLoads<'a> {
             .sum()
     }
 
-    /// The contact spike this bond feels, N·s: the largest any collider of
+    /// The contact blow this bond feels, N·s: the hardest any collider of
     /// what it tears off took, or of either part if it tears nothing off,
     /// falling off with distance from where it landed to the anchor over the
     /// bond's reach.
@@ -139,7 +139,7 @@ impl<'a> BondLoads<'a> {
     /// that choose that number read it directly.
     pub fn contact_load(&self, graph: &PartGraph, bond: &Bond) -> f32 {
         let anchor = self.pose * bond.anchor;
-        let felt = |spike: &ContactSpike| felt_at(spike, anchor, bond.reach);
+        let felt = |spike: &ContactBlow| felt_at(spike, anchor, bond.reach);
         match self.sides.of_bond(bond) {
             Some(side) => self
                 .landed
@@ -164,7 +164,7 @@ impl<'a> BondLoads<'a> {
 /// a frame without either need not judge the bonds at all.
 pub fn may_break(
     graph: &PartGraph,
-    spikes: &[ContactSpike],
+    spikes: &[ContactBlow],
     blasted: bool,
     default_toughness: Option<f32>,
 ) -> bool {
@@ -181,7 +181,7 @@ pub fn may_break(
 
 /// A spike as felt at `anchor`, falling off with distance from where it
 /// landed over `reach`.
-fn felt_at(spike: &ContactSpike, anchor: Point3<f32>, reach: f32) -> f32 {
+fn felt_at(spike: &ContactBlow, anchor: Point3<f32>, reach: f32) -> f32 {
     if spike.magnitude <= 0.0 || reach <= 0.0 {
         return spike.magnitude;
     }
@@ -197,17 +197,18 @@ mod tests {
     use super::*;
     use crate::physics::ConstraintHandle;
 
-    fn spike(magnitude: f32, z: f32) -> ContactSpike {
-        ContactSpike {
+    fn spike(magnitude: f32, z: f32) -> ContactBlow {
+        ContactBlow {
             magnitude,
             point: Point3::new(0.0, 0.0, z),
+            ..ContactBlow::default()
         }
     }
 
     /// The loads on `graph`, each part weighing a kilogram at the origin.
     fn at_anchors<'a>(
         graph: &PartGraph,
-        spikes: impl IntoIterator<Item = (ColliderHandle, ContactSpike)>,
+        spikes: impl IntoIterator<Item = (ColliderHandle, ContactBlow)>,
         blasts: &'a [PhysicsImpulse],
         pose: Isometry3<f32>,
         default_toughness: Option<f32>,
@@ -293,7 +294,7 @@ mod tests {
 
         fn loads<'a>(
             &self,
-            spikes: impl IntoIterator<Item = (ColliderHandle, ContactSpike)>,
+            spikes: impl IntoIterator<Item = (ColliderHandle, ContactBlow)>,
             blasts: &'a [PhysicsImpulse],
         ) -> BondLoads<'a> {
             BondLoads::new(
@@ -330,9 +331,10 @@ mod tests {
     #[test]
     fn a_branch_feels_the_blows_on_itself() {
         let fork = Fork::new();
-        let at = |p: Point3<f32>| ContactSpike {
+        let at = |p: Point3<f32>| ContactBlow {
             magnitude: 1_000.0,
             point: p,
+            ..ContactBlow::default()
         };
         let on_trunk = fork.loads(
             [(ColliderHandle::for_test(0), at(Point3::new(0.0, 2.0, 0.0)))],
@@ -351,9 +353,9 @@ mod tests {
     #[test]
     fn a_quiet_frame_cannot_break_anything() {
         let fork = Fork::new();
-        let spike = |magnitude| ContactSpike {
+        let spike = |magnitude| ContactBlow {
             magnitude,
-            point: Point3::origin(),
+            ..ContactBlow::default()
         };
         assert!(!may_break(&fork.graph, &[spike(99.0)], false, None));
         assert!(may_break(&fork.graph, &[spike(101.0)], false, None));

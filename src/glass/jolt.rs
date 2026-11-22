@@ -1,19 +1,21 @@
-//! The load a jarred body puts on the pieces it carries.
+//! The load a struck body puts on the pieces it carries.
 //!
-//! A pane held in a frame is accelerated by its joints whenever the frame is.
-//! Steady acceleration — standing on the ground, falling freely, being
-//! carried round a corner — is a steady load and cracks nothing. What cracks
-//! glass is a *change* in acceleration: the frame stopped dead, or was
-//! kicked. That is the jerk, and over one frame it is the change in the
-//! body's per-frame velocity change.
+//! A pane held in a frame is moved by its joints whenever the frame is.
+//! What the frame does steadily (rests on the ground, falls, is carried
+//! round a corner) loads nothing. What cracks glass is the frame being
+//! struck: stopped dead, or kicked. The change of velocity the step's hits
+//! gave the body, felt by a piece riding on it, is what the piece's bonds
+//! had to give it.
 //!
 //! ```text
-//!   body velocity ──▶ JoltTracker::advance ──▶ BodyJolt { delta, jerk }
-//!                       (Δv this frame,          .at(r) for the piece at r
-//!                        Δv last frame)            └─▶ mass × |jerk| = spike
+//!   hits on the body ──▶ jolt_of ──▶ Motion { linear, angular }
+//!                                      .at(r) for the piece at r
+//!                                        └─▶ mass × |Δv| = load
 //! ```
 
 use nalgebra::Vector3;
+
+use crate::physics::{PhysicsWorld, RigidBodyHandle};
 
 /// A rigid motion increment: a linear part and an angular part, evaluated at
 /// a point by the usual `linear + angular × r`.
@@ -28,96 +30,94 @@ impl Motion {
     pub fn at(&self, r: Vector3<f32>) -> Vector3<f32> {
         self.linear + self.angular.cross(&r)
     }
-
-    fn minus(&self, other: &Motion) -> Motion {
-        Motion {
-            linear: self.linear - other.linear,
-            angular: self.angular - other.angular,
-        }
-    }
 }
 
-/// What the body did this frame, in terms a piece riding on it can be loaded
-/// by.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct BodyJolt {
-    /// Velocity change over this frame: what a piece that let go this frame
-    /// did *not* get, so the impulse that gives it back its old velocity.
-    pub delta: Motion,
-    /// Change in that velocity change since last frame. Zero for anything
-    /// steady, including free fall.
-    pub jerk: Motion,
-}
-
-/// Remembers a body's velocity across frames to turn it into a [`BodyJolt`].
-#[derive(Debug, Default)]
-pub struct JoltTracker {
-    last_velocity: Option<Motion>,
-    last_delta: Motion,
-}
-
-impl JoltTracker {
-    /// This frame's jolt, given the body's velocity after the step.
-    ///
-    /// The first frame has nothing to compare with and reports no jolt, as
-    /// does any frame after the tracker has been reset.
-    pub fn advance(&mut self, linear: Vector3<f32>, angular: Vector3<f32>) -> BodyJolt {
-        let velocity = Motion { linear, angular };
-        let jolt = match self.last_velocity {
-            Some(last) => {
-                let delta = velocity.minus(&last);
-                let jerk = delta.minus(&self.last_delta);
-                self.last_delta = delta;
-                BodyJolt { delta, jerk }
-            }
-            None => {
-                self.last_delta = Motion::default();
-                BodyJolt::default()
-            }
+/// The change of velocity the last step's hits gave `body`: each hit's
+/// impulse pushing it where it struck. A side backed against a hit passes
+/// it on and is not moved by it.
+pub fn jolt_of(world: &PhysicsWorld, body: RigidBodyHandle) -> Motion {
+    let Some(rigid) = world.body(body).filter(|b| b.mass() > 0.0) else {
+        return Motion::default();
+    };
+    let mut push = Vector3::zeros();
+    let mut twist = Vector3::zeros();
+    for hit in world.hits_on(body) {
+        let backed = if hit.body_b == body {
+            hit.backed[1]
+        } else {
+            hit.backed[0]
         };
-        self.last_velocity = Some(velocity);
-        jolt
+        let Some(impulse) = hit
+            .push_on(body)
+            .filter(|_| !backed)
+            .map(|way| way * hit.impulse())
+        else {
+            continue;
+        };
+        if !impulse.iter().all(|x| x.is_finite()) {
+            continue;
+        }
+        push += impulse;
+        twist += (hit.point - rigid.position()).cross(&impulse);
+    }
+    Motion {
+        linear: push / rigid.mass(),
+        angular: rigid.world_inv_inertia() * twist,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use nalgebra::Point3;
+
     use super::*;
+    use crate::debug::DebugLines;
+    use crate::physics::bench_harness::geometry::FlatQuadGeometry;
+    use crate::physics::stepping::{SequentialStepper, Stepper};
+    use crate::physics::{ColliderDesc, PhysicsConfig, RigidBodyDesc};
 
-    fn falling(tracker: &mut JoltTracker, frames: usize, g_dt: f32) -> BodyJolt {
-        let mut jolt = BodyJolt::default();
-        for i in 0..frames {
-            jolt = tracker.advance(Vector3::new(0.0, -g_dt * i as f32, 0.0), Vector3::zeros());
-        }
-        jolt
+    const DT: f32 = 1.0 / 60.0;
+
+    /// The largest jolt a box dropped at `speed` onto the ground took, m/s,
+    /// over the frames it fell and landed.
+    fn landing_jolt(speed: f32) -> f32 {
+        let geometry = FlatQuadGeometry::new(50.0);
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(0.0, 0.3, 0.0))
+                .linear_velocity(Vector3::new(0.0, -speed, 0.0)),
+        );
+        world.attach_collider(
+            body,
+            ColliderDesc::box_shape(Vector3::repeat(0.25)).restitution(0.0),
+        );
+        let mut stepper = SequentialStepper::new(DT, 4);
+        let mut debug = DebugLines::default();
+        (0..30)
+            .map(|_| {
+                stepper.step(&mut world, DT, &geometry, &[], &[], &mut debug);
+                jolt_of(&world, body).linear.magnitude()
+            })
+            .fold(0.0, f32::max)
     }
 
+    /// Falling is no jolt and resting is none; landing stops the body by
+    /// its speed.
     #[test]
-    fn free_fall_is_not_a_jolt() {
-        let mut tracker = JoltTracker::default();
-        let jolt = falling(&mut tracker, 5, 0.16);
-        assert!(jolt.jerk.linear.magnitude() < 1e-6);
-        assert!((jolt.delta.linear.y + 0.16).abs() < 1e-6);
-    }
-
-    #[test]
-    fn stopping_dead_is() {
-        let mut tracker = JoltTracker::default();
-        falling(&mut tracker, 5, 0.16);
-        let jolt = tracker.advance(Vector3::zeros(), Vector3::zeros());
-        // Was gaining 0.16 down per frame; now gained 0.64 up: a jerk of 0.8.
-        assert!((jolt.jerk.linear.y - 0.8).abs() < 1e-5);
+    fn a_landing_jolts_by_the_speed_it_stops() {
+        let jolt = landing_jolt(6.0);
+        assert!((jolt - 6.0).abs() < 0.3, "jolted {jolt} m/s");
+        assert!(landing_jolt(0.0) < 1e-6);
     }
 
     #[test]
     fn a_spin_loads_the_rim_more_than_the_hub() {
-        let mut tracker = JoltTracker::default();
-        tracker.advance(Vector3::zeros(), Vector3::zeros());
-        tracker.advance(Vector3::zeros(), Vector3::zeros());
-        let jolt = tracker.advance(Vector3::zeros(), Vector3::new(0.0, 0.0, 2.0));
-        let hub = jolt.jerk.at(Vector3::zeros()).magnitude();
-        let rim = jolt.jerk.at(Vector3::new(1.0, 0.0, 0.0)).magnitude();
-        assert_eq!(hub, 0.0);
-        assert!((rim - 2.0).abs() < 1e-6);
+        let spin = Motion {
+            linear: Vector3::zeros(),
+            angular: Vector3::new(0.0, 0.0, 2.0),
+        };
+        assert_eq!(spin.at(Vector3::zeros()).magnitude(), 0.0);
+        assert!((spin.at(Vector3::new(1.0, 0.0, 0.0)).magnitude() - 2.0).abs() < 1e-6);
     }
 }

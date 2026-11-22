@@ -1,6 +1,7 @@
 use generational_arena::Arena;
 use nalgebra::{Point3, Vector3};
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use super::event::Hit;
 use super::patch::Patch;
@@ -58,6 +59,11 @@ pub(crate) struct HitRecorder {
     pending: Vec<Pending>,
     /// Where each pending pair is in `pending`.
     pending_index: FxHashMap<PairKey, usize>,
+    /// The bodies held against the world this frame, which back every blow.
+    held: FxHashSet<RigidBodyHandle>,
+    /// This solve's pending sides by body: each pending pair's slot and
+    /// side, kept for its capacity.
+    sides_of: FxHashMap<RigidBodyHandle, SmallVec<[(usize, usize); 2]>>,
 }
 
 /// A pair one solve found closing fast, while its patch is gathered.
@@ -70,12 +76,22 @@ struct Pending {
     give: f32,
     /// Its contacts within its give of touching.
     points: Vec<Point3<f32>>,
+    /// Whether each side, `[a, b]`, is held against the world or pressed
+    /// against the blow by another of its contacts in this solve.
+    backed: [bool; 2],
 }
 
+/// How squarely another contact must press a side against a blow to back
+/// it: the cosine between the two pushes on it, opposed.
+const BACKING: f32 = 0.5;
+
 impl HitRecorder {
-    /// Drop the last frame's hits, remembering which pairs they were. Called
-    /// once per frame, before any solve.
-    pub(crate) fn clear(&mut self) {
+    /// Drop the last frame's hits, remembering which pairs they were, and
+    /// take the bodies `held` against the world this frame. Called once per
+    /// frame, before any solve.
+    pub(crate) fn clear(&mut self, held: impl IntoIterator<Item = RigidBodyHandle>) {
+        self.held.clear();
+        self.held.extend(held);
         self.previous.clear();
         self.previous.extend(self.index.keys().copied());
         self.hits.clear();
@@ -124,6 +140,7 @@ impl HitRecorder {
                     .map(|c| c.point),
             );
         }
+        self.note_backing(manifolds);
         let pending = std::mem::take(&mut self.pending);
         for pair in &pending {
             let hit = Hit {
@@ -170,7 +187,60 @@ impl HitRecorder {
                     restitution: header.restitution,
                     give: header.give,
                     points: Vec::new(),
+                    backed: [
+                        header.body_a.is_some_and(|a| self.held.contains(&a)),
+                        self.held.contains(&header.body_b),
+                    ],
                 });
+            }
+        }
+    }
+
+    /// Mark each pending side that another of its contacts in `manifolds`
+    /// pressed against the blow: one that took impulse, pushing it the way
+    /// opposite the blow's push.
+    fn note_backing(&mut self, manifolds: &[SolverManifold]) {
+        self.sides_of.clear();
+        for (slot, pending) in self.pending.iter().enumerate() {
+            for (side, body) in [pending.key.0, Some(pending.key.2)].into_iter().enumerate() {
+                if let Some(body) = body {
+                    self.sides_of.entry(body).or_default().push((slot, side));
+                }
+            }
+        }
+        for manifold in manifolds {
+            let header = &manifold.header;
+            let touched = [header.body_a, Some(header.body_b)]
+                .into_iter()
+                .flatten()
+                .any(|body| self.sides_of.contains_key(&body));
+            if !touched {
+                continue;
+            }
+            let Some(normal) = manifold
+                .contacts
+                .iter()
+                .find(|c| c.accumulated_normal_impulse > 0.0)
+                .map(|c| c.normal)
+            else {
+                continue;
+            };
+            let key = key_of(header);
+            for (body, push) in [(header.body_a, -normal), (Some(header.body_b), normal)] {
+                let Some(sides) = body.and_then(|body| self.sides_of.get(&body)) else {
+                    continue;
+                };
+                for &(slot, side) in sides {
+                    let pending = &mut self.pending[slot];
+                    let blow = if side == 0 {
+                        -pending.normal
+                    } else {
+                        pending.normal
+                    };
+                    if pending.key != key && push.dot(&blow) < -BACKING {
+                        pending.backed[side] = true;
+                    }
+                }
             }
         }
     }
@@ -224,6 +294,11 @@ fn hit_of(pair: &Pending, bodies: &Arena<RigidBody>, colliders: &Arena<Collider>
             colliders,
         )),
         effective_mass: effective_mass(bodies, [body_a, Some(body_b)], &point, &pair.normal),
+        side_masses: [
+            effective_mass(bodies, [body_a, None], &point, &pair.normal),
+            effective_mass(bodies, [Some(body_b), None], &point, &pair.normal),
+        ],
+        backed: pair.backed,
         patch: Patch::spanned(&pair.points, &pair.normal),
         continues: false,
     }

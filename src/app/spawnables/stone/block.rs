@@ -19,7 +19,7 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::mesh::{weathered_box_mesh, weathered_hull_mesh};
 use crate::app::spawnables::shared::models::{PieceHull, PiecePlacement, SurfaceUvs};
-use crate::cleave::{BlowMeasure, BrittleSolid, CleaveRule};
+use crate::cleave::{BrittleSolid, CleaveRule};
 use crate::collision::convex_hull::{cube_hull, ConvexHull};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -33,11 +33,11 @@ use crate::systems::PhysicsResource;
 
 /// How fast a block has to be going when it is stopped to crack, in m/s.
 ///
-/// Judged by [`BlowMeasure::Arrest`] — how hard the block itself is stopped —
-/// not by the contact load it carries: a voussoir is squeezed by the thrust of
-/// the whole arch, and the swing in that load when the arch shifts is many
-/// times what a landing delivers. The test arena's arch cracked its crown
-/// stones in place under a contact-load rule.
+/// Judged by the hit that stops it, a contact that closed fast, not by the
+/// contact load it carries: a voussoir is squeezed by the thrust of the
+/// whole arch, and the swing in that load when the arch shifts is many times
+/// what a landing delivers. The test arena's arch cracked its crown stones
+/// in place under a contact-load rule.
 ///
 /// The threshold is set per block as its mass times this, so a stone's
 /// strength is a speed and not an impulse: a five-metre voussoir and a
@@ -160,13 +160,10 @@ impl StoneBlock {
             .with(Renderable)
             .with(looks)
             .with(CompoundFracture::new(graph))
-            .with(
-                BrittleSolid::new(
-                    stone_cleaving(mass),
-                    Cuttable::new(Arc::new(faces)).with(collider, anchor),
-                )
-                .measured_by(BlowMeasure::Arrest),
-            )
+            .with(BrittleSolid::new(
+                stone_cleaving(mass),
+                Cuttable::new(Arc::new(faces)).with(collider, anchor),
+            ))
             .build()
     }
 }

@@ -555,6 +555,22 @@ impl ConstraintKind {
         true
     }
 
+    /// The body this holds against the world, if it holds one
+    /// ([`anchors_position`](Self::anchors_position)).
+    pub fn anchored_body(&self) -> Option<RigidBodyHandle> {
+        if !self.anchors_position() {
+            return None;
+        }
+        match self {
+            ConstraintKind::Fixed { body_b, .. }
+            | ConstraintKind::BallJoint { body_b, .. }
+            | ConstraintKind::Hinge { body_b, .. } => Some(*body_b),
+            ConstraintKind::SpringSlider(slider) => Some(slider.body_b),
+            ConstraintKind::MediumDrive { body, .. } => Some(*body),
+            _ => None,
+        }
+    }
+
     /// Whether this constraint references the given body.
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {

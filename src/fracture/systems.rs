@@ -4,6 +4,7 @@ use nalgebra::{Isometry3, Vector3};
 use specs::{Entities, Entity, Join, Read, System, Write, WriteStorage};
 
 use super::components::CompoundFracture;
+use super::contact_blow::contact_blows;
 use super::debris::Debris;
 use super::load::{may_break, BondLoads};
 use super::parts::PartId;
@@ -13,7 +14,6 @@ use crate::components::{Orientation, Position, Renderable, RigidBodyComponent, V
 use crate::model::PartLooks;
 use crate::physics::{ColliderHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle};
 use crate::systems::PhysicsResource;
-use crate::time::Time;
 
 /// Breaks the bonds of compound bodies whose load exceeds what they can
 /// hold, then splits every group of parts still bonded but the one that
@@ -26,19 +26,12 @@ use crate::time::Time;
 /// - **Blast.** `PhysicsImpulseQueue::last_impulses()`' loading per area at
 ///   the torn-off side's centre of mass, so a blast beside one branch takes
 ///   that branch and not its neighbour at the same fork.
-/// - **Impact.** The frame-over-frame *spike* in the contact impulse the
-///   solver pushed through the torn-off side's colliders, felt at the anchor
-///   over the bond's reach.
+/// - **Impact.** The hardest blow the torn-off side's colliders took
+///   ([`contact_blows`]: the impulse of a hit), felt at the anchor over the
+///   bond's reach.
 ///
-/// A frame with no blast and no spike past the least toughness among the
+/// A frame with no blast and no blow past the least toughness among the
 /// bonds cannot break any, and its bonds are not judged.
-///
-/// Contact is read as a spike and not as a level on purpose. The level includes
-/// whatever the object is already carrying: a heavy compound standing still
-/// pushes `mass * gravity * frame_dt` through its lowest parts every frame,
-/// which for anything massive is larger than a sensible fracture threshold on
-/// its own. Differencing against last frame leaves resting weight and steady
-/// pushing at roughly zero and keeps only the step change of a real collision.
 ///
 /// The group that stays is the tied one, else the heaviest. Every other
 /// group goes whole through `PhysicsWorld::split_off`, taking its ties, its
@@ -61,7 +54,6 @@ impl<'a> System<'a> for FractureSystem {
         WriteStorage<'a, Debris>,
         Write<'a, PieceSplits>,
         Read<'a, PhysicsImpulseQueue>,
-        Read<'a, Time>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -78,14 +70,13 @@ impl<'a> System<'a> for FractureSystem {
             mut debris,
             mut splits,
             impulse_queue,
-            time,
         ) = data;
         splits.clear();
         let blasts = impulse_queue.last_impulses();
 
         let mut breaking: Vec<(Entity, RigidBodyHandle)> = Vec::new();
         for (entity, fracture, body) in (&entities, &mut fractures, &bodies).join() {
-            if judge(&physics, fracture, body.0, blasts, time.delta_seconds()) {
+            if judge(&physics, fracture, body.0, blasts) {
                 breaking.push((entity, body.0));
             }
         }
@@ -105,7 +96,7 @@ impl<'a> System<'a> for FractureSystem {
             let shares: Vec<(CompoundFracture, Option<Debris>)> = pieces
                 .iter()
                 .map(|piece| {
-                    let share = fracture.share(&piece.parts, &piece.colliders);
+                    let share = fracture.share(&piece.parts);
                     let debris = fracture.sheds_debris.then(|| {
                         let size = piece_volume(&physics, &piece.colliders);
                         Debris::new(entity, size)
@@ -151,14 +142,13 @@ impl<'a> System<'a> for FractureSystem {
     }
 }
 
-/// Advance a compound's loads for the frame and break the bonds that cannot
+/// Judge a compound's loads for the frame and break the bonds that cannot
 /// hold. Whether it must split.
 fn judge(
     physics: &PhysicsResource,
     fracture: &mut CompoundFracture,
     body: RigidBodyHandle,
     blasts: &[PhysicsImpulse],
-    dt: f32,
 ) -> bool {
     let Some(rigid) = physics.world.body(body) else {
         return false;
@@ -166,12 +156,7 @@ fn judge(
     let colliders = rigid.colliders().to_vec();
     let pose = Isometry3::from_parts(rigid.position().coords.into(), rigid.rotation());
 
-    // The impact baseline has to advance every frame, including frames where
-    // this body cannot break. Skipping it would let a load build up
-    // unwatched and then read as one huge spike later.
-    let spikes = fracture
-        .contact_load
-        .advance(&physics.world, body, &colliders, dt);
+    let spikes = contact_blows(&physics.world, body, &colliders);
     if fracture.graph.parts().len() <= 1 && !fracture.released {
         return false;
     }
@@ -347,7 +332,7 @@ mod tests {
     use super::*;
     use crate::components::ModelInstance;
     use crate::debug::DebugLines;
-    use crate::fracture::{Bond, ContactLoadTracker, PartGraph};
+    use crate::fracture::{Bond, PartGraph};
     use crate::geometry::{generate_cube_indices, generate_cube_vertices};
     use crate::model::Look;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
@@ -358,6 +343,7 @@ mod tests {
     use crate::rendering::colour::Colour;
     use crate::rendering::material::MaterialId;
     use crate::systems::PartDrawSystem;
+    use crate::time::Time;
 
     const FRAME_DT: f32 = 1.0 / 60.0;
     const HALF: Vector3<f32> = Vector3::new(0.5, 0.5, 0.5);
@@ -390,12 +376,12 @@ mod tests {
         (body, handles)
     }
 
-    /// Run the world and report the largest per-collider spike seen over the
+    /// Run the world and report the largest blow any collider took over the
     /// frames in `window`, exactly as `FractureSystem` would read it.
     ///
     /// `drive`, when given, is forced onto the body's linear velocity every
     /// frame — a stand-in for something that keeps pushing.
-    fn peak_spike(
+    fn peak_blow(
         world: &mut PhysicsWorld,
         body: RigidBodyHandle,
         colliders: &[ColliderHandle],
@@ -406,7 +392,6 @@ mod tests {
         let geometry = FlatQuadGeometry::new(50.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
         let mut debug = DebugLines::default();
-        let mut tracker = ContactLoadTracker::default();
         let mut peak = 0.0f32;
 
         for frame in 0..frames {
@@ -414,31 +399,30 @@ mod tests {
                 body_mut.set_linear_velocity(velocity);
             }
             stepper.step(world, FRAME_DT, &geometry, &[], &[], &mut debug);
-            let spikes = tracker.advance(world, body, colliders, FRAME_DT);
             if window.contains(&frame) {
-                peak = peak.max(spikes.into_iter().fold(0.0f32, |m, s| m.max(s.magnitude)));
+                peak = peak.max(strongest(world, body, colliders));
             }
         }
         peak
     }
 
-    /// The whole contact-fracture rule rests on this margin. A compound's own
-    /// weight must not look like a hit, and a hit must not look like weight —
-    /// with enough room between them that an authored threshold can sit in the
-    /// gap without being fussy. Measured on a 3.6 t slab: 9e-5 N·s standing,
-    /// 2e-3 N·s while shoved along the ground, 20549 N·s on landing.
-    ///
-    /// Sleep is off for the two quiet cases on purpose. A sleeping body reports
-    /// nothing at all, which would make the comparison vacuous; what has to be
-    /// small is what an *awake* compound produces just by existing.
+    /// The hardest blow any of `colliders` took in the last step.
+    fn strongest(world: &PhysicsWorld, body: RigidBodyHandle, colliders: &[ColliderHandle]) -> f32 {
+        contact_blows(world, body, colliders)
+            .into_iter()
+            .fold(0.0f32, |m, blow| m.max(blow.magnitude))
+    }
+
+    /// A compound's own weight, and something pushing it along, deal its
+    /// colliders no blow; a landing deals them one.
     #[test]
-    fn a_landing_and_a_compound_sitting_still_are_orders_of_magnitude_apart() {
+    fn a_landing_is_a_blow_and_a_compound_sitting_still_is_none() {
         let mut awake = PhysicsConfig::default();
         awake.sleep.enabled = false;
 
         let mut resting_world = PhysicsWorld::new(awake.clone());
         let (resting, resting_colliders) = compound_slab(&mut resting_world, 0.5, Vector3::zeros());
-        let resting_peak = peak_spike(
+        let resting_peak = peak_blow(
             &mut resting_world,
             resting,
             &resting_colliders,
@@ -449,7 +433,7 @@ mod tests {
 
         let mut pushed_world = PhysicsWorld::new(awake);
         let (pushed, pushed_colliders) = compound_slab(&mut pushed_world, 0.5, Vector3::zeros());
-        let pushed_peak = peak_spike(
+        let pushed_peak = peak_blow(
             &mut pushed_world,
             pushed,
             &pushed_colliders,
@@ -461,7 +445,7 @@ mod tests {
         let mut dropped_world = PhysicsWorld::new(PhysicsConfig::default());
         let (dropped, dropped_colliders) =
             compound_slab(&mut dropped_world, 4.0, Vector3::new(0.0, -12.0, 0.0));
-        let landing_peak = peak_spike(
+        let landing_peak = peak_blow(
             &mut dropped_world,
             dropped,
             &dropped_colliders,
@@ -470,30 +454,28 @@ mod tests {
             None,
         );
 
-        let quiet = resting_peak.max(pushed_peak);
+        assert_eq!(resting_peak, 0.0, "resting");
+        assert_eq!(pushed_peak, 0.0, "pushed");
+        let mass = dropped_world.body(dropped).unwrap().mass();
         assert!(
-            landing_peak > quiet * 20.0,
-            "landing {landing_peak} is not clear of resting {resting_peak} / \
-             pushed {pushed_peak}"
+            landing_peak > 0.5 * mass * 12.0,
+            "landing {landing_peak} N·s of {mass} kg at 12 m/s"
         );
     }
 
-    /// Waking up is not an impact. The solver stops reporting impulses for a
-    /// sleeping body, and the frame it wakes its children are carrying their
-    /// full share again — which must not read as having arrived all at once.
+    /// Waking up is not an impact: a slab that slept and is set sliding
+    /// deals its colliders no blow.
     #[test]
-    fn waking_up_is_not_read_as_a_spike() {
+    fn waking_up_is_no_blow() {
         let geometry = FlatQuadGeometry::new(50.0);
         let mut world = PhysicsWorld::new(PhysicsConfig::default());
         let (body, colliders) = compound_slab(&mut world, 0.5, Vector3::zeros());
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
         let mut debug = DebugLines::default();
-        let mut tracker = ContactLoadTracker::default();
 
         let mut slept = false;
         for _ in 0..600 {
             stepper.step(&mut world, FRAME_DT, &geometry, &[], &[], &mut debug);
-            tracker.advance(&world, body, &colliders, FRAME_DT);
             if world.is_sleeping(body) {
                 slept = true;
                 break;
@@ -510,37 +492,9 @@ mod tests {
         let mut peak = 0.0f32;
         for _ in 0..30 {
             stepper.step(&mut world, FRAME_DT, &geometry, &[], &[], &mut debug);
-            let spikes = tracker.advance(&world, body, &colliders, FRAME_DT);
-            peak = peak.max(spikes.into_iter().fold(0.0f32, |m, s| m.max(s.magnitude)));
+            peak = peak.max(strongest(&world, body, &colliders));
         }
-
-        // What is left is the slab re-seating under the shove, which is a real
-        // change in contact and small: measured 44 N·s against a frame of
-        // weight of 589 N·s.
-        let weight_per_frame = world.body(body).unwrap().mass() * 9.81 * FRAME_DT;
-        assert!(
-            peak < weight_per_frame * 0.2,
-            "waking read as a spike of {peak}, a large share of one frame of \
-             weight ({weight_per_frame})"
-        );
-    }
-
-    /// A body held up by the world carries its weight through what holds
-    /// it, so a spike on it is judged without the body's weight taken off.
-    #[test]
-    fn a_body_held_by_the_world_gets_no_deadband() {
-        let mut world = PhysicsWorld::new(PhysicsConfig::default());
-        let (body, _) = compound_slab(&mut world, 3.0, Vector3::zeros());
-        assert!(!world.is_held_by_world(body));
-        world.create_constraint(ConstraintKind::world_fixed(
-            body,
-            Point3::new(0.0, 3.0, 0.0),
-            Vector3::zeros(),
-            &nalgebra::UnitQuaternion::identity(),
-            0.0,
-            f32::INFINITY,
-        ));
-        assert!(world.is_held_by_world(body));
+        assert_eq!(peak, 0.0, "waking read as a blow");
     }
 
     /// A world with the fracture and drawing systems' storages and a row of

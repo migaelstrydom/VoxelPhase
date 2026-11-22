@@ -158,8 +158,10 @@ per frame, from the substep it closed fastest in.
 | `give` | how far the pair yields before it stops, m: both sides' gives in series (their sum) |
 | `bluntness` | radius of the sharper side's feature, m |
 | `effective_mass` | the pair's mass along the normal at `point`, kg: `1 / Σ (1/m + (r×n)·I⁻¹(r×n))` over the sides that can move |
+| `side_masses` | each side's own mass along the normal at `point`, kg: what the contact would have had to stop were the other side a wall; infinite for a side that cannot move |
+| `backed` | whether each side was backed against the blow: held against the world (a weld, a medium drive), or pressed the opposite way by another of its contacts that took impulse in the same solve (a block lying on the ground struck from above) |
 | `patch` | `Point`, `Line { length }` or `Face { area }` |
-| `continues` | the pair was hit the frame before too: the rest of a stop the solver split across two frames (it lets a body reach the surface still closing, and stops it the next frame), not a new blow. Readers that count blows skip it |
+| `continues` | the pair was hit the frame before too: the rest of a stop the solver split across two frames (it lets a body reach the surface still closing, and stops it the next frame), not a new blow. Readers that count blows (harm) skip it; readers that judge each frame's hardest blow (breakage) need not, since a continuation never reads harder than the stop it continues, and a tumbling body's second contact with the same partner (a column landing on one end and slapping down on the other) is a blow of its own |
 
 - **A hit is confirmed, not predicted**: a contact closing faster than
   `HitConfig::speed` (0.5 m/s) that took impulse, as Box2D v3's hit events
@@ -200,6 +202,13 @@ geometry do not ask what the ground is and take it as hard.
 - **`delta_v(m)`**, the change of velocity of a side weighing m:
   `(1 + e) · approach · m_eff / m`. A body landing square on the ground
   with no bounce loses exactly its approach.
+- **`impulse`**, the pair's: `(1 + e) · approach · m_eff`. **`impulse_through(body)`**,
+  what the blow drove through that side: the pair's, or for a backed side
+  the other side stopped as against a wall, `(1 + e) · approach · m_other`.
+  A 400 kg hammer on a 66 kg block reads 355 N·s for the pair; with the
+  block lying on the ground or welded, 3070 N·s go through it. What a blow
+  does to a side's speed is still `delta_v`: a backed side is squeezed,
+  not moved.
 - **`peak_force`**: `m_eff · approach² / (2 · give)`, what stops the pair
   at a constant rate over its give. **`duration`**: `2 · give / approach`.
 - **`contact_area`**: a face's own; a line `length × 2·sqrt(bluntness ·
@@ -245,9 +254,9 @@ without changing what it records.
 |---|---|---|
 | Grenade detonation | its side's Δv ≥ its detonation speed, so a glancing blow or a light body it strikes does not set it off | moved over (`projectile/detonation.rs`) |
 | Harm (the player) | the player's Δv from every hit and shove, judged by how sudden it was over the pair's give (and the limbs', braced) | moved over (`src/harm/`); being tuned in play |
-| Glass | pressure: a local crack; force: bending fatigue | its own meters: impulse over `dt` against a bearing (`glass/fatigue.rs`), and velocity change and jerk (`glass/jolt.rs`) |
-| Cleave | force at the struck block | its own meter: fracture's spike, or m × Δv frame to frame (`BlowMeasure`, `cleave/`) |
-| Fracture | force at a part, into `BondLoads` | its own meter: frame-to-frame rise in impulse less deadbands (`fracture/contact_load.rs`) |
+| Fracture | each collider's hardest blow, `impulse_through` it, felt at a bond over its reach (`fracture::contact_blows`, into `BondLoads`) | moved over: the frame-to-frame rise in impulse less deadbands is gone |
+| Cleave | the struck block's hardest blow, as fracture reads it | moved over: fracture's spike and the whole body's m × Δv (`BlowMeasure::Arrest`) are gone |
+| Glass | a cell's hardest blow, as fracture reads it; a frame struck jolts its cells by the velocity change its hits gave it (`glass::jolt_of`) | moved over, but for the held load (bending fatigue), which is a load and stays on the ledger (`glass/fatigue.rs`). Still judged by impulse alone: a local crack under a corner's pressure (`Hit::peak_pressure`) wants a design decision first, since small sharp things (falling shards) would then crack a pane they land on |
 | Creature damage | Δv of the creature's side | its own meter: speed lost frame to frame (`damage/sources.rs`) |
 
 Readers move over in the table's order, one at a time, each judged with the
@@ -257,9 +266,16 @@ meter and its deadbands; this table says where each stands.
 
 ## Limits
 
-- **Impacts passed down a stack** reach no contact, so no hit. Options: pass
-  a hit on to what the struck body rests on (`support_sets`), or solve loads
-  over a compound's bonds as NVIDIA Blast's stress solver does.
+- **Impacts passed down a stack** reach no contact, so no hit: a block
+  struck where it lies on another block takes the whole stop (it is
+  backed), but the block under it takes none. Options: pass a hit on to
+  what the struck body rests on (`support_sets`), or solve loads over a
+  compound's bonds as NVIDIA Blast's stress solver does.
+- **Backing is all or nothing.** A side pressed the other way by any
+  contact that took impulse is treated as a wall, however light what
+  backs it is; a side held only by friction, or by a contact whose push
+  is more than 60° off the blow's, is not backed at all. A CCD hit sees
+  only its own contact, so it is backed only by a weld.
 - **Water** stops a body with drag, not a contact, spread over many frames;
   whether harm reads it is the harm design's question.
 - **Which side is sharp.** A manifold does not say whose corner met whose

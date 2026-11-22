@@ -459,7 +459,7 @@ fn nail_holes(u: f32, v: f32) -> f32 {
 mod contact_fracture {
     use super::*;
     use crate::debug::DebugLines;
-    use crate::fracture::{BondLoads, ContactLoadTracker, TornSides};
+    use crate::fracture::{contact_blows, BondLoads, TornSides};
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
     use crate::physics::{ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc};
@@ -546,13 +546,12 @@ mod contact_fracture {
             let geometry = FlatQuadGeometry::new(60.0);
             let mut stepper = SequentialStepper::new(FRAME_DT, 4);
             let mut debug = DebugLines::default();
-            let mut tracker = ContactLoadTracker::default();
             let mut peak = 0.0f32;
             let mut peak_bond = 0.0f32;
             let mut broken = vec![false; bonds.len()];
             for _ in 0..240 {
                 stepper.step(&mut world, FRAME_DT, &geometry, &[], &[], &mut debug);
-                let spikes = tracker.advance(&world, body, &colliders, FRAME_DT);
+                let spikes = contact_blows(&world, body, &colliders);
                 peak = peak.max(spikes.iter().fold(0.0f32, |m, s| m.max(s.magnitude)));
 
                 let rigid = world.body(body).unwrap();

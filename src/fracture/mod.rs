@@ -21,7 +21,7 @@
 
 mod carved;
 mod components;
-mod contact_load;
+mod contact_blow;
 mod cutting;
 mod debris;
 mod depth;
@@ -33,7 +33,7 @@ mod torn_side;
 
 pub use carved::{BreakFace, CarvedBlock, CarvedPieces};
 pub use components::{CompoundFracture, PieceTraits};
-pub use contact_load::{ContactLoadTracker, ContactSpike, Deadband};
+pub use contact_blow::{contact_blows, ContactBlow};
 pub use cutting::{replace_part, CutPiece, Cuttable, FaceMesher, MadePart};
 pub use debris::{Debris, DebrisBudget, DebrisCullSystem};
 pub use depth::BreakDepths;
