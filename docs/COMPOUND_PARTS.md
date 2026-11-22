@@ -769,7 +769,10 @@ crown: 1771 N·s/m² at 0.5 m, 1615 at 1 m, 1420 at 1.5 m, 1212 at 2 m, 998
 at 2.5 m, 781 at 3 m. The centre of mass sits nearer the crown than the
 fork did, so every number is higher. `branch_strength` is 1100: 2 m takes
 the branch off, 2.5 m does not. The 2 m grenade loads the other branch at
-the same fork with 368, and only the near branch comes off.
+the same fork with 368, and only the near branch comes off. (Without the
+upward boost blasts once had, the same grenades load the branch with 1109
+at 2 m, 910 at 2.5 m and 710 at 3 m, and 335 the other branch:
+`branch_strength` is 1000.)
 
 Contact: a felled tree puts at most 79 N·s into a branch (133 when the
 trunk's spikes counted); dropped lying on its side, 313 from 6 m, 317 from

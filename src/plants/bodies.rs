@@ -39,10 +39,10 @@ pub struct Joinery {
     pub wood: Substance,
     /// Blast loading on a branch, at its centre of mass with whatever grows
     /// on it, N·s/m², past which it breaks off: a grenade 2 m beyond a side
-    /// crown loads its branch with about 1210, 2.5 m beyond with about
-    /// 1000 and 3 m beyond with about 780, so the first takes the branch
-    /// off and the others do not. The 2 m grenade loads the branch beside
-    /// it at the same fork with about 370, which keeps it.
+    /// crown loads its branch with about 1110, 2.5 m beyond with about 910
+    /// and 3 m beyond with about 710, so the first takes the branch off and
+    /// the others do not. The 2 m grenade loads the branch beside it at the
+    /// same fork with about 335, which keeps it.
     pub branch_strength: f32,
     /// Contact spike on a branch, felt at its fork, N·s, past which it
     /// breaks off: a tree felled onto its crowns puts about 80 into a
@@ -58,7 +58,7 @@ impl Default for Joinery {
     fn default() -> Self {
         Self {
             wood: substance::OAK,
-            branch_strength: 1100.0,
+            branch_strength: 1000.0,
             branch_toughness: 220.0,
             core: LeafCore::default(),
         }
