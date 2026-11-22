@@ -22,13 +22,13 @@ pub struct GrenadeConfig {
     pub fuse_time: f32,
     /// Seconds after the throw before impact detonation arms.
     pub arm_delay: f32,
-    /// How hard an impact must be to detonate the grenade, expressed as the
-    /// head-on approach speed (m/s) that would produce it.
+    /// How hard a blow must be to detonate the grenade: the change of speed,
+    /// m/s, it gives the grenade ([`crate::physics::Hit::delta_v`]).
     ///
-    /// Compared against the normal impulse the solver delivered over the frame,
-    /// scaled by the grenade's mass — the impulse needed to arrest the grenade
-    /// from this speed. Glancing blows, slow rolls and yielding surfaces stay
-    /// below it; a direct throw at `throw_speed` clears it comfortably.
+    /// Landing square on the ground without a bounce, that is the speed it
+    /// arrived at. A glancing blow counts only its speed into the surface,
+    /// and a light body gives way and changes it by less, so both stay below
+    /// it; a direct throw at `throw_speed` clears it comfortably.
     pub detonation_impact_speed: f32,
     /// Cooldown between throws (seconds).
     pub cooldown: f32,

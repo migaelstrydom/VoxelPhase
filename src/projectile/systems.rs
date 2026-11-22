@@ -10,6 +10,7 @@ use specs::{
 
 use super::components::{Grenade, Lifetime, Projectile};
 use super::config::GrenadeConfig;
+use super::detonation::detonating_hit;
 use super::held::HeldGrenade;
 use super::spawn::spawn_grenade;
 use super::throw::grenade_launch;
@@ -214,10 +215,10 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
 /// System that burns grenade fuses and detonates grenades on hard impacts.
 ///
 /// Detonation has two triggers. The fuse always fires, so a grenade that comes
-/// to rest still goes off. Impact detonation fires early when the frame's
-/// normal impulse exceeds what it would take to arrest the grenade from
-/// `detonation_impact_speed`, which is what makes a direct throw explode on
-/// contact while a bounce off a menhir merely bounces.
+/// to rest still goes off. Impact detonation fires early, once armed, on a hit
+/// that changes the grenade's speed by `detonation_impact_speed`
+/// ([`detonating_hit`]), which is what makes a direct throw explode on contact
+/// while a glancing bounce off a menhir merely bounces.
 pub struct ProjectileDetonationSystem;
 
 impl<'a> System<'a> for ProjectileDetonationSystem {
@@ -255,14 +256,10 @@ impl<'a> System<'a> for ProjectileDetonationSystem {
                 continue;
             }
 
-            // The impulse that would arrest this grenade from the configured
-            // speed. Deriving it from mass keeps the tunable speed-like even if
-            // the collider's size or density changes.
-            let threshold = rigid_body.mass() * config.detonation_impact_speed;
-            if let Some(impact) = physics.world.impacts().get(body.0) {
-                if impact.total_impulse >= threshold {
-                    detonations.push((entity, impact.point));
-                }
+            if let Some(hit) =
+                detonating_hit(&physics.world, body.0, config.detonation_impact_speed)
+            {
+                detonations.push((entity, hit.point));
             }
         }
 

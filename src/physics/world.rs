@@ -1610,6 +1610,11 @@ impl PhysicsWorld {
         self.hits.hits()
     }
 
+    /// This frame's hits on `body`, from either side.
+    pub fn hits_on(&self, body: RigidBodyHandle) -> impl Iterator<Item = &Hit> {
+        self.hits().iter().filter(move |hit| hit.involves(body))
+    }
+
     /// What this frame's blasts gave each body, one per blast and body.
     pub fn shoves(&self) -> &[Shove] {
         &self.shoves

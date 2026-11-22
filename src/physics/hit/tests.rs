@@ -58,12 +58,7 @@ impl Bench {
     }
 
     fn hits_on(&self, body: RigidBodyHandle) -> Vec<Hit> {
-        self.world
-            .hits()
-            .iter()
-            .filter(|h| h.involves(body))
-            .copied()
-            .collect()
+        self.world.hits_on(body).copied().collect()
     }
 
     /// Step until `body` is hit, at most `seconds`; the frame's hits on it.

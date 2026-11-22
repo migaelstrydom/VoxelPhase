@@ -241,7 +241,7 @@ without changing what it records.
 
 | Reader | Judges by hits as | Status |
 |---|---|---|
-| Grenade detonation | approach ≥ its detonation speed | its own meter: frame `total_impulse` ≥ m × speed (`projectile/systems.rs`) |
+| Grenade detonation | its side's Δv ≥ its detonation speed, so a glancing blow or a light body it strikes does not set it off | moved over (`projectile/detonation.rs`) |
 | Harm (the player) | the player's side of every hit and shove | not built; designed in `GAME_DESIGN.md` *Harm* |
 | Glass | pressure: a local crack; force: bending fatigue | its own meters: impulse over `dt` against a bearing (`glass/fatigue.rs`), and velocity change and jerk (`glass/jolt.rs`) |
 | Cleave | force at the struck block | its own meter: fracture's spike, or m × Δv frame to frame (`BlowMeasure`, `cleave/`) |

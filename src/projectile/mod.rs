@@ -5,6 +5,7 @@
 
 mod components;
 mod config;
+mod detonation;
 mod held;
 pub mod model;
 mod spawn;
