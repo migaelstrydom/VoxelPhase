@@ -59,6 +59,10 @@ const TURN_AUTHORITY: f32 = 300.0;
 /// again.
 const PECK_WINDUP: f32 = 0.7;
 const PECK_RECOVERY: f32 = 1.1;
+/// The impulse its peck drives into what it strikes, N·s: about 7.5 m/s on
+/// the player, the hardest blow of any creature, which knocks them down
+/// for about four and a half seconds.
+const PECK_BLOW: f32 = 420.0;
 
 /// Radius of each eye, m; where the left one sits in the head, the right
 /// its mirror; and how far either can turn off the way the head faces,
@@ -1530,6 +1534,7 @@ impl StalkerDef {
             turn_authority: TURN_AUTHORITY,
             peck: Some(Peck {
                 damage: 22.0,
+                blow: PECK_BLOW,
                 windup: PECK_WINDUP,
                 recovery: PECK_RECOVERY,
             }),

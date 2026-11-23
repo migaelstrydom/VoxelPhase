@@ -22,6 +22,7 @@ use super::anatomy::{self, LIMB_GRAIN};
 use crate::animation::stilts::{Dress, Joint, StiltAnimator, StiltRigConfig, Worn};
 use crate::animation::FootSide;
 use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
+use crate::collision_layers::CREATURE_BODY;
 use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, ProceduralMesh, Renderable, RigidBodyComponent,
     Rotation, Velocity,
@@ -73,6 +74,9 @@ pub fn bare_legs(rig: &StiltRigConfig, girth: f32, foot: f32) -> Vec<(Worn, Vec<
 pub struct Peck {
     /// Hit points it takes off.
     pub damage: f32,
+    /// The impulse it drives into what it strikes, N·s
+    /// ([`MeleeAttack::blow`]).
+    pub blow: f32,
     /// Seconds of rearing back before it lands: the warning.
     pub windup: f32,
     /// Seconds before it can strike again.
@@ -196,6 +200,7 @@ impl StiltWalker {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body_handle = physics.world.create_body(
                 RigidBodyDesc::dynamic()
+                    .filter(CREATURE_BODY)
                     .position(initial_pos)
                     .gravity_scale(1.0)
                     .linear_damping(0.0)
@@ -257,8 +262,11 @@ impl StiltWalker {
             .with(Perception::ground_creature(self.sight_range))
             .with((self.brain)(standoff));
         if let Some(peck) = self.peck {
-            entity = entity
-                .with(MeleeAttack::new(peck.damage, reach).with_timing(peck.windup, peck.recovery));
+            entity = entity.with(
+                MeleeAttack::new(peck.damage, reach)
+                    .with_timing(peck.windup, peck.recovery)
+                    .with_blow(peck.blow),
+            );
         }
         if let Some(health) = self.health {
             entity = entity

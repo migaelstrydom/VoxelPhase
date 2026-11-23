@@ -119,7 +119,7 @@ which prevents a spiral of death). A frame is **one contact pass, then N substep
 
 ```text
 PhysicsWorld::update_contacts(dt, substeps)         once per frame
-  ├─ sleep bookkeeping, wake events, one-shot impulses (explosions)
+  ├─ sleep bookkeeping, wake events, one-shot impulses (explosions, strikes)
   ├─ cast_suspensions                                one sphere cast per awake suspension
   ├─ generate_contacts                               static, then dynamic; repeated for
   │     └─ narrowphase (+ speculative contacts)      bodies each pass wakes, until none do

@@ -94,7 +94,10 @@ blasts) knocks down at worst:
   down; being pinned or crushed kills.
 - **Creatures** push, trap and knock down. They do not kill directly: the
   danger is where their shove sends the player (off a ledge, into water,
-  under a falling stone).
+  under a falling stone). A walker's peck or ram and a flying fish's bite
+  are blows struck after a wind-up; a roller lunges once it is close,
+  bursting at the player along a line it then keeps to. No creature strikes
+  a player who is down.
 - **Blasts, the player's own included,** shove or knock down by how close
   they are, and never kill directly: as with a creature's shove, the danger
   is what the blast throws the player into (a wall, a long fall). Nothing
@@ -419,7 +422,8 @@ buildable:
 - **The tower that is both stair and weights.** Nothing in the engine weighs
   anything down (the seesaw is too small), so the weights have no use.
 - **The peeper.** Every island room puts it on ground it cannot leave or
-  ground the player shares; with death off, being seen costs nothing.
+  ground the player shares; with death off, being seen costs only a
+  knockdown.
 - **Glass holding back water, a barrel lifting a platform, rubble raising a
   linked basin.** Bodies do not hold back the water field, and rubble is too
   little to raise a level.

@@ -97,7 +97,7 @@ mod tests {
 
     /// The more sudden a heavy blow, the longer it keeps the body down: from
     /// the least time at the heavy threshold to the most at the deadly one,
-    /// and no longer for a blast's shove past it.
+    /// and no longer for a shove past it.
     #[test]
     fn a_harder_blow_keeps_the_body_down_longer() {
         let config = HarmConfig::default();
@@ -110,7 +110,7 @@ mod tests {
         assert_eq!(knock(blow(config.heavy)), config.least_down);
         assert!((knock(blow(midway)) - 0.5 * (config.least_down + config.most_down)).abs() < 1e-5);
         let blast = Blow {
-            at_worst: config.blast_at_worst,
+            at_worst: config.creatures_and_blasts_at_worst,
             ..blow(2.0 * config.deadly)
         };
         assert_eq!(knock(blast), config.most_down);

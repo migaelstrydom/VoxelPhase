@@ -50,6 +50,10 @@ const TURN_AUTHORITY: f32 = 260.0;
 /// Seconds of rocking back before it rams, and before it can again.
 const RAM_WINDUP: f32 = 0.8;
 const RAM_RECOVERY: f32 = 1.2;
+/// The impulse its ram drives into what it strikes, N·s: about 4 m/s on the
+/// player, a shove that leaves them on their feet. It cannot be hurt and
+/// walks at them; the danger is where it shoves them.
+const RAM_BLOW: f32 = 225.0;
 
 /// The bell's half-width at its mouth, m.
 const BELL_RADIUS: f32 = 0.42;
@@ -953,6 +957,7 @@ impl BellCarrierDef {
             turn_authority: TURN_AUTHORITY,
             peck: Some(Peck {
                 damage: 18.0,
+                blow: RAM_BLOW,
                 windup: RAM_WINDUP,
                 recovery: RAM_RECOVERY,
             }),

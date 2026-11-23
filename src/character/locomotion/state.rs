@@ -162,6 +162,12 @@ impl LocomotionState {
         }
     }
 
+    /// Whether the body is knocked down: what no creature strikes, so that it
+    /// gets up rather than being kept down.
+    pub fn is_down(&self) -> bool {
+        matches!(self, Self::Down(_))
+    }
+
     /// Whether the hands are free to take an edge: on foot (to mantle), in
     /// a jump's flight, a fall, or the water. Not in a Hop, whose landing
     /// is planned, nor while a jump is still launching or already holding.

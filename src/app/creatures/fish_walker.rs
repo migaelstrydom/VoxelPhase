@@ -52,6 +52,9 @@ const TURN_AUTHORITY: f32 = 380.0;
 /// Seconds of rearing back before it bites, and before it can again.
 const BITE_WINDUP: f32 = 0.45;
 const BITE_RECOVERY: f32 = 0.9;
+/// The impulse its bite drives into what it strikes, N·s: about 5.5 m/s on
+/// the player, which only just knocks them down.
+const BITE_BLOW: f32 = 310.0;
 
 /// Side of the grid each part is skinned from, m: finest where the eye
 /// goes.
@@ -1023,6 +1026,7 @@ impl FishWalkerDef {
             turn_authority: TURN_AUTHORITY,
             peck: Some(Peck {
                 damage: 10.0,
+                blow: BITE_BLOW,
                 windup: BITE_WINDUP,
                 recovery: BITE_RECOVERY,
             }),

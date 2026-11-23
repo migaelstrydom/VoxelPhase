@@ -302,6 +302,53 @@ fn a_blast_is_a_shove_of_the_impulse_it_gave() {
     assert!(bench.world.shoves().is_empty(), "a shove lasts its frame");
 }
 
+/// A strike gives the body it is aimed at its impulse where it lands, and
+/// nothing to the body beside it: landing off the centre of mass, it spins
+/// the body too. It is recorded as a shove, as a blast is.
+#[test]
+fn a_strike_is_a_shove_of_one_body_where_it_lands() {
+    let mut bench = Bench::with(|config| config.gravity = Vector3::zeros());
+    let struck = bench.body(
+        RigidBodyDesc::dynamic().position(Point3::new(0.0, 5.0, 0.0)),
+        crate_box(),
+    );
+    let beside = bench.body(
+        RigidBodyDesc::dynamic().position(Point3::new(0.0, 5.0, 2.0)),
+        crate_box(),
+    );
+    let mass = bench.world.body(struck).unwrap().mass();
+    let (impulse, point) = (
+        Vector3::new(3.0 * mass, 0.0, 0.0),
+        Point3::new(0.0, 5.2, 0.0),
+    );
+    bench.step(&[PhysicsImpulse::Strike {
+        body: struck,
+        impulse,
+        point,
+    }]);
+    assert_eq!(bench.world.shoves().len(), 1);
+    let shove = bench.world.shoves()[0];
+    assert_eq!(
+        (shove.body, shove.impulse, shove.point),
+        (struck, impulse, point)
+    );
+    let body = bench.world.body(struck).unwrap();
+    assert!(
+        (body.linear_velocity().x - 3.0).abs() < 1e-3,
+        "{:?}",
+        body.linear_velocity()
+    );
+    assert!(
+        body.angular_velocity().z < -0.5,
+        "struck high, it tips: {:?}",
+        body.angular_velocity()
+    );
+    assert_eq!(
+        bench.world.body(beside).unwrap().linear_velocity(),
+        Vector3::zeros()
+    );
+}
+
 /// Fast enough for CCD to catch it, a small ball still arrives at its speed.
 #[test]
 fn a_fast_small_ball_is_hit_at_its_speed() {

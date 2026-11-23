@@ -49,11 +49,12 @@ use crate::app::sculpt::{
 use crate::app::spawnables::MaterialCtx;
 use crate::app::spawnables::Spawnable;
 use crate::character::CharacterIntent;
+use crate::collision_layers::CREATURE_BODY;
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{AlertTelegraph, Brain, Perception, Roller};
+use crate::creature::{AlertTelegraph, Brain, Lunge, Perception, Roller};
 use crate::model::{MeshPrimitive, Model, ModelPart, Transform};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
@@ -110,6 +111,19 @@ const DENSITY: f32 = 2400.0;
 /// travel — a slick roller would spin in place. Shared with `Roller::new`,
 /// which derives the traction limit on its drive torque from it.
 const FRICTION: f32 = 1.2;
+
+/// Its lunge: rolling at what it hunts, once within 3 m of it, it bursts to
+/// 8 m/s and strikes a body standing in its way at about 7.5 m/s, which
+/// knocks it down; a roller cruising strikes at about 4.4, which only
+/// shoves. It keeps to its line for 0.6 s, so stepping aside beats it, and
+/// rests 3 s before it lunges again.
+const LUNGE: Lunge = Lunge {
+    range: 3.0,
+    closing: 1.0,
+    speed: 8.0,
+    seconds: 0.6,
+    rest: 3.0,
+};
 
 /// A rolling boulder creature.
 ///
@@ -1010,6 +1024,7 @@ impl Spawnable for RollerDef {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body_handle = physics.world.create_body(
                 RigidBodyDesc::dynamic()
+                    .filter(CREATURE_BODY)
                     .position(initial_pos)
                     .gravity_scale(1.0)
                     // Low linear damping so momentum carries downhill, but
@@ -1052,13 +1067,16 @@ impl Spawnable for RollerDef {
             // as a hop and a shiver instead.
             .with(AlertTelegraph::ground_creature())
             .with(brain)
-            .with(Roller::new(
-                self.radius,
-                self.mass(),
-                self.speed,
-                self.spin_up_time,
-                FRICTION,
-            ))
+            .with(
+                Roller::new(
+                    self.radius,
+                    self.mass(),
+                    self.speed,
+                    self.spin_up_time,
+                    FRICTION,
+                )
+                .with_lunge(LUNGE),
+            )
             .build()]
     }
 }

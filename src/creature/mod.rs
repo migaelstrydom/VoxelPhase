@@ -21,6 +21,11 @@
 //! at all: a lobber throws bombs at what it perceives, and a snap trap bites
 //! what steps into it.
 //!
+//! A melee blow lands on its target's body as a strike
+//! (`PhysicsImpulse::Strike`), which harm reads as a shove; a roller strikes
+//! with its own body, bursting at its target once it is close (`Lunge`).
+//! Neither strikes a character that is down.
+//!
 //! The definitions of individual creatures — geometry, materials, physics —
 //! live in `crate::app::creatures`, mirroring the spawnables library.
 
@@ -45,6 +50,6 @@ pub use lobber::{
 };
 pub use melee::{MeleeAttack, MeleeAttackSystem, StrikePhase};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
-pub use roller::{Roller, RollerLocomotionSystem};
+pub use roller::{Lunge, LungePhase, Roll, Roller, RollerLocomotionSystem};
 pub use snap_trap::{Caught, Cycle, Hinge, Moment, SnapTrap, SnapTrapSystem, TrapPart, TrapRig};
 pub use swimmer::{Swimmer, SwimmerLocomotionSystem};

@@ -19,6 +19,7 @@ use specs::{Builder, Entity, World, WorldExt};
 use crate::animation::critter::{CritterAnimator, CritterRigConfig};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
+use crate::collision_layers::CREATURE_BODY;
 use crate::components::{
     Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
 };
@@ -126,6 +127,7 @@ impl Spawnable for HeartCritterDef {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body_handle = physics.world.create_body(
                 RigidBodyDesc::dynamic()
+                    .filter(CREATURE_BODY)
                     .position(initial_pos)
                     .gravity_scale(1.0)
                     .linear_damping(0.0)

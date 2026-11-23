@@ -5,12 +5,13 @@ use nalgebra::{Point3, Vector3};
 use super::{worst_blow, Band, Blow, HarmConfig};
 use crate::app::spawners::create_player_body;
 use crate::character::LocomotionConfig;
+use crate::collision_layers::CREATURE_BODY;
 use crate::debug::DebugLines;
 use crate::explosion::Explosion;
 use crate::physics::bench_harness::geometry::FlatQuadGeometry;
 use crate::physics::{
-    Atmosphere, PhysicsConfig, PhysicsImpulse, PhysicsWorld, RigidBodyHandle, SequentialStepper,
-    Stepper,
+    Atmosphere, ColliderDesc, CollisionFilter, PhysicsConfig, PhysicsImpulse, PhysicsWorld,
+    RigidBodyDesc, RigidBodyHandle, SequentialStepper, Stepper,
 };
 
 const FRAME_DT: f32 = 1.0 / 60.0;
@@ -151,4 +152,62 @@ fn a_blast_knocks_down_close_and_shoves_at_its_edge() {
             blow.delta_v
         );
     }
+}
+
+/// A creature's strike is judged as a shove: a peck that changes the
+/// body's speed by 6 m/s knocks it down, and one as sudden as a deadly hit
+/// still only knocks it down.
+#[test]
+fn a_strike_knocks_down_and_never_kills() {
+    for (speed, band) in [(3.0, Band::Light), (6.0, Band::Heavy), (12.0, Band::Heavy)] {
+        let mut yard = Yard::new(0.0);
+        yard.step(&[]);
+        let centre = yard.world.body(yard.body).unwrap().position();
+        yard.step(&[PhysicsImpulse::Strike {
+            body: yard.body,
+            impulse: Vector3::x() * speed * yard.mass(),
+            point: centre,
+        }]);
+        let blow = worst_blow(
+            &yard.world,
+            yard.body,
+            yard.mass(),
+            Vector3::zeros(),
+            true,
+            &yard.config,
+        )
+        .expect("the strike's shove");
+        assert!((blow.delta_v - speed).abs() < 1e-3, "{blow:?}");
+        assert_eq!(blow.band(&yard.config), band, "{speed} m/s");
+    }
+}
+
+/// A stone thrown at the body at `speed`, on `filter`'s layers: the worst
+/// blow of its strike.
+fn struck_by_a_stone(speed: f32, filter: CollisionFilter) -> Blow {
+    let mut yard = Yard::new(0.0);
+    yard.step(&[]);
+    let centre = yard.world.body(yard.body).unwrap().position();
+    let stone = yard.world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(centre - Vector3::x() * 1.0)
+            .linear_velocity(Vector3::x() * speed)
+            .filter(filter),
+    );
+    yard.world
+        .attach_collider(stone, ColliderDesc::sphere(0.3).density(2400.0));
+    yard.world.wake_body(stone);
+    yard.first_blow(1.0, false).expect("the stone's strike")
+}
+
+/// A creature's body striking the body is spared as its strike is: a blow
+/// that would kill from a stone only knocks the body down from a creature.
+#[test]
+fn a_creature_never_kills_by_running_into_the_body() {
+    let config = HarmConfig::default();
+    let stone = struck_by_a_stone(12.0, CollisionFilter::DEFAULT);
+    assert!(stone.sudden(&config) >= config.deadly, "{stone:?}");
+    assert_eq!(stone.band(&config), Band::Deadly);
+    let creature = struck_by_a_stone(12.0, CREATURE_BODY);
+    assert_eq!(creature.band(&config), Band::Heavy, "{creature:?}");
 }

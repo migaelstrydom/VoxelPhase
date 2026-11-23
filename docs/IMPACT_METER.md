@@ -127,7 +127,7 @@ quantity measures a transmitted impact (see *Limits*).
               bluntness, effective_mass, side_masses, backed,
               patch, continues }                        PhysicsWorld::hits()
 
-  blasts, as they are applied
+  blasts and strikes, as they are applied
     ──▶ Shove { body, impulse, point }                  PhysicsWorld::shoves()
 
   ImpactLedger: impulse per body and collider per frame:
@@ -178,10 +178,13 @@ per frame, from the substep it closed fastest in.
 
 ### `Shove`
 
-What a blast gave a body as the step applied it: the impulse (the body's
-change of velocity is that over its mass) and where it struck: the centre
-of the blast's pressure on the body's envelope, so a body struck harder at
-one end than the other is spun (`docs/PHYSICS_ARCHITECTURE.md`, blasts).
+What a one-shot impulse gave a body as the step applied it: the impulse
+(the body's change of velocity is that over its mass) and where it struck.
+For a blast that is the centre of its pressure on the body's envelope, so
+a body struck harder at one end than the other is spun
+(`docs/PHYSICS_ARCHITECTURE.md`, blasts). For a strike
+(`PhysicsImpulse::Strike`: a blow aimed at one body, as a creature's peck)
+it is where the blow landed.
 
 ### Materials
 
@@ -256,7 +259,7 @@ without changing what it records.
 | Reader | Judges by hits as | Status |
 |---|---|---|
 | Grenade detonation | its side's Δv ≥ its detonation speed, so a glancing blow or a light body it strikes does not set it off | moved over (`projectile/detonation.rs`) |
-| Harm (the player) | the player's Δv from every hit and shove, judged by how sudden it was over the pair's give (and the limbs', braced) | moved over (`src/harm/`); being tuned in play |
+| Harm (the player) | the player's Δv from every hit and shove, judged by how sudden it was over the pair's give (and the limbs', braced); a shove, or a hit from a creature's body (`collision_layers::CREATURE`), is heavy at worst | moved over (`src/harm/`); being tuned in play |
 | Fracture | each collider's hardest blow, `impulse_through` it, felt at a bond over its reach (`fracture::contact_blows`, into `BondLoads`) | moved over: the frame-to-frame rise in impulse less deadbands is gone |
 | Cleave | the struck block's hardest blow, as fracture reads it | moved over: fracture's spike and the whole body's m × Δv (`BlowMeasure::Arrest`) are gone |
 | Glass | a cell's hardest blow, as fracture reads it; a frame struck jolts its cells by the velocity change its hits gave it (`glass::jolt_of`) | moved over, but for the held load (bending fatigue), which is a load and stays on the ledger (`glass/fatigue.rs`). Still judged by impulse alone: a local crack under a corner's pressure (`Hit::peak_pressure`) wants a design decision first, since small sharp things (falling shards) would then crack a pane they land on |

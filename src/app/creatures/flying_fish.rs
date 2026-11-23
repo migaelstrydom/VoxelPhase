@@ -39,6 +39,7 @@ use crate::app::sculpt::{
 };
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::character::CharacterIntent;
+use crate::collision_layers::CREATURE_BODY;
 use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -71,6 +72,9 @@ const BITE: f32 = 8.0;
 const REACH: f32 = 1.1;
 const BITE_WINDUP: f32 = 0.25;
 const BITE_RECOVERY: f32 = 1.6;
+/// The impulse its bite drives into what it strikes, N·s: about 5.5 m/s on
+/// the player, which only just knocks them down.
+const BITE_BLOW: f32 = 310.0;
 /// Hit points it can take.
 const HEALTH: f32 = 14.0;
 
@@ -977,9 +981,12 @@ impl Spawnable for FlyingFishDef {
         let at = Point3::new(self.pos.0, ground + RADIUS, self.pos.1);
         let (body, mass) = {
             let mut physics = world.write_resource::<PhysicsResource>();
-            let body = physics
-                .world
-                .create_body(RigidBodyDesc::dynamic().position(at).angular_damping(0.9));
+            let body = physics.world.create_body(
+                RigidBodyDesc::dynamic()
+                    .filter(CREATURE_BODY)
+                    .position(at)
+                    .angular_damping(0.9),
+            );
             physics.world.attach_collider(
                 body,
                 ColliderDesc::sphere(RADIUS)
@@ -1012,7 +1019,11 @@ impl Spawnable for FlyingFishDef {
                 wings: Self::wing_beat(),
                 beat_phase: 0.0,
             })
-            .with(MeleeAttack::new(BITE, REACH).with_timing(BITE_WINDUP, BITE_RECOVERY))
+            .with(
+                MeleeAttack::new(BITE, REACH)
+                    .with_timing(BITE_WINDUP, BITE_RECOVERY)
+                    .with_blow(BITE_BLOW),
+            )
             .with(Health::new(HEALTH, 5.0))
             .build()]
     }

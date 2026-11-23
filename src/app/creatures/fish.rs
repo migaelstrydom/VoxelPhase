@@ -16,6 +16,7 @@ use specs::{Builder, Entity, World, WorldExt};
 use crate::app::spawnables::shared::textures::seed_from_ground;
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::character::CharacterIntent;
+use crate::collision_layers::CREATURE_BODY;
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -164,9 +165,11 @@ impl Spawnable for FishDef {
 
         let body_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
-            let handle = physics
-                .world
-                .create_body(RigidBodyDesc::dynamic().position(start));
+            let handle = physics.world.create_body(
+                RigidBodyDesc::dynamic()
+                    .filter(CREATURE_BODY)
+                    .position(start),
+            );
             physics.world.attach_collider(
                 handle,
                 ColliderDesc::sphere(COLLIDER_RADIUS)

@@ -14,3 +14,14 @@ pub const FOLIAGE_CORE: CollisionFilter = CollisionFilter {
     membership: FOLIAGE,
     meets: Layers::ALL,
 };
+
+/// A creature's body.
+pub const CREATURE: Layers = Layers::layer(2);
+
+/// A creature's body: in the default layer as well, so it meets and is met
+/// as anything else is; its own layer only says it is a creature (harm
+/// spares what one strikes it with from death).
+pub const CREATURE_BODY: CollisionFilter = CollisionFilter {
+    membership: Layers::DEFAULT.with(CREATURE),
+    meets: Layers::ALL,
+};

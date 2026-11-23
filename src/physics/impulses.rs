@@ -1,6 +1,8 @@
 use nalgebra::{Point3, Vector3};
 
-// === One-shot impulses (explosions, jump pads, etc.) ===
+use super::handle::RigidBodyHandle;
+
+// === One-shot impulses (explosions, strikes) ===
 
 /// A one-shot impulse event applied to nearby bodies and then discarded.
 #[derive(Debug, Clone, Copy)]
@@ -17,6 +19,16 @@ pub enum PhysicsImpulse {
         /// Impulse per area struck (N·s/m², Pa·s) at the center, falling off
         /// linearly to zero at the radius.
         strength: f32,
+    },
+    /// A blow aimed at one body: a creature's strike. It loads no point in
+    /// space, only the body it is aimed at.
+    Strike {
+        /// The body struck.
+        body: RigidBodyHandle,
+        /// The impulse it is given, N·s, world space.
+        impulse: Vector3<f32>,
+        /// Where on it the blow lands, world space.
+        point: Point3<f32>,
     },
 }
 
@@ -43,7 +55,8 @@ impl PhysicsImpulse {
     }
 
     /// How hard the blast strikes at `point`: what each square metre facing
-    /// it is given. `None` outside the area of effect.
+    /// it is given. `None` outside the area of effect, and for a strike,
+    /// which loads only the body it is aimed at.
     pub fn loading_at(&self, point: Point3<f32>) -> Option<Loading> {
         match *self {
             Self::Radial {
@@ -69,6 +82,7 @@ impl PhysicsImpulse {
                     per_area: direction * strength * falloff,
                 })
             }
+            Self::Strike { .. } => None,
         }
     }
 }

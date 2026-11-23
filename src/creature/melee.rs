@@ -1,8 +1,11 @@
 //! Hitting something at close range.
 //!
 //! ```text
-//!   Brain (Attacking) ─► MeleeAttackSystem ─► DamageQueue
-//!                              │
+//!   Brain (Attacking) ─► MeleeAttackSystem ─► DamageQueue: hit points off
+//!                              │                its target's health
+//!                              ├─► PhysicsImpulseQueue: a strike on its
+//!                              │     target's body, which the step gives it
+//!                              │     and records as a shove (harm reads it)
 //!                              └─► StrikePhase ─► whatever draws the creature
 //! ```
 //!
@@ -12,18 +15,21 @@
 //! [`MeleeAttack::thrust`] knows which it is.
 //!
 //! Like every other damage source, this one is a pure producer — it pushes
-//! events and never touches `Health`.
+//! events and never touches `Health` or a body.
 
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 use specs::{
     Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, Write, WriteStorage,
 };
 
 use super::brain::{Behaviour, Brain};
 use super::perception::Perception;
-use crate::character::CharacterIntent;
+use crate::character::{CharacterIntent, CharacterState};
+use crate::components::RigidBodyComponent;
 use crate::damage::{DamageKind, DamageQueue};
 use crate::debug::DebugLog;
+use crate::physics::{PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle};
+use crate::systems::PhysicsResource;
 use crate::time::Time;
 
 /// Where a strike is in its swing.
@@ -47,6 +53,10 @@ pub enum StrikePhase {
 pub struct MeleeAttack {
     /// Hit points a connecting blow takes off.
     pub damage: f32,
+    /// The impulse a connecting blow drives into its target's body, N·s,
+    /// level from the striker to the target: what knocks it off its feet.
+    /// Zero for a blow that only wounds.
+    pub blow: f32,
     /// Centre-to-centre distance a blow connects within. Not the length of
     /// the limb that throws it — it has to cover the target's own radius
     /// too, or a creature standing against the player misses.
@@ -70,6 +80,7 @@ impl MeleeAttack {
     pub fn new(damage: f32, reach: f32) -> Self {
         Self {
             damage,
+            blow: 0.0,
             reach,
             windup: 0.45,
             recovery: 0.8,
@@ -84,6 +95,33 @@ impl MeleeAttack {
         self.windup = windup.max(1e-3);
         self.recovery = recovery.max(1e-3);
         self
+    }
+
+    /// Drive `impulse`, N·s, into the target's body with each blow.
+    pub fn with_blow(mut self, impulse: f32) -> Self {
+        self.blow = impulse.max(0.0);
+        self
+    }
+
+    /// The strike a blow thrown from `from` gives `target`, a body whose
+    /// centre of mass is at `at`: the blow's impulse, level from the
+    /// striker to the target, at its centre. `None` for a blow that only
+    /// wounds, or one thrown from straight above or below.
+    pub fn strike(
+        &self,
+        from: Point3<f32>,
+        target: RigidBodyHandle,
+        at: Point3<f32>,
+    ) -> Option<PhysicsImpulse> {
+        if self.blow <= 0.0 {
+            return None;
+        }
+        let toward = Vector3::new(at.x - from.x, 0.0, at.z - from.z).try_normalize(1e-4)?;
+        Some(PhysicsImpulse::Strike {
+            body: target,
+            impulse: toward * self.blow,
+            point: at,
+        })
     }
 
     /// How far through the swing the striking part is, in `[-1, 1]`:
@@ -116,7 +154,11 @@ impl<'a> System<'a> for MeleeAttackSystem {
         ReadStorage<'a, Perception>,
         WriteStorage<'a, MeleeAttack>,
         WriteStorage<'a, CharacterIntent>,
+        ReadStorage<'a, RigidBodyComponent>,
+        ReadStorage<'a, CharacterState>,
+        Read<'a, PhysicsResource>,
         Write<'a, DamageQueue>,
+        Write<'a, PhysicsImpulseQueue>,
         Write<'a, DebugLog>,
     );
 
@@ -128,9 +170,17 @@ impl<'a> System<'a> for MeleeAttackSystem {
             perceptions,
             mut attacks,
             mut intents,
+            bodies,
+            states,
+            physics,
             mut queue,
+            mut impulses,
             mut debug_log,
         ) = data;
+        let body_at = |entity| {
+            let handle = bodies.get(entity)?.0;
+            Some((handle, physics.world.body(handle)?.position()))
+        };
         let dt = time.delta_seconds();
         let mut swinging = 0;
 
@@ -141,7 +191,14 @@ impl<'a> System<'a> for MeleeAttackSystem {
         for (entity, brain, perception, attack) in
             (&entities, &brains, &perceptions, &mut attacks).join()
         {
-            let target = perception.target.filter(|target| target.visible);
+            // A body already knocked down is not struck: the creature waits
+            // for it to get up, which it can then step away from.
+            let target = perception.target.filter(|target| {
+                target.visible
+                    && !states
+                        .get(target.entity)
+                        .is_some_and(|state| state.locomotion.is_down())
+            });
             let in_reach = target.is_some_and(|target| target.distance <= attack.reach);
             let committed = matches!(brain.behaviour, Behaviour::Attacking { .. });
 
@@ -154,6 +211,12 @@ impl<'a> System<'a> for MeleeAttackSystem {
                 // player's half of the exchange.
                 if let Some(target) = target.filter(|_| in_reach) {
                     queue.push(target.entity, attack.damage, DamageKind::Melee);
+                    let strike = body_at(entity)
+                        .zip(body_at(target.entity))
+                        .and_then(|((_, from), (struck, at))| attack.strike(from, struck, at));
+                    if let Some(strike) = strike {
+                        impulses.push(strike);
+                    }
                 }
             }
             if attack.is_committed() {
@@ -266,5 +329,44 @@ mod tests {
 
         attack.phase = StrikePhase::Ready;
         assert_eq!(attack.thrust(), 0.0);
+    }
+
+    fn target() -> RigidBodyHandle {
+        RigidBodyHandle(generational_arena::Index::from_raw_parts(0, 0))
+    }
+
+    /// A blow drives its impulse into the target's body level along the
+    /// line from the striker to it, at its centre, whatever their heights.
+    #[test]
+    fn a_blow_strikes_its_target_level_from_the_striker() {
+        let attack = an_attack().with_blow(300.0);
+        let at = Point3::new(3.0, 1.0, 4.0);
+        let strike = attack.strike(Point3::new(0.0, 2.5, 0.0), target(), at);
+        let Some(PhysicsImpulse::Strike {
+            body,
+            impulse,
+            point,
+        }) = strike
+        else {
+            panic!("no strike: {strike:?}");
+        };
+        assert_eq!((body, point), (target(), at));
+        assert!(
+            (impulse - Vector3::new(180.0, 0.0, 240.0)).norm() < 1e-3,
+            "{impulse:?}"
+        );
+    }
+
+    /// A blow that only wounds strikes no body, nor does one thrown from
+    /// straight above.
+    #[test]
+    fn a_blow_without_an_impulse_strikes_nothing() {
+        let at = Point3::new(1.0, 0.0, 0.0);
+        assert!(an_attack().strike(Point3::origin(), target(), at).is_none());
+        let above = Point3::new(1.0, 2.0, 0.0);
+        assert!(an_attack()
+            .with_blow(300.0)
+            .strike(above, target(), at)
+            .is_none());
     }
 }

@@ -58,7 +58,8 @@ pub struct Hit {
     pub continues: bool,
 }
 
-/// What a blast gave a body, as the step applied it.
+/// What a one-shot impulse (`PhysicsImpulse`: a blast, a strike) gave a
+/// body, as the step applied it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shove {
     /// The body shoved.
@@ -66,7 +67,8 @@ pub struct Shove {
     /// The impulse it was given, N·s, world space: its change of velocity
     /// is this over its mass.
     pub impulse: Vector3<f32>,
-    /// Where the blast struck it: the centre of the pressure on its bulk,
-    /// which spins a body loaded harder at one end than the other.
+    /// Where it was struck: for a blast, the centre of the pressure on its
+    /// bulk, which spins a body loaded harder at one end than the other;
+    /// for a strike, where the blow landed.
     pub point: Point3<f32>,
 }
