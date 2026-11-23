@@ -3,11 +3,11 @@
 //! down, and a grenade thrown at the wall of the alley between two
 //! plateaus, walked clear of to where its blast knocks the body down (on its
 //! front, walking on; on its back, turned to face the grenade; over sideways,
-//! turned across the alley), and stood by until it kills. The report's
-//! `harm` column names each blow's band and how sudden it was; a knockdown
+//! turned across the alley), and stood by, where it knocks the body down
+//! hardest and keeps it down longest. The report's `harm` column names each
+//! blow's band and how sudden it was, and a death as `restart`; a knockdown
 //! shows as `down`, `gathering` and `rising` in the locomotion column, with
-//! the posture the figure is drawn in in the pose column, and a death as
-//! `restart`.
+//! the posture the figure is drawn in in the pose column.
 
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -32,7 +32,7 @@ pub fn catalogue() -> Vec<Scenario> {
         blast_knockdown(),
         blast_backward(),
         blast_sideways(),
-        blast_deadly(),
+        blast_close(),
     ]
 }
 
@@ -115,18 +115,18 @@ fn blast_sideways() -> Scenario {
 }
 
 /// Throw a grenade at the alley's wall and stand by it.
-fn blast_deadly() -> Scenario {
+fn blast_close() -> Scenario {
     Scenario {
-        name: "harm_blast_deadly",
-        summary: "Throw a grenade at a wall close by and stand by it: killed, the room restarts",
+        name: "harm_blast_close",
+        summary: "Throw a grenade at a wall close by and stand by it: knocked down hard, it lies longest, then gets up",
         level: CONTRACT,
         start: ALLEY,
         yaw: PI,
         script: Script::new()
             .then(Beat::stand(0.3))
             .then(Beat::stand(0.4).throwing_at(SOUTH).named("throw"))
-            .then(Beat::stand(4.0).named("stand by")),
-        camera: CameraRig::side().with_distance(7.0),
+            .then(Beat::stand(9.0).named("stand by")),
+        camera: CameraRig::side().with_azimuth(90.0).with_elevation(65.0).with_distance(5.0),
         judged: Judged::Motion,
     }
 }

@@ -28,6 +28,10 @@ pub struct Blow {
     pub give: f32,
     /// Whether the body met it braced.
     pub braced: bool,
+    /// The worst band it can fall in, however sudden: deadly for a hit, and
+    /// for a blast's shove what the body's harm allows
+    /// (`HarmConfig::blast_at_worst`).
+    pub at_worst: Band,
 }
 
 impl Blow {
@@ -51,16 +55,19 @@ impl Blow {
             delta_v: hit.delta_v(mass),
             give: hit.give + if braced { config.brace_give } else { 0.0 },
             braced,
+            at_worst: Band::Deadly,
         })
     }
 
     /// The blow a blast's `shove` dealt a body weighing `mass`: all at once,
-    /// as sudden as the bands are stated for.
+    /// as sudden as the bands are stated for, and no worse than
+    /// `blast_at_worst`.
     pub fn of_shove(shove: &Shove, mass: f32, config: &HarmConfig) -> Self {
         Self {
             delta_v: shove.impulse.norm() / mass,
             give: config.sudden_give,
             braced: false,
+            at_worst: config.blast_at_worst,
         }
     }
 
@@ -74,8 +81,19 @@ impl Blow {
 
     /// The band this blow falls in.
     pub fn band(&self, config: &HarmConfig) -> Band {
-        config.band(self.sudden(config))
+        config.band(self.sudden(config)).min(self.at_worst)
     }
+}
+
+/// The worst of `blows`: the one in the worst band, and the most sudden of
+/// those. A blast's shove capped at heavy is not worse than a deadly hit
+/// for being more sudden.
+pub fn worst(blows: impl IntoIterator<Item = Blow>, config: &HarmConfig) -> Option<Blow> {
+    blows.into_iter().max_by(|a, b| {
+        a.band(config)
+            .cmp(&b.band(config))
+            .then(a.sudden(config).total_cmp(&b.sudden(config)))
+    })
 }
 
 #[cfg(test)]
@@ -177,27 +195,47 @@ mod tests {
         assert_eq!(on(YIELDING_GIVE), Band::Light);
     }
 
-    /// A blast's shove is judged at its full change of speed.
-    #[test]
-    fn a_shove_is_as_sudden_as_its_change_of_speed() {
-        let config = HarmConfig::default();
-        let shove = |speed: f32| Shove {
+    fn shove(speed: f32) -> Shove {
+        Shove {
             body: body(),
             impulse: Vector3::new(speed * MASS, 0.0, 0.0),
             point: Point3::origin(),
-        };
-        assert_eq!(
-            Blow::of_shove(&shove(4.0), MASS, &config).band(&config),
-            Band::Light
-        );
-        assert_eq!(
-            Blow::of_shove(&shove(6.0), MASS, &config).band(&config),
-            Band::Heavy
-        );
-        assert_eq!(
-            Blow::of_shove(&shove(9.0), MASS, &config).band(&config),
-            Band::Deadly
-        );
+        }
+    }
+
+    /// A blast's shove is judged at its full change of speed, and knocks the
+    /// body down at worst: one as sudden as a deadly hit does not kill.
+    #[test]
+    fn a_shove_is_as_sudden_as_its_change_of_speed_and_never_kills() {
+        let config = HarmConfig::default();
+        let band = |speed| Blow::of_shove(&shove(speed), MASS, &config).band(&config);
+        assert_eq!(band(4.0), Band::Light);
+        assert_eq!(band(6.0), Band::Heavy);
+        let close = Blow::of_shove(&shove(12.0), MASS, &config);
+        assert_eq!(close.sudden(&config), 12.0);
+        assert!(close.sudden(&config) >= config.deadly);
+        assert_eq!(close.band(&config), Band::Heavy);
+    }
+
+    /// The worst blow of several is the one in the worst band: a deadly
+    /// landing in the step a blast shoved the body harder still.
+    #[test]
+    fn the_worst_blow_is_in_the_worst_band() {
+        let config = HarmConfig::default();
+        let falling = Vector3::new(0.0, -9.0, 0.0);
+        let landing = Blow::of_hit(
+            &from_below(9.0, HARD_GIVE),
+            body(),
+            MASS,
+            falling,
+            false,
+            &config,
+        )
+        .unwrap();
+        let blast = Blow::of_shove(&shove(12.0), MASS, &config);
+        let worst = worst([blast, landing], &config).unwrap();
+        assert_eq!(worst, landing);
+        assert_eq!(worst.band(&config), Band::Deadly);
     }
 
     #[test]

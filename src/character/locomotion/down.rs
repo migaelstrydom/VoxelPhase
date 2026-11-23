@@ -20,6 +20,11 @@ pub struct DownConfig {
     /// slope it slides down, a raft that rocks) waits before gathering itself
     /// anyway.
     pub settle_limit: f32,
+    /// Seconds of its time down a body lying still has left when it gathers
+    /// itself. Until then it lies where it fell, dazed: a harder blow keeps
+    /// the body down longer, and it spends the longer time lying, not
+    /// waiting on its knees.
+    pub gather_lead: f32,
     /// Seconds a body gathering itself takes at least before it gets up:
     /// time for one lying on its side to turn onto its front or its back.
     pub gather_time: f32,
@@ -62,6 +67,7 @@ impl Default for DownConfig {
             still_speed: 0.5,
             lying_tilt: 60f32.to_radians(),
             settle_limit: 2.0,
+            gather_lead: 1.0,
             gather_time: 0.6,
             rise_rate: 2.5,
             gather_compliance: 3.0e-4,
@@ -84,8 +90,8 @@ pub struct Down {
 /// Where in being knocked down a body is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DownPhase {
-    /// Limp until it lies still on something, with `remaining` seconds of
-    /// its time down left.
+    /// Limp until it lies still on something with `gather_lead` or less of
+    /// its time down left, `remaining` seconds.
     Limp { remaining: f32 },
     /// Lying still, held lying along its heading on its front, or on its back
     /// if it came to rest `face_up`, which turns a body lying on its side
@@ -116,7 +122,8 @@ impl Down {
         }
     }
 
-    /// Limp until it lies down, still, on something; then gathered until its
+    /// Limp until it lies down, still, on something, and its time is nearly
+    /// up (`gather_lead`); then gathered until its
     /// time is up and it has had `gather_time` to turn onto its front or its
     /// back (limp again if the ground goes from under it); then getting up
     /// until it stands within `upright_tilt` or has tried for `rise_limit`,
@@ -130,7 +137,7 @@ impl Down {
                 let settled = facts.velocity.norm() <= config.still_speed
                     || remaining <= -config.settle_limit;
                 let at_rest = facts.grounded && settled;
-                if at_rest && config.lies(facts.tilt) {
+                if at_rest && config.lies(facts.tilt) && remaining <= config.gather_lead {
                     DownPhase::Gathered {
                         remaining,
                         elapsed: 0.0,

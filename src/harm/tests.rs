@@ -116,12 +116,13 @@ fn a_limp_body_is_knocked_down_by_a_jumps_landing() {
     assert_eq!(blow.band(&yard.config), Band::Heavy);
 }
 
-/// A grenade's blast kills close in (within about 1.4 m), knocks the body
-/// down further out (to 2.75 m) and only shoves it out to the edge of its
-/// reach (5 m).
+/// A grenade's blast knocks the body down close in (to 2.75 m), however
+/// close, and only shoves it out to the edge of its reach (5 m). Within
+/// about 1.4 m its shove is as sudden as a deadly hit: it kills only by
+/// what it throws the body into.
 #[test]
-fn a_blast_kills_close_knocks_down_further_and_shoves_at_its_edge() {
-    for (distance, band) in [(1.0, Band::Deadly), (2.5, Band::Heavy), (4.0, Band::Light)] {
+fn a_blast_knocks_down_close_and_shoves_at_its_edge() {
+    for (distance, band) in [(1.0, Band::Heavy), (2.5, Band::Heavy), (4.0, Band::Light)] {
         let mut yard = Yard::new(0.0);
         yard.step(&[]);
         let centre = yard.world.body(yard.body).unwrap().position();
@@ -136,6 +137,13 @@ fn a_blast_kills_close_knocks_down_further_and_shoves_at_its_edge() {
             &yard.config,
         )
         .expect("the blast's shove");
+        if distance < 1.4 {
+            assert!(
+                blow.sudden(&yard.config) >= yard.config.deadly,
+                "{distance} m: {:.1} m/s",
+                blow.delta_v
+            );
+        }
         assert_eq!(
             blow.band(&yard.config),
             band,

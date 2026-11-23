@@ -1,7 +1,7 @@
 use nalgebra::Vector3;
 use specs::{Component, DenseVecStorage};
 
-use super::blow::Band;
+use super::blow::{Band, Blow};
 use super::config::HarmConfig;
 
 /// A character harm can befall: how its blows are judged, and what has
@@ -26,16 +26,19 @@ pub struct Harm {
 }
 
 impl Harm {
-    /// Suffer a blow in `band`: a heavy one knocks the body down, a deadly
-    /// one too, and starts the beat before the room restarts. A second
-    /// deadly blow does not restart the beat.
-    pub fn suffer(&mut self, band: Band) {
-        let down = match band {
+    /// Suffer `blow`: a heavy one knocks the body down, for longer the
+    /// more sudden it was (`HarmConfig::time_down`); a deadly one too, and
+    /// starts the beat before the room restarts. A second deadly blow does
+    /// not restart the beat.
+    pub fn suffer(&mut self, blow: &Blow) {
+        let config = self.config;
+        let time_down = config.time_down(blow.sudden(&config));
+        let down = match blow.band(&config) {
             Band::Light => return,
-            Band::Heavy => self.config.down_seconds,
+            Band::Heavy => time_down,
             Band::Deadly => {
-                self.dying.get_or_insert(self.config.restart_beat);
-                self.config.down_seconds.max(self.config.restart_beat)
+                self.dying.get_or_insert(config.restart_beat);
+                time_down.max(config.restart_beat)
             }
         };
         self.knock = Some(self.knock.map_or(down, |knock| knock.max(down)));
@@ -58,6 +61,16 @@ mod tests {
 
     const DT: f32 = 1.0 / 60.0;
 
+    /// A blow as sudden as `sudden`, m/s, from a hit.
+    fn blow(sudden: f32) -> Blow {
+        Blow {
+            delta_v: sudden,
+            give: HarmConfig::default().sudden_give,
+            braced: false,
+            at_worst: Band::Deadly,
+        }
+    }
+
     /// Frames until the beat runs out, counting how many times it says so.
     fn beat_frames(harm: &mut Harm, frames: usize) -> Vec<usize> {
         (0..frames).filter(|_| harm.beat_out(DT)).collect()
@@ -66,7 +79,7 @@ mod tests {
     #[test]
     fn a_light_blow_befalls_nothing() {
         let mut harm = Harm::default();
-        harm.suffer(Band::Light);
+        harm.suffer(&blow(4.0));
         assert_eq!(harm.knock, None);
         assert_eq!(harm.dying, None);
     }
@@ -74,12 +87,33 @@ mod tests {
     #[test]
     fn a_heavy_blow_knocks_down_for_the_longer_of_two() {
         let mut harm = Harm::default();
-        harm.suffer(Band::Heavy);
-        assert_eq!(harm.knock, Some(harm.config.down_seconds));
-        harm.knock = Some(5.0);
-        harm.suffer(Band::Heavy);
-        assert_eq!(harm.knock, Some(5.0));
+        harm.suffer(&blow(5.0));
+        assert_eq!(harm.knock, Some(harm.config.least_down));
+        harm.knock = Some(6.0);
+        harm.suffer(&blow(5.0));
+        assert_eq!(harm.knock, Some(6.0));
         assert_eq!(harm.dying, None);
+    }
+
+    /// The more sudden a heavy blow, the longer it keeps the body down: from
+    /// the least time at the heavy threshold to the most at the deadly one,
+    /// and no longer for a blast's shove past it.
+    #[test]
+    fn a_harder_blow_keeps_the_body_down_longer() {
+        let config = HarmConfig::default();
+        let knock = |blow: Blow| {
+            let mut harm = Harm::default();
+            harm.suffer(&blow);
+            harm.knock.unwrap()
+        };
+        let midway = 0.5 * (config.heavy + config.deadly);
+        assert_eq!(knock(blow(config.heavy)), config.least_down);
+        assert!((knock(blow(midway)) - 0.5 * (config.least_down + config.most_down)).abs() < 1e-5);
+        let blast = Blow {
+            at_worst: config.blast_at_worst,
+            ..blow(2.0 * config.deadly)
+        };
+        assert_eq!(knock(blast), config.most_down);
     }
 
     /// A deadly blow knocks the body down and the room restarts once, a
@@ -87,11 +121,11 @@ mod tests {
     #[test]
     fn a_deadly_blow_restarts_the_room_a_beat_later() {
         let mut harm = Harm::default();
-        harm.suffer(Band::Deadly);
+        harm.suffer(&blow(9.0));
         assert!(harm.knock.unwrap() >= harm.config.restart_beat);
         let half = beat_frames(&mut harm, 30);
         assert!(half.is_empty());
-        harm.suffer(Band::Deadly);
+        harm.suffer(&blow(9.0));
         let rest = beat_frames(&mut harm, 120);
         assert_eq!(rest.len(), 1, "restarted once");
         assert!(

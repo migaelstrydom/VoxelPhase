@@ -81,10 +81,11 @@ mass), whatever caused it, and falls into one of three bands:
 | Impact | Result |
 |---|---|
 | Light | Shoved; they stagger, and keep control |
-| Heavy | Knocked down: for a few seconds they tumble with no control, and land however physics lands them |
+| Heavy | Knocked down: they tumble with no control, land however physics lands them, and lie there before getting up; the harder the blow, the longer they are down (two seconds at the least, five at the most) |
 | Deadly | The room restarts |
 
-Two thresholds price everything, with no special cases:
+Two thresholds price everything. What may not kill directly (creatures,
+blasts) knocks down at worst:
 
 - **Falls** are judged on landing. Water breaks a fall. The deadly height
   sits well above anything a jump reaches, so a fatal fall is a clear
@@ -94,8 +95,10 @@ Two thresholds price everything, with no special cases:
 - **Creatures** push, trap and knock down. They do not kill directly: the
   danger is where their shove sends the player (off a ledge, into water,
   under a falling stone).
-- **Blasts, the player's own included,** shove, knock down or kill by how
-  close they are. Nothing stops a blast throwing the player upward, and the
+- **Blasts, the player's own included,** shove or knock down by how close
+  they are, and never kill directly: as with a creature's shove, the danger
+  is what the blast throws the player into (a wall, a long fall). Nothing
+  stops a blast throwing the player upward, and the
   physics is not cheated to prevent it. The heavy band prices it instead:
   it starts below the player's own jump takeoff speed (7 m/s for a full
   jump), so any blast that throws them higher than they can jump also

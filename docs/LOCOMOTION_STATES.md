@@ -226,8 +226,10 @@ first in the tick. `phase` is one of:
   the supports, nothing conjured in the air) and the attitude let go, so the
   body tumbles as the blow and the world turn it, until it lies down
   (`DownConfig::lies`, past `lying_tilt`: the one measure the figure is
-  drawn by too), still, on something. `remaining` counts its time down
-  meanwhile. One come to rest leaning on something rather than lying gets
+  drawn by too), still, on something, with `gather_lead` or less of its time
+  down left. `remaining` counts its time down meanwhile, which harm sets by
+  how hard the blow was (`HarmConfig::time_down`), so a body struck harder
+  lies longer where it fell before it gathers itself. One come to rest leaning on something rather than lying gets
   up from where it leans once its time is up.
 - `Gathered { remaining, elapsed, face_up }`: the attitude sprung lying
   along its heading, on its front, or on its back (pitch −90°, its heading

@@ -1,8 +1,10 @@
 //! Harm: how hard a character was struck, read from the physics' hits and
 //! shoves and judged in three bands: light (shoved, nothing more), heavy
-//! (knocked down) and deadly (knocked down, and the room restarts a beat
-//! later). There is no health. Design: `docs/GAME_DESIGN.md` *Harm*; the
-//! meter it reads: `docs/IMPACT_METER.md`.
+//! (knocked down, for longer the harder the blow) and deadly (knocked down,
+//! and the room restarts a beat later). A blast's shove is heavy at worst:
+//! it kills only by what it throws the body into. There is no health.
+//! Design: `docs/GAME_DESIGN.md` *Harm*; the meter it reads:
+//! `docs/IMPACT_METER.md`.
 //!
 //! ```text
 //!   PhysicsWorld::hits_on, shoves_on ─► Blow ─► Band ─► Harm

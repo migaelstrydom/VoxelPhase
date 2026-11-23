@@ -799,15 +799,20 @@ fn a_body_knocked_down_has_no_control() {
     assert_eq!(on_foot().attitude_hold(&config), AttitudeHold::Rigid);
 }
 
-/// A body gathers itself once it lies down, still, on something, its time
-/// down up or not, as it lies: on its front or its back. Not upright, nor
-/// in the air, nor while it slides, unless it has slid on past its time by
-/// `settle_limit`.
+/// A body gathers itself once it lies down, still, on something, with its
+/// time down nearly up (`gather_lead`) or past, as it lies: on its front or
+/// its back. Not upright, nor in the air, nor while it slides, unless it has
+/// slid on past its time by `settle_limit`; nor while it has longer left,
+/// when it lies where it fell.
 #[test]
 fn a_body_gathers_itself_once_it_lies_still() {
     let config = LocomotionConfig::player().down;
     let lying = || ground().tilted(1.5);
     assert!(is_gathered(advance(limp(1.0), lying()).0));
+    assert!(
+        is_limp(advance(limp(config.gather_lead + 2.0 * DT), lying()).0),
+        "dazed, it lies where it fell"
+    );
     assert!(
         is_limp(advance(limp(1.0), ground()).0),
         "upright, it buckles over first"

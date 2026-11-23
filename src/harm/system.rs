@@ -1,7 +1,7 @@
 use nalgebra::Vector3;
 use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 
-use super::blow::{Band, Blow};
+use super::blow::{worst, Band, Blow};
 use super::component::Harm;
 use super::config::HarmConfig;
 use crate::character::CharacterState;
@@ -11,8 +11,8 @@ use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::systems::{LevelRestart, PhysicsResource};
 use crate::time::Time;
 
-/// The worst blow `body` took in the last step, of its hits and shoves:
-/// the most sudden. A hit that continues a stop split across frames is the
+/// The worst blow `body` took in the last step, of its hits and shoves
+/// ([`worst`]). A hit that continues a stop split across frames is the
 /// rest of a blow already judged, and is passed over. `mass` is the body's,
 /// `velocity` what it moved at before the step, `in_control` whether it
 /// could brace.
@@ -31,8 +31,7 @@ pub fn worst_blow(
     let shoves = world
         .shoves_on(body)
         .map(|shove| Blow::of_shove(shove, mass, config));
-    hits.chain(shoves)
-        .max_by(|a, b| a.sudden(config).total_cmp(&b.sudden(config)))
+    worst(hits.chain(shoves), config)
 }
 
 /// Judges the blows each harmable character took in the step just run, and
@@ -75,9 +74,8 @@ impl<'a> System<'a> for HarmSystem {
                 &config,
             );
             if let Some(blow) = worst {
-                let band = blow.band(&config);
-                harm.last_blow = Some((blow.sudden(&config), band));
-                harm.suffer(band);
+                harm.last_blow = Some((blow.sudden(&config), blow.band(&config)));
+                harm.suffer(&blow);
             }
             harm.last_velocity = rigid.linear_velocity();
             if let Some((sudden, band)) = harm.last_blow {
