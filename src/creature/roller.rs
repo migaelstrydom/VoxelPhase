@@ -4,7 +4,7 @@ use specs::{
 };
 
 use super::perception::Perception;
-use crate::character::{CharacterIntent, CharacterState};
+use crate::character::{CharacterIntent, CharacterState, Grounding};
 use crate::components::RigidBodyComponent;
 use crate::damage::Dead;
 use crate::systems::PhysicsResource;
@@ -26,11 +26,15 @@ use crate::time::Time;
 ///
 /// Its drive comes from angular impulse and nothing else. Friction against the
 /// terrain converts the spin into travel, which means the creature is subject
-/// to the real surface: it struggles out of a grenade crater and skids on
-/// the way. It steers by its spin: each step it turns its spin toward the
-/// spin that rolls where it wants to go, so it sheds travel it does not want
-/// (sideways, or too fast) as it builds the travel it does, and the ground
-/// carries its travel after its spin.
+/// to the real surface: it struggles out of a grenade crater, and the
+/// ground's grip is all that limits how hard it can turn or speed up. It
+/// keeps its thorns in the ground: each step it spins to roll at its travel
+/// over the ground, plus what one step's drive toward the travel it wants
+/// adds, so its spin never runs further ahead of its travel than the ground
+/// can take up in about a step. The drive is aimed at the difference between
+/// the travel it wants and the travel it has, so it sheds travel it does not
+/// want (sideways, or too fast) as it builds the travel it does. In the air
+/// it has nothing to turn against, and does not drive.
 ///
 /// Close to what it hunts it may lunge ([`Lunge`]): it slows to stalk, then
 /// surges along the line to it with all the torque its friction could take,
@@ -115,8 +119,19 @@ pub struct Quarry {
 pub struct Drive {
     /// The velocity it wants to roll at, level, m/s.
     pub velocity: Vector3<f32>,
-    /// The torque it turns its spin toward that velocity with, N·m.
+    /// The most torque it drives toward that velocity with, N·m.
     pub torque: f32,
+}
+
+/// How a roller is moving on the ground holding it up, on a step.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rolling {
+    /// The ground's normal under it, unit length.
+    pub normal: Vector3<f32>,
+    /// Its velocity over the ground, m/s: its own less the ground's.
+    pub travel: Vector3<f32>,
+    /// Its spin, rad/s.
+    pub spin: Vector3<f32>,
 }
 
 /// Gravity magnitude used to derive the traction limit. Matches
@@ -152,8 +167,9 @@ impl Roller {
     /// under-drives it by that factor and produces a creature that visibly
     /// labours to get going.
     ///
-    /// `friction` must match the collider's, since it sets the traction limit
-    /// below.
+    /// `friction` must match the collider's: it is the grip of the best
+    /// ground the roller can meet, and sets the most torque it ever drives
+    /// with.
     pub fn new(
         radius: f32,
         mass: f32,
@@ -163,11 +179,11 @@ impl Roller {
     ) -> Self {
         let radius = radius.max(1e-3);
 
-        // Torque beyond what friction can transmit spins the creature in place
-        // instead of moving it faster, so an over-eager `spin_up_time` would
-        // trade acceleration for a comic wheelspin. Clamping means the number
-        // in the level file means what it says right up to the point where the
-        // ground stops cooperating.
+        // Torque beyond what friction can transmit cannot move the creature
+        // any faster, even on its best ground. Clamping means the number in
+        // the level file means what it says right up to the point where the
+        // ground stops cooperating; on poorer ground than its own friction,
+        // `spin_impulse` holds the drive to what the ground takes.
         let requested_accel = surface_speed / spin_up_time.max(1e-3);
         let traction_limit = friction * GRAVITY;
         let rolling_torque = |accel: f32| (1.0 + SOLID_SPHERE_INERTIA) * mass * radius * accel;
@@ -259,30 +275,34 @@ impl Roller {
         drive
     }
 
-    /// The angular impulse, N·m·s, that turns a roller of `mass` spinning
-    /// at `spin` toward rolling at `drive.velocity`, over `dt`: about the
-    /// axis that rolls toward the difference, at most `drive.torque · dt`,
-    /// and no more than closes it. Spin about the vertical rolls nowhere
-    /// and is left alone.
+    /// The angular impulse, N·m·s, a roller of `mass` moving as `rolling`
+    /// says drives with on a step of `dt` toward rolling at
+    /// `drive.velocity`: what spins it to roll at its travel, so its thorns
+    /// hold, and what spins it on from there to roll on at the velocity it
+    /// wants, laid along the ground, if the ground grips; at most
+    /// `drive.torque · dt` in all. Spin about the ground's normal rolls
+    /// nowhere and is left alone.
     ///
-    /// Steering the spin rather than the travel cancels travel it does not
-    /// want as surely as it builds the travel it does, so a roller turning
-    /// after its target brakes its sideways travel instead of circling it;
-    /// and a spin already rolling as wanted asks for nothing more, however
-    /// far the travel lags it on poor ground.
-    pub fn spin_impulse(
-        &self,
-        drive: Drive,
-        spin: Vector3<f32>,
-        mass: f32,
-        dt: f32,
-    ) -> Vector3<f32> {
-        let wanted = Vector3::y().cross(&drive.velocity) / self.radius;
-        let short = wanted - (spin - Vector3::y() * spin.y);
+    /// The drive is sized about the contact, where it must turn the
+    /// roller's travel as well as its spin (the `1.4` of [`Roller::new`]),
+    /// so on ground that grips it reaches the velocity it wants in one step
+    /// if its torque allows; on ground that cannot take it all, the
+    /// contact slips by what is left of one step's drive, and the next step
+    /// starts from its travel again rather than from that slip.
+    pub fn spin_impulse(&self, drive: Drive, rolling: Rolling, mass: f32, dt: f32) -> Vector3<f32> {
+        let normal = rolling.normal;
+        let rolls_at = |velocity: Vector3<f32>| normal.cross(&velocity) / self.radius;
         let inertia = SOLID_SPHERE_INERTIA * mass * self.radius * self.radius;
-        short.try_normalize(1e-6).map_or(Vector3::zeros(), |axis| {
-            axis * (short.norm() * inertia).min(drive.torque * dt)
-        })
+        let about_contact = inertia + mass * self.radius * self.radius;
+        let most = drive.torque * dt;
+        let along_ground = drive.velocity - normal * normal.dot(&drive.velocity);
+        let wanted = along_ground
+            .try_normalize(1e-6)
+            .map_or(Vector3::zeros(), |way| way * drive.velocity.norm());
+        let spin = rolling.spin - normal * normal.dot(&rolling.spin);
+        let slip = spin - rolls_at(rolling.travel);
+        let push = (rolls_at(wanted - rolling.travel) * about_contact).cap_magnitude(most);
+        (push - slip * inertia).cap_magnitude(most)
     }
 }
 
@@ -310,20 +330,31 @@ impl<'a> System<'a> for RollerLocomotionSystem {
         ReadStorage<'a, RigidBodyComponent>,
         ReadStorage<'a, Perception>,
         ReadStorage<'a, CharacterState>,
+        ReadStorage<'a, Grounding>,
         ReadStorage<'a, Dead>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (time, mut physics_res, mut rollers, intents, rigid_bodies, perceptions, states, deads) =
-            data;
+        let (
+            time,
+            mut physics_res,
+            mut rollers,
+            intents,
+            rigid_bodies,
+            perceptions,
+            states,
+            groundings,
+            deads,
+        ) = data;
         let dt = time.delta_seconds();
         let level = |v: Vector3<f32>| Vector3::new(v.x, 0.0, v.z);
 
-        for (roller, intent, rb, perception, _) in (
+        for (roller, intent, rb, perception, grounding, _) in (
             &mut rollers,
             &intents,
             &rigid_bodies,
             (&perceptions).maybe(),
+            (&groundings).maybe(),
             !&deads,
         )
             .join()
@@ -350,7 +381,21 @@ impl<'a> System<'a> for RollerLocomotionSystem {
             let Some(drive) = roller.drive(heading, quarry, position, velocity, dt) else {
                 continue;
             };
-            let impulse = roller.spin_impulse(drive, spin, mass, dt);
+            // A roller placed at rest sleeps before anything has held it up,
+            // so its grounding says nothing until it wakes; one without
+            // `Grounding` is taken to be on level, still ground.
+            let asleep = physics_res.world.is_sleeping(rb.0);
+            let ground = match grounding {
+                Some(grounding) if !grounding.is_grounded && !asleep => continue,
+                Some(grounding) => (grounding.normal_or_up(), grounding.surface_velocity),
+                None => (Vector3::y(), Vector3::zeros()),
+            };
+            let rolling = Rolling {
+                normal: ground.0,
+                travel: velocity - ground.1,
+                spin,
+            };
+            let impulse = roller.spin_impulse(drive, rolling, mass, dt);
             // Goes through the world rather than the body so the creature
             // wakes itself. A roller spawns asleep — it is placed at rest —
             // and would otherwise stay that way, spinning up a velocity the
@@ -365,6 +410,11 @@ impl<'a> System<'a> for RollerLocomotionSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collision::{MeshPatch, PatchTriangle, SurfaceId, Triangle, AABB};
+    use crate::debug::DebugLines;
+    use crate::physics::{
+        ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc, StaticGeometry, StaticSurface,
+    };
 
     const RADIUS: f32 = 0.6;
     const MASS: f32 = 2171.0;
@@ -428,21 +478,36 @@ mod tests {
         Roller::new(RADIUS, MASS, 4.5, 0.7, 1.2)
     }
 
-    /// The spin that rolls at `velocity` without slipping.
+    /// The spin that rolls at `velocity` on level ground without slipping.
     fn rolling_at(velocity: Vector3<f32>) -> Vector3<f32> {
         Vector3::y().cross(&velocity) / RADIUS
     }
+
+    /// On level ground, travelling at `travel` and spinning at `spin`.
+    fn on_level(travel: Vector3<f32>, spin: Vector3<f32>) -> Rolling {
+        Rolling {
+            normal: Vector3::y(),
+            travel,
+            spin,
+        }
+    }
+
+    fn cruise(roller: &Roller, velocity: Vector3<f32>) -> Drive {
+        Drive {
+            velocity,
+            torque: roller.torque,
+        }
+    }
+
+    const INERTIA: f32 = SOLID_SPHERE_INERTIA * MASS * RADIUS * RADIUS;
 
     /// From rest, a roller spins up about the axis that rolls it where it
     /// wants to go, as hard as its torque allows.
     #[test]
     fn a_roller_spins_up_to_roll_where_it_wants_to_go() {
         let roller = roller();
-        let drive = Drive {
-            velocity: Vector3::z() * 4.5,
-            torque: roller.torque,
-        };
-        let impulse = roller.spin_impulse(drive, Vector3::zeros(), MASS, DT);
+        let rest = on_level(Vector3::zeros(), Vector3::zeros());
+        let impulse = roller.spin_impulse(cruise(&roller, Vector3::z() * 4.5), rest, MASS, DT);
         assert!(
             (impulse.normalize() - Vector3::x()).norm() < 1e-5,
             "{impulse:?}"
@@ -450,18 +515,15 @@ mod tests {
         assert!((impulse.norm() - roller.torque * DT).abs() < 1e-2);
     }
 
-    /// Rolling across where it wants to go, a roller turns its spin against
-    /// its travel across as well as toward the travel it wants: it brakes
-    /// out of the turn rather than circling.
+    /// Rolling across where it wants to go, a roller drives against its
+    /// travel across as well as toward the travel it wants: it brakes out
+    /// of the turn rather than circling.
     #[test]
     fn a_roller_turning_brakes_its_travel_across() {
         let roller = roller();
         let across = rolling_at(Vector3::z() * 4.5);
-        let drive = Drive {
-            velocity: Vector3::x() * 4.5,
-            torque: roller.torque,
-        };
-        let impulse = roller.spin_impulse(drive, across, MASS, DT);
+        let rolling = on_level(Vector3::z() * 4.5, across);
+        let impulse = roller.spin_impulse(cruise(&roller, Vector3::x() * 4.5), rolling, MASS, DT);
         assert!(
             impulse.dot(&across) < 0.0,
             "against the travel across: {impulse:?}"
@@ -472,29 +534,71 @@ mod tests {
         );
     }
 
-    /// A spin close to the one wanted is closed exactly, not overshot; one
-    /// already rolling as wanted asks for nothing, whatever it spins about
-    /// the vertical.
+    /// Rolling a little short of the velocity it wants, a roller drives
+    /// with what turns its travel as well as its spin the rest of the way;
+    /// rolling at it, it asks for nothing, whatever it spins about the
+    /// vertical.
     #[test]
-    fn a_roller_closes_its_spin_without_overshooting() {
+    fn a_roller_drives_its_travel_the_rest_of_the_way() {
         let roller = roller();
+        let drive = cruise(&roller, Vector3::z() * 4.5);
+        let nearly = drive.velocity * 0.999;
+        let impulse = roller.spin_impulse(drive, on_level(nearly, rolling_at(nearly)), MASS, DT);
+        let about_contact = INERTIA + MASS * RADIUS * RADIUS;
+        let rest_of_the_way = rolling_at(drive.velocity - nearly) * about_contact;
+        assert!((impulse - rest_of_the_way).norm() < 1e-2, "{impulse:?}");
+        let twisting = rolling_at(drive.velocity) + Vector3::y() * 3.0;
+        let impulse = roller.spin_impulse(drive, on_level(drive.velocity, twisting), MASS, DT);
+        assert!(impulse.norm() < 1e-2, "{impulse:?}");
+    }
+
+    /// Spinning faster than it travels, a roller spins back to roll at its
+    /// travel: its thorns take hold again.
+    #[test]
+    fn a_slipping_roller_spins_back_to_roll_at_its_travel() {
+        let roller = roller();
+        let travel = Vector3::z() * 2.0;
+        let slip = rolling_at(Vector3::z() * 0.5);
+        let rolling = on_level(travel, rolling_at(travel) + slip);
+        let impulse = roller.spin_impulse(cruise(&roller, travel), rolling, MASS, DT);
+        assert!((impulse + slip * INERTIA).norm() < 1e-2, "{impulse:?}");
+    }
+
+    /// However far its spin has run ahead of its travel, and however much
+    /// more it wants, a roller's spin leads its travel by no more than one
+    /// step of its torque.
+    #[test]
+    fn a_roller_spin_leads_its_travel_by_one_step_of_drive_at_most() {
+        let roller = roller();
+        let travel = Vector3::z();
+        let spinning_ahead = on_level(travel, rolling_at(Vector3::z() * 4.0));
         let drive = Drive {
-            velocity: Vector3::z() * 4.5,
-            torque: roller.torque,
+            velocity: Vector3::z() * 7.5,
+            torque: roller.surge_torque,
         };
-        let wanted = rolling_at(drive.velocity);
-        let nearly = wanted * 0.999;
-        let inertia = SOLID_SPHERE_INERTIA * MASS * RADIUS * RADIUS;
-        let impulse = roller.spin_impulse(drive, nearly, MASS, DT);
-        assert!(
-            (impulse - (wanted - nearly) * inertia).norm() < 1e-2,
-            "{impulse:?}"
-        );
-        let twisting = wanted + Vector3::y() * 3.0;
-        assert_eq!(
-            roller.spin_impulse(drive, twisting, MASS, DT),
-            Vector3::zeros()
-        );
+        let impulse = roller.spin_impulse(drive, spinning_ahead, MASS, DT);
+        let lead = spinning_ahead.spin + impulse / INERTIA - rolling_at(travel);
+        let one_step = roller.surge_torque * DT / INERTIA;
+        assert!(lead.dot(&rolling_at(travel)) > 0.0, "{lead:?}");
+        assert!(lead.norm() <= one_step * 1.001, "{lead:?}");
+    }
+
+    /// Rolling down a slope as fast as it wants to go, a roller asks for
+    /// nothing more: it rolls about the axis across the slope, as fast as
+    /// it travels along it.
+    #[test]
+    fn a_roller_on_a_slope_rolls_along_the_ground() {
+        let roller = roller();
+        let (sin, cos) = 0.4f32.sin_cos();
+        let normal = Vector3::new(sin, cos, 0.0);
+        let travel = Vector3::new(cos, -sin, 0.0) * 4.5;
+        let rolling = Rolling {
+            normal,
+            travel,
+            spin: normal.cross(&travel) / RADIUS,
+        };
+        let impulse = roller.spin_impulse(cruise(&roller, Vector3::x() * 4.5), rolling, MASS, DT);
+        assert!(impulse.norm() < 1e-2, "{impulse:?}");
     }
 
     const LUNGE: Lunge = Lunge {
@@ -649,6 +753,100 @@ mod tests {
         assert_eq!(
             lunging_roller().drive(None, None, Point3::origin(), Vector3::x(), DT),
             None
+        );
+    }
+
+    /// Ground that grips as grass does, under every triangle of it.
+    struct Grass(MeshPatch);
+
+    impl StaticGeometry for Grass {
+        fn query_region(&self, _aabb: &AABB) -> MeshPatch {
+            self.0.clone()
+        }
+
+        fn surface(&self, _id: SurfaceId) -> Option<StaticSurface> {
+            Some(StaticSurface::yielding(0.45, 0.2))
+        }
+    }
+
+    /// A level lawn `2 · half` metres across, centred on the origin.
+    fn lawn(half: f32) -> Grass {
+        let corner = |x: f32, z: f32| Point3::new(x * half, 0.0, z * half);
+        let (a, b, c, d) = (
+            corner(-1.0, -1.0),
+            corner(1.0, -1.0),
+            corner(1.0, 1.0),
+            corner(-1.0, 1.0),
+        );
+        let grass = |triangle, neighbors| PatchTriangle {
+            triangle,
+            neighbors,
+            surface: SurfaceId(1),
+        };
+        Grass(MeshPatch {
+            triangles: vec![
+                grass(Triangle::new(a, c, b), [Some(1), None, None]),
+                grass(Triangle::new(a, d, c), [None, None, Some(0)]),
+            ],
+        })
+    }
+
+    /// On grass, which grips a roller far less than its own friction
+    /// would, its thorns hold: speeding up from rest, turning back and
+    /// surging, the ground slips under it by little, and it still reaches
+    /// the speeds it wants.
+    #[test]
+    fn on_grass_a_roller_keeps_its_thorns_in_the_ground() {
+        let grass = lawn(100.0);
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(0.0, RADIUS, 0.0))
+                .linear_damping(0.05)
+                .angular_damping(0.4),
+        );
+        world.attach_collider(
+            body,
+            ColliderDesc::sphere(RADIUS)
+                .density(2400.0)
+                .friction(1.2)
+                .restitution(0.1),
+        );
+        let mass = world.body(body).unwrap().mass();
+        let roller = Roller::new(RADIUS, mass, 4.5, 0.7, 1.2);
+        let (frame, substeps) = (1.0 / 60.0, 4);
+        let mut debug = DebugLines::default();
+        let mut slipped = 0.0f32;
+        let mut run = |seconds: f32, drive: Drive| {
+            for _ in 0..(seconds / frame).round() as usize {
+                let rolling = {
+                    let body = world.body(body).unwrap();
+                    on_level(body.linear_velocity(), body.angular_velocity())
+                };
+                let under = rolling.travel + rolling.spin.cross(&(-Vector3::y() * RADIUS));
+                slipped = slipped.max(Vector3::new(under.x, 0.0, under.z).norm());
+                let impulse = roller.spin_impulse(drive, rolling, mass, frame);
+                world.apply_angular_impulse(body, impulse);
+                world.update_contacts(frame, substeps, &grass, &[], &mut debug);
+                for _ in 0..substeps {
+                    world.substep(frame / substeps as f32, &grass, &[]);
+                }
+            }
+            world.body(body).unwrap().linear_velocity().x
+        };
+        let away = run(2.0, cruise(&roller, Vector3::x() * 4.5));
+        let back = run(2.0, cruise(&roller, -Vector3::x() * 4.5));
+        let surge = Drive {
+            velocity: -Vector3::x() * 7.5,
+            torque: roller.surge_torque,
+        };
+        let surged = run(1.5, surge);
+        assert!(away > 4.3, "{away} m/s away");
+        assert!(back < -4.0, "{back} m/s back");
+        assert!(surged < -7.0, "surged to {surged} m/s");
+        assert!(
+            slipped < 0.5,
+            "the ground slipped under it at {slipped} m/s"
         );
     }
 }

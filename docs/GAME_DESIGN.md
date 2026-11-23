@@ -97,7 +97,9 @@ blasts) knocks down at worst:
   under a falling stone). A walker's peck or ram and a flying fish's bite
   are blows struck after a wind-up, and land on whatever is in front of the
   beak or the jaws. A roller slows to stalk once it is close, circles at
-  a distance, and charges along a line it keeps to. Its body hits as any heavy thing does: running
+  a distance, always the same way round, and charges along a line it keeps
+  to; its thorns hold the ground, so it rolls where it spins and never
+  skids. Its body hits as any heavy thing does: running
   down a player who stands still knocks them down, but walking into it, or
   being thrown into its path, kills. No creature strikes a player who is
   down.

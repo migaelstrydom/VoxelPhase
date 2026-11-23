@@ -48,7 +48,7 @@ use crate::app::sculpt::{
 };
 use crate::app::spawnables::MaterialCtx;
 use crate::app::spawnables::Spawnable;
-use crate::character::CharacterIntent;
+use crate::character::{CharacterIntent, Grounding};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -1054,12 +1054,17 @@ impl Spawnable for RollerDef {
             body_handle
         };
 
-        // It circles what it hunts at `CIRCLING` and attacks by its lunge.
+        // It circles what it hunts at `CIRCLING`, always the same way round,
+        // and attacks by its lunge: a boulder that turned back every second
+        // and a half would read as one that cannot make up its mind.
         // Relentless because a roller has no health to break off over —
         // `next_behaviour` would reach the same conclusion from a missing
         // `Health`, but saying it here means the intent survives someone later
         // giving rollers health back.
-        let brain = Brain::hunter(CIRCLING).relentless();
+        let brain = Brain {
+            strafe_interval: f32::INFINITY,
+            ..Brain::hunter(CIRCLING).relentless()
+        };
 
         vec![world
             .create_entity()
@@ -1072,6 +1077,8 @@ impl Spawnable for RollerDef {
             // Intent is the seam: `BrainSystem` writes it, `RollerLocomotionSystem`
             // reads it. Neither knows about the other.
             .with(CharacterIntent::default())
+            // What holds it up, which its drive turns against.
+            .with(Grounding::default())
             // It hears what it hunts out to the range it stalks it from: it
             // sees only where it rolls, and backing off to circle, it would
             // otherwise lose what it is circling.
