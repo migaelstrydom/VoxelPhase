@@ -541,21 +541,19 @@ fn sample_down(ctx: &SampleCtx<'_>) -> PoseFragment {
     let Some(down) = ctx.anim.down else {
         return sample_airborne(ctx, AirKind::Fall, Takeoff::default());
     };
-    let pelvis = ctx.anim.pelvis_position;
-    let (drop, lean) = down.trunk(ctx.rig, pelvis);
-    let ([left, right], _) = down.limbs(ctx.rig, pelvis);
+    let pose = down.pose;
     PoseFragment {
         feet: Some(FeetPose {
-            left,
-            right,
+            left: pose.feet[0],
+            right: pose.feet[1],
             anchor: FootAnchor::Hips,
         }),
         hands: None,
-        pelvis_offset: Some(drop),
+        pelvis_offset: Some(pose.pelvis_offset),
         shoulder_twist: None,
-        head_tilt: Some(Vector2::new(down.head_bow(), 0.0)),
+        head_tilt: Some(Vector2::new(pose.head_bow, 0.0)),
         head_bob: Some(0.0),
-        torso_pitch: Some(lean),
+        torso_pitch: Some(pose.torso_pitch),
     }
 }
 

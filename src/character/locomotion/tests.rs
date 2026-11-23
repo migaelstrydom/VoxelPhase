@@ -698,7 +698,10 @@ fn gathered(remaining: f32, elapsed: f32) -> LocomotionState {
 
 fn rising(elapsed: f32) -> LocomotionState {
     LocomotionState::Down(Down {
-        phase: DownPhase::Rising { elapsed },
+        phase: DownPhase::Rising {
+            elapsed,
+            face_up: false,
+        },
     })
 }
 
@@ -824,6 +827,25 @@ fn a_body_gathers_itself_once_it_lies_still() {
     assert!(is_gathered(advance(limp(overdue), sliding).0));
 }
 
+/// Come to rest leaning on something rather than lying, a body gets up from
+/// where it leans once its time is up, as it faces; never gathered, and
+/// never left limp for good.
+#[test]
+fn a_body_at_rest_leaning_gets_up_once_its_time_is_up() {
+    let mut leaning = ground().tilted(0.7);
+    leaning.facts.face_up = true;
+    assert!(is_limp(advance(limp(1.0), leaning).0), "its time is not up");
+    assert_eq!(
+        advance(limp(DT / 2.0), leaning).0,
+        LocomotionState::Down(Down {
+            phase: DownPhase::Rising {
+                elapsed: 0.0,
+                face_up: true,
+            }
+        })
+    );
+}
+
 /// Gathered, a body gets up once its time is up and it has had
 /// `gather_time` to turn onto its front or its back, sliding as it turns or
 /// not; the ground gone from under it, it is limp again.
@@ -845,14 +867,14 @@ fn a_gathered_body_gets_up_once_its_time_is_up_and_it_has_rolled_over() {
 }
 
 /// Gathered, the body is held lying along its heading at once, on its
-/// front or its back as it came to rest; limp, its pitch is left as it
-/// was; getting up, it is pitched toward standing no faster than
+/// front or its back as it came to rest; limp, standing, as nothing holds
+/// it; getting up, it is pitched toward standing no faster than
 /// `rise_rate`.
 #[test]
 fn a_body_lies_along_its_heading_until_it_gets_up() {
     let config = LocomotionConfig::player().down;
     let pitch = |phase| Down { phase }.pitch(0.3, &config, DT);
-    assert_eq!(pitch(DownPhase::Limp { remaining: 1.0 }), 0.3);
+    assert_eq!(pitch(DownPhase::Limp { remaining: 1.0 }), 0.0);
     for (face_up, lying) in [(false, FRAC_PI_2), (true, -FRAC_PI_2)] {
         let phase = DownPhase::Gathered {
             remaining: 1.0,

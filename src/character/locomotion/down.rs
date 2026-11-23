@@ -12,8 +12,9 @@ pub struct DownConfig {
     /// Below this speed, m/s, a body lying on something lies still and
     /// gathers itself.
     pub still_speed: f32,
-    /// Past this lean, rad, a body is lying down. One knocked down where it
-    /// stands is still upright, however still: it buckles over first.
+    /// Past this lean, rad, a body is lying down ([`lies`](Self::lies)).
+    /// One knocked down where it stands is still upright, however still: it
+    /// buckles over first.
     pub lying_tilt: f32,
     /// Seconds past its time a body lying on something but never still (on a
     /// slope it slides down, a raft that rocks) waits before gathering itself
@@ -45,6 +46,14 @@ pub struct DownConfig {
     /// as its legs give way. The capsule has no legs to buckle: balanced on
     /// its round end, it would otherwise stand limp.
     pub buckle_rate: f32,
+}
+
+impl DownConfig {
+    /// Whether a body leaning `tilt` off upright, rad, is lying down: the
+    /// one measure the state and the figure drawn for it share.
+    pub fn lies(&self, tilt: f32) -> bool {
+        tilt >= self.lying_tilt
+    }
 }
 
 impl Default for DownConfig {
@@ -88,8 +97,8 @@ pub enum DownPhase {
         face_up: bool,
     },
     /// Getting up, `elapsed` seconds in, still with no control: off its knees
-    /// from its front, sitting up from its back.
-    Rising { elapsed: f32 },
+    /// from its front, or sitting up from its back if it is `face_up`.
+    Rising { elapsed: f32, face_up: bool },
 }
 
 impl Down {
@@ -111,7 +120,8 @@ impl Down {
     /// time is up and it has had `gather_time` to turn onto its front or its
     /// back (limp again if the ground goes from under it); then getting up
     /// until it stands within `upright_tilt` or has tried for `rise_limit`,
-    /// when it is on its feet.
+    /// when it is on its feet. One come to rest leaning on something rather
+    /// than lying gets up from where it leans once its time is up.
     pub fn tick(self, input: &LocomotionInput) -> LocomotionState {
         let (facts, config, dt) = (&input.facts, &input.config.down, input.dt);
         let phase = match self.phase {
@@ -119,9 +129,15 @@ impl Down {
                 let remaining = remaining - dt;
                 let settled = facts.velocity.norm() <= config.still_speed
                     || remaining <= -config.settle_limit;
-                if facts.grounded && settled && facts.tilt >= config.lying_tilt {
+                let at_rest = facts.grounded && settled;
+                if at_rest && config.lies(facts.tilt) {
                     DownPhase::Gathered {
                         remaining,
+                        elapsed: 0.0,
+                        face_up: facts.face_up,
+                    }
+                } else if at_rest && remaining <= 0.0 {
+                    DownPhase::Rising {
                         elapsed: 0.0,
                         face_up: facts.face_up,
                     }
@@ -138,7 +154,10 @@ impl Down {
                 if !facts.grounded {
                     DownPhase::Limp { remaining }
                 } else if remaining <= 0.0 && elapsed >= config.gather_time {
-                    DownPhase::Rising { elapsed: 0.0 }
+                    DownPhase::Rising {
+                        elapsed: 0.0,
+                        face_up,
+                    }
                 } else {
                     DownPhase::Gathered {
                         remaining,
@@ -147,12 +166,13 @@ impl Down {
                     }
                 }
             }
-            DownPhase::Rising { elapsed } => {
+            DownPhase::Rising { elapsed, face_up } => {
                 if facts.tilt <= config.upright_tilt || elapsed >= config.rise_limit {
                     return LocomotionState::OnFoot(OnFoot::default());
                 }
                 DownPhase::Rising {
                     elapsed: elapsed + dt,
+                    face_up,
                 }
             }
         };
@@ -179,15 +199,15 @@ impl Down {
         }
     }
 
-    /// The pitch to hold the body at this frame, rad, from `current`: as it
-    /// was while limp, since nothing holds it; gathered, lying along its
-    /// heading, on its front (+90°) or its back (−90°, its heading toward
-    /// its feet), at once; getting up, pitched toward standing at
-    /// `rise_rate`, which stands a body on its front up off its knees and
-    /// sits one on its back up.
+    /// The pitch to hold the body at this frame, rad, from `current`: while
+    /// limp, standing, as nothing holds it, so one that gets up from where
+    /// it leans starts from there; gathered, lying along its heading, on its
+    /// front (+90°) or its back (−90°, its heading toward its feet), at once;
+    /// getting up, pitched toward standing at `rise_rate`, which stands a
+    /// body on its front up off its knees and sits one on its back up.
     pub fn pitch(&self, current: f32, config: &DownConfig, dt: f32) -> f32 {
         match self.phase {
-            DownPhase::Limp { .. } => current,
+            DownPhase::Limp { .. } => 0.0,
             DownPhase::Gathered { face_up, .. } => {
                 if face_up {
                     -FRAC_PI_2

@@ -341,7 +341,7 @@ impl<'a> System<'a> for CharacterControlSystem {
                 .pitch_rate_toward(state.body_pitch, target_pitch);
             // A body caught by an edge stands up as the grip carries it.
             state.body_pitch = match state.locomotion {
-                _ if hanging => state.grip.map_or(0.0, |grip| grip.pitch(config)),
+                LocomotionState::Ledge(_) => state.grip.map_or(0.0, |grip| grip.pitch(config)),
                 LocomotionState::Down(down) => down.pitch(state.body_pitch, &config.down, dt),
                 _ => approach(state.body_pitch, target_pitch, rate, dt),
             };

@@ -225,8 +225,10 @@ first in the tick. `phase` is one of:
 - `Limp { remaining }`: no control at all (`MovementRule::limp`: nothing at
   the supports, nothing conjured in the air) and the attitude let go, so the
   body tumbles as the blow and the world turn it, until it lies down
-  (`lying_tilt`), still, on something. `remaining` counts its time down
-  meanwhile.
+  (`DownConfig::lies`, past `lying_tilt`: the one measure the figure is
+  drawn by too), still, on something. `remaining` counts its time down
+  meanwhile. One come to rest leaning on something rather than lying gets
+  up from where it leans once its time is up.
 - `Gathered { remaining, elapsed, face_up }`: the attitude sprung lying
   along its heading, on its front, or on its back (pitch −90°, its heading
   toward its feet) if it came to rest face up, so a body on its side turns
@@ -234,11 +236,11 @@ first in the tick. `phase` is one of:
   soft, so it settles with a small rock). It lasts until the time down is up
   and it has had `gather_time`; the ground gone from under it, it is limp
   again.
-- `Rising`: the pitch held eased toward standing at `rise_rate`, on a stiff
-  spring (`rise_compliance`) that keeps up with it, so the body arrives
-  upright without swinging past and popping off its feet: off its knees from
-  its front, sitting up from its back. It ends within `upright_tilt` or
-  after `rise_limit`.
+- `Rising { elapsed, face_up }`: the pitch held eased toward standing at
+  `rise_rate`, on a stiff spring (`rise_compliance`) that keeps up with it,
+  so the body arrives upright without swinging past and popping off its
+  feet: off its knees from its front, sitting up from its back. It ends
+  within `upright_tilt` or after `rise_limit`.
 
 The hands let go and reach for nothing, and nothing is thrown. A knock while
 limp or gathered keeps the longer time down; a knock while rising goes down

@@ -242,11 +242,15 @@ impl CharacterAnimator {
         self.state.pelvis_position = pelvis_position;
         self.state.velocity = velocity;
         self.state.body_pitch = body.up.dot(&facing).atan2(body.up.y);
-        self.state.down = match (&character_state.locomotion, &body.lying) {
+        // Taken up once the outgoing pose has been sampled for its crossfade:
+        // a body getting up blends out of the figure it was last drawn as.
+        let down = match (&character_state.locomotion, &body.lying) {
             (LocomotionState::Down(down), Some(lying)) => Some(DownFigure::advance(
                 self.state.down.as_ref(),
                 lying,
                 &down.phase,
+                &self.config,
+                pelvis_position,
                 dt,
             )),
             _ => None,
@@ -325,12 +329,6 @@ impl CharacterAnimator {
 
         let new_upper = map_upper_state(&character_state.arm, &character_state.locomotion);
 
-        let pose_sample_ctx = SampleCtx {
-            rig: &self.config,
-            anim: &self.state,
-            velocity,
-        };
-
         // Snapshot outgoing fragments BEFORE the variant swap, so the
         // crossfade `from` reflects what the old state was producing.
         let blend = blend_duration(&self.pose_state, &new_pose);
@@ -342,7 +340,12 @@ impl CharacterAnimator {
             self.config.leg_length(),
             blend,
             || {
-                let from = self.pose_state.sample(&pose_sample_ctx);
+                let outgoing = SampleCtx {
+                    rig: &self.config,
+                    anim: &self.state,
+                    velocity,
+                };
+                let from = self.pose_state.sample(&outgoing);
                 // The gait's feet, blending into feet that hang from the
                 // hips, have left the ground with the body: they come along
                 // with it, from within the leg's reach of where it is.
@@ -370,6 +373,7 @@ impl CharacterAnimator {
         // Swap in new variants, then tick.
         self.pose_state = new_pose;
         self.upper_state = new_upper;
+        self.state.down = down;
 
         let pose_tick_ctx = TickCtx {
             dt,
@@ -381,6 +385,11 @@ impl CharacterAnimator {
         self.upper_state = self.upper_state.tick(&UpperTickCtx { dt });
 
         // Sample the (now current) states.
+        let pose_sample_ctx = SampleCtx {
+            rig: &self.config,
+            anim: &self.state,
+            velocity,
+        };
         let to_pose = self.pose_state.sample(&pose_sample_ctx);
         let upper_sample_ctx =
             build_upper_ctx(&self.pose_state, &self.config, &self.state, grab_config);
@@ -719,7 +728,7 @@ fn build_upper_ctx<'a>(
 ) -> UpperSampleCtx<'a> {
     let preset = gait_preset_for(pose, rig);
     let (pelvis_offset, torso_pitch) = match (pose, &anim.down) {
-        (PoseState::Down, Some(down)) => down.trunk(rig, anim.pelvis_position),
+        (PoseState::Down, Some(down)) => (down.pose.pelvis_offset, down.pose.torso_pitch),
         _ => upper_torso_inputs(preset),
     };
     UpperSampleCtx {

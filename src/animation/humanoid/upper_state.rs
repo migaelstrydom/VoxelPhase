@@ -424,7 +424,7 @@ fn sample_down(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
     let Some(down) = ctx.anim.down else {
         return sample_braced(ctx);
     };
-    let (_, [left, right]) = down.limbs(ctx.rig, ctx.anim.pelvis_position);
+    let [left, right] = down.pose.hands;
     PoseFragment {
         feet: None,
         hands: Some(HandsPose { left, right }),

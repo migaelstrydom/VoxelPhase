@@ -157,22 +157,25 @@ impl<'a> System<'a> for CharacterAnimationSystem {
                     .get(entity)
                     .and_then(|s| s.ahead)
                     .map(|ahead| (ahead.hands, ahead.in_seconds)),
-                lying: (!character_state.locomotion.in_control()).then(|| Lying {
-                    rotation: orientation.0,
-                    ground: grounding
-                        .normal
-                        .filter(|_| grounding.is_grounded)
-                        .zip(configs.get(entity))
-                        .map(|(normal, config)| {
-                            GroundPlane::under_capsule(
-                                body_pos,
-                                body_up,
-                                normal,
-                                config.collider_half_height,
-                                config.collider_radius,
-                            )
-                        }),
-                }),
+                lying: configs
+                    .get(entity)
+                    .filter(|_| !character_state.locomotion.in_control())
+                    .map(|config| Lying {
+                        rotation: orientation.0,
+                        ground: grounding
+                            .normal
+                            .filter(|_| grounding.is_grounded)
+                            .map(|normal| {
+                                GroundPlane::under_capsule(
+                                    body_pos,
+                                    body_up,
+                                    normal,
+                                    config.collider_half_height,
+                                    config.collider_radius,
+                                )
+                            }),
+                        judged: config.down,
+                    }),
             };
             if let Some(throws) = throws.get(entity) {
                 animator.observe_throws(throws.this_frame(), dt);

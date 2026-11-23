@@ -3,10 +3,11 @@
 //! down, and a grenade thrown at the wall of the alley between two
 //! plateaus, walked clear of to where its blast knocks the body down (on its
 //! front, walking on; on its back, turned to face the grenade; over sideways,
-//! turned across the alley), and stood by until it kills. The report's `harm` column names each blow's band and how
-//! sudden it was; a knockdown shows as `down`, `gathering` and `rising` in
-//! the locomotion column, with the posture the figure is drawn in in the
-//! pose column, and a death as `restart`.
+//! turned across the alley), and stood by until it kills. The report's
+//! `harm` column names each blow's band and how sudden it was; a knockdown
+//! shows as `down`, `gathering` and `rising` in the locomotion column, with
+//! the posture the figure is drawn in in the pose column, and a death as
+//! `restart`.
 
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -78,7 +79,7 @@ fn blast_knockdown() -> Scenario {
 fn blast_backward() -> Scenario {
     Scenario {
         name: "harm_blast_backward",
-        summary: "Throw a grenade at a wall close by, walk clear, turn to face it, and be knocked onto your back",
+        summary: "Grenade at a wall close by, walk clear, face it: knocked onto the back",
         level: CONTRACT,
         start: ALLEY,
         yaw: PI,
@@ -98,7 +99,7 @@ fn blast_backward() -> Scenario {
 fn blast_sideways() -> Scenario {
     Scenario {
         name: "harm_blast_sideways",
-        summary: "Throw a grenade at a wall close by, walk clear, turn across the alley, and be knocked over sideways",
+        summary: "Grenade at a wall close by, walk clear, turn across: knocked over sideways",
         level: CONTRACT,
         start: ALLEY,
         yaw: PI,

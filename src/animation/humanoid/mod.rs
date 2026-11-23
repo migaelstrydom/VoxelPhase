@@ -13,7 +13,6 @@ pub mod throw;
 pub mod upper_state;
 
 pub use body_frame::BodyFrame;
-pub use down::{DownFigure, GroundPlane, Lying};
 pub use foot_slew::FootSlew;
 pub use gait::GaitCycle;
 pub use hang::{FigureNow, Hang, HangPhase, LedgeReading};
