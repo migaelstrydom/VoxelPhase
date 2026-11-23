@@ -216,6 +216,7 @@ impl LocomotionState {
             },
             Self::Down(Down { phase }) => match phase {
                 DownPhase::Limp { .. } => "down",
+                DownPhase::Gathered { .. } => "gathering",
                 DownPhase::Rising { .. } => "rising",
             },
         }

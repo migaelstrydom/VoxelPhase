@@ -10,7 +10,6 @@ use std::f32::consts::PI;
 
 use nalgebra::{Point3, Vector2, Vector3};
 
-use super::body_frame::BodyFrame;
 use super::hang;
 use super::stride_sync;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
@@ -150,6 +149,7 @@ pub enum PoseKey {
     Airborne(AirKind),
     Swimming(Stroke),
     Hanging,
+    Down,
 }
 
 /// Lower-body / core animation state.
@@ -175,6 +175,9 @@ pub enum PoseState {
     /// Hands on an edge: hanging under them, or climbing over it
     /// (`hang::sample_hanging`, from `AnimationState::hang`).
     Hanging,
+    /// Knocked down: the figure as the body lies and moves
+    /// (`down::DownFigure`, from `AnimationState::down`).
+    Down,
 }
 
 /// Per-frame tick inputs.
@@ -215,20 +218,22 @@ impl PoseState {
             | PoseState::Hop { .. }
             | PoseState::Airborne { .. }
             | PoseState::Swimming { .. }
-            | PoseState::Hanging => false,
+            | PoseState::Hanging
+            | PoseState::Down => false,
         }
     }
 
     /// Whether the legs are a standing body's, on foot or in the air, and
     /// drawn where such legs go (`LegEnvelope`). A swimmer's trail down its
-    /// stroke and a hanger's climb the wall, by rules of their own.
+    /// stroke, a hanger's climb the wall and a knocked-down body's lie as it
+    /// does, by rules of their own.
     pub fn stands_on_its_legs(&self) -> bool {
         match self {
             PoseState::Grounded { .. }
             | PoseState::Launching { .. }
             | PoseState::Hop { .. }
             | PoseState::Airborne { .. } => true,
-            PoseState::Swimming { .. } | PoseState::Hanging => false,
+            PoseState::Swimming { .. } | PoseState::Hanging | PoseState::Down => false,
         }
     }
 
@@ -240,17 +245,19 @@ impl PoseState {
             PoseState::Launching { .. }
             | PoseState::Airborne { .. }
             | PoseState::Swimming { .. }
-            | PoseState::Hanging => false,
+            | PoseState::Hanging
+            | PoseState::Down => false,
         }
     }
 
-    /// Whether the legs hang from the hips, the feet on nothing: a wind-up
-    /// off the ground, a flight, a swim.
+    /// Whether the feet go where the body takes them, not where the gait set
+    /// them down: a wind-up off the ground, a flight, a swim, a knockdown.
     pub fn hangs_its_legs(&self) -> bool {
         match self {
             PoseState::Launching { .. }
             | PoseState::Airborne { .. }
-            | PoseState::Swimming { .. } => true,
+            | PoseState::Swimming { .. }
+            | PoseState::Down => true,
             PoseState::Grounded { .. } | PoseState::Hop { .. } | PoseState::Hanging => false,
         }
     }
@@ -261,7 +268,10 @@ impl PoseState {
         match *self {
             PoseState::Launching { kind, .. } | PoseState::Airborne { kind, .. } => Some(kind),
             PoseState::Hop { .. } => Some(AirKind::Leap),
-            PoseState::Grounded { .. } | PoseState::Swimming { .. } | PoseState::Hanging => None,
+            PoseState::Grounded { .. }
+            | PoseState::Swimming { .. }
+            | PoseState::Hanging
+            | PoseState::Down => None,
         }
     }
 
@@ -271,7 +281,10 @@ impl PoseState {
             PoseState::Launching { takeoff, .. }
             | PoseState::Hop { takeoff }
             | PoseState::Airborne { takeoff, .. } => Some(takeoff),
-            PoseState::Grounded { .. } | PoseState::Swimming { .. } | PoseState::Hanging => None,
+            PoseState::Grounded { .. }
+            | PoseState::Swimming { .. }
+            | PoseState::Hanging
+            | PoseState::Down => None,
         }
     }
 
@@ -294,6 +307,7 @@ impl PoseState {
                 Some(hang) => hang::sample_hanging(hang, ctx.anim, ctx.rig),
                 None => sample_airborne(ctx, AirKind::Fall, Takeoff::default()),
             },
+            PoseState::Down => sample_down(ctx),
         }
     }
 
@@ -308,6 +322,7 @@ impl PoseState {
             PoseState::Airborne { kind, .. } => PoseKey::Airborne(kind),
             PoseState::Swimming { stroke } => PoseKey::Swimming(stroke),
             PoseState::Hanging => PoseKey::Hanging,
+            PoseState::Down => PoseKey::Down,
         }
     }
 
@@ -331,6 +346,7 @@ impl PoseState {
                 stroke: Stroke::Tread,
             } => "tread",
             PoseState::Hanging => "hanging",
+            PoseState::Down => "down",
         }
     }
 
@@ -350,7 +366,10 @@ impl PoseState {
                 phase: anim.stroke_phase,
                 kind: CycleKind::Stroke,
             }),
-            PoseState::Launching { .. } | PoseState::Airborne { .. } | PoseState::Hanging => None,
+            PoseState::Launching { .. }
+            | PoseState::Airborne { .. }
+            | PoseState::Hanging
+            | PoseState::Down => None,
         }
     }
 }
@@ -450,9 +469,6 @@ pub fn wade_lean(wade: f32) -> f32 {
 fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> PoseFragment {
     let rig = ctx.rig;
     let anim = ctx.anim;
-    if let Some(frame) = anim.lying {
-        return sample_limp(ctx, &frame);
-    }
     let right = anim.facing.cross(&Vector3::y());
     let left_hip = anim.pelvis_position - right * rig.hip_width;
     let right_hip = anim.pelvis_position + right * rig.hip_width;
@@ -518,33 +534,30 @@ fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> Pose
     }
 }
 
-/// A body knocked down, its legs gone limp: they lie along the body's own
-/// axis from the hips, a little apart, however the body lies.
-fn sample_limp(ctx: &SampleCtx<'_>, frame: &BodyFrame) -> PoseFragment {
-    let rig = ctx.rig;
+/// A body knocked down: its feet, and its trunk lowered and leaned, as its
+/// figure lies (`DownFigure`). Read without how it lies, so with no figure,
+/// it hangs as a fall's.
+fn sample_down(ctx: &SampleCtx<'_>) -> PoseFragment {
+    let Some(down) = ctx.anim.down else {
+        return sample_airborne(ctx, AirKind::Fall, Takeoff::default());
+    };
     let pelvis = ctx.anim.pelvis_position;
-    let reach = rig.leg_length() * LIMP_REACH;
-    let foot = |side: Vector3<f32>| pelvis + side * (rig.hip_width + LIMP_SPLAY) - frame.up * reach;
+    let (drop, lean) = down.trunk(ctx.rig, pelvis);
+    let ([left, right], _) = down.limbs(ctx.rig, pelvis);
     PoseFragment {
         feet: Some(FeetPose {
-            left: foot(frame.left()),
-            right: foot(frame.right),
+            left,
+            right,
             anchor: FootAnchor::Hips,
         }),
         hands: None,
-        pelvis_offset: None,
+        pelvis_offset: Some(drop),
         shoulder_twist: None,
-        head_tilt: Some(Vector2::new(0.0, 0.0)),
+        head_tilt: Some(Vector2::new(down.head_bow(), 0.0)),
         head_bob: Some(0.0),
-        torso_pitch: Some(0.0),
+        torso_pitch: Some(lean),
     }
 }
-
-/// How far from the pelvis a limp body's feet lie, along its axis, as a
-/// share of its legs' length: just short of straight, so the knees give.
-const LIMP_REACH: f32 = 0.97;
-/// How much further apart than its hips a limp body's feet lie, in metres.
-const LIMP_SPLAY: f32 = 0.06;
 
 /// How far ahead of its hip the leading foot hangs through a flight at
 /// speed, and the trailing one behind, in metres.

@@ -14,7 +14,8 @@ pub struct FrameRecord {
     pub beat: &'static str,
     /// The motion FSM's state.
     pub locomotion: String,
-    /// The lower-body animation FSM's state.
+    /// The lower-body animation FSM's state; knocked down, the posture the
+    /// figure is drawn in.
     pub pose: &'static str,
     /// The upper-body animation FSM's state.
     pub upper: String,

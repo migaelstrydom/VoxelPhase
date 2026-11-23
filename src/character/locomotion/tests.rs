@@ -1,3 +1,5 @@
+use std::f32::consts::FRAC_PI_2;
+
 use nalgebra::{Point3, Vector3};
 
 use super::*;
@@ -21,6 +23,7 @@ fn ground() -> Frame {
             position: Point3::new(0.0, 0.5, 0.0),
             velocity: Vector3::zeros(),
             tilt: 0.0,
+            face_up: false,
             since_contact: 0.0,
             knocked: None,
         },
@@ -683,6 +686,16 @@ fn limp(remaining: f32) -> LocomotionState {
     })
 }
 
+fn gathered(remaining: f32, elapsed: f32) -> LocomotionState {
+    LocomotionState::Down(Down {
+        phase: DownPhase::Gathered {
+            remaining,
+            elapsed,
+            face_up: false,
+        },
+    })
+}
+
 fn rising(elapsed: f32) -> LocomotionState {
     LocomotionState::Down(Down {
         phase: DownPhase::Rising { elapsed },
@@ -694,6 +707,15 @@ fn is_limp(state: LocomotionState) -> bool {
         state,
         LocomotionState::Down(Down {
             phase: DownPhase::Limp { .. }
+        })
+    )
+}
+
+fn is_gathered(state: LocomotionState) -> bool {
+    matches!(
+        state,
+        LocomotionState::Down(Down {
+            phase: DownPhase::Gathered { .. }
         })
     )
 }
@@ -730,12 +752,16 @@ fn a_knockdown_takes_every_state() {
     }
 }
 
-/// Knocked again while limp, a body stays down for whichever is longer;
+/// Knocked again while down, a body stays down for whichever is longer;
 /// knocked while getting up, it goes down again.
 #[test]
 fn a_second_knock_keeps_the_longer_time_down() {
     assert_eq!(advance(limp(1.5), ground().knocked(1.0)).0, limp(1.5));
     assert_eq!(advance(limp(0.5), ground().knocked(2.0)).0, limp(2.0));
+    assert_eq!(
+        advance(gathered(1.5, 0.3), ground().knocked(1.0)).0,
+        limp(1.5)
+    );
     assert_eq!(advance(rising(0.3), ground().knocked(2.0)).0, limp(2.0));
 }
 
@@ -752,7 +778,7 @@ fn a_body_knocked_down_has_no_control() {
         swim: 2.0,
         swim_accel: 4.0,
     };
-    for state in [limp(1.0), rising(0.1)] {
+    for state in [limp(1.0), gathered(1.0, 0.1), rising(0.1)] {
         assert!(!state.in_control());
         assert!(!state.hands_free());
         let rule = state.movement_rule(Vector3::x(), &speeds);
@@ -761,32 +787,86 @@ fn a_body_knocked_down_has_no_control() {
         assert!(matches!(advance(state, lying).0, LocomotionState::Down(_)));
     }
     assert_eq!(limp(1.0).attitude_hold(&config), AttitudeHold::Released);
-    assert!(matches!(
-        rising(0.1).attitude_hold(&config),
-        AttitudeHold::Sprung { .. }
-    ));
+    for state in [gathered(1.0, 0.1), rising(0.1)] {
+        assert!(matches!(
+            state.attitude_hold(&config),
+            AttitudeHold::Sprung { .. }
+        ));
+    }
     assert_eq!(on_foot().attitude_hold(&config), AttitudeHold::Rigid);
 }
 
-/// A body gets up once its time is up and it lies still on something: not
-/// in the air, nor while it slides, unless it has slid on past its time
-/// by `settle_limit`.
+/// A body gathers itself once it lies down, still, on something, its time
+/// down up or not, as it lies: on its front or its back. Not upright, nor
+/// in the air, nor while it slides, unless it has slid on past its time by
+/// `settle_limit`.
 #[test]
-fn a_body_gets_up_once_its_time_is_up_and_it_lies_still() {
+fn a_body_gathers_itself_once_it_lies_still() {
     let config = LocomotionConfig::player().down;
+    let lying = || ground().tilted(1.5);
+    assert!(is_gathered(advance(limp(1.0), lying()).0));
     assert!(
         is_limp(advance(limp(1.0), ground()).0),
-        "its time is not up"
+        "upright, it buckles over first"
     );
-    assert!(is_rising(advance(limp(DT / 2.0), ground()).0));
-    assert!(
-        is_limp(advance(limp(DT / 2.0), air()).0),
-        "still in the air"
-    );
-    let sliding = ground().moving(Vector3::new(2.0, 0.0, 0.0));
+    let mut on_its_back = lying();
+    on_its_back.facts.face_up = true;
+    assert!(matches!(
+        advance(limp(1.0), on_its_back).0,
+        LocomotionState::Down(Down {
+            phase: DownPhase::Gathered { face_up: true, .. }
+        })
+    ));
+    assert!(is_limp(advance(limp(1.0), air()).0), "still in the air");
+    let sliding = lying().moving(Vector3::new(2.0, 0.0, 0.0));
     assert!(is_limp(advance(limp(DT / 2.0), sliding).0), "still sliding");
     let overdue = -config.settle_limit;
-    assert!(is_rising(advance(limp(overdue), sliding).0));
+    assert!(is_gathered(advance(limp(overdue), sliding).0));
+}
+
+/// Gathered, a body gets up once its time is up and it has had
+/// `gather_time` to turn onto its front or its back, sliding as it turns or
+/// not; the ground gone from under it, it is limp again.
+#[test]
+fn a_gathered_body_gets_up_once_its_time_is_up_and_it_has_rolled_over() {
+    let config = LocomotionConfig::player().down;
+    let rolled = config.gather_time;
+    let rolling = ground().moving(Vector3::new(1.5, 0.0, 0.0));
+    assert!(
+        is_gathered(advance(gathered(1.0, rolled), ground()).0),
+        "its time is not up"
+    );
+    assert!(
+        is_gathered(advance(gathered(DT / 2.0, 0.0), rolling).0),
+        "not yet rolled over"
+    );
+    assert!(is_rising(advance(gathered(DT / 2.0, rolled), rolling).0));
+    assert!(is_limp(advance(gathered(1.0, rolled), air()).0));
+}
+
+/// Gathered, the body is held lying along its heading at once, on its
+/// front or its back as it came to rest; limp, its pitch is left as it
+/// was; getting up, it is pitched toward standing no faster than
+/// `rise_rate`.
+#[test]
+fn a_body_lies_along_its_heading_until_it_gets_up() {
+    let config = LocomotionConfig::player().down;
+    let pitch = |phase| Down { phase }.pitch(0.3, &config, DT);
+    assert_eq!(pitch(DownPhase::Limp { remaining: 1.0 }), 0.3);
+    for (face_up, lying) in [(false, FRAC_PI_2), (true, -FRAC_PI_2)] {
+        let phase = DownPhase::Gathered {
+            remaining: 1.0,
+            elapsed: 0.1,
+            face_up,
+        };
+        assert_eq!(pitch(phase), lying);
+    }
+    let LocomotionState::Down(down) = rising(0.1) else {
+        unreachable!()
+    };
+    let pitched = down.pitch(FRAC_PI_2, &config, DT);
+    assert!((FRAC_PI_2 - pitched - config.rise_rate * DT).abs() < 1e-6);
+    assert_eq!(down.pitch(0.01, &config, DT), 0.0);
 }
 
 /// Getting up ends on its feet once the body stands within `upright_tilt`,
@@ -807,4 +887,8 @@ fn the_water_takes_a_knocked_body_once_its_time_is_up() {
     let deep = air().in_sea(3.0, -0.2);
     assert!(is_limp(advance(limp(1.0), deep).0));
     assert_eq!(advance(limp(0.0), deep).0, LocomotionState::Swim(Swim));
+    assert_eq!(
+        advance(gathered(0.0, 0.1), deep).0,
+        LocomotionState::Swim(Swim)
+    );
 }

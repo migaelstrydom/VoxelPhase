@@ -116,7 +116,7 @@ column gives the request or fact that causes each transition.
 | `Fall { steering }` | OnFoot (`grace` runs out), Hop (landing missed), Swim (out over a drop), Ledge (drop) | OnFoot (down), Swim, Ledge (an edge at the hands) | Off | Off | Brace |
 | `Swim` | OnFoot, Fall, Jump falling, once the water is deep | OnFoot, Fall, Jump, Ledge | Off | Off | Stroke |
 | `Ledge { edge, phase }` | Jump, Fall, Swim (an edge at the hands) | Fall (drop, edge lost), Jump (back-jump), OnFoot (pull-up done) | Off | Off | Grip |
-| `Down { phase }` | any (knocked down) | OnFoot (righted), Swim (time up, deep water) | Off | Off | Brace |
+| `Down { phase }` | any (knocked down) | OnFoot (righted), Swim (time up, deep water) | Off | Off | Down |
 
 ### Takeoffs: Hop and Jump
 
@@ -224,19 +224,39 @@ The knock is a fact (`Facts::knocked`) and takes the body from any state,
 first in the tick. `phase` is one of:
 - `Limp { remaining }`: no control at all (`MovementRule::limp`: nothing at
   the supports, nothing conjured in the air) and the attitude let go, so the
-  body tumbles as the blow and the world turn it. It lasts at least
-  `remaining`, then until the body lies still on something.
-- `Rising`: the attitude sprung back upright, still with no control, until
-  the body stands within `DownConfig::upright_tilt`.
+  body tumbles as the blow and the world turn it, until it lies down
+  (`lying_tilt`), still, on something. `remaining` counts its time down
+  meanwhile.
+- `Gathered { remaining, elapsed, face_up }`: the attitude sprung lying
+  along its heading, on its front, or on its back (pitch −90°, its heading
+  toward its feet) if it came to rest face up, so a body on its side turns
+  onto whichever is nearer (at most a quarter turn; `gather_compliance` is
+  soft, so it settles with a small rock). It lasts until the time down is up
+  and it has had `gather_time`; the ground gone from under it, it is limp
+  again.
+- `Rising`: the pitch held eased toward standing at `rise_rate`, on a stiff
+  spring (`rise_compliance`) that keeps up with it, so the body arrives
+  upright without swinging past and popping off its feet: off its knees from
+  its front, sitting up from its back. It ends within `upright_tilt` or
+  after `rise_limit`.
 
 The hands let go and reach for nothing, and nothing is thrown. A knock while
-limp keeps the longer time down; a knock while rising goes down again. Deep
-water takes a body only once its time is up: until then it floats as it
-lies. The figure is drawn in the body's own frame (`BodyFrame::of`), so it
-lies on its back, its side or its face as the body does, with its legs and
-arms limp along it; it heads the way the body's front points and gets up
-facing that way. Limbs trailing the body's motion, and getting up as a
-motion rather than a spring, are still to come.
+limp or gathered keeps the longer time down; a knock while rising goes down
+again. Deep water takes a body only once its time is up: until then it
+floats as it lies. It heads the way the body's front points (its head,
+lying face down; its feet, face up) and gets up facing that way.
+
+The figure (`PoseState::Down`, `UpperState::Down`) is drawn in the body's
+own frame by `animation::humanoid::down`, in a posture read from how the body
+lies and moves, each eased into the next: buckling while still upright on
+the ground, tucked while it tumbles end over end, sprawled through the air
+otherwise, a log roll while it rolls along the ground about its length,
+spread while it slides or lies before gathering, kneeling on its hands and
+knees gathered on its front, sat back on its hands gathered on its back,
+and from those two getting up as the body pitches up. The capsule is half a
+metre thick and the figure thin, so on the ground the limbs reach the ground
+the capsule rests on and hold the figure up where the capsule is, rather
+than it lying flat in the air.
 
 ## The consumers
 
@@ -307,7 +327,8 @@ they are allowed, as today. Otherwise:
 | State | Arms |
 |---|---|
 | OnFoot, a Hop the legs stride through | Swing |
-| Jump, Fall, a Hop too long to stride through, Down | Brace |
+| Jump, Fall, a Hop too long to stride through | Brace |
+| Down | Down (`UpperState::Down`: the hands of the figure's posture) |
 | Swim | Stroke |
 | Ledge | Grip (`UpperState::Gripping`) |
 

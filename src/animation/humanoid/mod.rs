@@ -1,7 +1,8 @@
-//! Humanoid-specific character animation: skeleton, stride phase, gait, and
-//! hanging from and climbing onto ledges.
+//! Humanoid-specific character animation: skeleton, stride phase, gait,
+//! hanging from and climbing onto ledges, and lying knocked down.
 
 pub mod body_frame;
+pub mod down;
 pub mod foot_slew;
 pub mod gait;
 pub mod hang;
@@ -12,6 +13,7 @@ pub mod throw;
 pub mod upper_state;
 
 pub use body_frame::BodyFrame;
+pub use down::{DownFigure, GroundPlane, Lying};
 pub use foot_slew::FootSlew;
 pub use gait::GaitCycle;
 pub use hang::{FigureNow, Hang, HangPhase, LedgeReading};

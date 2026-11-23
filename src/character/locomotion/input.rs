@@ -27,6 +27,9 @@ pub struct Facts {
     pub velocity: Vector3<f32>,
     /// How far the body's axis leans off upright, in radians.
     pub tilt: f32,
+    /// Whether the body's front faces up rather than down: lying, whether
+    /// it lies on its back.
+    pub face_up: bool,
     /// Seconds since the contacts last held the body up, forgiven or not;
     /// zero in contact.
     pub since_contact: f32,

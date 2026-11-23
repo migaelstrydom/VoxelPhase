@@ -361,7 +361,10 @@ fn record(
         time,
         beat,
         locomotion: state.locomotion.tag().to_string(),
-        pose: animator.pose_state.tag(),
+        pose: animator
+            .state
+            .down
+            .map_or(animator.pose_state.tag(), |down| down.posture_tag()),
         upper: format!("{:?}", animator.upper_state.transition_key()).to_lowercase(),
         harm,
         body: position,

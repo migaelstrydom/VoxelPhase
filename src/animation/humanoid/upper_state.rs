@@ -36,6 +36,7 @@ pub enum UpperKey {
     Braced,
     Stroking,
     Gripping,
+    Down,
 }
 
 /// Upper-body animation state.
@@ -63,6 +64,9 @@ pub enum UpperState {
     /// Hands on an edge (`hang::sample_gripping`, from
     /// `AnimationState::hang`).
     Gripping,
+    /// Knocked down: the hands as the figure lies (`down::DownFigure`, from
+    /// `AnimationState::down`).
+    Down,
 }
 
 /// Per-frame tick inputs for `UpperState`.
@@ -136,6 +140,7 @@ impl UpperState {
             UpperState::Braced => UpperKey::Braced,
             UpperState::Stroking => UpperKey::Stroking,
             UpperState::Gripping => UpperKey::Gripping,
+            UpperState::Down => UpperKey::Down,
         }
     }
 
@@ -164,6 +169,7 @@ impl UpperState {
                 current_hold_height,
                 ..
             } => sample_holding(ctx, *current_hold_height),
+            UpperState::Down => sample_down(ctx),
         }
     }
 }
@@ -350,9 +356,6 @@ fn sample_swinging(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
 }
 
 fn sample_braced(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
-    if let Some(frame) = ctx.anim.lying {
-        return sample_limp(ctx, &frame);
-    }
     let rig = ctx.rig;
     let anim = ctx.anim;
     let facing = anim.facing;
@@ -415,20 +418,16 @@ fn sample_braced(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
     }
 }
 
-/// A body knocked down, its arms gone limp: they lie along its sides
-/// toward its feet, however it lies, as its legs lie along its axis.
-fn sample_limp(ctx: &UpperSampleCtx<'_>, frame: &BodyFrame) -> PoseFragment {
-    let shoulders = shoulders_with_twist(ctx, 0.0);
-    let reach = ctx.rig.arm_length() * LIMP_ARM_REACH;
-    let hand = |shoulder: Point3<f32>, side: Vector3<f32>| {
-        shoulder + side * LIMP_ARM_SPLAY - frame.up * reach
+/// A body knocked down: its hands as its figure lies (`DownFigure`). Read
+/// without how it lies, so with no figure, braced as a fall's.
+fn sample_down(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
+    let Some(down) = ctx.anim.down else {
+        return sample_braced(ctx);
     };
+    let (_, [left, right]) = down.limbs(ctx.rig, ctx.anim.pelvis_position);
     PoseFragment {
         feet: None,
-        hands: Some(HandsPose {
-            left: hand(shoulders.left, frame.left()),
-            right: hand(shoulders.right, frame.right),
-        }),
+        hands: Some(HandsPose { left, right }),
         pelvis_offset: None,
         shoulder_twist: Some(0.0),
         head_tilt: None,
@@ -436,12 +435,6 @@ fn sample_limp(ctx: &UpperSampleCtx<'_>, frame: &BodyFrame) -> PoseFragment {
         torso_pitch: None,
     }
 }
-
-/// How far from its shoulder a limp arm's hand lies, along the body, as a
-/// share of the arm's length: just short of straight, so the elbow gives.
-const LIMP_ARM_REACH: f32 = 0.97;
-/// How far out from its shoulder a limp arm's hand lies, in metres.
-const LIMP_ARM_SPLAY: f32 = 0.1;
 
 /// Braced arms rising to the holds on an edge the arc is about to bring the
 /// hands to: from `REACH_AHEAD_FROM` seconds out, all the way there by

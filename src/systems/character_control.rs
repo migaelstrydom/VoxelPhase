@@ -143,6 +143,10 @@ impl<'a> System<'a> for CharacterControlSystem {
             target.landing = None;
             target.edge = None;
             let sensed_edge = requests.edge;
+            let attitude_now = physics_res
+                .world
+                .body(character_body)
+                .map(|body| body.rotation());
             let input = LocomotionInput {
                 dt,
                 facts: Facts {
@@ -150,10 +154,8 @@ impl<'a> System<'a> for CharacterControlSystem {
                     immersion,
                     position: Point3::from(pos.0),
                     velocity: motion.linear,
-                    tilt: physics_res
-                        .world
-                        .body(character_body)
-                        .map_or(0.0, |body| tilt_of(&body.rotation())),
+                    tilt: attitude_now.map_or(0.0, |rotation| tilt_of(&rotation)),
+                    face_up: attitude_now.is_some_and(|rotation| (rotation * Vector3::z()).y > 0.0),
                     since_contact: state.conditioning.since_contact(),
                     knocked: harm.and_then(|harm| harm.knock.take()),
                 },
@@ -326,7 +328,8 @@ impl<'a> System<'a> for CharacterControlSystem {
                 state.conditioning.departed().surface_velocity.norm() <= STILL_GROUND;
             apply_movement_rule(drive, rule, left_still_ground);
 
-            // --- Attitude: lie over to stroke, stand up to tread or wade ---
+            // --- Attitude: lie over to stroke, stand up to tread or wade;
+            // knocked down, lie along the heading until getting up ---
             let stroking = swimming && move_dir.magnitude() > 0.001;
             let target_pitch = if swimming {
                 config.swim.pitch(stroking)
@@ -337,10 +340,10 @@ impl<'a> System<'a> for CharacterControlSystem {
                 .swim
                 .pitch_rate_toward(state.body_pitch, target_pitch);
             // A body caught by an edge stands up as the grip carries it.
-            state.body_pitch = if hanging {
-                state.grip.map_or(0.0, |grip| grip.pitch(config))
-            } else {
-                approach(state.body_pitch, target_pitch, rate, dt)
+            state.body_pitch = match state.locomotion {
+                _ if hanging => state.grip.map_or(0.0, |grip| grip.pitch(config)),
+                LocomotionState::Down(down) => down.pitch(state.body_pitch, &config.down, dt),
+                _ => approach(state.body_pitch, target_pitch, rate, dt),
             };
             if let Some(attitude) = attitude {
                 attitude.hold(

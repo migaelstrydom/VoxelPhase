@@ -8,6 +8,7 @@ use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteS
 use super::animator::{BodyReading, CharacterAnimator};
 use super::debug_config::AnimationDebugConfig;
 use super::foot_placer::{FootPhase, FootPlacer};
+use super::humanoid::down::{GroundPlane, Lying};
 use super::humanoid::hang::{HangPhase, LedgeReading};
 use crate::character::grab::GrabConfig;
 use crate::character::ledge::LedgeSensor;
@@ -156,7 +157,22 @@ impl<'a> System<'a> for CharacterAnimationSystem {
                     .get(entity)
                     .and_then(|s| s.ahead)
                     .map(|ahead| (ahead.hands, ahead.in_seconds)),
-                lying: (!character_state.locomotion.in_control()).then_some(orientation.0),
+                lying: (!character_state.locomotion.in_control()).then(|| Lying {
+                    rotation: orientation.0,
+                    ground: grounding
+                        .normal
+                        .filter(|_| grounding.is_grounded)
+                        .zip(configs.get(entity))
+                        .map(|(normal, config)| {
+                            GroundPlane::under_capsule(
+                                body_pos,
+                                body_up,
+                                normal,
+                                config.collider_half_height,
+                                config.collider_radius,
+                            )
+                        }),
+                }),
             };
             if let Some(throws) = throws.get(entity) {
                 animator.observe_throws(throws.this_frame(), dt);

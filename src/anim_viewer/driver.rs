@@ -289,6 +289,7 @@ fn pose_label(pose: &PoseState) -> &'static str {
         PoseState::Airborne { .. } => "air",
         PoseState::Swimming { .. } => "swim",
         PoseState::Hanging => "hang",
+        PoseState::Down => "down",
     }
 }
 

@@ -3,12 +3,13 @@
 //! This is the single source of truth for character animation.
 //! All animation logic flows through this animator.
 
-use nalgebra::{Point3, UnitQuaternion, Vector3};
+use nalgebra::{Point3, Vector3};
 use specs::{Component, VecStorage};
 
 use super::config::{CharacterRigConfig, GaitPreset};
 use super::foot_placer::{FootPlacer, FootSide, LegEnvelope, LegMode, PlacerFoot};
 use super::humanoid::body_frame::BodyFrame;
+use super::humanoid::down::{DownFigure, Lying};
 use super::humanoid::foot_slew::FootSlew;
 use super::humanoid::hang::{FigureNow, Hang, LedgeReading};
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Stroke, Takeoff, TickCtx};
@@ -77,9 +78,9 @@ pub struct BodyReading<'a> {
     /// An edge the hands will reach along a jump's or fall's arc: where each
     /// hand will hold, and how soon, in seconds.
     pub reach_for: Option<([Point3<f32>; 2], f32)>,
-    /// The body's rotation, while it is out of the character's control
+    /// How the body lies, while it is out of the character's control
     /// (knocked down) and drawn as it lies.
-    pub lying: Option<UnitQuaternion<f32>>,
+    pub lying: Option<Lying>,
 }
 
 /// The character animation driver.
@@ -241,7 +242,15 @@ impl CharacterAnimator {
         self.state.pelvis_position = pelvis_position;
         self.state.velocity = velocity;
         self.state.body_pitch = body.up.dot(&facing).atan2(body.up.y);
-        self.state.lying = body.lying.as_ref().map(BodyFrame::of);
+        self.state.down = match (&character_state.locomotion, &body.lying) {
+            (LocomotionState::Down(down), Some(lying)) => Some(DownFigure::advance(
+                self.state.down.as_ref(),
+                lying,
+                &down.phase,
+                dt,
+            )),
+            _ => None,
+        };
         self.state.water_surface = body.immersion.water.map(|w| w.surface);
         self.state.left.normal = self.locomotion.ground(FootSide::Left).normal_or_up();
         self.state.right.normal = self.locomotion.ground(FootSide::Right).normal_or_up();
@@ -517,7 +526,8 @@ impl CharacterAnimator {
                 | PoseState::Hop { .. }
                 | PoseState::Airborne { .. }
                 | PoseState::Swimming { .. }
-                | PoseState::Hanging,
+                | PoseState::Hanging
+                | PoseState::Down,
                 _,
             ) => None,
         };
@@ -537,7 +547,8 @@ impl CharacterAnimator {
                 | PoseState::Launching { .. }
                 | PoseState::Hop { .. }
                 | PoseState::Swimming { .. }
-                | PoseState::Hanging,
+                | PoseState::Hanging
+                | PoseState::Down,
                 _,
             ) => None,
         };
@@ -551,7 +562,8 @@ impl CharacterAnimator {
                 | PoseState::Launching { .. }
                 | PoseState::Hop { .. }
                 | PoseState::Airborne { .. }
-                | PoseState::Hanging,
+                | PoseState::Hanging
+                | PoseState::Down,
                 _,
             ) => None,
         };
@@ -706,7 +718,10 @@ fn build_upper_ctx<'a>(
     grab: &'a GrabConfig,
 ) -> UpperSampleCtx<'a> {
     let preset = gait_preset_for(pose, rig);
-    let (pelvis_offset, torso_pitch) = upper_torso_inputs(preset);
+    let (pelvis_offset, torso_pitch) = match (pose, &anim.down) {
+        (PoseState::Down, Some(down)) => down.trunk(rig, anim.pelvis_position),
+        _ => upper_torso_inputs(preset),
+    };
     UpperSampleCtx {
         rig,
         anim,
@@ -795,8 +810,9 @@ fn copy_placer_foot(foot: &mut FootState, placer: &PlacerFoot) {
 /// The arms' role: what the grab system has them doing, and otherwise the
 /// locomotion state's carriage. They swing on foot and through a Hop the
 /// legs stride through, which flows out of the run and back into it, brace
-/// through a jump, a fall or a Hop too long to stride through, and stroke in
-/// the water. Which grabs a state allows is
+/// through a jump, a fall or a Hop too long to stride through, stroke in
+/// the water, and lie as a knocked-down figure does. Which grabs a state
+/// allows is
 /// `CharacterState::arm_state_allowed`.
 fn map_upper_state(arm: &ArmState, state: &LocomotionState) -> UpperState {
     match arm {
@@ -809,9 +825,8 @@ fn map_upper_state(arm: &ArmState, state: &LocomotionState) -> UpperState {
                     UpperState::Braced
                 }
             }
-            LocomotionState::Jump(_) | LocomotionState::Fall(_) | LocomotionState::Down(_) => {
-                UpperState::Braced
-            }
+            LocomotionState::Jump(_) | LocomotionState::Fall(_) => UpperState::Braced,
+            LocomotionState::Down(_) => UpperState::Down,
             LocomotionState::Ledge(_) => UpperState::Gripping,
             LocomotionState::Swim(_) => UpperState::Stroking,
         },
@@ -919,7 +934,8 @@ fn next_pose_state(
             PoseState::Grounded { .. }
             | PoseState::Hop { .. }
             | PoseState::Swimming { .. }
-            | PoseState::Hanging => match phase {
+            | PoseState::Hanging
+            | PoseState::Down => match phase {
                 TakeoffPhase::Launch { .. } => PoseState::Launching {
                     kind: jump_kind(kind),
                     takeoff,
@@ -931,12 +947,11 @@ fn next_pose_state(
                 },
             },
         },
-        // Knocked down, the figure is a falling one until the limbs are
-        // drawn trailing the body's motion.
-        LocomotionState::Fall(_) | LocomotionState::Down(_) => PoseState::Airborne {
+        LocomotionState::Fall(_) => PoseState::Airborne {
             kind: AirKind::Fall,
             takeoff,
         },
+        LocomotionState::Down(_) => PoseState::Down,
         LocomotionState::Ledge(_) => PoseState::Hanging,
         // In the water, the stroke follows the intent the way the gait does
         // on land: going somewhere is a crawl, staying put is a tread.

@@ -147,6 +147,7 @@ impl Body {
                 position: self.position,
                 velocity: self.velocity,
                 tilt: 0.0,
+                face_up: false,
                 // No plan takes off here, and nothing else reads it.
                 since_contact: 0.0,
                 knocked: None,

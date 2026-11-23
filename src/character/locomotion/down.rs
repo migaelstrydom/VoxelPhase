@@ -1,24 +1,39 @@
+use std::f32::consts::FRAC_PI_2;
+
 use super::input::LocomotionInput;
 use super::on_foot::OnFoot;
 use super::rule::MovementRule;
 use super::state::LocomotionState;
-use crate::character::attitude::AttitudeHold;
+use crate::character::attitude::{approach, AttitudeHold};
 
 /// How a knocked-down character lies and gets up again.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DownConfig {
-    /// Below this speed, m/s, a body lying on something lies still and may
-    /// get up.
+    /// Below this speed, m/s, a body lying on something lies still and
+    /// gathers itself.
     pub still_speed: f32,
+    /// Past this lean, rad, a body is lying down. One knocked down where it
+    /// stands is still upright, however still: it buckles over first.
+    pub lying_tilt: f32,
     /// Seconds past its time a body lying on something but never still (on a
-    /// slope it slides down, a raft that rocks) waits before getting up
+    /// slope it slides down, a raft that rocks) waits before gathering itself
     /// anyway.
     pub settle_limit: f32,
-    /// How sprung the attitude is while the body rights itself, rad per N·m:
-    /// the larger, the slower it stands. Stiff enough to outpull gravity's
-    /// tipping at every lean (about 275 N·m per radian on the player), or
-    /// the body hangs part way up. The spring is barely damped, so standing
-    /// ends at its first pass within `upright_tilt`, before it can swing past.
+    /// Seconds a body gathering itself takes at least before it gets up:
+    /// time for one lying on its side to turn onto its front or its back.
+    pub gather_time: f32,
+    /// How fast, rad/s, a body getting up is pitched from lying along its
+    /// heading to standing.
+    pub rise_rate: f32,
+    /// How sprung the attitude is while the body gathers itself, rad per
+    /// N·m: soft, as a stiffer spring turns a body lying on its side over
+    /// faster and rocks it further past its front or back.
+    pub gather_compliance: f32,
+    /// How sprung the attitude is while the body gets up, rad per N·m: stiff
+    /// enough to keep up with `rise_rate`, so the body arrives upright
+    /// without swinging past it and popping off its feet, and to outpull
+    /// gravity's tipping at every lean (about 275 N·m per radian on the
+    /// player).
     pub rise_compliance: f32,
     /// Within this lean of upright, rad, a body getting up is on its feet;
     /// the rigid hold that takes over stands it the rest of the way at once.
@@ -36,9 +51,13 @@ impl Default for DownConfig {
     fn default() -> Self {
         Self {
             still_speed: 0.5,
+            lying_tilt: 60f32.to_radians(),
             settle_limit: 2.0,
-            rise_compliance: 3.0e-4,
-            upright_tilt: 20f32.to_radians(),
+            gather_time: 0.6,
+            rise_rate: 2.5,
+            gather_compliance: 3.0e-4,
+            rise_compliance: 8.0e-5,
+            upright_tilt: 8f32.to_radians(),
             rise_limit: 1.5,
             buckle_rate: 3.0,
         }
@@ -46,7 +65,8 @@ impl Default for DownConfig {
 }
 
 /// Knocked down by a heavy blow: no control while the body tumbles where the
-/// blow threw it, then getting up.
+/// blow threw it, then gathering itself on its front or its back and getting
+/// up.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Down {
     pub phase: DownPhase,
@@ -55,20 +75,30 @@ pub struct Down {
 /// Where in being knocked down a body is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DownPhase {
-    /// Limp for `remaining` seconds more at least, and then until it lies
-    /// still on something.
+    /// Limp until it lies still on something, with `remaining` seconds of
+    /// its time down left.
     Limp { remaining: f32 },
-    /// Righting itself, `elapsed` seconds in, still with no control.
+    /// Lying still, held lying along its heading on its front, or on its back
+    /// if it came to rest `face_up`, which turns a body lying on its side
+    /// onto whichever is nearer: `elapsed` seconds in, with `remaining`
+    /// seconds of its time down left.
+    Gathered {
+        remaining: f32,
+        elapsed: f32,
+        face_up: bool,
+    },
+    /// Getting up, `elapsed` seconds in, still with no control: off its knees
+    /// from its front, sitting up from its back.
     Rising { elapsed: f32 },
 }
 
 impl Down {
-    /// Knocked down from `from` for `seconds`. A body already limp stays
+    /// Knocked down from `from` for `seconds`. A body already down stays
     /// down for whichever is longer; one getting up goes down again.
     pub fn knocked(from: &LocomotionState, seconds: f32) -> Self {
         let remaining = match from {
             LocomotionState::Down(Down {
-                phase: DownPhase::Limp { remaining },
+                phase: DownPhase::Limp { remaining } | DownPhase::Gathered { remaining, .. },
             }) => remaining.max(seconds),
             _ => seconds,
         };
@@ -77,9 +107,11 @@ impl Down {
         }
     }
 
-    /// Limp until its time is up and it lies still on something; then
-    /// getting up until it stands within `upright_tilt` or has tried for
-    /// `rise_limit`, when it is on its feet.
+    /// Limp until it lies down, still, on something; then gathered until its
+    /// time is up and it has had `gather_time` to turn onto its front or its
+    /// back (limp again if the ground goes from under it); then getting up
+    /// until it stands within `upright_tilt` or has tried for `rise_limit`,
+    /// when it is on its feet.
     pub fn tick(self, input: &LocomotionInput) -> LocomotionState {
         let (facts, config, dt) = (&input.facts, &input.config.down, input.dt);
         let phase = match self.phase {
@@ -87,10 +119,32 @@ impl Down {
                 let remaining = remaining - dt;
                 let settled = facts.velocity.norm() <= config.still_speed
                     || remaining <= -config.settle_limit;
-                if remaining <= 0.0 && facts.grounded && settled {
-                    DownPhase::Rising { elapsed: 0.0 }
+                if facts.grounded && settled && facts.tilt >= config.lying_tilt {
+                    DownPhase::Gathered {
+                        remaining,
+                        elapsed: 0.0,
+                        face_up: facts.face_up,
+                    }
                 } else {
                     DownPhase::Limp { remaining }
+                }
+            }
+            DownPhase::Gathered {
+                remaining,
+                elapsed,
+                face_up,
+            } => {
+                let (remaining, elapsed) = (remaining - dt, elapsed + dt);
+                if !facts.grounded {
+                    DownPhase::Limp { remaining }
+                } else if remaining <= 0.0 && elapsed >= config.gather_time {
+                    DownPhase::Rising { elapsed: 0.0 }
+                } else {
+                    DownPhase::Gathered {
+                        remaining,
+                        elapsed,
+                        face_up,
+                    }
                 }
             }
             DownPhase::Rising { elapsed } => {
@@ -111,21 +165,47 @@ impl Down {
         MovementRule::limp()
     }
 
-    /// Let go while limp; sprung upright while getting up.
+    /// Let go while limp; sprung to its [`pitch`](Self::pitch) while it
+    /// gathers itself and gets up.
     pub fn attitude_hold(&self, config: &DownConfig) -> AttitudeHold {
         match self.phase {
             DownPhase::Limp { .. } => AttitudeHold::Released,
+            DownPhase::Gathered { .. } => AttitudeHold::Sprung {
+                compliance: config.gather_compliance,
+            },
             DownPhase::Rising { .. } => AttitudeHold::Sprung {
                 compliance: config.rise_compliance,
             },
         }
     }
 
-    /// The water takes a body whose time down is up: it swims. One still
-    /// limp floats as it lies.
+    /// The pitch to hold the body at this frame, rad, from `current`: as it
+    /// was while limp, since nothing holds it; gathered, lying along its
+    /// heading, on its front (+90°) or its back (−90°, its heading toward
+    /// its feet), at once; getting up, pitched toward standing at
+    /// `rise_rate`, which stands a body on its front up off its knees and
+    /// sits one on its back up.
+    pub fn pitch(&self, current: f32, config: &DownConfig, dt: f32) -> f32 {
+        match self.phase {
+            DownPhase::Limp { .. } => current,
+            DownPhase::Gathered { face_up, .. } => {
+                if face_up {
+                    -FRAC_PI_2
+                } else {
+                    FRAC_PI_2
+                }
+            }
+            DownPhase::Rising { .. } => approach(current, 0.0, config.rise_rate, dt),
+        }
+    }
+
+    /// The water takes a body whose time down is up: it swims. One with
+    /// time down left floats as it lies.
     pub fn water_takes(&self) -> bool {
         match self.phase {
-            DownPhase::Limp { remaining } => remaining <= 0.0,
+            DownPhase::Limp { remaining } | DownPhase::Gathered { remaining, .. } => {
+                remaining <= 0.0
+            }
             DownPhase::Rising { .. } => true,
         }
     }

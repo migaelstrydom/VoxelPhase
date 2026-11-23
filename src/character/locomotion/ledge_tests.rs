@@ -59,6 +59,7 @@ fn frame(grounded: bool) -> Frame {
             position: CENTRE,
             velocity: Vector3::zeros(),
             tilt: 0.0,
+            face_up: false,
             since_contact: 0.0,
             knocked: None,
         },
