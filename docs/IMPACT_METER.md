@@ -124,7 +124,8 @@ quantity measures a transmitted impact (see *Limits*).
   HitRecorder, after every solve (main and CCD), per pair, per frame:
     a contact that closed faster than HitConfig::speed and took impulse
     ──▶ Hit { pair, point, normal, approach, restitution, give,
-              bluntness, effective_mass, patch }        PhysicsWorld::hits()
+              bluntness, effective_mass, side_masses, backed,
+              patch, continues }                        PhysicsWorld::hits()
 
   blasts, as they are applied
     ──▶ Shove { body, impulse, point }                  PhysicsWorld::shoves()
@@ -158,10 +159,10 @@ per frame, from the substep it closed fastest in.
 | `give` | how far the pair yields before it stops, m: both sides' gives in series (their sum) |
 | `bluntness` | radius of the sharper side's feature, m |
 | `effective_mass` | the pair's mass along the normal at `point`, kg: `1 / Σ (1/m + (r×n)·I⁻¹(r×n))` over the sides that can move |
-| `side_masses` | each side's own mass along the normal at `point`, kg: what the contact would have had to stop were the other side a wall; infinite for a side that cannot move |
-| `backed` | whether each side was backed against the blow: held against the world (a weld, a medium drive), or pressed the opposite way by another of its contacts that took impulse in the same solve (a block lying on the ground struck from above) |
+| `side_masses` | each side's own mass along the normal at `point`, kg, `[a, b]`: what the contact would have had to stop were the other side a wall; infinite for a side that cannot move |
+| `backed` | whether each side, `[a, b]`, was backed against the blow: held by a constraint that anchors it to the world (`ConstraintKind::anchors_position`: a weld, a joint to the world, a medium drive), or pressed the opposite way by another of its contacts that took impulse in the same solve (a block lying on the ground struck from above) |
 | `patch` | `Point`, `Line { length }` or `Face { area }` |
-| `continues` | the pair was hit the frame before too: the rest of a stop the solver split across two frames (it lets a body reach the surface still closing, and stops it the next frame), not a new blow. Readers that count blows (harm) skip it; readers that judge each frame's hardest blow (breakage) need not, since a continuation never reads harder than the stop it continues, and a tumbling body's second contact with the same partner (a column landing on one end and slapping down on the other) is a blow of its own |
+| `continues` | the same pair was hit the frame before too: usually the rest of a stop the solver split across two frames (it lets a body reach the surface still closing, and stops it the next frame). Readers that count blows (harm) skip it; readers that judge each frame's hardest blow (breakage) need not, since a continuation never reads harder than the stop it continues, and a tumbling body's second contact with the same partner (a column landing on one end and slapping down on the other) is a blow of its own |
 
 - **A hit is confirmed, not predicted**: a contact closing faster than
   `HitConfig::speed` (0.5 m/s) that took impulse, as Box2D v3's hit events
@@ -178,9 +179,9 @@ per frame, from the substep it closed fastest in.
 ### `Shove`
 
 What a blast gave a body as the step applied it: the impulse (the body's
-change of velocity is that over its mass) and where it struck. A blast
-strikes a body at its centre of mass; if blasts come to load each part of a
-body's bulk at its own point, each part's share is one more `Shove`.
+change of velocity is that over its mass) and where it struck: the centre
+of the blast's pressure on the body's envelope, so a body struck harder at
+one end than the other is spun (`docs/PHYSICS_ARCHITECTURE.md`, blasts).
 
 ### Materials
 
@@ -197,12 +198,14 @@ geometry do not ask what the ground is and take it as hard.
 
 ### Severity
 
-`Hit`'s methods, each tested by numbers:
+`Hit`'s methods, each tested by numbers, and one side's (`hit.side(body)`,
+a `HitSide`: which way it was pushed, what struck it, whether it was
+backed):
 
 - **`delta_v(m)`**, the change of velocity of a side weighing m:
   `(1 + e) · approach · m_eff / m`. A body landing square on the ground
   with no bounce loses exactly its approach.
-- **`impulse`**, the pair's: `(1 + e) · approach · m_eff`. **`impulse_through(body)`**,
+- **`impulse`**, the pair's: `(1 + e) · approach · m_eff`. **`HitSide::impulse_through`**,
   what the blow drove through that side: the pair's, or for a backed side
   the other side stopped as against a wall, `(1 + e) · approach · m_other`.
   A 400 kg hammer on a 66 kg block reads 355 N·s for the pair; with the
@@ -237,7 +240,7 @@ Measured November 2026, interleaved release builds of `physics_perf`
 - Recording hits: the solve stage's mean 1.5–2 % (about 0.008 ms) higher,
   its worst frame within noise. Final-state fingerprints unchanged.
 - The four igloos peak at 151 hits in a frame out of 3444 contacts, about
-  13 a frame over the run. A `Hit` is 144 bytes and a `Shove` 40, so a
+  13 a frame over the run. A `Hit` is 152 bytes and a `Shove` 40, so a
   frame's records are tens of kilobytes at most, in buffers whose capacity
   is kept from frame to frame.
 

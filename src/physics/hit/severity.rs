@@ -7,7 +7,7 @@ use std::f32::consts::PI;
 
 use super::event::Hit;
 use super::patch::Patch;
-use crate::physics::handle::RigidBodyHandle;
+use super::side::HitSide;
 
 /// The least give a hit is judged over, m: a pair that claims none would
 /// stop in no time, at no finite force.
@@ -21,33 +21,13 @@ impl Hit {
         if !mass.is_finite() || mass <= 0.0 {
             return 0.0;
         }
-        (1.0 + self.restitution) * self.approach * self.effective_mass.min(mass) / mass
+        self.stopping_impulse(self.effective_mass.min(mass)) / mass
     }
 
     /// The impulse that stopped the pair, N·s, the same on either side:
     /// `(1 + e) · approach · m_eff`.
     pub fn impulse(&self) -> f32 {
-        (1.0 + self.restitution) * self.approach * self.effective_mass
-    }
-
-    /// The impulse the hit drove through `body`'s side, N·s: the pair's
-    /// ([`impulse`](Self::impulse)), unless that side was backed, when it
-    /// stopped the other side as a wall would. What breaks a block struck
-    /// where it lies: it barely moves, and passes the whole blow on to what
-    /// it lies on. `None` if the hit was not on `body`.
-    pub fn impulse_through(&self, body: RigidBodyHandle) -> Option<f32> {
-        let (own, other) = if self.body_b == body {
-            (1, 0)
-        } else if self.body_a == Some(body) {
-            (0, 1)
-        } else {
-            return None;
-        };
-        let stopped = match self.side_masses[other] {
-            wall if self.backed[own] && wall.is_finite() => wall.max(self.effective_mass),
-            _ => self.effective_mass,
-        };
-        Some((1.0 + self.restitution) * self.approach * stopped)
+        self.stopping_impulse(self.effective_mass)
     }
 
     /// The greatest force between the pair, N: what stops the effective
@@ -87,6 +67,28 @@ impl Hit {
     fn give(&self) -> f32 {
         self.give.max(MIN_GIVE)
     }
+
+    /// The impulse that stops `mass` kg closing at the hit's approach, with
+    /// its bounce, N·s: `(1 + e) · approach · mass`.
+    fn stopping_impulse(&self, mass: f32) -> f32 {
+        (1.0 + self.restitution) * self.approach * mass
+    }
+}
+
+impl HitSide<'_> {
+    /// The impulse the hit drove through this side, N·s: the pair's
+    /// ([`Hit::impulse`]), unless this side was backed, when it stopped the
+    /// other side as a wall would. What breaks a block struck where it
+    /// lies: it barely moves, and passes the whole blow on to what it lies
+    /// on.
+    pub fn impulse_through(&self) -> f32 {
+        let hit = self.hit;
+        let stopped = match hit.side_masses[self.side.other().index()] {
+            wall if self.backed() && wall.is_finite() => wall.max(hit.effective_mass),
+            _ => hit.effective_mass,
+        };
+        hit.stopping_impulse(stopped)
+    }
 }
 
 #[cfg(test)]
@@ -94,6 +96,7 @@ mod tests {
     use nalgebra::{Point3, Vector3};
 
     use super::*;
+    use crate::physics::handle::RigidBodyHandle;
 
     fn hit(patch: Patch, approach: f32, effective_mass: f32, give: f32) -> Hit {
         Hit {
@@ -127,16 +130,15 @@ mod tests {
             side_masses: [400.0, 60.0],
             ..hit(Patch::Point, 5.0, 400.0 * 60.0 / 460.0, 0.01)
         };
+        let through = |hit: &Hit, body| hit.side(body).unwrap().impulse_through();
         let pair = free.impulse();
-        assert_eq!(free.impulse_through(block), Some(pair));
+        assert_eq!(through(&free, block), pair);
         let lying = Hit {
             backed: [false, true],
             ..free
         };
-        assert!((lying.impulse_through(block).unwrap() - 2000.0).abs() < 1e-2);
-        assert_eq!(lying.impulse_through(hammer), Some(pair));
-        let elsewhere = RigidBodyHandle(generational_arena::Index::from_raw_parts(2, 0));
-        assert_eq!(lying.impulse_through(elsewhere), None);
+        assert!((through(&lying, block) - 2000.0).abs() < 1e-2);
+        assert_eq!(through(&lying, hammer), pair);
     }
 
     #[test]

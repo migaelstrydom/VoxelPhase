@@ -19,13 +19,13 @@
 
 use nalgebra::{Point3, Vector3};
 
-use crate::physics::{ColliderHandle, Hit, PhysicsWorld, RigidBodyHandle};
+use crate::physics::{ColliderHandle, HitSide, PhysicsWorld, RigidBodyHandle};
 
 /// The hardest blow one collider took in the last step.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ContactBlow {
     /// The impulse the hit drove through its side, N·s
-    /// ([`Hit::impulse_through`]). Zero for no blow.
+    /// ([`HitSide::impulse_through`]). Zero for no blow.
     pub magnitude: f32,
     /// Where it was struck, world space.
     pub point: Point3<f32>,
@@ -47,21 +47,14 @@ impl Default for ContactBlow {
 }
 
 impl ContactBlow {
-    /// The blow `hit` dealt `body`, `None` if it was not on `body`.
-    fn of(hit: &Hit, body: RigidBodyHandle) -> Option<Self> {
-        let push = hit.push_on(body)?;
-        let magnitude = hit.impulse_through(body)?;
-        let by = if hit.body_b == body {
-            hit.collider_a
-        } else {
-            hit.collider_b
-        };
-        Some(Self {
-            magnitude,
-            point: hit.point,
-            push,
-            by,
-        })
+    /// The blow a hit dealt `side`.
+    fn of(side: &HitSide) -> Self {
+        Self {
+            magnitude: side.impulse_through(),
+            point: side.hit().point,
+            push: side.push(),
+            by: side.struck_by(),
+        }
     }
 }
 
@@ -75,15 +68,15 @@ pub fn contact_blows(
 ) -> Vec<ContactBlow> {
     let mut blows = vec![ContactBlow::default(); colliders.len()];
     for hit in world.hits_on(body) {
-        let Some(blow) = ContactBlow::of(hit, body).filter(|b| b.magnitude.is_finite()) else {
+        let Some(side) = hit.side(body) else {
             continue;
         };
-        let own = if hit.body_b == body {
-            hit.collider_b
-        } else {
-            hit.collider_a
-        };
-        let index = own
+        let blow = ContactBlow::of(&side);
+        if !blow.magnitude.is_finite() {
+            continue;
+        }
+        let index = side
+            .collider()
             .and_then(|own| colliders.iter().position(|&c| c == own))
             .or_else(|| nearest(world, body, colliders, hit.point));
         if let Some(index) = index {

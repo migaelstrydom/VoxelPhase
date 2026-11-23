@@ -35,41 +35,27 @@ pub struct Hit {
     /// The pair's mass along the normal at `point`, kg: what the contact had
     /// to stop. Infinite only if neither side can move.
     pub effective_mass: f32,
-    /// Each side's own mass along the normal at `point`, kg, `[a, b]`: what
-    /// the contact would have had to stop were the other side a wall.
-    /// Infinite for a side that cannot move.
+    /// Each side's own mass along the normal at `point`, kg, `[a, b]`
+    /// ([`Side::index`](super::side::Side::index)): what the contact would have
+    /// had to stop were the other side a wall. Infinite for a side that
+    /// cannot move.
     pub side_masses: [f32; 2],
-    /// Whether each side, `[a, b]`, was backed against the blow: held
-    /// against the world (a weld), or pressed the other way by another of
-    /// its contacts in the same solve, as a block lying on the ground is
-    /// when it is struck from above. A backed side passes the blow on rather
-    /// than moving with it.
+    /// Whether each side, `[a, b]` ([`Side::index`](super::side::Side::index)),
+    /// was backed against the blow: held by a constraint that anchors it to
+    /// the world
+    /// ([`anchors_position`](crate::physics::ConstraintKind::anchors_position)),
+    /// or pressed the other way by another of its contacts in the same
+    /// solve, as a block lying on the ground is when it is struck from
+    /// above. A backed side passes the blow on rather than moving with it.
     pub backed: [bool; 2],
     /// What the pair met over.
     pub patch: Patch,
-    /// The pair was hit the frame before too and is still closing: the rest
-    /// of a stop the solver split across two frames, not a new blow. Its
-    /// approach is what the first left.
+    /// The same pair was hit the frame before too. Usually that is the rest
+    /// of a stop the solver split across two frames, whose approach is what
+    /// the first left; but a body tumbling against the same partner (a
+    /// column landing on one end and slapping down on the other) strikes it
+    /// anew, so whether to skip it is the reader's call.
     pub continues: bool,
-}
-
-impl Hit {
-    /// Whether `body` is either side of the hit.
-    pub fn involves(&self, body: RigidBodyHandle) -> bool {
-        self.body_b == body || self.body_a == Some(body)
-    }
-
-    /// Which way the hit pushed `body`, unit length: along the normal for
-    /// `body_b`, against it for `body_a`. `None` if `body` was not in it.
-    pub fn push_on(&self, body: RigidBodyHandle) -> Option<Vector3<f32>> {
-        if self.body_b == body {
-            Some(self.normal)
-        } else if self.body_a == Some(body) {
-            Some(-self.normal)
-        } else {
-            None
-        }
-    }
 }
 
 /// What a blast gave a body, as the step applied it.
@@ -80,7 +66,7 @@ pub struct Shove {
     /// The impulse it was given, N·s, world space: its change of velocity
     /// is this over its mass.
     pub impulse: Vector3<f32>,
-    /// Where the blast struck it: its centre of mass, until a blast loads
-    /// each part of a body's bulk at its own point.
+    /// Where the blast struck it: the centre of the pressure on its bulk,
+    /// which spins a body loaded harder at one end than the other.
     pub point: Point3<f32>,
 }

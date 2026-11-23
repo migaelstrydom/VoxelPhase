@@ -45,6 +45,7 @@ use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
 use super::pipeline::normal_smoothing::NormalSmoothingConfig;
 use super::pipeline::pair::SolverManifold;
+use super::pressure;
 use super::profile::{FrameProfile, PhysicsStage};
 use super::silhouette;
 use super::sleep::{SleepManager, SleepManagerConfig};
@@ -474,8 +475,7 @@ impl PhysicsWorld {
         handle: RigidBodyHandle,
         impulse: &PhysicsImpulse,
     ) -> Option<Vector3<f32>> {
-        let body = self.body(handle)?;
-        blast_on(body, &self.colliders, impulse).map(|(shove, _)| shove)
+        blast_impulse_on(self.body(handle)?, &self.colliders, impulse)
     }
 
     /// Shove `handle` with `impulse` as a step would: by the area its
@@ -483,12 +483,13 @@ impl PhysicsWorld {
     /// waking it. For tools that blast a world outside its step. Returns
     /// false for no body, or one out of reach.
     pub fn apply_blast(&mut self, handle: RigidBodyHandle, impulse: &PhysicsImpulse) -> bool {
-        let Some((shove, point)) = self
-            .body(handle)
-            .and_then(|body| blast_on(body, &self.colliders, impulse))
-        else {
+        let Some(body) = self.body(handle) else {
             return false;
         };
+        let Some(shove) = blast_impulse_on(body, &self.colliders, impulse) else {
+            return false;
+        };
+        let point = blast_point_on(body, &self.colliders, impulse);
         self.apply_impulse_at_point(handle, shove, point)
     }
 
@@ -534,11 +535,7 @@ impl PhysicsWorld {
     /// bears its weight through it rather than through its contacts
     /// ([`ConstraintKind::anchors_position`]).
     pub fn is_held_by_world(&self, handle: RigidBodyHandle) -> bool {
-        self.constraints.iter().any(|(_, constraint)| {
-            constraint.active
-                && constraint.kind.anchors_position()
-                && constraint.kind.references_body(handle)
-        })
+        held_by_world(&self.constraints).any(|held| held == handle)
     }
 
     /// Apply one-shot impulses to all dynamic bodies.
@@ -551,7 +548,8 @@ impl PhysicsWorld {
             let mut wake = false;
 
             for impulse in impulses {
-                if let Some((v, point)) = blast_on(body, &self.colliders, impulse) {
+                if let Some(v) = blast_impulse_on(body, &self.colliders, impulse) {
+                    let point = blast_point_on(body, &self.colliders, impulse);
                     body.apply_impulse_at_point(v, point);
                     self.shoves.push(Shove {
                         body: RigidBodyHandle(idx),
@@ -1324,12 +1322,7 @@ impl PhysicsWorld {
 
         self.last_contacts.clear();
         self.impacts.clear();
-        self.hits.clear(
-            self.constraints
-                .iter()
-                .filter(|(_, constraint)| constraint.active)
-                .filter_map(|(_, constraint)| constraint.kind.anchored_body()),
-        );
+        self.hits.begin_frame(held_by_world(&self.constraints));
         self.contact_work.clear();
         for manifold in &solver_manifolds {
             for contact in &manifold.contacts {
@@ -2321,22 +2314,39 @@ impl PhysicsWorld {
     }
 }
 
+/// The bodies `constraints` hold against the world
+/// ([`ConstraintKind::anchored_body`]).
+fn held_by_world(constraints: &Arena<Constraint>) -> impl Iterator<Item = RigidBodyHandle> + '_ {
+    constraints
+        .iter()
+        .filter(|(_, constraint)| constraint.active)
+        .filter_map(|(_, constraint)| constraint.kind.anchored_body())
+}
+
 /// The impulse `impulse` gives `body`, by the area its envelope shows it,
-/// each part weighed by its solidity ([`silhouette::struck_area`]), and the
-/// point it acts at ([`PhysicsImpulse::centre_of_pressure`]).
-fn blast_on(
+/// each part weighed by its solidity ([`silhouette::struck_area`]). `None`
+/// out of its reach.
+fn blast_impulse_on(
     body: &RigidBody,
     colliders: &Arena<Collider>,
     impulse: &PhysicsImpulse,
-) -> Option<(Vector3<f32>, Point3<f32>)> {
-    let shove = impulse.impulse_on(body.position(), |travel| {
+) -> Option<Vector3<f32>> {
+    impulse.impulse_on(body.position(), |travel| {
         silhouette::struck_area(body.envelope(colliders), body.rotation().inverse() * travel)
-    })?;
+    })
+}
+
+/// Where `impulse` pushes `body`: the centre of its pressure on the body's
+/// envelope ([`pressure::centre_of_pressure`]), or the centre of mass where
+/// it loads none of it.
+fn blast_point_on(
+    body: &RigidBody,
+    colliders: &Arena<Collider>,
+    impulse: &PhysicsImpulse,
+) -> Point3<f32> {
     let pose = Isometry3::from_parts(body.position().coords.into(), body.rotation());
-    let point = impulse
-        .centre_of_pressure(body.envelope(colliders), &pose)
-        .unwrap_or(body.position());
-    Some((shove, point))
+    pressure::centre_of_pressure(body.envelope(colliders), &pose, |at| impulse.loading_at(at))
+        .unwrap_or(body.position())
 }
 
 #[cfg(test)]

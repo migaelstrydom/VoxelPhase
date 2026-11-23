@@ -59,6 +59,7 @@ mod impulses;
 mod math;
 mod narrowphase;
 mod pipeline;
+mod pressure;
 pub mod profile;
 mod rest_pose;
 mod silhouette;
@@ -97,7 +98,7 @@ pub use drive::{
 pub use energy_audit::{energy_per_kg, EnergyAudit};
 pub use force_provider::{ForceContext, ForceOutput, MediumDrag, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
-pub use hit::{Hit, HitConfig, Patch, Shove};
+pub use hit::{Hit, HitConfig, HitSide, Patch, Shove};
 pub use impact::{Impact, ImpactLedger};
 pub use impulses::{Loading, PhysicsImpulse, PhysicsImpulseQueue};
 pub use profile::{FrameProfile, PhysicsStage};

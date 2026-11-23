@@ -44,7 +44,7 @@ impl Blow {
         in_control: bool,
         config: &HarmConfig,
     ) -> Option<Self> {
-        let push = hit.push_on(body)?;
+        let push = hit.side(body)?.push();
         let moved_into = (-velocity.dot(&push)).max(0.0);
         let braced = in_control && moved_into >= 0.5 * hit.approach;
         Some(Self {

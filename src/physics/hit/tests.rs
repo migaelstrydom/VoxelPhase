@@ -7,8 +7,8 @@ use super::{Hit, Patch};
 use crate::debug::DebugLines;
 use crate::physics::bench_harness::geometry::FlatQuadGeometry;
 use crate::physics::{
-    Atmosphere, ColliderDesc, PhysicsConfig, PhysicsImpulse, PhysicsWorld, RigidBodyDesc,
-    RigidBodyHandle, SequentialStepper, Stepper, HARD_GIVE,
+    Atmosphere, ColliderDesc, ConstraintKind, PhysicsConfig, PhysicsImpulse, PhysicsWorld,
+    RigidBodyDesc, RigidBodyHandle, SequentialStepper, Stepper, HARD_GIVE,
 };
 
 const FRAME_DT: f32 = 1.0 / 60.0;
@@ -235,11 +235,11 @@ fn a_head_on_pair_shares_the_blow_by_its_effective_mass() {
     let speed = bench.world.body(left).unwrap().linear_velocity().x;
     assert_near(2.0 - speed, hit.delta_v(mass), 0.05, "change of speed");
     assert!(
-        hit.push_on(left).unwrap().x < -0.99,
+        hit.side(left).unwrap().push().x < -0.99,
         "the left ball is pushed back"
     );
     assert!(
-        hit.push_on(right).unwrap().x > 0.99,
+        hit.side(right).unwrap().push().x > 0.99,
         "the right ball is pushed on"
     );
 }
@@ -321,4 +321,91 @@ fn a_fast_small_ball_is_hit_at_its_speed() {
     );
     let arrival = (speed * speed + 2.0 * GRAVITY * 1.45).sqrt();
     assert_near(hits[0].approach, arrival, 0.03, "approach");
+}
+
+/// A 0.5 m crate placed at `at`, at rest.
+fn resting_crate(bench: &mut Bench, at: Point3<f32>) -> RigidBodyHandle {
+    let block = bench.body(RigidBodyDesc::dynamic().position(at), crate_box());
+    for _ in 0..30 {
+        bench.step(&[]);
+    }
+    block
+}
+
+/// A 110 kg ball fired at `block` from `from` off its centre at 5 m/s:
+/// whether each was backed against the first hit between them, `(block,
+/// ball)`.
+fn strike(bench: &mut Bench, block: RigidBodyHandle, from: Vector3<f32>) -> (bool, bool) {
+    let centre = bench.world.body(block).unwrap().position();
+    let ball = bench.body(
+        RigidBodyDesc::dynamic()
+            .position(centre + from)
+            .linear_velocity(-from.normalize() * 5.0),
+        ColliderDesc::sphere(0.15).density(7800.0).restitution(0.0),
+    );
+    let hits = bench.first_hits(ball, 1.0);
+    let hit = hits
+        .iter()
+        .find(|hit| hit.involves(block))
+        .expect("the ball strikes the block");
+    (
+        hit.side(block).unwrap().backed(),
+        hit.side(ball).unwrap().backed(),
+    )
+}
+
+/// Struck from above where it lies, a block is pushed back against the
+/// blow by the ground, and passes it on.
+#[test]
+fn a_block_struck_where_it_lies_is_backed_by_the_ground() {
+    let mut bench = Bench::new();
+    let block = resting_crate(&mut bench, Point3::new(3.0, 0.25, 1.0));
+    assert_eq!(
+        strike(&mut bench, block, Vector3::y() * 0.45),
+        (true, false)
+    );
+}
+
+#[test]
+fn a_block_struck_in_flight_is_backed_by_nothing() {
+    let mut bench = Bench::new();
+    let block = bench.body(
+        RigidBodyDesc::dynamic().position(Point3::new(3.0, 10.0, 1.0)),
+        crate_box(),
+    );
+    assert_eq!(
+        strike(&mut bench, block, Vector3::y() * 0.45),
+        (false, false)
+    );
+}
+
+/// Struck sideways where it lies, a block is pushed by the ground square to
+/// the blow, not against it, and moves with it.
+#[test]
+fn a_block_struck_across_the_ground_it_lies_on_is_not_backed() {
+    let mut bench = Bench::new();
+    let block = resting_crate(&mut bench, Point3::new(3.0, 0.25, 1.0));
+    assert_eq!(
+        strike(&mut bench, block, Vector3::x() * 0.45),
+        (false, false)
+    );
+}
+
+#[test]
+fn a_block_welded_to_the_world_is_backed_by_its_weld() {
+    let mut bench = Bench::new();
+    let at = Point3::new(3.0, 2.0, 1.0);
+    let block = bench.body(RigidBodyDesc::dynamic().position(at), crate_box());
+    bench.world.create_constraint(ConstraintKind::world_fixed(
+        block,
+        at,
+        Vector3::zeros(),
+        &UnitQuaternion::identity(),
+        0.0,
+        f32::INFINITY,
+    ));
+    assert_eq!(
+        strike(&mut bench, block, Vector3::y() * 0.45),
+        (true, false)
+    );
 }

@@ -42,18 +42,10 @@ pub fn jolt_of(world: &PhysicsWorld, body: RigidBodyHandle) -> Motion {
     let mut push = Vector3::zeros();
     let mut twist = Vector3::zeros();
     for hit in world.hits_on(body) {
-        let backed = if hit.body_b == body {
-            hit.backed[1]
-        } else {
-            hit.backed[0]
-        };
-        let Some(impulse) = hit
-            .push_on(body)
-            .filter(|_| !backed)
-            .map(|way| way * hit.impulse())
-        else {
+        let Some(side) = hit.side(body).filter(|side| !side.backed()) else {
             continue;
         };
+        let impulse = side.push() * hit.impulse();
         if !impulse.iter().all(|x| x.is_finite()) {
             continue;
         }

@@ -561,14 +561,9 @@ impl ConstraintKind {
         if !self.anchors_position() {
             return None;
         }
-        match self {
-            ConstraintKind::Fixed { body_b, .. }
-            | ConstraintKind::BallJoint { body_b, .. }
-            | ConstraintKind::Hinge { body_b, .. } => Some(*body_b),
-            ConstraintKind::SpringSlider(slider) => Some(slider.body_b),
-            ConstraintKind::MediumDrive { body, .. } => Some(*body),
-            _ => None,
-        }
+        let bodies = self.referenced_bodies();
+        debug_assert_eq!(bodies.len(), 1, "an anchor holds one body to the world");
+        bodies.first().copied()
     }
 
     /// Whether this constraint references the given body.

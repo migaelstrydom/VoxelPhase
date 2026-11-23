@@ -62,7 +62,10 @@ connects them.
   a size are struck alike and the lighter flies further, a plate edge-on is barely moved,
   a part behind another of the same body is shielded by it, and a gap between parts lets
   the blast through. Separate bodies do not shield each other. Fracture and glass read the loading per area (`PhysicsImpulse::loading_at`) as
-  the blast's strength at a point.
+  the blast's strength at a point. The shove acts at the centre of the blast's pressure on
+  the envelope (`pressure::centre_of_pressure`), each part sampled across its bounds, so a
+  plank struck at one end spins and a standing body struck at its feet is swept; the point
+  does not see shielding, so a shielded part still draws it to itself.
 
 ## Bodies, colliders, constraints
 

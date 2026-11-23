@@ -8,7 +8,8 @@
 //!                                                  │ the patch within its give,
 //!                                                  │ its effective mass there
 //!                                                  ▼
-//!                                     PhysicsWorld::hits() ──▶ severity (Hit's methods)
+//!                                     PhysicsWorld::hits() ──▶ severity (Hit's methods,
+//!                                                              and one side's: HitSide)
 //!   blasts, as they are applied ──▶ Shove ──▶ PhysicsWorld::shoves()
 //! ```
 
@@ -16,6 +17,7 @@ mod event;
 mod patch;
 mod recorder;
 mod severity;
+mod side;
 #[cfg(test)]
 mod tests;
 
@@ -23,3 +25,4 @@ pub use event::{Hit, Shove};
 pub use patch::Patch;
 pub use recorder::HitConfig;
 pub(crate) use recorder::HitRecorder;
+pub use side::HitSide;

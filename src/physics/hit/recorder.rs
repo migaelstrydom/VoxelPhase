@@ -5,6 +5,7 @@ use smallvec::SmallVec;
 
 use super::event::Hit;
 use super::patch::Patch;
+use super::side::Side;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::Collider;
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
@@ -63,7 +64,7 @@ pub(crate) struct HitRecorder {
     held: FxHashSet<RigidBodyHandle>,
     /// This solve's pending sides by body: each pending pair's slot and
     /// side, kept for its capacity.
-    sides_of: FxHashMap<RigidBodyHandle, SmallVec<[(usize, usize); 2]>>,
+    sides_of: FxHashMap<RigidBodyHandle, SmallVec<[(usize, Side); 2]>>,
 }
 
 /// A pair one solve found closing fast, while its patch is gathered.
@@ -79,6 +80,8 @@ struct Pending {
     /// Whether each side, `[a, b]`, is held against the world or pressed
     /// against the blow by another of its contacts in this solve.
     backed: [bool; 2],
+    /// The pair was hit the frame before too.
+    continues: bool,
 }
 
 /// How squarely another contact must press a side against a blow to back
@@ -86,10 +89,10 @@ struct Pending {
 const BACKING: f32 = 0.5;
 
 impl HitRecorder {
-    /// Drop the last frame's hits, remembering which pairs they were, and
-    /// take the bodies `held` against the world this frame. Called once per
-    /// frame, before any solve.
-    pub(crate) fn clear(&mut self, held: impl IntoIterator<Item = RigidBodyHandle>) {
+    /// Start a frame: drop the last frame's hits, remembering which pairs
+    /// they were, and take the bodies `held` against the world this frame.
+    /// Called once per frame, before any solve.
+    pub(crate) fn begin_frame(&mut self, held: impl IntoIterator<Item = RigidBodyHandle>) {
         self.held.clear();
         self.held.extend(held);
         self.previous.clear();
@@ -143,11 +146,7 @@ impl HitRecorder {
         self.note_backing(manifolds);
         let pending = std::mem::take(&mut self.pending);
         for pair in &pending {
-            let hit = Hit {
-                continues: self.previous.contains(&pair.key),
-                ..hit_of(pair, bodies, colliders)
-            };
-            self.keep_fastest(pair.key, hit);
+            self.keep_fastest(pair.key, hit_of(pair, bodies, colliders));
         }
         self.pending = pending;
     }
@@ -191,6 +190,7 @@ impl HitRecorder {
                         header.body_a.is_some_and(|a| self.held.contains(&a)),
                         self.held.contains(&header.body_b),
                     ],
+                    continues: self.previous.contains(&key),
                 });
             }
         }
@@ -202,7 +202,7 @@ impl HitRecorder {
     fn note_backing(&mut self, manifolds: &[SolverManifold]) {
         self.sides_of.clear();
         for (slot, pending) in self.pending.iter().enumerate() {
-            for (side, body) in [pending.key.0, Some(pending.key.2)].into_iter().enumerate() {
+            for (side, body) in [(Side::A, pending.key.0), (Side::B, Some(pending.key.2))] {
                 if let Some(body) = body {
                     self.sides_of.entry(body).or_default().push((slot, side));
                 }
@@ -226,19 +226,19 @@ impl HitRecorder {
                 continue;
             };
             let key = key_of(header);
-            for (body, push) in [(header.body_a, -normal), (Some(header.body_b), normal)] {
+            let pushes = [
+                (header.body_a, Side::A.push(&normal)),
+                (Some(header.body_b), Side::B.push(&normal)),
+            ];
+            for (body, push) in pushes {
                 let Some(sides) = body.and_then(|body| self.sides_of.get(&body)) else {
                     continue;
                 };
                 for &(slot, side) in sides {
                     let pending = &mut self.pending[slot];
-                    let blow = if side == 0 {
-                        -pending.normal
-                    } else {
-                        pending.normal
-                    };
+                    let blow = side.push(&pending.normal);
                     if pending.key != key && push.dot(&blow) < -BACKING {
-                        pending.backed[side] = true;
+                        pending.backed[side.index()] = true;
                     }
                 }
             }
@@ -300,7 +300,7 @@ fn hit_of(pair: &Pending, bodies: &Arena<RigidBody>, colliders: &Arena<Collider>
         ],
         backed: pair.backed,
         patch: Patch::spanned(&pair.points, &pair.normal),
-        continues: false,
+        continues: pair.continues,
     }
 }
 
