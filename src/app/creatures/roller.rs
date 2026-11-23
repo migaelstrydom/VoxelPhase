@@ -48,7 +48,7 @@ use crate::app::sculpt::{
 };
 use crate::app::spawnables::MaterialCtx;
 use crate::app::spawnables::Spawnable;
-use crate::character::{CharacterIntent, Grounding};
+use crate::character::CharacterIntent;
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -107,9 +107,14 @@ const JUICE: (f32, f32, f32) = (0.17, 0.008, 0.014);
 const DENSITY: f32 = 2400.0;
 
 /// Contact friction. High, because friction is what turns drive torque into
-/// travel — a slick roller would spin in place. Shared with `Roller::new`,
-/// which derives the traction limit on its drive torque from it.
+/// travel — a slick roller would spin in place.
 const FRICTION: f32 = 1.2;
+
+/// The grip its drive torque is sized for: grass's, the poorest ground it
+/// rolls on (`VoxelMaterial::surface`). Loose ground grips with its own
+/// friction whatever rolls on it, so torque beyond what grass carries into
+/// travel would only spin its thorns through the turf.
+const GRIP: f32 = 0.45;
 
 /// Its lunge. Within 11 m of what it hunts it slows to 1.5 m/s, which is
 /// the warning. Between 6 and 9 m of it, unless rolling away from it
@@ -1077,8 +1082,6 @@ impl Spawnable for RollerDef {
             // Intent is the seam: `BrainSystem` writes it, `RollerLocomotionSystem`
             // reads it. Neither knows about the other.
             .with(CharacterIntent::default())
-            // What holds it up, which its drive turns against.
-            .with(Grounding::default())
             // It hears what it hunts out to the range it stalks it from: it
             // sees only where it rolls, and backing off to circle, it would
             // otherwise lose what it is circling.
@@ -1096,7 +1099,7 @@ impl Spawnable for RollerDef {
                     self.mass(),
                     self.speed,
                     self.spin_up_time,
-                    FRICTION,
+                    GRIP,
                 )
                 .with_lunge(LUNGE),
             )
