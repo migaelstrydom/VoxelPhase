@@ -23,7 +23,7 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitQuaternion, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -39,12 +39,11 @@ use crate::app::sculpt::{
 };
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::character::CharacterIntent;
-use crate::collision_layers::CREATURE_BODY;
 use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{Brain, Flyer, MeleeAttack, Wing, WingBeat};
+use crate::creature::{Brain, Flyer, MeleeAttack, Swing, Wing, WingBeat};
 use crate::damage::Health;
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
@@ -75,6 +74,9 @@ const BITE_RECOVERY: f32 = 1.6;
 /// The impulse its bite drives into what it strikes, N·s: about 5.5 m/s on
 /// the player, which only just knocks them down.
 const BITE_BLOW: f32 = 310.0;
+/// How far its bite carries its body ahead of its centre, m: it bites what
+/// its own sphere touches on the way.
+const BITE_LENGTH: f32 = 0.4;
 /// Hit points it can take.
 const HEALTH: f32 = 14.0;
 
@@ -981,12 +983,9 @@ impl Spawnable for FlyingFishDef {
         let at = Point3::new(self.pos.0, ground + RADIUS, self.pos.1);
         let (body, mass) = {
             let mut physics = world.write_resource::<PhysicsResource>();
-            let body = physics.world.create_body(
-                RigidBodyDesc::dynamic()
-                    .filter(CREATURE_BODY)
-                    .position(at)
-                    .angular_damping(0.9),
-            );
+            let body = physics
+                .world
+                .create_body(RigidBodyDesc::dynamic().position(at).angular_damping(0.9));
             physics.world.attach_collider(
                 body,
                 ColliderDesc::sphere(RADIUS)
@@ -1022,7 +1021,12 @@ impl Spawnable for FlyingFishDef {
             .with(
                 MeleeAttack::new(BITE, REACH)
                     .with_timing(BITE_WINDUP, BITE_RECOVERY)
-                    .with_blow(BITE_BLOW),
+                    .with_swing(Swing {
+                        from: Vector2::zeros(),
+                        to: Vector2::new(BITE_LENGTH, 0.0),
+                        radius: RADIUS,
+                        impulse: BITE_BLOW,
+                    }),
             )
             .with(Health::new(HEALTH, 5.0))
             .build()]

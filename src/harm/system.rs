@@ -5,16 +5,14 @@ use super::blow::{worst, Band, Blow};
 use super::component::Harm;
 use super::config::HarmConfig;
 use crate::character::CharacterState;
-use crate::collision_layers::CREATURE;
 use crate::components::RigidBodyComponent;
 use crate::debug::DebugLog;
-use crate::physics::{Hit, PhysicsWorld, RigidBodyHandle};
+use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::systems::{LevelRestart, PhysicsResource};
 use crate::time::Time;
 
 /// The worst blow `body` took in the last step, of its hits and shoves
-/// ([`worst`]); a hit from a creature's body (`collision_layers::CREATURE`)
-/// is spared as a shove is. A hit that continues a stop split across frames is the
+/// ([`worst`]). A hit that continues a stop split across frames is the
 /// rest of a blow already judged, and is passed over. `mass` is the body's,
 /// `velocity` what it moved at before the step, `in_control` whether it
 /// could brace.
@@ -26,23 +24,10 @@ pub fn worst_blow(
     in_control: bool,
     config: &HarmConfig,
 ) -> Option<Blow> {
-    let by_creature = |hit: &Hit| {
-        hit.side(body)
-            .and_then(|side| side.struck_by())
-            .and_then(|collider| world.collider(collider))
-            .is_some_and(|collider| collider.filter().membership.intersects(CREATURE))
-    };
     let hits = world
         .hits_on(body)
         .filter(|hit| !hit.continues)
-        .filter_map(|hit| {
-            let blow = Blow::of_hit(hit, body, mass, velocity, in_control, config)?;
-            Some(if by_creature(hit) {
-                blow.by_creature(config)
-            } else {
-                blow
-            })
-        });
+        .filter_map(|hit| Blow::of_hit(hit, body, mass, velocity, in_control, config));
     let shoves = world
         .shoves_on(body)
         .map(|shove| Blow::of_shove(shove, mass, config));

@@ -92,12 +92,15 @@ blasts) knocks down at worst:
   misjudgement, never a surprise.
 - **Heavy things:** a glancing blow from a falling pillar knocks the player
   down; being pinned or crushed kills.
-- **Creatures** push, trap and knock down. They do not kill directly: the
+- **Creatures** push, trap and knock down. Their strikes do not kill: the
   danger is where their shove sends the player (off a ledge, into water,
   under a falling stone). A walker's peck or ram and a flying fish's bite
-  are blows struck after a wind-up; a roller lunges once it is close,
-  bursting at the player along a line it then keeps to. No creature strikes
-  a player who is down.
+  are blows struck after a wind-up, and land on whatever is in front of the
+  beak or the jaws. A roller slows to stalk once it is close, circles at
+  a distance, and charges along a line it keeps to. Its body hits as any heavy thing does: running
+  down a player who stands still knocks them down, but walking into it, or
+  being thrown into its path, kills. No creature strikes a player who is
+  down.
 - **Blasts, the player's own included,** shove or knock down by how close
   they are, and never kill directly: as with a creature's shove, the danger
   is what the blast throws the player into (a wall, a long fall). Nothing

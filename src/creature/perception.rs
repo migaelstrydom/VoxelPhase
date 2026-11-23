@@ -177,7 +177,7 @@ impl<'a> System<'a> for PerceptionSystem {
 /// bearing down on is the closest thing it has to a gaze. A creature that is
 /// neither rigged nor moving falls through to `None` and senses all round,
 /// which is the honest answer rather than an arbitrary one.
-fn facing_of(
+pub(super) fn facing_of(
     entity: specs::Entity,
     rotations: &ReadStorage<Rotation>,
     velocities: &ReadStorage<Velocity>,

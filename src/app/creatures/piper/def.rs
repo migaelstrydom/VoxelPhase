@@ -28,7 +28,6 @@ use crate::app::creatures::palette::{self, Paint, BESTIARY};
 use crate::app::creatures::sculpted::{all_round, ground_under, Exhibit};
 use crate::app::sculpt::Clay;
 use crate::app::spawnables::{MaterialCtx, Spawnable};
-use crate::collision_layers::CREATURE_BODY;
 use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, ProceduralMesh, Renderable, RigidBodyComponent,
     Velocity,
@@ -278,7 +277,6 @@ impl Spawnable for PiperDef {
             // and it settles.
             let body = physics.world.create_body(
                 RigidBodyDesc::dynamic()
-                    .filter(CREATURE_BODY)
                     .position(at)
                     .linear_damping(0.4)
                     .angular_damping(0.98),

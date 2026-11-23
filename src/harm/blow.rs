@@ -29,8 +29,7 @@ pub struct Blow {
     /// Whether the body met it braced.
     pub braced: bool,
     /// The worst band it can fall in, however sudden: deadly for a hit, and
-    /// for one from a creature or a blast what the body's harm allows
-    /// (`HarmConfig::creatures_and_blasts_at_worst`).
+    /// for a shove what the body's harm allows (`HarmConfig::shove_at_worst`).
     pub at_worst: Band,
 }
 
@@ -61,22 +60,13 @@ impl Blow {
 
     /// The blow a `shove` (a blast's, a creature's strike) dealt a body
     /// weighing `mass`: all at once, as sudden as the bands are stated for,
-    /// and no worse than `creatures_and_blasts_at_worst`.
+    /// and no worse than `shove_at_worst`.
     pub fn of_shove(shove: &Shove, mass: f32, config: &HarmConfig) -> Self {
         Self {
             delta_v: shove.impulse.norm() / mass,
             give: config.sudden_give,
             braced: false,
-            at_worst: config.creatures_and_blasts_at_worst,
-        }
-    }
-
-    /// The same blow dealt by a creature's body: no worse than
-    /// `creatures_and_blasts_at_worst`.
-    pub fn by_creature(self, config: &HarmConfig) -> Self {
-        Self {
-            at_worst: self.at_worst.min(config.creatures_and_blasts_at_worst),
-            ..self
+            at_worst: config.shove_at_worst,
         }
     }
 

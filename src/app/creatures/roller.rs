@@ -49,7 +49,6 @@ use crate::app::sculpt::{
 use crate::app::spawnables::MaterialCtx;
 use crate::app::spawnables::Spawnable;
 use crate::character::CharacterIntent;
-use crate::collision_layers::CREATURE_BODY;
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -112,18 +111,31 @@ const DENSITY: f32 = 2400.0;
 /// which derives the traction limit on its drive torque from it.
 const FRICTION: f32 = 1.2;
 
-/// Its lunge: rolling at what it hunts, once within 3 m of it, it bursts to
-/// 8 m/s and strikes a body standing in its way at about 7.5 m/s, which
-/// knocks it down; a roller cruising strikes at about 4.4, which only
-/// shoves. It keeps to its line for 0.6 s, so stepping aside beats it, and
-/// rests 3 s before it lunges again.
+/// Its lunge. Within 11 m of what it hunts it slows to 1.5 m/s, which is
+/// the warning. Between 6 and 9 m of it, unless rolling away from it
+/// faster than 0.5 m/s (just past it, or backing off to rest), it surges
+/// along the line to it toward 7.5 m/s for 2.2 s, as fast as the ground's
+/// grip lets it. On grass, about 4 m/s², a heavy hit needs that run-up: it
+/// reaches 6.5 m/s or more by the time it strikes a body standing in its
+/// way, which knocks it down; a body walking into it is struck at its own
+/// speed as well, which kills. Stepping aside beats it. It rests 3 s
+/// before it lunges again.
 const LUNGE: Lunge = Lunge {
-    range: 3.0,
-    closing: 1.0,
-    speed: 8.0,
-    seconds: 0.6,
+    stalk_range: 11.0,
+    stalk_speed: 1.5,
+    nearest: 6.0,
+    range: 9.0,
+    closing: -0.5,
+    speed: 7.5,
+    seconds: 2.2,
     rest: 3.0,
 };
+
+/// How far from what it hunts it circles once close, m. Its brain holds
+/// that within 15% either way, which keeps it inside the band its lunge
+/// surges from: it backs off there while it rests, and surges again with
+/// the run-up a heavy hit needs.
+const CIRCLING: f32 = 7.5;
 
 /// A rolling boulder creature.
 ///
@@ -1024,7 +1036,6 @@ impl Spawnable for RollerDef {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body_handle = physics.world.create_body(
                 RigidBodyDesc::dynamic()
-                    .filter(CREATURE_BODY)
                     .position(initial_pos)
                     .gravity_scale(1.0)
                     // Low linear damping so momentum carries downhill, but
@@ -1043,13 +1054,12 @@ impl Spawnable for RollerDef {
             body_handle
         };
 
-        // Attack at the point of contact: a roller's attack is running into
-        // you, so its range is the sum of the two bodies' radii plus a little
-        // slack. Relentless because a roller has no health to break off over —
+        // It circles what it hunts at `CIRCLING` and attacks by its lunge.
+        // Relentless because a roller has no health to break off over —
         // `next_behaviour` would reach the same conclusion from a missing
         // `Health`, but saying it here means the intent survives someone later
         // giving rollers health back.
-        let brain = Brain::hunter(self.radius + 0.9).relentless();
+        let brain = Brain::hunter(CIRCLING).relentless();
 
         vec![world
             .create_entity()
@@ -1062,7 +1072,13 @@ impl Spawnable for RollerDef {
             // Intent is the seam: `BrainSystem` writes it, `RollerLocomotionSystem`
             // reads it. Neither knows about the other.
             .with(CharacterIntent::default())
-            .with(Perception::ground_creature(self.sight_range))
+            // It hears what it hunts out to the range it stalks it from: it
+            // sees only where it rolls, and backing off to circle, it would
+            // otherwise lose what it is circling.
+            .with(Perception {
+                hearing_range: LUNGE.stalk_range,
+                ..Perception::ground_creature(self.sight_range)
+            })
             // A sphere has no face to pull, so the alert beat is expressed
             // as a hop and a shiver instead.
             .with(AlertTelegraph::ground_creature())

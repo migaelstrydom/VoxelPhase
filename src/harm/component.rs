@@ -110,7 +110,7 @@ mod tests {
         assert_eq!(knock(blow(config.heavy)), config.least_down);
         assert!((knock(blow(midway)) - 0.5 * (config.least_down + config.most_down)).abs() < 1e-5);
         let blast = Blow {
-            at_worst: config.creatures_and_blasts_at_worst,
+            at_worst: config.shove_at_worst,
             ..blow(2.0 * config.deadly)
         };
         assert_eq!(knock(blast), config.most_down);

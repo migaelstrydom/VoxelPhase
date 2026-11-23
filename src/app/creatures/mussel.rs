@@ -38,7 +38,6 @@ use crate::app::sculpt::{
     scatter, Blush, Clay, Ellipsoid, Grime, Lump, Mottle, Relief, Spots, Strand, Veins, VertexPaint,
 };
 use crate::app::spawnables::{MaterialCtx, Spawnable};
-use crate::collision_layers::CREATURE_BODY;
 use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -1253,7 +1252,6 @@ impl Spawnable for MusselDef {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body = physics.world.create_body(
                 RigidBodyDesc::dynamic()
-                    .filter(CREATURE_BODY)
                     .position(at)
                     .linear_damping(0.3)
                     .angular_damping(0.9),

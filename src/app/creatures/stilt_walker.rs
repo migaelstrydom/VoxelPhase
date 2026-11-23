@@ -15,19 +15,18 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector2, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::anatomy::{self, LIMB_GRAIN};
 use crate::animation::stilts::{Dress, Joint, StiltAnimator, StiltRigConfig, Worn};
 use crate::animation::FootSide;
 use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
-use crate::collision_layers::CREATURE_BODY;
 use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, ProceduralMesh, Renderable, RigidBodyComponent,
     Rotation, Velocity,
 };
-use crate::creature::{Brain, MeleeAttack, Perception};
+use crate::creature::{Brain, MeleeAttack, Perception, Swing};
 use crate::damage::{Health, Ragdoll};
 use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
 use crate::model::MeshPrimitive;
@@ -75,7 +74,7 @@ pub struct Peck {
     /// Hit points it takes off.
     pub damage: f32,
     /// The impulse it drives into what it strikes, N·s
-    /// ([`MeleeAttack::blow`]).
+    /// ([`Swing::impulse`]).
     pub blow: f32,
     /// Seconds of rearing back before it lands: the warning.
     pub windup: f32,
@@ -200,7 +199,6 @@ impl StiltWalker {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body_handle = physics.world.create_body(
                 RigidBodyDesc::dynamic()
-                    .filter(CREATURE_BODY)
                     .position(initial_pos)
                     .gravity_scale(1.0)
                     .linear_damping(0.0)
@@ -265,7 +263,7 @@ impl StiltWalker {
             entity = entity.with(
                 MeleeAttack::new(peck.damage, reach)
                     .with_timing(peck.windup, peck.recovery)
-                    .with_blow(peck.blow),
+                    .with_swing(peck_swing(&rig, clearance, peck.blow)),
             );
         }
         if let Some(health) = self.health {
@@ -277,6 +275,23 @@ impl StiltWalker {
             entity = entity.with(drape);
         }
         vec![entity.build()]
+    }
+}
+
+/// What a peck sweeps, for a rig whose centre is `clearance` above its foot
+/// centres: the head speared from over the haunch, where the neck pivots,
+/// to where the neck throws it at `strike_pitch`, as wide as the head. It
+/// drives `impulse`, N·s, into what it touches.
+fn peck_swing(rig: &StiltRigConfig, clearance: f32, impulse: f32) -> Swing {
+    let pivot = rig.standing_height() + rig.haunch_height - clearance;
+    Swing {
+        from: Vector2::new(0.0, pivot),
+        to: Vector2::new(
+            rig.neck_length * rig.strike_pitch.sin(),
+            pivot + rig.neck_length * rig.strike_pitch.cos(),
+        ),
+        radius: rig.head_radius,
+        impulse,
     }
 }
 
