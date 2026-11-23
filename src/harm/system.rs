@@ -6,7 +6,7 @@ use super::component::Harm;
 use super::config::HarmConfig;
 use crate::character::CharacterState;
 use crate::components::RigidBodyComponent;
-use crate::debug::DebugLines;
+use crate::debug::DebugLog;
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::systems::{LevelRestart, PhysicsResource};
 use crate::time::Time;
@@ -47,7 +47,7 @@ impl<'a> System<'a> for HarmSystem {
         Read<'a, Time>,
         Read<'a, PhysicsResource>,
         Write<'a, LevelRestart>,
-        Write<'a, DebugLines>,
+        Write<'a, DebugLog>,
         WriteStorage<'a, Harm>,
         ReadStorage<'a, RigidBodyComponent>,
         ReadStorage<'a, CharacterState>,
@@ -55,7 +55,7 @@ impl<'a> System<'a> for HarmSystem {
 
     fn run(
         &mut self,
-        (time, physics, mut restart, mut debug, mut harms, bodies, states): Self::SystemData,
+        (time, physics, mut restart, mut log, mut harms, bodies, states): Self::SystemData,
     ) {
         let dt = time.delta_seconds();
         for (harm, body, state) in (&mut harms, &bodies, &states).join() {
@@ -81,10 +81,7 @@ impl<'a> System<'a> for HarmSystem {
             }
             harm.last_velocity = rigid.linear_velocity();
             if let Some((sudden, band)) = harm.last_blow {
-                debug.add(
-                    "Harm/last blow",
-                    format!("{sudden:.1} m/s, {}", label(band)),
-                );
+                log.add("Harm/LastBlow", format!("{sudden:.1} m/s, {}", label(band)));
             }
         }
     }
