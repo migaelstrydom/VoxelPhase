@@ -26,14 +26,15 @@ use crate::time::Time;
 ///
 /// Its drive comes from angular impulse and nothing else. Friction against the
 /// terrain converts the spin into travel, which means the creature is subject
-/// to the real surface: it struggles out of a grenade crater and spins its
-/// thorns through ground too steep to climb. It steers by its spin: each
-/// step it turns its spin toward the spin that rolls where it wants to go,
-/// so it sheds travel it does not want (sideways, or too fast) as it builds
-/// the travel it does, and the ground carries its travel after its spin.
+/// to the real surface: it struggles out of a grenade crater and skids on
+/// the way. It steers by its spin: each step it turns its spin toward the
+/// spin that rolls where it wants to go, so it sheds travel it does not want
+/// (sideways, or too fast) as it builds the travel it does, and the ground
+/// carries its travel after its spin.
 ///
-/// Close to what it hunts it may lunge ([`Lunge`]): it slows to stalk, then
-/// surges along the line to it with all the torque its ground can take.
+/// Close to what it hunts it may lunge ([`Lunge`]): it surges along the
+/// line to it with all the torque its friction could take,
+/// as fast as the ground's grip allows.
 #[derive(Component, Debug, Clone)]
 #[storage(DenseVecStorage)]
 pub struct Roller {
@@ -41,7 +42,8 @@ pub struct Roller {
     /// with mass, so heavier rollers need proportionally more.
     pub torque: f32,
     /// Angular impulse applied per second while it surges, N·m: the most
-    /// its ground can carry into travel.
+    /// its own friction could carry into travel, so that the ground's grip
+    /// is all that limits it.
     pub surge_torque: f32,
     /// Its top speed rolling where it wants to go, m/s.
     pub speed: f32,
@@ -53,17 +55,12 @@ pub struct Roller {
     pub lunging: LungePhase,
 }
 
-/// A roller's lunge. Within `stalk_range` of what it hunts it slows to
-/// `stalk_speed`, which is the warning. Between `nearest` and `range` of
-/// it, rolling at it at `closing` m/s or more, it surges along the line to
-/// it toward `speed` for `seconds`, keeping to that line, so that stepping
+/// A roller's lunge. Between `nearest` and `range` of what it hunts,
+/// rolling at it at `closing` m/s or more, it surges along the line to it
+/// toward `speed` for `seconds`, keeping to that line, so that stepping
 /// aside beats it; then it rests for `rest` before it can lunge again.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Lunge {
-    /// Centre-to-centre distance to its target, m, within which it stalks.
-    pub stalk_range: f32,
-    /// Its top speed while it stalks, m/s.
-    pub stalk_speed: f32,
     /// The nearest it surges from, m, centre to centre: nearer, it has too
     /// little run-up to strike hard.
     pub nearest: f32,
@@ -150,10 +147,15 @@ impl Roller {
     /// under-drives it by that factor and produces a creature that visibly
     /// labours to get going.
     ///
-    /// `grip` is the friction it can count on at its contact on level
-    /// ground: on loose ground that is the ground's own, whatever it rolls
-    /// on it with. It sets the traction limit below.
-    pub fn new(radius: f32, mass: f32, surface_speed: f32, spin_up_time: f32, grip: f32) -> Self {
+    /// `friction` must match the collider's, since it sets the traction limit
+    /// below.
+    pub fn new(
+        radius: f32,
+        mass: f32,
+        surface_speed: f32,
+        spin_up_time: f32,
+        friction: f32,
+    ) -> Self {
         let radius = radius.max(1e-3);
 
         // Torque beyond what friction can transmit spins the creature in place
@@ -162,7 +164,7 @@ impl Roller {
         // in the level file means what it says right up to the point where the
         // ground stops cooperating.
         let requested_accel = surface_speed / spin_up_time.max(1e-3);
-        let traction_limit = grip * GRAVITY;
+        let traction_limit = friction * GRAVITY;
         let rolling_torque = |accel: f32| (1.0 + SOLID_SPHERE_INERTIA) * mass * radius * accel;
 
         Self {
@@ -213,12 +215,6 @@ impl Roller {
                 torque: surge_torque,
             }
         };
-        let stalking = quarry.is_some_and(|quarry| quarry.offset.norm() <= lunge.stalk_range);
-        let speed = if stalking {
-            lunge.stalk_speed.min(self.speed)
-        } else {
-            self.speed
-        };
         let (phase, drive) = match self.lunging {
             LungePhase::Surging {
                 left,
@@ -232,9 +228,11 @@ impl Roller {
                 },
                 Some(surge(line, through)),
             ),
-            LungePhase::Surging { .. } => (LungePhase::Resting { left: lunge.rest }, cruise(speed)),
+            LungePhase::Surging { .. } => {
+                (LungePhase::Resting { left: lunge.rest }, cruise(self.speed))
+            }
             LungePhase::Resting { left } if left > dt => {
-                (LungePhase::Resting { left: left - dt }, cruise(speed))
+                (LungePhase::Resting { left: left - dt }, cruise(self.speed))
             }
             _ => match quarry.zip(lunge.line(quarry, velocity)) {
                 Some((quarry, line)) => (
@@ -245,7 +243,7 @@ impl Roller {
                     },
                     Some(surge(line, position + quarry.offset)),
                 ),
-                None => (LungePhase::Ready, cruise(speed)),
+                None => (LungePhase::Ready, cruise(self.speed)),
             },
         };
         self.lunging = phase;
@@ -358,11 +356,6 @@ impl<'a> System<'a> for RollerLocomotionSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collision::{MeshPatch, PatchTriangle, SurfaceId, Triangle, AABB};
-    use crate::debug::DebugLines;
-    use crate::physics::{
-        ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc, StaticGeometry, StaticSurface,
-    };
 
     const RADIUS: f32 = 0.6;
     const MASS: f32 = 2171.0;
@@ -496,8 +489,6 @@ mod tests {
     }
 
     const LUNGE: Lunge = Lunge {
-        stalk_range: 8.0,
-        stalk_speed: 1.5,
         nearest: 2.0,
         range: 5.0,
         closing: 1.0,
@@ -515,25 +506,6 @@ mod tests {
             offset,
             down: false,
         })
-    }
-
-    /// Within stalking range of what it hunts, a roller wants no more than
-    /// its stalking speed; further off, its own.
-    #[test]
-    fn a_roller_slows_to_stalk_what_it_hunts() {
-        let speed_with = |offset: Vector3<f32>| {
-            let heading = Some(Vector3::x());
-            let drive = lunging_roller().drive(
-                heading,
-                quarry(offset),
-                Point3::origin(),
-                Vector3::zeros(),
-                DT,
-            );
-            drive.unwrap().velocity.norm()
-        };
-        assert_eq!(speed_with(Vector3::x() * 7.0), LUNGE.stalk_speed);
-        assert_eq!(speed_with(Vector3::x() * 9.0), 4.5);
     }
 
     /// Rolling at what it hunts and within range, a roller surges along the
@@ -647,104 +619,6 @@ mod tests {
         assert_eq!(
             lunging_roller().drive(None, None, Point3::origin(), Vector3::x(), DT),
             None
-        );
-    }
-
-    /// Ground that grips as grass does, under every triangle of it.
-    struct Grass(MeshPatch);
-
-    impl StaticGeometry for Grass {
-        fn query_region(&self, _aabb: &AABB) -> MeshPatch {
-            self.0.clone()
-        }
-
-        fn surface(&self, _id: SurfaceId) -> Option<StaticSurface> {
-            Some(StaticSurface::yielding(0.45, 0.2))
-        }
-    }
-
-    /// A level lawn `2 · half` metres across, centred on the origin.
-    fn lawn(half: f32) -> Grass {
-        let corner = |x: f32, z: f32| Point3::new(x * half, 0.0, z * half);
-        let (a, b, c, d) = (
-            corner(-1.0, -1.0),
-            corner(1.0, -1.0),
-            corner(1.0, 1.0),
-            corner(-1.0, 1.0),
-        );
-        let grass = |triangle, neighbors| PatchTriangle {
-            triangle,
-            neighbors,
-            surface: SurfaceId(1),
-        };
-        Grass(MeshPatch {
-            triangles: vec![
-                grass(Triangle::new(a, c, b), [Some(1), None, None]),
-                grass(Triangle::new(a, d, c), [None, None, Some(0)]),
-            ],
-        })
-    }
-
-    /// Driven within what grass grips, a roller's thorns hold: speeding up
-    /// from rest and surging, the ground does not slip under it, and it
-    /// reaches the speeds it wants. Turning back, its own damping brakes its
-    /// spin on top of its drive, and the ground slips under it a little.
-    #[test]
-    fn on_grass_a_roller_keeps_its_thorns_in_the_ground() {
-        let grass = lawn(100.0);
-        let mut world = PhysicsWorld::new(PhysicsConfig::default());
-        let body = world.create_body(
-            RigidBodyDesc::dynamic()
-                .position(Point3::new(0.0, RADIUS, 0.0))
-                .linear_damping(0.05)
-                .angular_damping(0.4),
-        );
-        world.attach_collider(
-            body,
-            ColliderDesc::sphere(RADIUS)
-                .density(2400.0)
-                .friction(1.2)
-                .restitution(0.1),
-        );
-        let mass = world.body(body).unwrap().mass();
-        let roller = Roller::new(RADIUS, mass, 4.5, 0.7, 0.45);
-        let (frame, substeps) = (1.0 / 60.0, 4);
-        let mut debug = DebugLines::default();
-        let mut slipped = 0.0f32;
-        let mut run = |seconds: f32, drive: Drive| {
-            for _ in 0..(seconds / frame).round() as usize {
-                let (travel, spin) = {
-                    let body = world.body(body).unwrap();
-                    (body.linear_velocity(), body.angular_velocity())
-                };
-                let under = travel + spin.cross(&(-Vector3::y() * RADIUS));
-                slipped = slipped.max(Vector3::new(under.x, 0.0, under.z).norm());
-                let impulse = roller.spin_impulse(drive, spin, mass, frame);
-                world.apply_angular_impulse(body, impulse);
-                world.update_contacts(frame, substeps, &grass, &[], &mut debug);
-                for _ in 0..substeps {
-                    world.substep(frame / substeps as f32, &grass, &[]);
-                }
-            }
-            world.body(body).unwrap().linear_velocity().x
-        };
-        let cruise = |velocity| Drive {
-            velocity,
-            torque: roller.torque,
-        };
-        let away = run(2.0, cruise(Vector3::x() * 4.5));
-        let back = run(2.0, cruise(-Vector3::x() * 4.5));
-        let surge = Drive {
-            velocity: -Vector3::x() * 7.5,
-            torque: roller.surge_torque,
-        };
-        let surged = run(1.5, surge);
-        assert!(away > 4.3, "{away} m/s away");
-        assert!(back < -4.0, "{back} m/s back");
-        assert!(surged < -7.0, "surged to {surged} m/s");
-        assert!(
-            slipped < 0.7,
-            "the ground slipped under it at {slipped} m/s"
         );
     }
 }

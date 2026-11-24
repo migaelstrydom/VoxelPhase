@@ -23,8 +23,8 @@
 //!
 //! A melee blow lands as a strike (`PhysicsImpulse::Strike`) on the first
 //! body its swing touches (`Swing`), which harm reads as a shove; a roller
-//! strikes with its own body, stalking its target once it is close and then
-//! surging at it (`Lunge`). Neither strikes a character that is down.
+//! strikes with its own body, surging at its target once it is close
+//! (`Lunge`). Neither strikes a character that is down.
 //!
 //! The definitions of individual creatures — geometry, materials, physics —
 //! live in `crate::app::creatures`, mirroring the spawnables library.

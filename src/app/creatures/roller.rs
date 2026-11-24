@@ -107,33 +107,26 @@ const JUICE: (f32, f32, f32) = (0.17, 0.008, 0.014);
 const DENSITY: f32 = 2400.0;
 
 /// Contact friction. High, because friction is what turns drive torque into
-/// travel — a slick roller would spin in place.
+/// travel — a slick roller would spin in place. Shared with `Roller::new`,
+/// which derives the traction limit on its drive torque from it.
 const FRICTION: f32 = 1.2;
 
-/// The grip its drive torque is sized for: grass's, the poorest ground it
-/// rolls on (`VoxelMaterial::surface`). Loose ground grips with its own
-/// friction whatever rolls on it, so torque beyond what grass carries into
-/// travel would only spin its thorns through the turf.
-const GRIP: f32 = 0.45;
-
-/// Its lunge. Within 11 m of what it hunts it slows to 1.5 m/s, which is
-/// the warning. Between 6 and 9 m of it, unless rolling away from it
-/// faster than 0.5 m/s (just past it, or backing off to rest), it surges
-/// along the line to it toward 7.5 m/s for 2.2 s, as fast as the ground's
-/// grip lets it. On grass, about 4 m/s², a heavy hit needs that run-up: it
+/// Its lunge. Between 6 and 9 m of what it hunts, unless rolling away from
+/// it faster than 0.5 m/s (just past it, or backing off), it surges along
+/// the line to it toward 7.5 m/s for 2.2 s, as fast as the ground's grip
+/// lets it. On grass, about 4 m/s², a heavy hit needs that run-up: it
 /// reaches 6.5 m/s or more by the time it strikes a body standing in its
 /// way, which knocks it down; a body walking into it is struck at its own
-/// speed as well, which kills. Stepping aside beats it. It rests 3 s
-/// before it lunges again.
+/// speed as well, which kills. Stepping aside beats it. It rests 1 s
+/// before it lunges again, so it comes again almost as soon as it has
+/// rolled past.
 const LUNGE: Lunge = Lunge {
-    stalk_range: 11.0,
-    stalk_speed: 1.5,
     nearest: 6.0,
     range: 9.0,
     closing: -0.5,
     speed: 7.5,
     seconds: 2.2,
-    rest: 3.0,
+    rest: 1.0,
 };
 
 /// How far from what it hunts it circles once close, m. Its brain holds
@@ -141,6 +134,11 @@ const LUNGE: Lunge = Lunge {
 /// surges from: it backs off there while it rests, and surges again with
 /// the run-up a heavy hit needs.
 const CIRCLING: f32 = 7.5;
+
+/// How far it hears what it hunts, m: it sees only where it rolls, and
+/// rolling past or circling it, it would otherwise lose what it is after.
+/// Clear of the furthest it circles and surges from.
+const HEARING: f32 = 11.0;
 
 /// A rolling boulder creature.
 ///
@@ -1082,11 +1080,8 @@ impl Spawnable for RollerDef {
             // Intent is the seam: `BrainSystem` writes it, `RollerLocomotionSystem`
             // reads it. Neither knows about the other.
             .with(CharacterIntent::default())
-            // It hears what it hunts out to the range it stalks it from: it
-            // sees only where it rolls, and backing off to circle, it would
-            // otherwise lose what it is circling.
             .with(Perception {
-                hearing_range: LUNGE.stalk_range,
+                hearing_range: HEARING,
                 ..Perception::ground_creature(self.sight_range)
             })
             // A sphere has no face to pull, so the alert beat is expressed
@@ -1099,7 +1094,7 @@ impl Spawnable for RollerDef {
                     self.mass(),
                     self.speed,
                     self.spin_up_time,
-                    GRIP,
+                    FRICTION,
                 )
                 .with_lunge(LUNGE),
             )
