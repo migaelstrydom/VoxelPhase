@@ -99,10 +99,10 @@ blasts) knocks down at worst:
   beak or the jaws. A roller slows to stalk once it is close, circles at
   a distance, always the same way round, and charges along a line it keeps
   to; it drives its spin no harder than grass can grip, so its thorns hold
-  the ground, and ground too steep to climb spins them out. Its body hits as any heavy thing does: running
-  down a player who stands still knocks them down, but walking into it, or
-  being thrown into its path, kills. No creature strikes a player who is
-  down.
+  the ground, and ground too steep to climb spins them out. Its body hits
+  as any heavy thing does: running down a player who stands still knocks
+  them down, but walking into it, or being thrown into its path, kills. No
+  creature strikes a player who is down.
 - **Blasts, the player's own included,** shove or knock down by how close
   they are, and never kill directly: as with a creature's shove, the danger
   is what the blast throws the player into (a wall, a long fall). Nothing
