@@ -1,6 +1,6 @@
 // Bestiary: the egg walkers, for looking at them and for meeting them on
 // open ground. Each creature has a level of its own in this folder, on the
-// same lawn; egg walkers go about together, so here there are three.
+// same lawn; egg walkers go about in packs, so here there are six.
 //
 // They stand in the middle and the player starts 14 m south of them,
 // facing them. They are awake.
@@ -27,9 +27,12 @@ Level(
             ),
 
             objects: [
-                EggWalker(pos: (-1.0, 0.0)),
-                EggWalker(pos: (0.0, -1.2)),
-                EggWalker(pos: (1.0, 0.0)),
+                EggWalker(pos: (-1.5, 0.0)),
+                EggWalker(pos: (0.0, 0.0)),
+                EggWalker(pos: (1.5, 0.0)),
+                EggWalker(pos: (-1.5, -1.5)),
+                EggWalker(pos: (0.0, -1.5)),
+                EggWalker(pos: (1.5, -1.5)),
             ],
         ),
     ],

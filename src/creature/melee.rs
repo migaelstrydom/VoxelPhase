@@ -114,6 +114,17 @@ impl MeleeAttack {
         self
     }
 
+    /// The velocity its blow drives it at, m/s, while it rushes, and while
+    /// it winds up facing `facing` the one it is about to: a creature
+    /// reared back is as good as coming on, to anything that sees it.
+    pub fn lunge(&self, facing: Vector3<f32>) -> Option<Vector3<f32>> {
+        match self.phase {
+            StrikePhase::Winding { .. } => Some(facing * self.rush.speed),
+            StrikePhase::Rushing { along, .. } => Some(along * self.rush.speed),
+            StrikePhase::Ready | StrikePhase::Recovering { .. } => None,
+        }
+    }
+
     /// Whether the creature is mid-swing, and so has given up choosing
     /// where it goes and which way it faces until it is over.
     pub fn is_committed(&self) -> bool {
@@ -472,6 +483,30 @@ mod tests {
             matches!(attack.phase, StrikePhase::Winding { .. }),
             "a target that steps away must not rewind the swing"
         );
+    }
+
+    /// Winding up, a striker is as good as lunging the way it faces;
+    /// rushing, it lunges the way it threw; otherwise it is not lunging.
+    #[test]
+    fn a_lunge_shows_from_the_wind_up_to_the_end_of_the_rush() {
+        let mut attack = an_attack();
+        let speed = attack.rush.speed;
+        let facing = Vector3::x();
+        attack.phase = StrikePhase::Winding { elapsed: 0.1 };
+        assert_eq!(attack.lunge(facing), Some(facing * speed));
+        attack.phase = StrikePhase::Rushing {
+            elapsed: 0.1,
+            seconds: 0.4,
+            along: Vector3::z(),
+        };
+        assert_eq!(attack.lunge(facing), Some(Vector3::z() * speed));
+        for phase in [
+            StrikePhase::Ready,
+            StrikePhase::Recovering { remaining: 0.2 },
+        ] {
+            attack.phase = phase;
+            assert_eq!(attack.lunge(facing), None);
+        }
     }
 
     #[test]

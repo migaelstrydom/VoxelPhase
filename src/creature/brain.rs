@@ -1,14 +1,14 @@
 use nalgebra::{Point3, Vector3};
 use rand::Rng;
 use specs::{
-    Component, DenseVecStorage, Entities, Join, LendJoin, Read, ReadStorage, System, Write,
-    WriteStorage,
+    Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, Write, WriteStorage,
 };
 
+use super::melee::MeleeAttack;
 use super::perception::{PerceivedTarget, Perception};
 use super::steering::{self, Mover};
-use crate::character::CharacterIntent;
-use crate::components::{Position, Velocity};
+use crate::character::{facing_from_rotation, CharacterIntent};
+use crate::components::{Position, Rotation, Velocity};
 use crate::damage::{Dead, Health};
 use crate::debug::DebugLog;
 use crate::time::Time;
@@ -110,7 +110,7 @@ const STANDOFF_BAND_FRACTION: f32 = 0.15;
 /// How hard keeping apart from its kin pulls against where a creature is
 /// going, with one of them on top of it: enough to turn it aside before
 /// they meet, where running on into each other would break a shell.
-const KEEPING_APART: f32 = 2.0;
+const KEEPING_APART: f32 = 4.0;
 
 /// How far ahead, s, a creature reckons where its kin will be as it keeps
 /// clear of them: about as long as a lunge lasts, the fastest any of them
@@ -253,6 +253,8 @@ impl<'a> System<'a> for BrainSystem {
         ReadStorage<'a, Perception>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Velocity>,
+        ReadStorage<'a, Rotation>,
+        ReadStorage<'a, MeleeAttack>,
         ReadStorage<'a, Health>,
         ReadStorage<'a, Dead>,
         WriteStorage<'a, Brain>,
@@ -267,6 +269,8 @@ impl<'a> System<'a> for BrainSystem {
             perceptions,
             positions,
             velocities,
+            rotations,
+            attacks,
             healths,
             deads,
             mut brains,
@@ -277,19 +281,20 @@ impl<'a> System<'a> for BrainSystem {
 
         let mut awake = 0;
         let mut total = 0;
-        let mover = |pos: &Position, velocity: Option<&Velocity>| Mover {
+        // How a creature moves, as its kin see it: lunging (or about to),
+        // at its lunge; otherwise as its body goes.
+        let mover = |entity: specs::Entity, pos: &Position| Mover {
             at: Point3::from(pos.0),
-            velocity: velocity.map_or_else(Vector3::zeros, |v| v.0),
+            velocity: attacks
+                .get(entity)
+                .zip(rotations.get(entity))
+                .and_then(|(attack, rotation)| attack.lunge(facing_from_rotation(rotation.0)))
+                .or_else(|| velocities.get(entity).map(|v| v.0))
+                .unwrap_or_else(Vector3::zeros),
         };
-        let kin: Vec<(specs::Entity, Mover)> = (
-            &entities,
-            &positions,
-            (&velocities).maybe(),
-            &brains,
-            !&deads,
-        )
+        let kin: Vec<(specs::Entity, Mover)> = (&entities, &positions, &brains, !&deads)
             .join()
-            .map(|(entity, pos, velocity, _, _)| (entity, mover(pos, velocity)))
+            .map(|(entity, pos, _, _)| (entity, mover(entity, pos)))
             .collect();
 
         for (entity, perception, pos, brain, intent, _) in (
@@ -316,7 +321,7 @@ impl<'a> System<'a> for BrainSystem {
                 .filter(|(other, _)| *other != entity)
                 .map(|(_, at)| *at)
                 .collect();
-            let moving = mover(pos, velocities.get(entity));
+            let moving = mover(entity, pos);
             *intent = intent_for(brain, perception, moving, &others);
 
             total += 1;
