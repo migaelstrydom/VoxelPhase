@@ -51,7 +51,7 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{AlertTelegraph, Brain, Cracks, Lunge, Perception, Roller, Shell};
+use crate::creature::{AlertTelegraph, Brain, Cracks, Lunge, Perception, Remains, Roller, Shell};
 use crate::harm::{Band, Death, Harm, HarmConfig};
 use crate::model::{MeshPrimitive, Model, ModelPart, Transform};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
@@ -1063,7 +1063,7 @@ impl Spawnable for RollerDef {
                 radius: self.radius,
             },
             density: DENSITY,
-            remains: None,
+            remains: Remains::Nothing,
         };
 
         let body_handle = {

@@ -9,8 +9,9 @@
 //!            through its axis, each half a dome
 //!        ──▶ each piece a body moving as the shell moved where it was,
 //!            drawn as its own triangles (PartLooks), Debris
-//!     what remains: drawn without its shell, colliding as the thinner
-//!     capsule of what was inside; or nothing, its body gone into the pieces
+//!     what remains (Remains): drawn without its shell, colliding as the
+//!     thinner capsule of what was inside, or as the lower box of what lay
+//!     in it; or nothing, its body gone into the pieces
 //! ```
 //!
 //! A piece carries the motion the shell had where it was, and nothing more:
@@ -64,14 +65,25 @@ pub struct Shell {
     pub parts: Vec<usize>,
     /// How the shell comes apart.
     pub cracks: Cracks,
-    /// Density of a piece, kg/m³, where the creature lives on without its
-    /// shell: light, as a shard's box holds more air than shell. Where
-    /// nothing remains, the pieces share its whole weight instead.
+    /// Density of a piece, kg/m³, where something remains of the creature
+    /// without its shell: light, as a shard's box holds more air than shell.
+    /// Where nothing remains, the pieces share its whole weight instead.
     pub density: f32,
-    /// What is left of it once its shell is gone: the radius of the capsule
-    /// it then collides as, m, which the pieces lie outside; `None` if
-    /// nothing is, the shell being all of it.
-    pub remains: Option<f32>,
+    /// What is left of it once its shell is gone.
+    pub remains: Remains,
+}
+
+/// What is left of a creature once its shell is gone, as heavy as it was.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Remains {
+    /// Nothing: the shell was all of it.
+    Nothing,
+    /// What was inside: the capsule it collides as, thinned to `radius`,
+    /// m, which the pieces lie outside.
+    Thinner { radius: f32 },
+    /// What lay in it: the box it collides as, brought down to
+    /// `half_height`, m, onto the ground under it.
+    Lower { half_height: f32 },
 }
 
 /// How a shell comes apart.
@@ -186,8 +198,8 @@ impl<'a> System<'a> for ShellSystem {
                 worn.primitives.clear();
             }
             let density = match shell.remains {
-                Some(_) => shell.density,
-                None => {
+                Remains::Thinner { .. } | Remains::Lower { .. } => shell.density,
+                Remains::Nothing => {
                     mass / pieces
                         .iter()
                         .map(|(_, s)| s.volume())
@@ -226,20 +238,21 @@ impl<'a> System<'a> for ShellSystem {
                 let _ = debris.insert(entity, Debris::new(creature, size));
             }
 
+            if shell.remains == Remains::Nothing {
+                physics.world.remove_body(body);
+                let _ = entities.delete(creature);
+                continue;
+            }
+            let bare = Arc::new(bare);
+            if let Some(posed) = posed.get_mut(creature) {
+                posed.model = bare;
+            } else if let Some(instance) = instances.get_mut(creature) {
+                instance.model = bare;
+            }
             match shell.remains {
-                Some(radius) => {
-                    let bare = Arc::new(bare);
-                    if let Some(posed) = posed.get_mut(creature) {
-                        posed.model = bare;
-                    } else if let Some(instance) = instances.get_mut(creature) {
-                        instance.model = bare;
-                    }
-                    thin(&mut physics.world, body, radius);
-                }
-                None => {
-                    physics.world.remove_body(body);
-                    let _ = entities.delete(creature);
-                }
+                Remains::Thinner { radius } => thin(&mut physics.world, body, radius),
+                Remains::Lower { half_height } => lower(&mut physics.world, body, half_height),
+                Remains::Nothing => {}
             }
         }
     }
@@ -593,6 +606,48 @@ fn thin(physics: &mut PhysicsWorld, body: RigidBodyHandle, radius: f32) {
     physics.wake_body(body);
 }
 
+/// Brings the box `body` collides as down to `half_height` onto the ground
+/// under it, as heavy as it was: the collider made lower about its middle,
+/// and the body let down by as much along its own up.
+fn lower(physics: &mut PhysicsWorld, body: RigidBodyHandle, half_height: f32) {
+    let Some(rigid) = physics.body(body) else {
+        return;
+    };
+    let slab = rigid.colliders().iter().copied().find_map(|handle| {
+        let collider = physics.collider(handle)?;
+        match *collider.shape() {
+            ColliderShape::Box { half_extents } if half_extents.y > half_height => {
+                Some((handle, half_extents))
+            }
+            _ => None,
+        }
+    });
+    let Some((handle, was)) = slab else {
+        return;
+    };
+    let Some(old) = physics.detach_collider(body, handle) else {
+        return;
+    };
+    let shape = ColliderShape::Box {
+        half_extents: Vector3::new(was.x, half_height, was.z),
+    };
+    let volume = shape.compute_mass(1.0);
+    let lowered = ColliderDesc {
+        shape,
+        offset: *old.offset(),
+        density: old.mass() / volume.max(1e-6),
+        material: *old.material(),
+        bulk: old.bulk().cloned(),
+        bluntness: None,
+    };
+    physics.attach_collider(body, lowered);
+    if let Some(rigid) = physics.body_mut(body) {
+        let down = rigid.rotation() * Vector3::y() * (was.y - half_height);
+        rigid.set_position(rigid.position() - down);
+    }
+    physics.wake_body(body);
+}
+
 #[cfg(test)]
 mod tests {
     use nalgebra::Point3;
@@ -714,7 +769,7 @@ mod tests {
             parts: vec![0],
             cracks: Cracks::Anywhere { shards: 6 },
             density: 300.0,
-            remains: Some(0.1),
+            remains: Remains::Thinner { radius: 0.1 },
         };
         let posed = PosedModel {
             model: Arc::new(Model::flat(vec![ModelPart::new(self::shell())])),
@@ -747,6 +802,47 @@ mod tests {
         assert!((rigid.mass() - mass).abs() < 1e-3 * mass);
     }
 
+    /// What lay in a shell is left lying where it was once the shell breaks:
+    /// drawn without it, colliding as the box it did brought down onto the
+    /// ground under it, and as heavy.
+    #[test]
+    fn what_lay_in_a_shell_is_left_lying_lower() {
+        let shell = Shell {
+            parts: vec![0],
+            cracks: Cracks::Anywhere { shards: 4 },
+            density: 1000.0,
+            remains: Remains::Lower { half_height: 0.02 },
+        };
+        let model = Arc::new(Model::flat(vec![ModelPart::new(self::shell())]));
+        let slab = ColliderDesc::box_shape(Vector3::new(0.75, 0.05, 0.6));
+        let (world, creature, body, mass) =
+            broken(shell, slab, |c| c.with(ModelInstance::new(model)));
+
+        assert_eq!((&world.read_storage::<Debris>()).join().count(), 4);
+        let instances = world.read_storage::<ModelInstance>();
+        assert!(instances.get(creature).unwrap().model.parts[0]
+            .primitives
+            .is_empty());
+        let physics = world.read_resource::<PhysicsResource>();
+        let rigid = physics.world.body(body).unwrap();
+        let shape: Vec<ColliderShape> = rigid
+            .colliders()
+            .iter()
+            .map(|&c| physics.world.collider(c).unwrap().shape().clone())
+            .collect();
+        assert!(
+            matches!(shape[..], [ColliderShape::Box { half_extents }]
+                if (half_extents - Vector3::new(0.75, 0.02, 0.6)).norm() < 1e-6),
+            "{shape:?}"
+        );
+        let underside = rigid.position().y - 0.02;
+        assert!(
+            (underside - 0.95).abs() < 1e-5,
+            "its underside at {underside}"
+        );
+        assert!((rigid.mass() - mass).abs() < 1e-3 * mass);
+    }
+
     /// A creature that is all shell is gone once it breaks, body and all,
     /// its whole weight in its two halves.
     #[test]
@@ -758,7 +854,7 @@ mod tests {
                 radius: 0.25,
             },
             density: 2400.0,
-            remains: None,
+            remains: Remains::Nothing,
         };
         let model = Arc::new(Model::flat(vec![ModelPart::new(self::shell())]));
         let ball = ColliderDesc::sphere(0.25).density(2400.0);

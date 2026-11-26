@@ -35,7 +35,8 @@ pub struct HarmConfig {
     /// sudden the blow was (`time_down`).
     pub most_down: f32,
     /// Seconds between a deadly blow and what it ends in (`Harm::death`):
-    /// the beat in which the player sees what killed them.
+    /// the beat in which the player sees what killed them. None for a body
+    /// nothing knocks down, which would go on as if alive through it.
     pub death_beat: f32,
 }
 

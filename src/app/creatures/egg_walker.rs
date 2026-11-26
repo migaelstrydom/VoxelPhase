@@ -31,7 +31,7 @@ use crate::animation::{FootPlacerConfig, FootSide};
 use crate::app::sculpt::{Clay, Grime, Lump, Mottle, Relief, Spots, VertexPaint};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::core::error::EngineResult;
-use crate::creature::{Brain, Cracks, Shell};
+use crate::creature::{Brain, Cracks, Remains, Shell};
 use crate::harm::{Band, HarmConfig};
 use crate::model::MeshPrimitive;
 use crate::rendering::material::MaterialId;
@@ -437,7 +437,9 @@ impl EggWalkerDef {
                 parts: Vec::new(),
                 cracks: Cracks::Anywhere { shards: SHARDS },
                 density: SHARD_DENSITY,
-                remains: Some(BARE_RADIUS),
+                remains: Remains::Thinner {
+                    radius: BARE_RADIUS,
+                },
             }),
             brain: Brain::hunter,
         }

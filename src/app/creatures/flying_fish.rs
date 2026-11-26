@@ -44,7 +44,8 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::creature::{Brain, FlightPose, Flyer, MeleeAttack, Rush, RushAim, Wing, WingBeat};
-use crate::damage::{Health, Ragdoll};
+use crate::damage::Ragdoll;
+use crate::harm::{Band, Death, Harm, HarmConfig};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
@@ -81,8 +82,8 @@ const CIRCLE_ROOM: f32 = 1.25;
 const CIRCLING: f32 = 12.0;
 /// How far past its circle it still stoops, level, as a share of it.
 const REACH_PAST_STANDOFF: f32 = 0.2;
-/// Hit points it can take.
-const HEALTH: f32 = 14.0;
+/// Seconds it lies dead before it is cleared away.
+const CORPSE_SECONDS: f32 = 5.0;
 
 /// The parts of its model: the body, and the wing on each side.
 const BODY: usize = 0;
@@ -1088,7 +1089,20 @@ impl Spawnable for FlyingFishDef {
                 MeleeAttack::new(BITE, reach, Self::bite(gravity, carry))
                     .with_timing(BITE_WINDUP, BITE_RECOVERY),
             )
-            .with(Health::new(HEALTH, 5.0))
+            // A blast close by kills it outright, as it does an egg: nothing
+            // throws it into anything up there. Nothing knocks it down
+            // either, so it dies the moment it is struck, its fins let go.
+            .with(Harm {
+                config: HarmConfig {
+                    shove_at_worst: Band::Deadly,
+                    death_beat: 0.0,
+                    ..HarmConfig::default()
+                },
+                death: Death::Dies {
+                    lingers: CORPSE_SECONDS,
+                },
+                ..Harm::default()
+            })
             .with(Ragdoll::new(vec![level]))
             .build()]
     }

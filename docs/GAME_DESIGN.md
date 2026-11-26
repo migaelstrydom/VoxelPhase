@@ -417,9 +417,7 @@ marks one that depends on behaviour not yet confirmed in the engine.
 | Idea | Pattern | Also |
 |---|---|---|
 | A peeper sees a long way and nothing through earth. Drop a bank between it and the path. | Borrowed force | Earth |
-| A stalker's beak reaches over a wall. Stand so that its strike knocks the crate off the far ledge **(check)**. | Borrowed force | Objects |
 | A fish-walker follows into water. Lead it onto the float the player needs sunk, or off the one they need to rise. | Borrowed force | Water |
-| A flying fish stoops on anything in the open. Cross under cover, or dig cover where there is none. | Nothing underneath | Earth |
 | A mussel holds whatever it shuts on. Shut on a float's tether or a rolling ball, it is an anchor **(check)**. | Borrowed force | Objects |
 | A piper throws at what it sees. Seen from behind the dam, its bombs breach it; seen from behind the only ledge, they take that instead. | Shared support | Earth |
 | A roller in a crater is stranded until the crater floods. Then it floats out **(check)**. | Unwanted passenger | Water |

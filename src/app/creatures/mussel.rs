@@ -6,6 +6,10 @@
 //! again. Seen, it is walked round or blasted; it is for the path taken at
 //! a run. `visual_bench mussel` shows it open and shut.
 //!
+//! A blow sudden enough cracks both valves (`creature::Shell`), and kills
+//! it: a grenade going off on it does, or one thrown hard onto it, but not
+//! one beside it. Its flesh is left lying where it was.
+//!
 //! ```text
 //!   part          what it is                                      moves as
 //!   ────────────  ──────────────────────────────────────────────  ────────
@@ -42,8 +46,8 @@ use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{Cycle, Hinge, Moment, SnapTrap, TrapPart, TrapRig};
-use crate::damage::Health;
+use crate::creature::{self, Cracks, Cycle, Hinge, Moment, Remains, SnapTrap, TrapPart, TrapRig};
+use crate::harm::{Band, Death, Harm, HarmConfig};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
@@ -71,8 +75,23 @@ const CYCLE: Cycle = Cycle {
 };
 /// How far the upper valve stands open, radians.
 const GAPE: f32 = 1.0;
-/// Hit points it can take.
-const HEALTH: f32 = 70.0;
+/// How sudden a blow cracks it, m/s. A shell cracks at a force, and the
+/// same force moves a heavier body less: twice as thick as an egg walker's,
+/// it holds about 3.5 times the force, on ten times the weight, so it
+/// cracks at about 0.6 of the egg's 5 m/s.
+const STRENGTH: f32 = 3.0;
+/// The parts of its look that are shell: each valve, with what grows on it.
+const VALVES: [usize; 2] = [0, 4];
+/// The pieces each valve breaks into.
+const SHARDS: usize = 8;
+/// Kilograms to the cubic metre of a piece of valve: shell, in a box
+/// fitted to its curve.
+const SHARD_DENSITY: f32 = 1000.0;
+/// Half the height of the flesh left lying on the ground once its shell is
+/// broken, m.
+const FLESH_HALF_HEIGHT: f32 = 0.02;
+/// Seconds it lies dead before it is cleared away.
+const CORPSE_SECONDS: f32 = 4.0;
 
 /// The ground it lies on, under the slab's middle, m.
 const GROUND: f32 = -SLAB.1;
@@ -1281,7 +1300,29 @@ impl Spawnable for MusselDef {
             .with(Renderable)
             .with(all_round(3.0))
             .with(trap)
-            .with(Health::new(HEALTH, 4.0))
+            // Nothing knocks it down, so a blow that cracks it kills it at
+            // once; a blast does, close enough.
+            .with(Harm {
+                config: HarmConfig {
+                    heavy: STRENGTH,
+                    deadly: STRENGTH,
+                    shove_at_worst: Band::Deadly,
+                    death_beat: 0.0,
+                    ..HarmConfig::default()
+                },
+                death: Death::Dies {
+                    lingers: CORPSE_SECONDS,
+                },
+                ..Harm::default()
+            })
+            .with(creature::Shell {
+                parts: VALVES.to_vec(),
+                cracks: Cracks::Anywhere { shards: SHARDS },
+                density: SHARD_DENSITY,
+                remains: Remains::Lower {
+                    half_height: FLESH_HALF_HEIGHT,
+                },
+            })
             .build()]
     }
 }
@@ -1319,6 +1360,13 @@ mod tests {
             (30_000..200_000).contains(&triangles),
             "{triangles} triangles"
         );
+    }
+
+    #[test]
+    fn what_cracks_is_its_two_valves() {
+        let rig = MusselDef::rig();
+        assert!(matches!(rig.parts[VALVES[0]], TrapPart::Bed));
+        assert!(matches!(rig.parts[VALVES[1]], TrapPart::Jaw));
     }
 
     #[test]

@@ -58,6 +58,6 @@ pub use melee::{MeleeAttack, MeleeAttackSystem, StrikePhase};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
 pub use roller::{Drive, Lunge, LungePhase, Quarry, Roller, RollerLocomotionSystem};
 pub use rush::{Rush, RushAim};
-pub use shell::{Cracks, Shell, ShellSystem};
+pub use shell::{Cracks, Remains, Shell, ShellSystem};
 pub use snap_trap::{Caught, Cycle, Hinge, Moment, SnapTrap, SnapTrapSystem, TrapPart, TrapRig};
 pub use swimmer::{Swimmer, SwimmerLocomotionSystem};

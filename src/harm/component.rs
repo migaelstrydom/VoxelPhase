@@ -56,14 +56,15 @@ impl Harm {
         self.knock = Some(self.knock.map_or(down, |knock| knock.max(down)));
     }
 
-    /// Count the beat down by `dt`: whether it ran out this frame.
+    /// Count the beat down by `dt`: whether it ran out this frame. A beat of
+    /// none runs out the frame after the blow.
     pub fn beat_out(&mut self, dt: f32) -> bool {
-        let Some(left) = self.dying else {
+        let Some(left) = self.dying.filter(|left| *left >= 0.0) else {
             return false;
         };
         let left = left - dt;
         self.dying = Some(left);
-        left <= 0.0 && left + dt > 0.0
+        left < 0.0
     }
 }
 
@@ -145,5 +146,20 @@ mod tests {
             "at frame {}",
             rest[0] + 30
         );
+    }
+
+    /// A body nothing holds down through a beat dies the frame after its
+    /// deadly blow, and only once.
+    #[test]
+    fn a_beat_of_none_runs_out_the_frame_after() {
+        let mut harm = Harm {
+            config: HarmConfig {
+                death_beat: 0.0,
+                ..HarmConfig::default()
+            },
+            ..Harm::default()
+        };
+        harm.suffer(&blow(9.0));
+        assert_eq!(beat_frames(&mut harm, 60), vec![0]);
     }
 }
