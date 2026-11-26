@@ -548,8 +548,18 @@ fn intent_for(brain: &Brain, perception: &Perception, me: Point3<f32>) -> Charac
         Behaviour::Wandering { heading, .. } => heading,
     };
 
+    // Attacking, it squares up to its target whichever way it circles: a
+    // blow is thrown where the creature faces.
+    let face = match brain.behaviour {
+        Behaviour::Attacking { .. } => perception.target.and_then(|t| {
+            Vector3::new(t.position.x - me.x, 0.0, t.position.z - me.z).try_normalize(1e-4)
+        }),
+        _ => None,
+    };
+
     CharacterIntent {
         direction,
+        face,
         // Reuse the player's own gait modifiers rather than inventing a
         // creature-only speed channel: a fleeing creature sprints, a wary one
         // moves at crouch speed.
@@ -912,6 +922,23 @@ mod tests {
         let intent = intent_for(&brain, &seen, origin());
         assert!(intent.direction.z > 0.9, "heads toward the target");
         assert!(!intent.sprint && !intent.crouch, "at plain walking speed");
+    }
+
+    /// Attacking, a creature faces its target while it circles it; doing
+    /// anything else, it faces where it walks.
+    #[test]
+    fn an_attacking_creature_faces_its_target_as_it_circles() {
+        let attacking = brain_in(Behaviour::Attacking {
+            strafe_clockwise: true,
+            remaining: 1.0,
+        });
+        let close = perception_of(Point3::new(0.0, 0.0, 2.0), 2.0, true);
+        let intent = intent_for(&attacking, &close, origin());
+        assert_eq!(intent.face, Some(Vector3::z()));
+        assert!(intent.direction.x.abs() > 0.5, "circling: {intent:?}");
+
+        let chasing = intent_for(&brain_in(Behaviour::Chasing), &close, origin());
+        assert_eq!(chasing.face, None);
     }
 
     #[test]

@@ -96,7 +96,8 @@ blasts) knocks down at worst:
   danger is where their shove sends the player (off a ledge, into water,
   under a falling stone). A walker's peck or ram and a flying fish's bite
   are blows struck after a wind-up, and land on whatever is in front of the
-  beak or the jaws. A roller circles at a distance once it is close,
+  beak or the jaws. A creature faces what it attacks as it circles it, and
+  steps in until its blow would land before it throws one. A roller circles at a distance once it is close,
   always the same way round, and charges along a line it keeps to, again
   and again with barely a pause. Its body hits as any heavy thing does:
   running down a player who stands still knocks them down, but walking

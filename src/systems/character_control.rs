@@ -263,9 +263,11 @@ impl<'a> System<'a> for CharacterControlSystem {
                 (Some(wall), _, _) => Some((wall, config.turn_aggression)),
                 (None, Some(aim), _) => Some((aim, config.throw_turn_aggression)),
                 (None, None, Some(flight)) => Some((flight, config.turn_aggression)),
-                (None, None, None) => {
-                    (move_dir.magnitude() > 0.001).then_some((move_dir, config.turn_aggression))
-                }
+                (None, None, None) => target
+                    .face
+                    .filter(|face| face.magnitude() > 0.001)
+                    .or_else(|| (move_dir.magnitude() > 0.001).then_some(move_dir))
+                    .map(|heading| (heading, config.turn_aggression)),
             };
             if let Some((heading, aggression)) = heading {
                 let target_yaw = -heading.z.atan2(heading.x) + std::f32::consts::PI / 2.0;

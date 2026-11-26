@@ -120,6 +120,10 @@ pub struct CharacterIntent {
     /// is read as the camera's pitch would be. `None` leaves the aim to the
     /// camera when it follows this character, and to the facing otherwise.
     pub aim: Option<Vector3<f32>>,
+    /// Which way to face (level), for a brain that faces somewhere other
+    /// than where it walks: a creature squaring up to what it attacks while
+    /// it circles it. `None` faces where it walks.
+    pub face: Option<Vector3<f32>>,
     /// A takeoff planned for this frame: a traversal plan's hop or roll-off.
     /// Consumed by `CharacterControlSystem`; a jump pressed the same frame
     /// wins.
@@ -148,6 +152,7 @@ impl Default for CharacterIntent {
             throw: false,
             throw_grenade: false,
             aim: None,
+            face: None,
             takeoff: None,
             landing: None,
             edge: None,

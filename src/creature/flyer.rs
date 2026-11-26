@@ -253,9 +253,14 @@ impl<'a> System<'a> for FlyerLocomotionSystem {
                 .world
                 .apply_impulse(rb.0, (change + lift) * flyer.mass);
 
-            // It faces the way it flies.
+            // It faces the way it flies, unless its brain would have it face
+            // elsewhere.
             let flat = Vector3::new(velocity.x, 0.0, velocity.z);
-            let Some(travel) = flat.try_normalize(0.1) else {
+            let Some(travel) = intent
+                .face
+                .and_then(|face| Vector3::new(face.x, 0.0, face.z).try_normalize(1e-3))
+                .or_else(|| flat.try_normalize(0.1))
+            else {
                 continue;
             };
             let forward = rotation * Vector3::z();

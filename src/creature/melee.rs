@@ -24,10 +24,10 @@ use specs::{
 };
 
 use super::brain::{Behaviour, Brain};
-use super::perception::{facing_of, Perception};
+use super::perception::{PerceivedTarget, Perception};
 use super::swing::Swing;
-use crate::character::{CharacterIntent, CharacterState};
-use crate::components::{RigidBodyComponent, Rotation, Velocity};
+use crate::character::{facing_from_rotation, CharacterIntent, CharacterState};
+use crate::components::{RigidBodyComponent, Rotation};
 use crate::damage::{DamageKind, DamageQueue};
 use crate::debug::DebugLog;
 use crate::physics::bench_harness::geometry::EmptyGeometry;
@@ -141,7 +141,6 @@ impl<'a> System<'a> for MeleeAttackSystem {
         ReadStorage<'a, RigidBodyComponent>,
         ReadStorage<'a, CharacterState>,
         ReadStorage<'a, Rotation>,
-        ReadStorage<'a, Velocity>,
         Read<'a, PhysicsResource>,
         Option<Read<'a, TerrainWorld>>,
         Write<'a, DamageQueue>,
@@ -160,7 +159,6 @@ impl<'a> System<'a> for MeleeAttackSystem {
             bodies,
             states,
             rotations,
-            velocities,
             physics,
             terrain,
             mut queue,
@@ -189,8 +187,41 @@ impl<'a> System<'a> for MeleeAttackSystem {
                         .get(target.entity)
                         .is_some_and(|state| state.locomotion.is_down())
             });
-            let in_reach = target.is_some_and(|target| target.distance <= attack.reach);
             let committed = matches!(brain.behaviour, Behaviour::Attacking { .. });
+            let striker = bodies.get(entity).map(|body| body.0);
+            // The blow it would land if it threw it now: on whatever its
+            // swing touches first, thrown the way its body faces. A creature
+            // with no front strikes at what it is after.
+            let strike = |swing: &Swing| {
+                let striker = striker?;
+                let body = physics.world.body(striker)?;
+                let centre = body.position();
+                let facing = rotations
+                    .get(entity)
+                    .map(|rotation| facing_from_rotation(rotation.0))
+                    .or_else(|| level(body.rotation() * Vector3::z()))
+                    .or_else(|| level(target?.position - centre))?;
+                swing.land(&physics.world, scenery, striker, centre, facing)
+            };
+            let on = |strike: &PhysicsImpulse, target: PerceivedTarget| {
+                let PhysicsImpulse::Strike { body: struck, .. } = *strike else {
+                    return false;
+                };
+                bodies.get(target.entity).map(|body| body.0) == Some(struck)
+            };
+            let in_reach = target.is_some_and(|target| {
+                target.distance <= attack.reach
+                    && match attack.swing {
+                        // A swing is begun only where it would land on its
+                        // target: beside it or under its reach, the creature
+                        // squares up to it (its brain faces it at its target)
+                        // rather than striking the air.
+                        Some(swing) if committed && !attack.is_committed() => {
+                            strike(&swing).is_some_and(|strike| on(&strike, target))
+                        }
+                        _ => true,
+                    }
+            });
 
             let (phase, connected) = advance(*attack, committed, in_reach, dt);
             attack.phase = phase;
@@ -201,26 +232,8 @@ impl<'a> System<'a> for MeleeAttackSystem {
             if connected {
                 match attack.swing {
                     Some(swing) => {
-                        let striker = bodies.get(entity).map(|body| body.0);
-                        let centre = striker
-                            .and_then(|striker| physics.world.body(striker))
-                            .map(|body| body.position());
-                        // A creature with no front strikes at what it is after.
-                        let facing = facing_of(entity, &rotations, &velocities).or_else(|| {
-                            let (target, centre) = target.zip(centre)?;
-                            let to = target.position - centre;
-                            Vector3::new(to.x, 0.0, to.z).try_normalize(1e-4)
-                        });
-                        let strike = striker.zip(centre).zip(facing).and_then(
-                            |((striker, centre), facing)| {
-                                swing.land(&physics.world, scenery, striker, centre, facing)
-                            },
-                        );
-                        if let Some(strike @ PhysicsImpulse::Strike { body: struck, .. }) = strike {
-                            let on_target = target.filter(|target| {
-                                bodies.get(target.entity).map(|body| body.0) == Some(struck)
-                            });
-                            if let Some(target) = on_target {
+                        if let Some(strike) = strike(&swing) {
+                            if let Some(target) = target.filter(|&target| on(&strike, target)) {
                                 queue.push(target.entity, attack.damage, DamageKind::Melee);
                             }
                             impulses.push(strike);
@@ -235,14 +248,24 @@ impl<'a> System<'a> for MeleeAttackSystem {
             }
             if attack.is_committed() {
                 // A swing costs the creature its feet. It neither closes nor
-                // circles until the blow is over, and since the shared
-                // control chain faces a character where it steers, it does
-                // not turn either: the strike lands where it was aimed when
-                // it was thrown, and stepping aside is what beats it.
+                // circles until the blow is over, and it does not turn
+                // either: the strike lands where it was aimed when it was
+                // thrown, and stepping aside is what beats it.
                 if let Some(intent) = intents.get_mut(entity) {
                     intent.direction = Vector3::zeros();
+                    intent.face = None;
                 }
                 swinging += 1;
+            } else if committed && attack.swing.is_some() && !in_reach {
+                // Ready, but its blow would not land from where it stands:
+                // circling just out of its reach, or with its target beside
+                // it. It steps in at it, squared up, until it would.
+                let toward = target.zip(striker.and_then(|striker| physics.world.body(striker)));
+                let toward =
+                    toward.and_then(|(target, body)| level(target.position - body.position()));
+                if let Some((intent, toward)) = intents.get_mut(entity).zip(toward) {
+                    intent.direction = toward;
+                }
             }
         }
 
@@ -250,6 +273,11 @@ impl<'a> System<'a> for MeleeAttackSystem {
             debug_log.add("Creature/Striking", swinging.to_string());
         }
     }
+}
+
+/// `v` laid level, unit length; `None` if it is all but vertical.
+fn level(v: Vector3<f32>) -> Option<Vector3<f32>> {
+    Vector3::new(v.x, 0.0, v.z).try_normalize(1e-4)
 }
 
 /// Advance one swing. Returns the next phase and whether a blow was thrown
@@ -291,7 +319,11 @@ fn advance(attack: MeleeAttack, committed: bool, in_reach: bool, dt: f32) -> (St
 
 #[cfg(test)]
 mod tests {
+    use nalgebra::{Point3, Vector2};
+    use specs::{Builder, RunNow, World, WorldExt};
+
     use super::*;
+    use crate::physics::{ColliderDesc, RigidBodyDesc, RigidBodyHandle};
 
     fn an_attack() -> MeleeAttack {
         MeleeAttack::new(10.0, 2.0).with_timing(0.4, 0.5)
@@ -343,5 +375,98 @@ mod tests {
 
         attack.phase = StrikePhase::Ready;
         assert_eq!(attack.thrust(), 0.0);
+    }
+
+    /// A peck: from just above the striker's centre to 0.8 m ahead of it.
+    const PECK: Swing = Swing {
+        from: Vector2::new(0.0, 0.3),
+        to: Vector2::new(0.8, 0.3),
+        radius: 0.2,
+        impulse: 300.0,
+    };
+
+    fn ball(physics: &mut PhysicsResource, at: Point3<f32>) -> RigidBodyHandle {
+        let body = physics
+            .world
+            .create_body(RigidBodyDesc::dynamic().position(at));
+        physics
+            .world
+            .attach_collider(body, ColliderDesc::sphere(0.3).density(1000.0));
+        body
+    }
+
+    /// A striker at the origin facing +z, ready and attacking a ball at
+    /// `at`, after the system has run once: where it is in its swing, and
+    /// the way it steps.
+    fn ready_at(at: Point3<f32>) -> (StrikePhase, Vector3<f32>) {
+        let mut world = World::new();
+        System::setup(&mut MeleeAttackSystem, &mut world);
+        let mut physics = PhysicsResource::default();
+        let (mine, theirs) = (ball(&mut physics, Point3::origin()), ball(&mut physics, at));
+        world.insert(physics);
+
+        let target = world
+            .create_entity()
+            .with(RigidBodyComponent(theirs))
+            .build();
+        let striker = world
+            .create_entity()
+            .with(Brain {
+                behaviour: Behaviour::Attacking {
+                    strafe_clockwise: true,
+                    remaining: 1.0,
+                },
+                ..Brain::hunter(1.0)
+            })
+            .with(Perception {
+                target: Some(PerceivedTarget {
+                    entity: target,
+                    position: at,
+                    distance: at.coords.norm(),
+                    visible: true,
+                    since_seen: 0.0,
+                }),
+                ..Perception::ground_creature(20.0)
+            })
+            .with(MeleeAttack::new(10.0, 2.0).with_swing(PECK))
+            .with(CharacterIntent {
+                direction: Vector3::x(),
+                ..CharacterIntent::default()
+            })
+            .with(RigidBodyComponent(mine))
+            .with(Rotation(0.0))
+            .build();
+
+        MeleeAttackSystem.run_now(&world);
+        let phase = world
+            .read_storage::<MeleeAttack>()
+            .get(striker)
+            .unwrap()
+            .phase;
+        let direction = world
+            .read_storage::<CharacterIntent>()
+            .get(striker)
+            .unwrap()
+            .direction;
+        (phase, direction)
+    }
+
+    /// With its target in front, where its blow would land, a ready striker
+    /// begins its swing and stands to throw it.
+    #[test]
+    fn a_striker_swings_at_a_target_its_blow_would_land_on() {
+        let (phase, direction) = ready_at(Point3::new(0.0, 0.0, 0.9));
+        assert!(matches!(phase, StrikePhase::Winding { .. }), "{phase:?}");
+        assert_eq!(direction, Vector3::zeros());
+    }
+
+    /// With its target beside it, within its reach but not where its blow
+    /// would land, a ready striker does not swing at the air: it steps in
+    /// at its target.
+    #[test]
+    fn beside_its_target_a_striker_steps_in_at_it_rather_than_striking_the_air() {
+        let (phase, direction) = ready_at(Point3::new(-0.9, 0.0, 0.0));
+        assert_eq!(phase, StrikePhase::Ready);
+        assert!((direction + Vector3::x()).norm() < 1e-4, "{direction:?}");
     }
 }
