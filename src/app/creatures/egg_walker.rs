@@ -2,8 +2,9 @@
 //! holds the break open with its fingers and looks out.
 //!
 //! The swarm. One is no trouble: it is quick, but a single blow breaks it
-//! and its butt only bruises. They come several at a time. `visual_bench
-//! egg_walker` shows it.
+//! and its butt only bruises. They come several at a time, keeping apart
+//! and butting at the player in turn: two shells that met at a run would
+//! break each other. `visual_bench egg_walker` shows it.
 //!
 //! ```text
 //!   shell    a hollow egg, broken open at the front and cracked from the

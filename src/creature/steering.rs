@@ -1,7 +1,8 @@
 //! Steering primitives.
 //!
 //! Each function returns a desired *direction* — a unit vector in the XZ plane,
-//! or zero for "no preference". Speed is not a steering concern: it belongs to
+//! or zero for "no preference" — except [`separate`], whose length also says
+//! how pressing it is. Speed is not a steering concern: it belongs to
 //! [`LocomotionConfig`](crate::character::LocomotionConfig), which the shared
 //! `CharacterControlSystem` already applies. Keeping these pure and
 //! speed-agnostic is what lets a brain compose several of them per frame
@@ -68,6 +69,51 @@ pub fn strafe(from: Point3<f32>, target: Point3<f32>, clockwise: bool) -> Vector
     }
 }
 
+/// Where something is and how it moves.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Mover {
+    /// Its centre.
+    pub at: Point3<f32>,
+    /// Its velocity, m/s.
+    pub velocity: Vector3<f32>,
+}
+
+/// Away from each of `others` that comes nearer than `spacing` (centre to
+/// centre) within `ahead` seconds, if it and `me` go on as they are going:
+/// from where the two will be nearest, the more the further inside
+/// `spacing` that is, from nothing at it to a unit's worth at the same
+/// spot, summed over them. Not normalised, so blended with where a
+/// creature is going it turns it aside only as far as it is crowded.
+pub fn separate(
+    me: Mover,
+    others: impl IntoIterator<Item = Mover>,
+    spacing: f32,
+    ahead: f32,
+) -> Vector3<f32> {
+    let planar = |v: Vector3<f32>| Vector3::new(v.x, 0.0, v.z);
+    others
+        .into_iter()
+        .filter_map(|other| {
+            let apart = planar(me.at - other.at);
+            let closing = planar(me.velocity - other.velocity);
+            let soonest = closing
+                .try_normalize(MIN_MEANINGFUL_LENGTH)
+                .map_or(0.0, |_| {
+                    (-apart.dot(&closing) / closing.norm_squared()).clamp(0.0, ahead)
+                });
+            let nearest = apart + closing * soonest;
+            let distance = nearest.magnitude();
+            if distance >= spacing {
+                return None;
+            }
+            let away = nearest
+                .try_normalize(MIN_MEANINGFUL_LENGTH)
+                .or_else(|| apart.try_normalize(MIN_MEANINGFUL_LENGTH))?;
+            Some(away * (1.0 - distance / spacing))
+        })
+        .sum()
+}
+
 /// Blend weighted steering directions into one direction.
 ///
 /// Weights are relative, not normalised — a `seek` at 1.0 blended with an
@@ -88,6 +134,64 @@ mod tests {
 
     fn point(x: f32, z: f32) -> Point3<f32> {
         Point3::new(x, 0.0, z)
+    }
+
+    fn still(x: f32, z: f32) -> Mover {
+        Mover {
+            at: point(x, z),
+            velocity: Vector3::zeros(),
+        }
+    }
+
+    #[test]
+    fn separate_turns_away_from_neighbours_inside_the_spacing_only() {
+        let alone = separate(still(0.0, 0.0), [still(3.0, 0.0)], 2.0, 0.5);
+        assert_eq!(alone, Vector3::zeros());
+        let near = separate(still(0.0, 0.0), [still(1.5, 0.0)], 2.0, 0.5);
+        let nearer = separate(still(0.0, 0.0), [still(0.5, 0.0)], 2.0, 0.5);
+        assert!(near.x < 0.0 && near.z.abs() < 1e-6, "{near:?}");
+        assert!(nearer.x < near.x, "{nearer:?} against {near:?}");
+        let between = separate(
+            still(0.0, 0.0),
+            [still(1.0, 0.0), still(-1.0, 0.0)],
+            2.0,
+            0.5,
+        );
+        assert!(between.magnitude() < 1e-6, "{between:?}");
+    }
+
+    /// One coming fast from out of the spacing is made way for before it
+    /// arrives, aside from the line it comes along; one going away, or that
+    /// passes wide, is not.
+    #[test]
+    fn separate_makes_way_for_one_coming_before_it_arrives() {
+        let coming = Mover {
+            at: point(3.0, 0.3),
+            velocity: Vector3::new(-6.0, 0.0, 0.0),
+        };
+        let way = separate(still(0.0, 0.0), [coming], 1.5, 0.5);
+        assert!(way.z < -0.3, "{way:?}");
+        assert_eq!(
+            separate(still(0.0, 0.0), [coming], 1.5, 0.2),
+            Vector3::zeros()
+        );
+
+        let going = Mover {
+            velocity: Vector3::new(6.0, 0.0, 0.0),
+            ..coming
+        };
+        assert_eq!(
+            separate(still(0.0, 0.0), [going], 1.5, 0.5),
+            Vector3::zeros()
+        );
+        let wide = Mover {
+            at: point(3.0, 2.0),
+            ..coming
+        };
+        assert_eq!(
+            separate(still(0.0, 0.0), [wide], 1.5, 0.5),
+            Vector3::zeros()
+        );
     }
 
     #[test]

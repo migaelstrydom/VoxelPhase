@@ -213,6 +213,9 @@ impl StiltWalker {
         let run_up = self.peck.map_or(0.0, |peck| rush(peck.lunge, 0.0).run_up());
         let standoff = contact + run_up;
         let reach = standoff * (1.0 + REACH_PAST_STANDOFF);
+        // It keeps the room from its kin that the two of them need to turn
+        // aside from each other at a walk.
+        let spacing = 2.0 * radius + self.speed * self.speed / LUNGE_GRIP;
 
         let (body_handle, upright) = {
             let mut physics = world.write_resource::<PhysicsResource>();
@@ -288,7 +291,7 @@ impl StiltWalker {
             .with(DriveIntent::default())
             .with(BodyMotion::default())
             .with(Perception::ground_creature(self.sight_range))
-            .with((self.brain)(standoff));
+            .with((self.brain)(standoff).keeping_apart(spacing));
         if let Some(peck) = self.peck {
             entity = entity.with(
                 MeleeAttack::new(peck.damage, reach, rush(peck.lunge, reach))

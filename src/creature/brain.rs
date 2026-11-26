@@ -1,13 +1,14 @@
 use nalgebra::{Point3, Vector3};
 use rand::Rng;
 use specs::{
-    Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, Write, WriteStorage,
+    Component, DenseVecStorage, Entities, Join, LendJoin, Read, ReadStorage, System, Write,
+    WriteStorage,
 };
 
 use super::perception::{PerceivedTarget, Perception};
-use super::steering;
+use super::steering::{self, Mover};
 use crate::character::CharacterIntent;
-use crate::components::Position;
+use crate::components::{Position, Velocity};
 use crate::damage::{Dead, Health};
 use crate::debug::DebugLog;
 use crate::time::Time;
@@ -106,6 +107,16 @@ const ATTACK_RELEASE: f32 = 1.25;
 /// settle at a distance its own brain calls out of range.
 const STANDOFF_BAND_FRACTION: f32 = 0.15;
 
+/// How hard keeping apart from its kin pulls against where a creature is
+/// going, with one of them on top of it: enough to turn it aside before
+/// they meet, where running on into each other would break a shell.
+const KEEPING_APART: f32 = 2.0;
+
+/// How far ahead, s, a creature reckons where its kin will be as it keeps
+/// clear of them: about as long as a lunge lasts, the fastest any of them
+/// comes at another.
+const LOOK_AHEAD: f32 = 0.5;
+
 /// What a creature knows about its own injuries.
 ///
 /// Two readings of the same `Health`, because breaking off needs both: how
@@ -158,6 +169,10 @@ pub struct Brain {
     /// Largest nudge to a wandering heading, in radians. A quarter turn
     /// wanders; a half turn dithers on the spot.
     pub wander_turn: f32,
+    /// How near another creature's centre it lets its own come as it goes,
+    /// m: it turns away from one that will be inside it, as they both go,
+    /// the more the nearer (`steering::separate`). Zero keeps no distance.
+    pub spacing: f32,
 
     /// `Health::taken` seen last frame.
     ///
@@ -186,6 +201,7 @@ impl Brain {
             search_arrival_radius: 1.5,
             wander_interval: 1.2,
             wander_turn: std::f32::consts::FRAC_PI_2,
+            spacing: 0.0,
             previous_damage_taken: 0.0,
         }
     }
@@ -195,6 +211,12 @@ impl Brain {
         self.flee_health_fraction > 0.0
             && health.fraction <= self.flee_health_fraction
             && health.taken > self.previous_damage_taken
+    }
+
+    /// A creature that keeps `spacing` from the others as it goes.
+    pub fn keeping_apart(mut self, spacing: f32) -> Self {
+        self.spacing = spacing;
+        self
     }
 
     /// A creature that never breaks off, however hurt it gets.
@@ -230,6 +252,7 @@ impl<'a> System<'a> for BrainSystem {
         Read<'a, Time>,
         ReadStorage<'a, Perception>,
         ReadStorage<'a, Position>,
+        ReadStorage<'a, Velocity>,
         ReadStorage<'a, Health>,
         ReadStorage<'a, Dead>,
         WriteStorage<'a, Brain>,
@@ -243,6 +266,7 @@ impl<'a> System<'a> for BrainSystem {
             time,
             perceptions,
             positions,
+            velocities,
             healths,
             deads,
             mut brains,
@@ -253,6 +277,20 @@ impl<'a> System<'a> for BrainSystem {
 
         let mut awake = 0;
         let mut total = 0;
+        let mover = |pos: &Position, velocity: Option<&Velocity>| Mover {
+            at: Point3::from(pos.0),
+            velocity: velocity.map_or_else(Vector3::zeros, |v| v.0),
+        };
+        let kin: Vec<(specs::Entity, Mover)> = (
+            &entities,
+            &positions,
+            (&velocities).maybe(),
+            &brains,
+            !&deads,
+        )
+            .join()
+            .map(|(entity, pos, velocity, _, _)| (entity, mover(pos, velocity)))
+            .collect();
 
         for (entity, perception, pos, brain, intent, _) in (
             &entities,
@@ -273,7 +311,13 @@ impl<'a> System<'a> for BrainSystem {
 
             brain.behaviour = next_behaviour(brain, perception, me, wounds, dt);
             brain.previous_damage_taken = wounds.taken;
-            *intent = intent_for(brain, perception, me);
+            let others: Vec<Mover> = kin
+                .iter()
+                .filter(|(other, _)| *other != entity)
+                .map(|(_, at)| *at)
+                .collect();
+            let moving = mover(pos, velocities.get(entity));
+            *intent = intent_for(brain, perception, moving, &others);
 
             total += 1;
             if !matches!(brain.behaviour, Behaviour::Idle) {
@@ -487,7 +531,14 @@ fn still_engaged(target: PerceivedTarget) -> bool {
 }
 
 /// Translate a behaviour into the intent that expresses it.
-fn intent_for(brain: &Brain, perception: &Perception, me: Point3<f32>) -> CharacterIntent {
+/// `kin` is the other creatures.
+fn intent_for(
+    brain: &Brain,
+    perception: &Perception,
+    moving: Mover,
+    kin: &[Mover],
+) -> CharacterIntent {
+    let me = moving.at;
     let direction = match brain.behaviour {
         Behaviour::Idle => Vector3::zeros(),
 
@@ -548,6 +599,18 @@ fn intent_for(brain: &Brain, perception: &Perception, me: Point3<f32>) -> Charac
         Behaviour::Wandering { heading, .. } => heading,
     };
 
+    let direction = if direction == Vector3::zeros() {
+        direction
+    } else {
+        steering::blend(&[
+            (direction, 1.0),
+            (
+                steering::separate(moving, kin.iter().copied(), brain.spacing, LOOK_AHEAD),
+                KEEPING_APART,
+            ),
+        ])
+    };
+
     // Attacking, it squares up to its target whichever way it circles: a
     // blow is thrown where the creature faces.
     let face = match brain.behaviour {
@@ -606,6 +669,13 @@ mod tests {
 
     fn origin() -> Point3<f32> {
         Point3::origin()
+    }
+
+    fn standing() -> Mover {
+        Mover {
+            at: origin(),
+            velocity: Vector3::zeros(),
+        }
     }
 
     /// A creature nothing has touched.
@@ -894,7 +964,7 @@ mod tests {
         let gone = lost_perception_of(Point3::new(0.0, 0.0, 0.5), 0.5, 2.0, false);
 
         assert_eq!(
-            intent_for(&brain, &gone, origin()).direction,
+            intent_for(&brain, &gone, standing(), &[]).direction,
             Vector3::zeros(),
             "seeking a point it is standing on walks the creature over it and back"
         );
@@ -919,7 +989,7 @@ mod tests {
         let brain = brain_in(Behaviour::Chasing);
         let seen = perception_of(Point3::new(0.0, 0.0, 10.0), 10.0, true);
 
-        let intent = intent_for(&brain, &seen, origin());
+        let intent = intent_for(&brain, &seen, standing(), &[]);
         assert!(intent.direction.z > 0.9, "heads toward the target");
         assert!(!intent.sprint && !intent.crouch, "at plain walking speed");
     }
@@ -933,11 +1003,11 @@ mod tests {
             remaining: 1.0,
         });
         let close = perception_of(Point3::new(0.0, 0.0, 2.0), 2.0, true);
-        let intent = intent_for(&attacking, &close, origin());
+        let intent = intent_for(&attacking, &close, standing(), &[]);
         assert_eq!(intent.face, Some(Vector3::z()));
         assert!(intent.direction.x.abs() > 0.5, "circling: {intent:?}");
 
-        let chasing = intent_for(&brain_in(Behaviour::Chasing), &close, origin());
+        let chasing = intent_for(&brain_in(Behaviour::Chasing), &close, standing(), &[]);
         assert_eq!(chasing.face, None);
     }
 
@@ -946,7 +1016,7 @@ mod tests {
         let brain = brain_in(Behaviour::Fleeing { calm: 0.0 });
         let seen = perception_of(Point3::new(0.0, 0.0, 10.0), 10.0, true);
 
-        let intent = intent_for(&brain, &seen, origin());
+        let intent = intent_for(&brain, &seen, standing(), &[]);
         assert!(intent.direction.z < -0.9, "heads away from the target");
         assert!(intent.sprint, "flight uses the player's own sprint channel");
     }
@@ -956,8 +1026,32 @@ mod tests {
         let intent = intent_for(
             &brain_in(Behaviour::Idle),
             &Perception::ground_creature(20.0),
-            origin(),
+            standing(),
+            &[Mover {
+                at: Point3::new(0.5, 0.0, 0.0),
+                velocity: Vector3::zeros(),
+            }],
         );
         assert_eq!(intent.direction, Vector3::zeros());
+    }
+
+    /// Chasing alongside another creature, it turns aside from it before
+    /// they meet, and keeps on toward its target; one that keeps no
+    /// spacing runs on into it.
+    #[test]
+    fn a_creature_turns_aside_from_its_kin_as_it_goes() {
+        let seen = perception_of(Point3::new(0.0, 0.0, 10.0), 10.0, true);
+        let beside = [Mover {
+            at: Point3::new(0.8, 0.0, 0.5),
+            velocity: Vector3::zeros(),
+        }];
+
+        let spaced = brain_in(Behaviour::Chasing).keeping_apart(1.5);
+        let intent = intent_for(&spaced, &seen, standing(), &beside);
+        assert!(intent.direction.x < -0.3, "turns aside: {intent:?}");
+        assert!(intent.direction.z > 0.0, "still on toward it: {intent:?}");
+
+        let crowding = intent_for(&brain_in(Behaviour::Chasing), &seen, standing(), &beside);
+        assert!(crowding.direction.z > 0.99, "{crowding:?}");
     }
 }

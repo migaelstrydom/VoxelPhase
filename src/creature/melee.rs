@@ -19,10 +19,15 @@
 //! pushed back by what it gives. Keeping the timing apart is what lets the
 //! same swing sit under a peck, a headbutt or a bite: only the rig that
 //! reads [`MeleeAttack::thrust`] knows which it is.
+//!
+//! Strikers at one target take turns: none begins a blow while another is
+//! in the middle of one at it, so two rushing at one body do not meet each
+//! other there.
 
 use nalgebra::Vector3;
 use specs::{
-    Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, Write, WriteStorage,
+    Component, DenseVecStorage, Entities, Entity, Join, Read, ReadStorage, System, Write,
+    WriteStorage,
 };
 
 use super::brain::{Behaviour, Brain};
@@ -180,6 +185,11 @@ impl<'a> System<'a> for MeleeAttackSystem {
         };
         let dt = time.delta_seconds();
         let mut swinging = 0;
+        let mut striking: Vec<(Entity, Entity)> = (&entities, &perceptions, &attacks)
+            .join()
+            .filter(|(_, _, attack)| attack.is_committed())
+            .filter_map(|(striker, perception, _)| Some((striker, perception.target?.entity)))
+            .collect();
 
         // Intent is looked up rather than joined on: a creature that swings
         // without walking has no `CharacterIntent`, and joining on one would
@@ -246,7 +256,10 @@ impl<'a> System<'a> for MeleeAttackSystem {
             let in_reach = committed
                 && !attack.is_committed()
                 && target.is_some_and(|target| {
-                    target.distance <= attack.reach
+                    !striking
+                        .iter()
+                        .any(|&(other, at)| other != entity && at == target.entity)
+                        && target.distance <= attack.reach
                         && squared(target)
                         && gap(target).is_some_and(|gap| gap >= rush.nearest())
                 });
@@ -260,6 +273,9 @@ impl<'a> System<'a> for MeleeAttackSystem {
             };
             let (phase, thrown) = advance(*attack, committed, in_reach, along, seconds, dt);
             attack.phase = phase;
+            if let Some(target) = target.filter(|_| in_reach && attack.is_committed()) {
+                striking.push((entity, target.entity));
+            }
             if thrown {
                 if let Some(target) = target.filter(|&target| gap(target).is_some()) {
                     queue.push(target.entity, attack.damage, DamageKind::Melee);
@@ -503,25 +519,18 @@ mod tests {
         body
     }
 
-    /// A striker at the origin facing +z, attacking a ball at `at` from
-    /// `phase` with its body `locomotion`, after the system has run once:
-    /// where it is in its swing, and what it asks of its body.
-    fn struck_from(
-        at: Point3<f32>,
+    /// A striker at `from` facing `yaw` (0 is +z), attacking `target` from
+    /// `phase` with its body `locomotion`.
+    fn striker(
+        world: &mut World,
+        from: Point3<f32>,
+        yaw: f32,
         phase: StrikePhase,
+        target: PerceivedTarget,
         locomotion: LocomotionState,
-    ) -> (StrikePhase, Asked) {
-        let mut world = World::new();
-        System::setup(&mut MeleeAttackSystem, &mut world);
-        let mut physics = PhysicsResource::default();
-        let (mine, theirs) = (ball(&mut physics, Point3::origin()), ball(&mut physics, at));
-        world.insert(physics);
-
-        let target = world
-            .create_entity()
-            .with(RigidBodyComponent(theirs))
-            .build();
-        let striker = world
+    ) -> Entity {
+        let body = ball(&mut world.write_resource::<PhysicsResource>(), from);
+        world
             .create_entity()
             .with(Brain {
                 behaviour: Behaviour::Attacking {
@@ -532,11 +541,8 @@ mod tests {
             })
             .with(Perception {
                 target: Some(PerceivedTarget {
-                    entity: target,
-                    position: at,
-                    distance: at.coords.norm(),
-                    visible: true,
-                    since_seen: 0.0,
+                    distance: (target.position - from).norm(),
+                    ..target
                 }),
                 ..Perception::ground_creature(20.0)
             })
@@ -549,14 +555,43 @@ mod tests {
                 face: Some(Vector3::x()),
                 ..CharacterIntent::default()
             })
-            .with(RigidBodyComponent(mine))
-            .with(Rotation(0.0))
+            .with(RigidBodyComponent(body))
+            .with(Rotation(yaw))
             .with(CharacterState {
                 locomotion,
                 ..CharacterState::default()
             })
-            .build();
+            .build()
+    }
 
+    /// A world with a ball at `at` for strikers to attack, as their target.
+    fn target_at(at: Point3<f32>) -> (World, PerceivedTarget) {
+        let mut world = World::new();
+        System::setup(&mut MeleeAttackSystem, &mut world);
+        let mut physics = PhysicsResource::default();
+        let body = ball(&mut physics, at);
+        world.insert(physics);
+        let entity = world.create_entity().with(RigidBodyComponent(body)).build();
+        let target = PerceivedTarget {
+            entity,
+            position: at,
+            distance: 0.0,
+            visible: true,
+            since_seen: 0.0,
+        };
+        (world, target)
+    }
+
+    /// A striker at the origin facing +z, attacking a ball at `at` from
+    /// `phase` with its body `locomotion`, after the system has run once:
+    /// where it is in its swing, and what it asks of its body.
+    fn struck_from(
+        at: Point3<f32>,
+        phase: StrikePhase,
+        locomotion: LocomotionState,
+    ) -> (StrikePhase, Asked) {
+        let (mut world, target) = target_at(at);
+        let striker = striker(&mut world, Point3::origin(), 0.0, phase, target, locomotion);
         MeleeAttackSystem.run_now(&world);
         let phase = world
             .read_storage::<MeleeAttack>()
@@ -573,6 +608,35 @@ mod tests {
         (phase, asked)
     }
 
+    /// Two strikers on their feet either side of a ball between them, each
+    /// where its rush would meet it, from `phases`, after the system has
+    /// run once: where each is in its swing.
+    fn struck_by_two(phases: [StrikePhase; 2]) -> [StrikePhase; 2] {
+        let (mut world, target) = target_at(Point3::new(0.0, 0.0, 0.9));
+        let on_feet = LocomotionState::default();
+        let strikers = [
+            striker(
+                &mut world,
+                Point3::origin(),
+                0.0,
+                phases[0],
+                target,
+                on_feet,
+            ),
+            striker(
+                &mut world,
+                Point3::new(0.0, 0.0, 1.8),
+                std::f32::consts::PI,
+                phases[1],
+                target,
+                on_feet,
+            ),
+        ];
+        MeleeAttackSystem.run_now(&world);
+        let attacks = world.read_storage::<MeleeAttack>();
+        strikers.map(|striker| attacks.get(striker).unwrap().phase)
+    }
+
     /// [`struck_from`], ready and on its feet.
     fn ready_at(at: Point3<f32>) -> (StrikePhase, Asked) {
         struck_from(at, StrikePhase::Ready, LocomotionState::default())
@@ -585,6 +649,27 @@ mod tests {
         let (phase, intent) = ready_at(Point3::new(0.0, 0.0, 0.9));
         assert!(matches!(phase, StrikePhase::Winding { .. }), "{phase:?}");
         assert_eq!(intent.direction, Vector3::zeros());
+    }
+
+    /// Where their rushes would meet their target, two strikers take turns:
+    /// one holds its blow while the other is in the middle of one, and of
+    /// two ready at once, one begins.
+    #[test]
+    fn strikers_at_one_target_take_turns() {
+        let winding = |phase| matches!(phase, StrikePhase::Winding { .. });
+        for busy in [
+            StrikePhase::Winding { elapsed: 0.1 },
+            StrikePhase::Recovering { remaining: 0.1 },
+        ] {
+            let [phase, _] = struck_by_two([StrikePhase::Ready, busy]);
+            assert_eq!(phase, StrikePhase::Ready, "beside one {busy:?}");
+        }
+        let both = struck_by_two([StrikePhase::Ready; 2]);
+        assert_eq!(
+            both.iter().filter(|&&phase| winding(phase)).count(),
+            1,
+            "{both:?}"
+        );
     }
 
     /// With its target beside it, within its reach but not where its rush
