@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::anatomy::{self, LIMB_GRAIN};
@@ -29,7 +29,7 @@ use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, ProceduralMesh, Renderable, RigidBodyComponent,
     Rotation, Velocity,
 };
-use crate::creature::{Brain, MeleeAttack, Perception, Shell, Swing};
+use crate::creature::{Brain, MeleeAttack, Perception, Rush, Shell};
 use crate::damage::Ragdoll;
 use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
 use crate::harm::{Death, Harm, HarmConfig};
@@ -41,18 +41,18 @@ use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 
-/// Half-width of the thing a walker pecks at. The attack has to cover the
-/// target's own girth or a walker standing against the player misses.
+/// Half-width of the thing a walker strikes at, m: the player's, with room
+/// to spare, so that it holds station clear of them.
 const TARGET_HALF_WIDTH: f32 = 0.45;
 
-/// Where a walker holds station while attacking, between the distance at
-/// which the two bodies touch and the distance its peck reaches.
-///
-/// Halfway, and both bounds matter. Any closer and the solver is what ends
-/// up deciding the standoff — the creature walks into the player, gets
-/// shoved out, and walks back in. Any further and the peck cannot land
-/// from where the brain parks it.
-const STANDOFF_BETWEEN_CONTACT_AND_REACH: f32 = 0.5;
+/// How hard a walker's legs drive it into a lunge, m/s²: about what its
+/// traction drive gives it on the lawn, where a bell carrier gains its
+/// 4 m/s in under a fifth of a second ([`Rush::grip`]).
+const LUNGE_GRIP: f32 = 22.0;
+
+/// How far past its standoff a walker still throws its blow, as a share of
+/// it: as far as its brain lets it drift while it circles.
+const REACH_PAST_STANDOFF: f32 = 0.2;
 
 /// Seconds a walker's body lies where it fell before it is cleared away.
 const CORPSE_SECONDS: f32 = 6.0;
@@ -72,14 +72,16 @@ pub fn bare_legs(rig: &StiltRigConfig, girth: f32, foot: f32) -> Vec<(Worn, Vec<
     legs
 }
 
-/// A walker's strike with its head.
+/// A walker's strike: its head thrown at what it attacks, and its body
+/// behind it ([`Rush`]).
 #[derive(Clone, Copy, Debug)]
 pub struct Peck {
     /// Hit points it takes off.
     pub damage: f32,
-    /// The impulse it drives into what it strikes, N·s
-    /// ([`Swing::impulse`]).
-    pub blow: f32,
+    /// The speed it lunges at, m/s: what its legs drive its body toward,
+    /// along the way it faces, as it throws the blow. Their grip on the
+    /// ground decides how soon it gets there.
+    pub lunge: f32,
     /// Seconds of rearing back before it lands: the warning.
     pub windup: f32,
     /// Seconds before it can strike again.
@@ -163,6 +165,9 @@ impl StiltWalker {
         let clearance = rig.body_height() * 0.5;
         let radius = rig.head_radius;
         let mut locomotion = LocomotionConfig::creature(self.speed, radius, clearance);
+        if let Some(peck) = self.peck {
+            locomotion.sprint_speed_mul = peck.lunge / self.speed;
+        }
         let (air_steer_speed, jump_speed) = (locomotion.air_steer_speed, locomotion.jump_speed);
 
         let surface_y = {
@@ -193,14 +198,21 @@ impl StiltWalker {
             mesh
         });
 
-        // Reach is the rig's own geometry plus the target's girth, so
-        // lengthening the neck lengthens the attack by itself. The standoff
-        // the brain holds is derived from the same two numbers, which is
-        // what keeps the creature out of the player's collider while still
-        // close enough to connect.
+        // It holds station a run-up away from touching its target: what
+        // its legs need to bring its body up to its lunge speed. Any nearer
+        // and its blow is a push; it backs off to there before it throws
+        // one, and throws it from anywhere about there.
         let contact = radius + TARGET_HALF_WIDTH;
-        let reach = rig.strike_extent() + TARGET_HALF_WIDTH;
-        let standoff = contact + (reach - contact) * STANDOFF_BETWEEN_CONTACT_AND_REACH;
+        let rush = |speed: f32, carry: f32| Rush {
+            speed,
+            grip: LUNGE_GRIP,
+            carry,
+            radius,
+            half_height: clearance,
+        };
+        let run_up = self.peck.map_or(0.0, |peck| rush(peck.lunge, 0.0).run_up());
+        let standoff = contact + run_up;
+        let reach = standoff * (1.0 + REACH_PAST_STANDOFF);
 
         let (body_handle, upright) = {
             let mut physics = world.write_resource::<PhysicsResource>();
@@ -279,9 +291,8 @@ impl StiltWalker {
             .with((self.brain)(standoff));
         if let Some(peck) = self.peck {
             entity = entity.with(
-                MeleeAttack::new(peck.damage, reach)
-                    .with_timing(peck.windup, peck.recovery)
-                    .with_swing(peck_swing(&rig, clearance, peck.blow)),
+                MeleeAttack::new(peck.damage, reach, rush(peck.lunge, reach))
+                    .with_timing(peck.windup, peck.recovery),
             );
         }
         if let Some(config) = self.harm {
@@ -305,23 +316,6 @@ impl StiltWalker {
             });
         }
         vec![entity.build()]
-    }
-}
-
-/// What a peck sweeps, for a rig whose centre is `clearance` above its foot
-/// centres: the head speared from over the haunch, where the neck pivots,
-/// to where the neck throws it at `strike_pitch`, as wide as the head. It
-/// drives `impulse`, N·s, into what it touches.
-fn peck_swing(rig: &StiltRigConfig, clearance: f32, impulse: f32) -> Swing {
-    let pivot = rig.standing_height() + rig.haunch_height - clearance;
-    Swing {
-        from: Vector2::new(0.0, pivot),
-        to: Vector2::new(
-            rig.neck_length * rig.strike_pitch.sin(),
-            pivot + rig.neck_length * rig.strike_pitch.cos(),
-        ),
-        radius: rig.head_radius,
-        impulse,
     }
 }
 

@@ -133,6 +133,7 @@ impl CcdStrategy for SweepClampCcd {
                 std::slice::from_ref(&manifold),
                 ctx.bodies,
                 ctx.colliders,
+                ctx.constraints,
                 dt,
             );
 

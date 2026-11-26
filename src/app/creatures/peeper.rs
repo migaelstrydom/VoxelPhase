@@ -78,9 +78,9 @@ const TURN_AUTHORITY: f32 = 420.0;
 /// back over the haunch is unmistakable.
 const PECK_WINDUP: f32 = 0.5;
 const PECK_RECOVERY: f32 = 0.85;
-/// The impulse its peck drives into what it strikes, N·s: about 6 m/s on
-/// the player, which knocks them down for about three seconds.
-const PECK_BLOW: f32 = 340.0;
+/// The speed its peck drives it at, m/s. A little heavier than the player,
+/// it gives one in its way about 3 m/s: a shove.
+const PECK_LUNGE: f32 = 5.5;
 
 /// Radius of the eye that is its head, m, and how far it can roll off the
 /// way the head faces, radians.
@@ -1135,7 +1135,7 @@ impl PeeperDef {
             turn_authority: TURN_AUTHORITY,
             peck: Some(Peck {
                 damage: self.peck_damage,
-                blow: PECK_BLOW,
+                lunge: PECK_LUNGE,
                 windup: PECK_WINDUP,
                 recovery: PECK_RECOVERY,
             }),

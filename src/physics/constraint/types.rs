@@ -555,6 +555,30 @@ impl ConstraintKind {
         true
     }
 
+    /// The body this holds rigidly from tipping, and the one axis (world
+    /// space) it leaves that body free to turn about: a `KeepUpright` its
+    /// target up, a `KeepAttitude` world up. `None` for any other kind, and
+    /// for a hold that gives (compliant, or bounded): a body so held still
+    /// tips under a blow.
+    pub fn holds_upright(&self) -> Option<(RigidBodyHandle, UnitVector3<f32>)> {
+        let (body, free, compliance, max_impulse) = match *self {
+            ConstraintKind::KeepUpright {
+                body,
+                target_up,
+                compliance,
+                max_impulse,
+            } => (body, target_up, compliance, max_impulse),
+            ConstraintKind::KeepAttitude {
+                body,
+                compliance,
+                max_impulse,
+                ..
+            } => (body, Vector3::y_axis(), compliance, max_impulse),
+            _ => return None,
+        };
+        (compliance == 0.0 && max_impulse == f32::INFINITY).then_some((body, free))
+    }
+
     /// The body this holds against the world, if it holds one
     /// ([`anchors_position`](Self::anchors_position)).
     pub fn anchored_body(&self) -> Option<RigidBodyHandle> {

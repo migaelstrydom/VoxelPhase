@@ -1,7 +1,7 @@
 //! Rigid body representation.
 
 use generational_arena::Arena;
-use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix2x3, Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
 
 use super::bulk::{self, Envelope, MassParts};
 use super::collider::Collider;
@@ -424,6 +424,25 @@ impl RigidBody {
             return Matrix3::zeros();
         }
         inertia_to_world(&self.inv_local_inertia, &self.rotation)
+    }
+
+    /// Its world-space inverse inertia while it is held from turning about
+    /// anything but `free` (world space): how an angular impulse turns it
+    /// when the hold takes the rest, as a rigid upright hold does.
+    pub fn world_inv_inertia_turning_about(&self, free: &UnitVector3<f32>) -> Matrix3<f32> {
+        let inv = self.world_inv_inertia();
+        let across = if free.x.abs() < 0.9 {
+            Vector3::x()
+        } else {
+            Vector3::y()
+        };
+        let b = free.cross(&across).normalize();
+        let c = free.cross(&b);
+        let held = Matrix2x3::from_rows(&[b.transpose(), c.transpose()]);
+        match (held * inv * held.transpose()).try_inverse() {
+            Some(stiff) => inv - inv * held.transpose() * stiff * held * inv,
+            None => free.into_inner() * free.transpose() * free.dot(&(inv * free.into_inner())),
+        }
     }
 
     // === Mutators ===

@@ -155,9 +155,9 @@ impl LocomotionConfig {
         }
     }
 
-    /// A ground creature that walks but never sprints, crouches, or long-jumps.
-    /// Brains do not emit those intents, so the multipliers are inert; the
-    /// numbers that matter are `walk_speed` and the body size.
+    /// A ground creature that walks, and never crouches or long-jumps. It
+    /// sprints only to lunge (`creature::MeleeAttack`), at `sprint_speed_mul`
+    /// its walk speed, which its spawner sets from the speed it lunges at.
     pub fn creature(walk_speed: f32, radius: f32, half_height: f32) -> Self {
         Self {
             walk_speed,

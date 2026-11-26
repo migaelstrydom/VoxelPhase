@@ -1,5 +1,5 @@
 use generational_arena::Arena;
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitVector3, Vector3};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
@@ -8,6 +8,7 @@ use super::patch::Patch;
 use super::side::Side;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::Collider;
+use crate::physics::constraint::types::Constraint;
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
 use crate::physics::pipeline::pair::{PairHeader, SolverContact, SolverManifold};
 
@@ -116,6 +117,7 @@ impl HitRecorder {
         manifolds: &[SolverManifold],
         bodies: &Arena<RigidBody>,
         colliders: &Arena<Collider>,
+        constraints: &Arena<Constraint>,
         substep_dt: f32,
     ) {
         self.pending.clear();
@@ -146,7 +148,7 @@ impl HitRecorder {
         self.note_backing(manifolds);
         let pending = std::mem::take(&mut self.pending);
         for pair in &pending {
-            self.keep_fastest(pair.key, hit_of(pair, bodies, colliders));
+            self.keep_fastest(pair.key, hit_of(pair, bodies, colliders, constraints));
         }
         self.pending = pending;
     }
@@ -268,7 +270,12 @@ fn within_give(contact: &SolverContact, give: f32, substep_dt: f32) -> bool {
     contact.accumulated_normal_impulse > 0.0 || contact.closing_allowance * substep_dt <= give
 }
 
-fn hit_of(pair: &Pending, bodies: &Arena<RigidBody>, colliders: &Arena<Collider>) -> Hit {
+fn hit_of(
+    pair: &Pending,
+    bodies: &Arena<RigidBody>,
+    colliders: &Arena<Collider>,
+    constraints: &Arena<Constraint>,
+) -> Hit {
     let (body_a, collider_a, body_b, collider_b) = pair.key;
     let count = pair.points.len().max(1) as f32;
     let point = Point3::from(
@@ -293,10 +300,22 @@ fn hit_of(pair: &Pending, bodies: &Arena<RigidBody>, colliders: &Arena<Collider>
             bodies,
             colliders,
         )),
-        effective_mass: effective_mass(bodies, [body_a, Some(body_b)], &point, &pair.normal),
+        effective_mass: effective_mass(
+            bodies,
+            constraints,
+            [body_a, Some(body_b)],
+            &point,
+            &pair.normal,
+        ),
         side_masses: [
-            effective_mass(bodies, [body_a, None], &point, &pair.normal),
-            effective_mass(bodies, [Some(body_b), None], &point, &pair.normal),
+            effective_mass(bodies, constraints, [body_a, None], &point, &pair.normal),
+            effective_mass(
+                bodies,
+                constraints,
+                [Some(body_b), None],
+                &point,
+                &pair.normal,
+            ),
         ],
         backed: pair.backed,
         patch: Patch::spanned(&pair.points, &pair.normal),
@@ -305,9 +324,12 @@ fn hit_of(pair: &Pending, bodies: &Arena<RigidBody>, colliders: &Arena<Collider>
 }
 
 /// The pair's mass along `normal` at `point`, kg: `1 / Σ (1/m + (r×n)·I⁻¹(r×n))`
-/// over the sides that can move.
+/// over the sides that can move. A side held rigidly upright turns only
+/// about the axis its hold leaves free, so a blow off its centre moves
+/// more of it, as the solver has it.
 fn effective_mass(
     bodies: &Arena<RigidBody>,
+    constraints: &Arena<Constraint>,
     sides: [Option<RigidBodyHandle>; 2],
     point: &Point3<f32>,
     normal: &Vector3<f32>,
@@ -315,11 +337,15 @@ fn effective_mass(
     let inverse: f32 = sides
         .into_iter()
         .flatten()
-        .filter_map(|handle| bodies.get(handle.0))
-        .filter(|body| body.is_dynamic())
-        .map(|body| {
+        .filter_map(|handle| Some((handle, bodies.get(handle.0)?)))
+        .filter(|(_, body)| body.is_dynamic())
+        .map(|(handle, body)| {
             let lever = (point - body.position()).cross(normal);
-            body.inv_mass() + lever.dot(&(body.world_inv_inertia() * lever))
+            let turning = match free_axis(constraints, handle) {
+                Some(free) => body.world_inv_inertia_turning_about(&free),
+                None => body.world_inv_inertia(),
+            };
+            body.inv_mass() + lever.dot(&(turning * lever))
         })
         .sum();
     if inverse > 0.0 {
@@ -327,6 +353,16 @@ fn effective_mass(
     } else {
         f32::INFINITY
     }
+}
+
+/// The one axis an active, rigid upright hold leaves `body` free to turn
+/// about, if one holds it.
+fn free_axis(constraints: &Arena<Constraint>, body: RigidBodyHandle) -> Option<UnitVector3<f32>> {
+    constraints
+        .iter()
+        .filter(|(_, constraint)| constraint.active)
+        .filter_map(|(_, constraint)| constraint.kind.holds_upright())
+        .find_map(|(held, free)| (held == body).then_some(free))
 }
 
 /// Bluntness of one side: its collider's, or where the contact kept no

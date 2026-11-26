@@ -547,12 +547,12 @@ impl PhysicsWorld {
             }
             let mut wake = false;
 
-            let handle = RigidBodyHandle(idx);
             for impulse in impulses {
-                if let Some((v, point)) = shove_of(handle, body, &self.colliders, impulse) {
+                if let Some(v) = blast_impulse_on(body, &self.colliders, impulse) {
+                    let point = blast_point_on(body, &self.colliders, impulse);
                     body.apply_impulse_at_point(v, point);
                     self.shoves.push(Shove {
-                        body: handle,
+                        body: RigidBodyHandle(idx),
                         impulse: v,
                         point,
                     });
@@ -1489,6 +1489,7 @@ impl PhysicsWorld {
             &self.cached_active_manifolds,
             &self.bodies,
             &self.colliders,
+            &self.constraints,
             dt,
         );
         self.contact_work.record_solved(
@@ -1549,6 +1550,7 @@ impl PhysicsWorld {
             let mut ctx = CcdContext {
                 bodies: &mut self.bodies,
                 colliders: &self.colliders,
+                constraints: &self.constraints,
                 contact_events: &mut self.last_contacts,
                 impacts: &mut self.impacts,
                 hits: &mut self.hits,
@@ -1627,13 +1629,12 @@ impl PhysicsWorld {
         self.hits().iter().filter(move |hit| hit.involves(body))
     }
 
-    /// What this frame's blasts and strikes gave each body, one per impulse
-    /// and body.
+    /// What this frame's blasts gave each body, one per blast and body.
     pub fn shoves(&self) -> &[Shove] {
         &self.shoves
     }
 
-    /// What this frame's blasts and strikes gave `body`.
+    /// What this frame's blasts gave `body`.
     pub fn shoves_on(&self, body: RigidBodyHandle) -> impl Iterator<Item = &Shove> {
         self.shoves.iter().filter(move |shove| shove.body == body)
     }
@@ -2327,28 +2328,6 @@ fn held_by_world(constraints: &Arena<Constraint>) -> impl Iterator<Item = RigidB
 /// The impulse `impulse` gives `body`, by the area its envelope shows it,
 /// each part weighed by its solidity ([`silhouette::struck_area`]). `None`
 /// out of its reach.
-/// What `impulse` gives `body` (`handle`), and where: a blast pushes it by
-/// its silhouette at the centre of its pressure; a strike gives the body it
-/// is aimed at its impulse where it lands. `None` if it gives it nothing.
-fn shove_of(
-    handle: RigidBodyHandle,
-    body: &RigidBody,
-    colliders: &Arena<Collider>,
-    impulse: &PhysicsImpulse,
-) -> Option<(Vector3<f32>, Point3<f32>)> {
-    match *impulse {
-        PhysicsImpulse::Radial { .. } => {
-            let v = blast_impulse_on(body, colliders, impulse)?;
-            Some((v, blast_point_on(body, colliders, impulse)))
-        }
-        PhysicsImpulse::Strike {
-            body: struck,
-            impulse,
-            point,
-        } => (struck == handle).then_some((impulse, point)),
-    }
-}
-
 fn blast_impulse_on(
     body: &RigidBody,
     colliders: &Arena<Collider>,

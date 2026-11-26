@@ -21,10 +21,11 @@
 //! at all: a lobber throws bombs at what it perceives, and a snap trap bites
 //! what steps into it.
 //!
-//! A melee blow lands as a strike (`PhysicsImpulse::Strike`) on the first
-//! body its swing touches (`Swing`), which harm reads as a shove; a roller
-//! strikes with its own body, surging at its target once it is close
-//! (`Lunge`). Neither strikes a character that is down.
+//! Every creature strikes with its own body: a melee blow, its wind-up
+//! over, is a rush along the way the creature faces (`Rush`), and a roller
+//! surges at its target once it is close (`Lunge`). The blow is the two
+//! bodies meeting, which harm judges as it does any hit. None strikes a
+//! character that is down.
 //!
 //! A creature that wears a shell (`Shell`) loses it in pieces to the blow
 //! that kills it; a roller, all shell, splits in two.
@@ -40,11 +41,11 @@ mod lobber;
 mod melee;
 mod perception;
 mod roller;
+mod rush;
 mod shell;
 mod snap_trap;
 pub mod steering;
 mod swimmer;
-mod swing;
 
 pub use alert_telegraph::{AlertTelegraph, AlertTelegraphSystem};
 pub use brain::{Behaviour, Brain, BrainSystem, Temperament};
@@ -56,7 +57,7 @@ pub use lobber::{
 pub use melee::{MeleeAttack, MeleeAttackSystem, StrikePhase};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
 pub use roller::{Drive, Lunge, LungePhase, Quarry, Roller, RollerLocomotionSystem};
+pub use rush::Rush;
 pub use shell::{Cracks, Shell, ShellSystem};
 pub use snap_trap::{Caught, Cycle, Hinge, Moment, SnapTrap, SnapTrapSystem, TrapPart, TrapRig};
 pub use swimmer::{Swimmer, SwimmerLocomotionSystem};
-pub use swing::Swing;

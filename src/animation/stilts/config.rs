@@ -110,17 +110,6 @@ impl StiltRigConfig {
         self.standing_height() + self.haunch_height + self.neck_length + self.head_radius
     }
 
-    /// How far in front of its own axis the head ends up at the far end
-    /// of a strike.
-    ///
-    /// The def sizes the attack from this rather than from a hand-picked
-    /// number, so a longer neck is a longer reach without anyone having to
-    /// remember to say so.
-    #[inline]
-    pub fn strike_extent(&self) -> f32 {
-        self.neck_length * self.strike_pitch.sin() + self.head_radius
-    }
-
     /// The subset of this rig the gait is planned against.
     #[inline]
     pub fn leg_dims(&self) -> crate::animation::LegRigDims {

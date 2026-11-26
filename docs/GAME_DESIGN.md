@@ -95,9 +95,13 @@ blasts) knocks down at worst:
 - **Creatures** push, trap and knock down. Their strikes do not kill: the
   danger is where their shove sends the player (off a ledge, into water,
   under a falling stone). A walker's peck or ram and a flying fish's bite
-  are blows struck after a wind-up, and land on whatever is in front of the
-  beak or the jaws. A creature faces what it attacks as it circles it, and
-  steps in until its blow would land before it throws one. A roller circles at a distance once it is close,
+  are its whole body thrown at the player after a wind-up, from a run-up
+  away: the blow lands on whatever is in front of it, as hard as the
+  creature's weight and speed make it, and pushes the creature back as
+  much as it pushes. A heavy creature shoves the player back, the stalker
+  at times off their feet; a light one barely moves them. A creature
+  squares up to what it attacks as it circles it, and backs off to its
+  run-up before it throws a blow. A roller circles at a distance once it is close,
   always the same way round, and charges along a line it keeps to, again
   and again with barely a pause. Its body hits as any heavy thing does:
   running down a player who stands still knocks them down, but walking

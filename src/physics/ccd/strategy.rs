@@ -5,6 +5,7 @@ use nalgebra::{Point3, UnitQuaternion};
 
 use crate::physics::body::RigidBody;
 use crate::physics::collider::Collider;
+use crate::physics::constraint::types::Constraint;
 use crate::physics::contact_event::ContactEvent;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::hit::{HitConfig, HitRecorder};
@@ -17,6 +18,9 @@ use super::ownership::NarrowphaseOwnership;
 pub struct CcdContext<'a> {
     pub bodies: &'a mut Arena<RigidBody>,
     pub colliders: &'a Arena<Collider>,
+    /// The world's constraints, for what they hold rigidly upright: a hit
+    /// on such a body moves more of it.
+    pub constraints: &'a Arena<Constraint>,
     pub contact_events: &'a mut Vec<ContactEvent>,
     /// Post-solve impulse ledger, fed by the CCD solve pass.
     pub impacts: &'a mut ImpactLedger,

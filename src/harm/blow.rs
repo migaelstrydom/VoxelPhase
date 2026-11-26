@@ -58,7 +58,7 @@ impl Blow {
         })
     }
 
-    /// The blow a `shove` (a blast's, a creature's strike) dealt a body
+    /// The blow a `shove` (a blast's) dealt a body
     /// weighing `mass`: all at once, as sudden as the bands are stated for,
     /// and no worse than `shove_at_worst`.
     pub fn of_shove(shove: &Shove, mass: f32, config: &HarmConfig) -> Self {

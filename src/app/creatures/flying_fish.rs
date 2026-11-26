@@ -23,7 +23,7 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -43,10 +43,10 @@ use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{Brain, Flyer, MeleeAttack, Swing, Wing, WingBeat};
-use crate::damage::Health;
+use crate::creature::{Brain, Flyer, MeleeAttack, Rush, Wing, WingBeat};
+use crate::damage::{Health, Ragdoll};
 use crate::model::{MeshPrimitive, Model, ModelPart};
-use crate::physics::{ColliderDesc, RigidBodyDesc};
+use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
 use crate::systems::PhysicsResource;
 
@@ -66,17 +66,15 @@ const CRUISE_HEIGHT: f32 = 6.0;
 const STOOP_RANGE: f32 = 5.0;
 /// How far it sees, m.
 const SIGHT: f32 = 30.0;
-/// Its bite: hit points, reach, and the seconds before and after.
+/// Its bite: hit points, and the seconds before and after.
 const BITE: f32 = 8.0;
-const REACH: f32 = 1.1;
 const BITE_WINDUP: f32 = 0.25;
 const BITE_RECOVERY: f32 = 1.6;
-/// The impulse its bite drives into what it strikes, N·s: about 5.5 m/s on
-/// the player, which only just knocks them down.
-const BITE_BLOW: f32 = 310.0;
-/// How far its bite carries its body ahead of its centre, m: it bites what
-/// its own sphere touches on the way.
-const BITE_LENGTH: f32 = 0.4;
+/// Centre to centre, m, at which it touches what it bites, the player,
+/// with room to spare.
+const TOUCHING: f32 = 0.55;
+/// How far past its standoff it still bites, as a share of it.
+const REACH_PAST_STANDOFF: f32 = 0.2;
 /// Hit points it can take.
 const HEALTH: f32 = 14.0;
 
@@ -930,6 +928,18 @@ impl FlyingFishDef {
     }
 
     /// How its wings beat: each on a hinge along the body at its root.
+    /// Its bite: its body flown along the way it faces at its own speed, as
+    /// hard as its wings fly it, carried as far as `carry`.
+    fn bite(carry: f32) -> Rush {
+        Rush {
+            speed: SPEED,
+            grip: SPEED / ACCEL_TIME,
+            carry,
+            radius: RADIUS,
+            half_height: RADIUS,
+        }
+    }
+
     fn wing_beat() -> WingBeat {
         let wing = |part: usize, side: f32| Wing {
             part,
@@ -981,7 +991,7 @@ impl Spawnable for FlyingFishDef {
         };
         // Perched: it takes off when it is first flown.
         let at = Point3::new(self.pos.0, ground + RADIUS, self.pos.1);
-        let (body, mass) = {
+        let (body, mass, level) = {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body = physics
                 .world
@@ -993,9 +1003,24 @@ impl Spawnable for FlyingFishDef {
                     .restitution(0.0),
             );
             let mass = physics.world.body(body).map_or(1.0, |body| body.mass());
-            (body, mass)
+            // Its fins keep it level, whatever knocks it, and let it turn;
+            // dead, it tumbles.
+            let level = physics
+                .world
+                .create_constraint(ConstraintKind::KeepAttitude {
+                    body,
+                    pitch: 0.0,
+                    compliance: 0.0,
+                    max_impulse: f32::INFINITY,
+                });
+            (body, mass, level)
         };
         let model: Arc<Model> = likeness::model(KIND, materials, Self::sculpt);
+        // Its bite is its body flown at what it bites, as hard as its wings
+        // fly it, so it hovers a run-up away. It weighs a third of what the
+        // player does: a bite barely moves them.
+        let standoff = TOUCHING + Self::bite(0.0).run_up();
+        let reach = standoff * (1.0 + REACH_PAST_STANDOFF);
         vec![world
             .create_entity()
             .with(Position(at.coords))
@@ -1006,7 +1031,7 @@ impl Spawnable for FlyingFishDef {
             .with(Renderable)
             .with(CharacterIntent::default())
             .with(all_round(SIGHT))
-            .with(Brain::hunter(0.5 * REACH))
+            .with(Brain::hunter(standoff))
             .with(Flyer {
                 mass,
                 yaw_inertia: 0.4 * mass * RADIUS * RADIUS,
@@ -1019,16 +1044,11 @@ impl Spawnable for FlyingFishDef {
                 beat_phase: 0.0,
             })
             .with(
-                MeleeAttack::new(BITE, REACH)
-                    .with_timing(BITE_WINDUP, BITE_RECOVERY)
-                    .with_swing(Swing {
-                        from: Vector2::zeros(),
-                        to: Vector2::new(BITE_LENGTH, 0.0),
-                        radius: RADIUS,
-                        impulse: BITE_BLOW,
-                    }),
+                MeleeAttack::new(BITE, reach, Self::bite(reach))
+                    .with_timing(BITE_WINDUP, BITE_RECOVERY),
             )
             .with(Health::new(HEALTH, 5.0))
+            .with(Ragdoll::new(vec![level]))
             .build()]
     }
 }

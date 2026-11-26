@@ -158,34 +158,6 @@ fn a_blast_knocks_down_close_and_shoves_at_its_edge() {
     }
 }
 
-/// A creature's strike is judged as a shove: a peck that changes the
-/// body's speed by 6 m/s knocks it down, and one as sudden as a deadly hit
-/// still only knocks it down.
-#[test]
-fn a_strike_knocks_down_and_never_kills() {
-    for (speed, band) in [(3.0, Band::Light), (6.0, Band::Heavy), (12.0, Band::Heavy)] {
-        let mut yard = Yard::new(0.0);
-        yard.step(&[]);
-        let centre = yard.world.body(yard.body).unwrap().position();
-        yard.step(&[PhysicsImpulse::Strike {
-            body: yard.body,
-            impulse: Vector3::x() * speed * yard.mass(),
-            point: centre,
-        }]);
-        let blow = worst_blow(
-            &yard.world,
-            yard.body,
-            yard.mass(),
-            Vector3::zeros(),
-            true,
-            &yard.config,
-        )
-        .expect("the strike's shove");
-        assert!((blow.delta_v - speed).abs() < 1e-3, "{blow:?}");
-        assert_eq!(blow.band(&yard.config), band, "{speed} m/s");
-    }
-}
-
 /// What a body whose harm ends in `death` comes to, `seconds` after it is
 /// dropped from where it lands at `speed`, judged by `HarmSystem` as it is
 /// in the game: whether the room restarted, and how long its corpse

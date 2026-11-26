@@ -14,10 +14,10 @@ pub struct HarmConfig {
     pub heavy: f32,
     /// A sudden change of speed, m/s, from which a blow kills.
     pub deadly: f32,
-    /// The worst band a shove (a blast's, a creature's strike) falls in,
-    /// however sudden. Heavy, since neither kills directly
-    /// (`docs/GAME_DESIGN.md` *Harm*): a shove knocks the body down, and
-    /// kills it only by what it throws it into, judged as any other hit.
+    /// The worst band a shove (a blast's) falls in, however sudden. Heavy,
+    /// since a blast does not kill directly (`docs/GAME_DESIGN.md` *Harm*):
+    /// it knocks the body down, and kills it only by what it throws it
+    /// into, judged as any other hit.
     pub shove_at_worst: Band,
     /// The give the bands are stated for, m: the body struck against
     /// something hard. A blow spread over more is judged as the sudden one

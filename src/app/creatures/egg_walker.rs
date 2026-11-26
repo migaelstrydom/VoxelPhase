@@ -45,9 +45,9 @@ const TURN_AUTHORITY: f32 = 520.0;
 /// Seconds of rocking back before it butts, and before it can again.
 const BUTT_WINDUP: f32 = 0.3;
 const BUTT_RECOVERY: f32 = 0.6;
-/// The impulse its butt drives into what it strikes, N·s: about 5.5 m/s on
-/// the player, which only just knocks them down.
-const BUTT_BLOW: f32 = 310.0;
+/// The speed its butt drives it at, m/s. Lighter than the player, it gives
+/// one in its way under half of that, about 2.8 m/s: a shove.
+const BUTT_LUNGE: f32 = 6.0;
 /// How sudden a blow its shell takes before it breaks, m/s: one that would
 /// knock the player down. A blast breaks it as surely as a fall or a
 /// thrown stone does.
@@ -422,7 +422,7 @@ impl EggWalkerDef {
             turn_authority: TURN_AUTHORITY,
             peck: Some(Peck {
                 damage: 6.0,
-                blow: BUTT_BLOW,
+                lunge: BUTT_LUNGE,
                 windup: BUTT_WINDUP,
                 recovery: BUTT_RECOVERY,
             }),
