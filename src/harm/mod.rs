@@ -1,16 +1,18 @@
-//! Harm: how hard a character was struck, read from the physics' hits and
-//! shoves and judged in three bands: light (shoved, nothing more), heavy
-//! (knocked down, for longer the harder the blow) and deadly (knocked down,
-//! and the room restarts a beat later). A shove (a blast's, a
-//! creature's strike) is heavy at worst: it kills only by what it throws the
-//! body into. There is no health.
+//! Harm: how hard a body was struck, the player's or a creature's, read
+//! from the physics' hits and shoves and judged in three bands: light
+//! (shoved, nothing more), heavy (knocked down, for longer the harder the
+//! blow) and deadly (knocked down, and a beat later the room restarts or the
+//! creature dies). A shove (a blast's, a creature's strike) is heavy at
+//! worst: it kills only by what it throws the body into. There is no health.
 //! Design: `docs/GAME_DESIGN.md` *Harm*; the meter it reads:
 //! `docs/IMPACT_METER.md`.
 //!
 //! ```text
 //!   PhysicsWorld::hits_on, shoves_on ─► Blow ─► Band ─► Harm
 //!                                                        ├─ knock ─► CharacterControlSystem ─► LocomotionState::Down
-//!                                                        └─ dying runs out ─► LevelRestart
+//!                                                        └─ dying runs out ─► Death
+//!                                                             ├─ the player's: LevelRestart
+//!                                                             └─ a creature's: damage::Dead
 //! ```
 //!
 //! A blow is judged by how sudden a stop it was: its change of speed over
@@ -26,6 +28,6 @@ mod system;
 mod tests;
 
 pub use blow::{Band, Blow};
-pub use component::Harm;
+pub use component::{Death, Harm};
 pub use config::{HarmConfig, FLESH_GIVE};
 pub use system::{worst_blow, HarmSystem};

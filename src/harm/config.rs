@@ -34,9 +34,9 @@ pub struct HarmConfig {
     /// sudden as `deadly` or more. Between the two, the time grows with how
     /// sudden the blow was (`time_down`).
     pub most_down: f32,
-    /// Seconds between a deadly blow and the room restarting: the beat in
-    /// which the player sees what killed them.
-    pub restart_beat: f32,
+    /// Seconds between a deadly blow and what it ends in (`Harm::death`):
+    /// the beat in which the player sees what killed them.
+    pub death_beat: f32,
 }
 
 impl Default for HarmConfig {
@@ -49,7 +49,7 @@ impl Default for HarmConfig {
             brace_give: 0.1,
             least_down: 2.0,
             most_down: 5.0,
-            restart_beat: 1.0,
+            death_beat: 1.0,
         }
     }
 }

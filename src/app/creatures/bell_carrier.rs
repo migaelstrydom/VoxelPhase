@@ -962,7 +962,7 @@ impl BellCarrierDef {
                 recovery: RAM_RECOVERY,
             }),
             // Nothing breaks the bell.
-            health: None,
+            harm: None,
             brain: |standoff| Brain::hunter(standoff).relentless(),
         }
     }

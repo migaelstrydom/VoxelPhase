@@ -100,7 +100,9 @@ impl<'a> System<'a> for DeathSystem {
 
             dead.elapsed += dt;
 
-            let lifetime = healths.get(entity).and_then(|h| h.corpse_lifetime);
+            let lifetime = dead
+                .lingers
+                .or_else(|| healths.get(entity).and_then(|h| h.corpse_lifetime));
             if let Some(lifetime) = lifetime {
                 if dead.elapsed >= lifetime {
                     despawn.push(entity);

@@ -1,17 +1,22 @@
 //! Blows on the player's own body in a stepped world: landings and blasts.
 
 use nalgebra::{Point3, Vector3};
+use specs::{Builder, RunNow, World, WorldExt};
 
-use super::{worst_blow, Band, Blow, HarmConfig};
+use super::{worst_blow, Band, Blow, Death, Harm, HarmConfig, HarmSystem};
 use crate::app::spawners::create_player_body;
-use crate::character::LocomotionConfig;
-use crate::debug::DebugLines;
+use crate::character::{CharacterState, LocomotionConfig};
+use crate::components::RigidBodyComponent;
+use crate::damage::Dead;
+use crate::debug::{DebugLines, DebugLog};
 use crate::explosion::Explosion;
 use crate::physics::bench_harness::geometry::FlatQuadGeometry;
 use crate::physics::{
     Atmosphere, PhysicsConfig, PhysicsImpulse, PhysicsWorld, RigidBodyHandle, SequentialStepper,
     Stepper,
 };
+use crate::systems::{LevelRestart, PhysicsResource};
+use crate::time::Time;
 
 const FRAME_DT: f32 = 1.0 / 60.0;
 
@@ -179,4 +184,76 @@ fn a_strike_knocks_down_and_never_kills() {
         assert!((blow.delta_v - speed).abs() < 1e-3, "{blow:?}");
         assert_eq!(blow.band(&yard.config), band, "{speed} m/s");
     }
+}
+
+/// What a body whose harm ends in `death` comes to, `seconds` after it is
+/// dropped from where it lands at `speed`, judged by `HarmSystem` as it is
+/// in the game: whether the room restarted, and how long its corpse
+/// lingers if it died. It is no character, so it cannot brace.
+fn dropped_and_judged(death: Death, speed: f32, seconds: f32) -> (bool, Option<Option<f32>>) {
+    let Yard {
+        world: physics,
+        mut stepper,
+        ground,
+        mut debug,
+        body,
+        ..
+    } = Yard::new(drop_for(speed));
+    let mut world = World::new();
+    world.register::<Harm>();
+    world.register::<Dead>();
+    world.register::<RigidBodyComponent>();
+    world.register::<CharacterState>();
+    world.insert(Time::fixed(FRAME_DT));
+    world.insert(LevelRestart::default());
+    world.insert(DebugLog::default());
+    world.insert(PhysicsResource::new(
+        physics,
+        Box::new(SequentialStepper::new(1.0 / 240.0, 12)),
+    ));
+    let entity = world
+        .create_entity()
+        .with(Harm {
+            death,
+            ..Harm::default()
+        })
+        .with(RigidBodyComponent(body))
+        .build();
+
+    for _ in 0..(seconds / FRAME_DT) as usize {
+        let mut physics = world.write_resource::<PhysicsResource>();
+        stepper.step(&mut physics.world, FRAME_DT, &ground, &[], &[], &mut debug);
+        drop(physics);
+        HarmSystem.run_now(&world);
+    }
+    let restarted = world.read_resource::<LevelRestart>().requested;
+    let lingers = world
+        .read_storage::<Dead>()
+        .get(entity)
+        .map(|dead| dead.lingers);
+    (restarted, lingers)
+}
+
+/// A deadly landing restarts the room for the player, a beat later; a
+/// creature's body instead dies where it lies, to be cleared away later.
+#[test]
+fn a_deadly_blow_restarts_the_player_s_room_and_kills_a_creature() {
+    let deadly = 2.0 * HarmConfig::default().deadly;
+    assert_eq!(
+        dropped_and_judged(Death::RestartsRoom, deadly, 3.0),
+        (true, None)
+    );
+    let creature = Death::Dies { lingers: 6.0 };
+    assert_eq!(
+        dropped_and_judged(creature, deadly, 3.0),
+        (false, Some(Some(6.0)))
+    );
+}
+
+/// A heavy landing kills nothing: the creature is knocked down, and lives.
+#[test]
+fn a_heavy_blow_kills_no_creature() {
+    let heavy = 0.5 * (HarmConfig::default().heavy + HarmConfig::default().deadly);
+    let creature = Death::Dies { lingers: 6.0 };
+    assert_eq!(dropped_and_judged(creature, heavy, 3.0), (false, None));
 }

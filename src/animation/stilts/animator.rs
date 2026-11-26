@@ -7,6 +7,9 @@
 //!   pelvis, yaw ─────────────────────────────┘                  ├─► poses
 //!   Mood ──► neck pitch, lids, what the eyes watch ─────────────┤    (one to a part
 //!   clock ─► blinks, glances, breath, gasps ────────────────────┘     of the Dress)
+//!
+//!   knocked down: posed as it stands about its body's centre, legs
+//!   folded, eye shut ─► placed where the body lies, turned as it lies
 //! ```
 //!
 //! Walking is entirely [`crate::animation::LeggedLocomotion`], the same
@@ -17,7 +20,7 @@
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitQuaternion, Vector3};
+use nalgebra::{Isometry3, Point3, UnitQuaternion, Vector3};
 use specs::{Component, VecStorage};
 
 use crate::animation::rig::right_vector;
@@ -39,6 +42,10 @@ const TUCK_RATE: f32 = 14.0;
 /// How far under the hips a tucked foot rides, as a fraction of standing
 /// height.
 const TUCK_HEIGHT_FRACTION: f32 = 0.55;
+
+/// How far under the hips a knocked-down walker's feet are drawn, folded up,
+/// as a fraction of standing height: a heap of bent leg.
+const FOLD_HEIGHT_FRACTION: f32 = 0.3;
 
 /// Seconds a blink takes, and the least and most between two.
 const BLINK_SECONDS: f32 = 0.16;
@@ -99,6 +106,10 @@ pub struct StiltAnimator {
     /// What the eyes are turned to, as the mood last gave it.
     watching: Option<Point3<f32>>,
 
+    /// Where its body lies and how it is turned, while it is knocked down:
+    /// its skeleton is then posed upright about the origin and drawn there.
+    lying: Option<Isometry3<f32>>,
+
     /// Seconds it has been alive: the clock its breath and gasps run on.
     clock: f32,
     /// Seconds until it next blinks, and seconds into a blink if it is in
@@ -147,6 +158,7 @@ impl StiltAnimator {
             carriage: CarriageMotion::default(),
             thrust: 0.0,
             watching: None,
+            lying: None,
             clock: 0.0,
             next_blink: BLINK_EVERY.0,
             blinking: None,
@@ -191,6 +203,7 @@ impl StiltAnimator {
         contacts: &[ContactCandidate],
         mood: Mood,
     ) {
+        self.lying = None;
         // A gait means something only in the frame of whatever is holding
         // the body up.
         let support_velocity = self.locomotion.observe_support(grounding, dt);
@@ -250,13 +263,92 @@ impl StiltAnimator {
             self.carriage.tilt(facing),
             feet,
         );
-        if let Some(drape) = self.dress.as_ref().and_then(|dress| dress.drape.as_ref()) {
-            let legs = [FootSide::Left, FootSide::Right].map(|side| {
-                let leg = self.skeleton.leg(side);
-                [leg.hip, leg.knee, leg.foot]
-            });
-            self.drape.step(drape, &self.skeleton.hips(), &legs, dt);
+        self.step_drape(dt);
+    }
+
+    /// Advance one frame knocked down. It is posed as it stands, about its
+    /// body's centre, and drawn wherever that body lies, turned as it lies
+    /// (`body`): the blow and the ground lay it down, and its figure goes
+    /// with it. Its legs fold up under its hips as far as `folded` asks, in
+    /// `[0, 1]`, and its eye shuts. The feet are held where they are drawn,
+    /// so that it stands up on them.
+    pub fn lie(&mut self, dt: f32, body: Isometry3<f32>, folded: f32) {
+        self.lying = Some(body);
+        self.tuck += (folded.clamp(0.0, 1.0) - self.tuck) * approach(TUCK_RATE, dt);
+        self.lid_close += (1.0 - self.lid_close) * approach(self.config.lid_rate, dt);
+        self.thrust = 0.0;
+        self.watching = None;
+        self.idle(dt);
+
+        let pelvis = self.locomotion.pelvis_for(Point3::origin());
+        let facing = Vector3::z();
+        let right = right_vector(facing);
+        let standing = self.config.standing_height();
+        let drop = standing + (standing * FOLD_HEIGHT_FRACTION - standing) * self.tuck;
+        let feet = [FootSide::Left, FootSide::Right].map(|side| FootPose {
+            position: pelvis + right * (side.side_sign() * self.config.hip_width)
+                - Vector3::y() * drop,
+            forward: facing,
+            up: Vector3::y(),
+        });
+        self.skeleton.update(
+            &self.config,
+            pelvis,
+            facing,
+            self.neck_pitch(0.0),
+            UnitQuaternion::identity(),
+            feet,
+        );
+
+        let heading = body.rotation * facing;
+        let yaw = heading.x.atan2(heading.z);
+        self.locomotion.tick(&LocomotionCtx {
+            dt,
+            pelvis: body * pelvis,
+            yaw,
+            velocity: Vector3::zeros(),
+            support_velocity: Vector3::zeros(),
+            intent_direction: Vector3::zeros(),
+            mode: LegMode::Off,
+            step_height: self.config.step_height,
+            stride_gain: self.config.stride_gain,
+            pose_tag: "down",
+        });
+        self.locomotion
+            .hold_feet(body * feet[0].position, body * feet[1].position, yaw);
+        self.step_drape(dt);
+    }
+
+    /// Hang its dress's drape, if it wears one, from where its hips and
+    /// legs are drawn this frame.
+    fn step_drape(&mut self, dt: f32) {
+        let Some(drape) = self.dress.as_ref().and_then(|dress| dress.drape.as_ref()) else {
+            return;
+        };
+        let legs = [FootSide::Left, FootSide::Right].map(|side| {
+            let leg = self.skeleton.leg(side);
+            [leg.hip, leg.knee, leg.foot].map(|joint| self.placed_point(joint))
+        });
+        let hips = self.placed(self.skeleton.hips());
+        self.drape.step(drape, &hips, &legs, dt);
+    }
+
+    /// `pose`, of the skeleton as it is posed, where it is drawn: as it is,
+    /// unless it lies knocked down, when it goes where its body lies.
+    fn placed(&self, pose: Transform) -> Transform {
+        match self.lying {
+            Some(body) => Transform {
+                translation: (body * Point3::from(pose.translation)).coords,
+                rotation: body.rotation * pose.rotation,
+                scale: pose.scale,
+            },
+            None => pose,
         }
+    }
+
+    /// A point of the skeleton as it is posed, where it is drawn.
+    fn placed_point(&self, point: Point3<f32>) -> Point3<f32> {
+        self.lying.map_or(point, |body| body * point)
     }
 
     /// Its dress's drape as it hangs now, in the frame at `origin` turned
@@ -271,7 +363,7 @@ impl StiltAnimator {
         let Some(drape) = self.dress.as_ref().and_then(|dress| dress.drape.as_ref()) else {
             return;
         };
-        let hips = self.skeleton.hips();
+        let hips = self.placed(self.skeleton.hips());
         let back = turn.inverse();
         let place = Transform {
             translation: back * (hips.translation - origin),
@@ -419,7 +511,7 @@ impl StiltAnimator {
                 // A breath swells a body across more than along.
                 let swell = worn.breath * breath;
                 pose.scale = Vector3::new(1.0 + swell, 1.0 + 0.3 * swell, 1.0 + swell);
-                pose
+                self.placed(pose)
             })
             .collect()
     }

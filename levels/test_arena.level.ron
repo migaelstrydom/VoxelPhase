@@ -317,7 +317,7 @@ Level(
                 // to be walked up on before they are fought, so neither is
                 // put anywhere the player has to pass.
                 Peeper(pos: (-18.0, -14.0)),
-                Peeper(pos: (20.0, -6.0), speed: 4.0, health: 40.0),
+                Peeper(pos: (20.0, -6.0), speed: 4.0),
 
                 PlayWheel(
                     pos: (5.0, -16.0),

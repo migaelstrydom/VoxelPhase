@@ -9,10 +9,13 @@
 //! The animator never sees a `Brain`, so the same rig can be posed by a
 //! bench harness that has none.
 
-use nalgebra::UnitQuaternion;
+use nalgebra::{Isometry3, Translation3, UnitQuaternion, Vector3};
 use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
-use crate::character::{CharacterIntent, Grounding};
+use crate::character::locomotion::{Down, DownPhase};
+use crate::character::{
+    CharacterIntent, CharacterState, Grounding, LocomotionConfig, LocomotionState,
+};
 use crate::components::{Orientation, PosedModel, Position, ProceduralMesh, Rotation, Velocity};
 use crate::creature::{Behaviour, Brain, MeleeAttack, Perception};
 use crate::debug::DebugLines;
@@ -68,6 +71,8 @@ impl<'a> System<'a> for StiltAnimationSystem {
         ReadStorage<'a, Orientation>,
         WriteStorage<'a, ProceduralMesh>,
         Write<'a, DebugLines>,
+        ReadStorage<'a, CharacterState>,
+        ReadStorage<'a, LocomotionConfig>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -88,6 +93,8 @@ impl<'a> System<'a> for StiltAnimationSystem {
             orientations,
             mut procedural,
             mut debug_lines,
+            states,
+            configs,
         ) = data;
 
         let dt = time.delta_seconds();
@@ -123,16 +130,29 @@ impl<'a> System<'a> for StiltAnimationSystem {
                     .map(|target| target.position),
             };
 
-            animator.update(
-                dt,
-                pelvis,
-                rot.0,
-                nalgebra::Vector3::new(vel.0.x, vel.0.y, vel.0.z),
-                grounding,
-                intent,
-                contacts,
-                mood,
-            );
+            let down = states.get(entity).and_then(|state| match state.locomotion {
+                LocomotionState::Down(down) => Some(down),
+                _ => None,
+            });
+            match down.zip(orientations.get(entity)) {
+                Some((down, turned)) => {
+                    let body = Isometry3::from_parts(Translation3::from(pos.0), turned.0);
+                    let folded = configs
+                        .get(entity)
+                        .map_or(1.0, |config| folded(down, turned.0, config));
+                    animator.lie(dt, body, folded);
+                }
+                None => animator.update(
+                    dt,
+                    pelvis,
+                    rot.0,
+                    nalgebra::Vector3::new(vel.0.x, vel.0.y, vel.0.z),
+                    grounding,
+                    intent,
+                    contacts,
+                    mood,
+                ),
+            }
 
             if let Some(posed) = posed.get_mut(entity) {
                 posed.poses = animator.poses_from(&pos.0);
@@ -156,6 +176,19 @@ impl<'a> System<'a> for StiltAnimationSystem {
                 }
             }
         }
+    }
+}
+
+/// How far a knocked-down walker's legs are folded up, in `[0, 1]`: all the
+/// way while it lies, and less as it comes upright getting up, straight by
+/// the time it stands.
+fn folded(down: Down, turned: UnitQuaternion<f32>, config: &LocomotionConfig) -> f32 {
+    match down.phase {
+        DownPhase::Rising { .. } => {
+            let tilt = (turned * Vector3::y()).y.clamp(-1.0, 1.0).acos();
+            tilt / config.down.lying_tilt
+        }
+        DownPhase::Limp { .. } | DownPhase::Gathered { .. } => 1.0,
     }
 }
 

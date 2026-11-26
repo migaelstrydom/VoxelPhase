@@ -179,6 +179,14 @@ impl<'a> System<'a> for MeleeAttackSystem {
         for (entity, brain, perception, attack) in
             (&entities, &brains, &perceptions, &mut attacks).join()
         {
+            // A creature knocked down drops whatever blow it was throwing.
+            if states
+                .get(entity)
+                .is_some_and(|state| !state.locomotion.in_control())
+            {
+                attack.phase = StrikePhase::Ready;
+                continue;
+            }
             // A body already knocked down is not struck: the creature waits
             // for it to get up, which it can then step away from.
             let target = perception.target.filter(|target| {
@@ -323,6 +331,8 @@ mod tests {
     use specs::{Builder, RunNow, World, WorldExt};
 
     use super::*;
+    use crate::character::locomotion::Down;
+    use crate::character::LocomotionState;
     use crate::physics::{ColliderDesc, RigidBodyDesc, RigidBodyHandle};
 
     fn an_attack() -> MeleeAttack {
@@ -399,6 +409,11 @@ mod tests {
     /// `at`, after the system has run once: where it is in its swing, and
     /// the way it steps.
     fn ready_at(at: Point3<f32>) -> (StrikePhase, Vector3<f32>) {
+        ready_in(at, LocomotionState::default())
+    }
+
+    /// [`ready_at`], the striker's body `locomotion`.
+    fn ready_in(at: Point3<f32>, locomotion: LocomotionState) -> (StrikePhase, Vector3<f32>) {
         let mut world = World::new();
         System::setup(&mut MeleeAttackSystem, &mut world);
         let mut physics = PhysicsResource::default();
@@ -435,6 +450,10 @@ mod tests {
             })
             .with(RigidBodyComponent(mine))
             .with(Rotation(0.0))
+            .with(CharacterState {
+                locomotion,
+                ..CharacterState::default()
+            })
             .build();
 
         MeleeAttackSystem.run_now(&world);
@@ -468,5 +487,13 @@ mod tests {
         let (phase, direction) = ready_at(Point3::new(-0.9, 0.0, 0.0));
         assert_eq!(phase, StrikePhase::Ready);
         assert!((direction + Vector3::x()).norm() < 1e-4, "{direction:?}");
+    }
+
+    /// Knocked down, a striker throws nothing, though its blow would land.
+    #[test]
+    fn a_striker_knocked_down_strikes_at_nothing() {
+        let down = LocomotionState::Down(Down::knocked(&LocomotionState::default(), 2.0));
+        let (phase, _) = ready_in(Point3::new(0.0, 0.0, 0.9), down);
+        assert_eq!(phase, StrikePhase::Ready);
     }
 }

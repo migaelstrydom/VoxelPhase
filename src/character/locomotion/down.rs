@@ -38,8 +38,7 @@ pub struct DownConfig {
     /// How sprung the attitude is while the body gets up, rad per N·m: stiff
     /// enough to keep up with `rise_rate`, so the body arrives upright
     /// without swinging past it and popping off its feet, and to outpull
-    /// gravity's tipping at every lean (about 275 N·m per radian on the
-    /// player).
+    /// gravity's tipping at every lean (`PLAYER_TIPPING` on the player).
     pub rise_compliance: f32,
     /// Within this lean of upright, rad, a body getting up is on its feet;
     /// the rigid hold that takes over stands it the rest of the way at once.
@@ -53,7 +52,30 @@ pub struct DownConfig {
     pub buckle_rate: f32,
 }
 
+/// How hard gravity tips the player's body over as it leans, N·m per
+/// radian: its weight times the height of its centre over the end it
+/// stands on. The default springs are tuned against it.
+const PLAYER_TIPPING: f32 = 275.0;
+
 impl DownConfig {
+    /// The player's, for a body gravity tips over `tipping` N·m per radian
+    /// of lean: its springs as stiff against its own weight as the player's
+    /// are against theirs, so a heavier or taller body gathers itself and
+    /// gets up as the player does.
+    pub fn tipped_at(tipping: f32) -> Self {
+        let defaults = Self::default();
+        let softer = if tipping > 0.0 {
+            PLAYER_TIPPING / tipping
+        } else {
+            1.0
+        };
+        Self {
+            gather_compliance: defaults.gather_compliance * softer,
+            rise_compliance: defaults.rise_compliance * softer,
+            ..defaults
+        }
+    }
+
     /// Whether a body leaning `tilt` off upright, rad, is lying down: the
     /// one measure the state and the figure drawn for it share.
     pub fn lies(&self, tilt: f32) -> bool {
@@ -235,5 +257,22 @@ impl Down {
             }
             DownPhase::Rising { .. } => true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A body gravity tips over twice as hard as the player is sprung twice
+    /// as stiffly; one tipped as the player is, as the player is.
+    #[test]
+    fn a_body_is_sprung_as_stiffly_against_its_weight_as_the_player() {
+        let player = DownConfig::default();
+        assert_eq!(DownConfig::tipped_at(PLAYER_TIPPING), player);
+        let heavier = DownConfig::tipped_at(2.0 * PLAYER_TIPPING);
+        assert!((heavier.gather_compliance - 0.5 * player.gather_compliance).abs() < 1e-12);
+        assert!((heavier.rise_compliance - 0.5 * player.rise_compliance).abs() < 1e-12);
+        assert_eq!(heavier.rise_rate, player.rise_rate);
     }
 }

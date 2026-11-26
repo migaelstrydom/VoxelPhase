@@ -44,6 +44,7 @@ use crate::app::sculpt::{
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::core::error::EngineResult;
 use crate::creature::Brain;
+use crate::harm::HarmConfig;
 use crate::model::MeshPrimitive;
 use crate::rendering::material::MaterialId;
 use crate::utils::noise::fbm_perlin_3d;
@@ -1538,7 +1539,7 @@ impl StalkerDef {
                 windup: PECK_WINDUP,
                 recovery: PECK_RECOVERY,
             }),
-            health: Some(110.0),
+            harm: Some(HarmConfig::default()),
             brain: Brain::hunter,
         }
     }

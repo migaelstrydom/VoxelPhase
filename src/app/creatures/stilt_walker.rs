@@ -5,8 +5,8 @@
 //!   StiltWalker { rig, dress, speed, sight, peck, health, brain }
 //!        │ spawn
 //!        ▼
-//!   capsule body kept upright ── StiltAnimator ──poses──▶ PosedModel (the dress)
-//!   CharacterIntent ◀── Brain ◀── Perception        MeleeAttack, Health
+//!   capsule body held upright ── StiltAnimator ──poses──▶ PosedModel (the dress)
+//!   CharacterIntent ◀── Brain ◀── Perception        MeleeAttack, Harm
 //! ```
 //!
 //! A def says what its creature is (its proportions, its dress, how fast
@@ -15,20 +15,24 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector2, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::anatomy::{self, LIMB_GRAIN};
 use crate::animation::stilts::{Dress, Joint, StiltAnimator, StiltRigConfig, Worn};
 use crate::animation::FootSide;
-use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
+use crate::character::locomotion::DownConfig;
+use crate::character::{
+    AttitudeControl, CharacterIntent, CharacterState, Grounding, LocomotionConfig,
+};
 use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, ProceduralMesh, Renderable, RigidBodyComponent,
     Rotation, Velocity,
 };
 use crate::creature::{Brain, MeleeAttack, Perception, Swing};
-use crate::damage::{Health, Ragdoll};
+use crate::damage::Ragdoll;
 use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
+use crate::harm::{Death, Harm, HarmConfig};
 use crate::model::MeshPrimitive;
 use crate::physics::{
     BulkShape, ColliderDesc, ColliderShape, ConstraintKind, FrictionModel, RigidBodyDesc, Volume,
@@ -100,8 +104,8 @@ pub struct StiltWalker {
     pub turn_authority: f32,
     /// Its strike. A walker without one only crowds its target.
     pub peck: Option<Peck>,
-    /// Hit points it can take; `None` for one that cannot be killed.
-    pub health: Option<f32>,
+    /// How the blows it takes are judged; `None` for one nothing harms.
+    pub harm: Option<HarmConfig>,
     /// Its wits, given the distance it holds from what it attacks.
     pub brain: fn(f32) -> Brain,
 }
@@ -155,7 +159,7 @@ impl StiltWalker {
         // it the character's ground clearance — sits at half its height.
         let clearance = rig.body_height() * 0.5;
         let radius = rig.head_radius;
-        let locomotion = LocomotionConfig::creature(self.speed, radius, clearance);
+        let mut locomotion = LocomotionConfig::creature(self.speed, radius, clearance);
         let (air_steer_speed, jump_speed) = (locomotion.air_steer_speed, locomotion.jump_speed);
 
         let surface_y = {
@@ -195,7 +199,7 @@ impl StiltWalker {
         let reach = rig.strike_extent() + TARGET_HALF_WIDTH;
         let standoff = contact + (reach - contact) * STANDOFF_BETWEEN_CONTACT_AND_REACH;
 
-        let (body_handle, keep_upright) = {
+        let (body_handle, upright) = {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body_handle = physics.world.create_body(
                 RigidBodyDesc::dynamic()
@@ -213,17 +217,25 @@ impl StiltWalker {
                     .bulk(stilts_and_head(&rig, clearance)),
             );
             // A capsule has nothing to resist a torque about its long axis,
-            // so without this it topples the first time it clips a rock.
-            // Released on death, which is what lets the legs fold.
-            let keep_upright = physics
+            // so without this it topples the first time it clips a rock. Let
+            // go when it is knocked down (`AttitudeControl`), as the
+            // player's is, and for good when it dies.
+            let upright = physics
                 .world
-                .create_constraint(ConstraintKind::KeepUpright {
+                .create_constraint(ConstraintKind::KeepAttitude {
                     body: body_handle,
-                    target_up: UnitVector3::new_normalize(Vector3::y()),
+                    pitch: 0.0,
                     compliance: 0.0,
                     max_impulse: f32::INFINITY,
                 });
-            (body_handle, keep_upright)
+            // It gets up as the player does, however heavy and tall it is.
+            let mass = physics
+                .world
+                .body(body_handle)
+                .map_or(0.0, |body| body.mass());
+            let gravity = physics.world.config().gravity.norm();
+            locomotion.down = DownConfig::tipped_at(mass * gravity * clearance);
+            (body_handle, upright)
         };
 
         let mut entity = world
@@ -235,6 +247,9 @@ impl StiltWalker {
             .with(CharacterState::default())
             .with(locomotion)
             .with(Grounding::default())
+            .with(AttitudeControl {
+                constraint: upright,
+            })
             .with(animator)
             .with(posed)
             .with(Position(initial_pos.coords))
@@ -266,10 +281,16 @@ impl StiltWalker {
                     .with_swing(peck_swing(&rig, clearance, peck.blow)),
             );
         }
-        if let Some(health) = self.health {
+        if let Some(config) = self.harm {
             entity = entity
-                .with(Health::new(health, CORPSE_SECONDS))
-                .with(Ragdoll::new(vec![keep_upright]));
+                .with(Harm {
+                    config,
+                    death: Death::Dies {
+                        lingers: CORPSE_SECONDS,
+                    },
+                    ..Harm::default()
+                })
+                .with(Ragdoll::new(vec![upright]));
         }
         if let Some(drape) = drape {
             entity = entity.with(drape);

@@ -166,6 +166,11 @@ impl LocomotionConfig {
             collider_radius: radius,
             collider_half_height: half_height,
             drop_probe: None,
+            // It swims standing, as it is drawn.
+            swim: SwimConfig {
+                stroke_pitch: 0.0,
+                ..SwimConfig::default()
+            },
             ..Self::player()
         }
     }

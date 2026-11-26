@@ -114,6 +114,10 @@ blasts) knocks down at worst:
   landing. Blast-jumping is a desperate gamble, never a trick: a room's
   heights must allow for a player who tries it.
 
+Creatures are harmed by the same law, in the same bands. A blow that would
+knock the player down knocks a walker down: it is flung, lies limp and gets
+up again. One that would kill the player kills it.
+
 ### How a knock looks
 
 A heavy hit takes the player off their feet, and how they tumble is physics

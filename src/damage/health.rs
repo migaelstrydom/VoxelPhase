@@ -92,18 +92,32 @@ impl Health {
     }
 }
 
-/// Marks an entity whose health has run out.
+/// Marks an entity that has died.
 ///
-/// Added by `DamageApplySystem` on the frame of death. `DeathSystem` reads it
-/// to run the one-time limp-body transition and, later, to despawn the corpse.
+/// Added by `DamageApplySystem` or `HarmSystem` on the frame of death.
+/// `DeathSystem` reads it to run the one-time limp-body transition and,
+/// later, to despawn the corpse.
 #[derive(Component, Debug, Default)]
 #[storage(DenseVecStorage)]
 pub struct Dead {
     /// Seconds since death.
     pub elapsed: f32,
+    /// Seconds the corpse lies before it is cleared away. `None` defers to
+    /// its `Health`'s `corpse_lifetime`.
+    pub lingers: Option<f32>,
     /// False until `DeathSystem` has released constraints and stopped the
     /// character driving itself. Keeps that transition to a single frame.
     pub limp: bool,
+}
+
+impl Dead {
+    /// Dead now, cleared away `lingers` seconds later.
+    pub fn lingering(lingers: f32) -> Self {
+        Self {
+            lingers: Some(lingers),
+            ..Self::default()
+        }
+    }
 }
 
 #[cfg(test)]

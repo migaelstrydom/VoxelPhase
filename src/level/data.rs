@@ -1417,8 +1417,6 @@ pub enum LevelObject {
         sight_range: f32,
         #[serde(default = "PeeperDef::default_peck_damage")]
         peck_damage: f32,
-        #[serde(default = "PeeperDef::default_health")]
-        health: f32,
     },
     /// Stalker — a tall bird-headed figure on stilts that chases at a walk and
     /// pecks from a long way off.
@@ -3013,13 +3011,11 @@ impl LevelObject {
                 speed,
                 sight_range,
                 peck_damage,
-                health,
             } => Box::new(PeeperDef {
                 pos: *pos,
                 speed: *speed,
                 sight_range: *sight_range,
                 peck_damage: *peck_damage,
-                health: *health,
             }),
 
             LevelObject::Pendulum {

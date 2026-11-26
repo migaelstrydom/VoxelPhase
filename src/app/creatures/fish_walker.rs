@@ -39,6 +39,7 @@ use crate::app::sculpt::{scatter, Blush, Clay, Ellipsoid, Lump, Mottle, Relief, 
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::core::error::EngineResult;
 use crate::creature::Brain;
+use crate::harm::HarmConfig;
 use crate::model::MeshPrimitive;
 use crate::rendering::material::MaterialId;
 
@@ -1030,7 +1031,7 @@ impl FishWalkerDef {
                 windup: BITE_WINDUP,
                 recovery: BITE_RECOVERY,
             }),
-            health: Some(40.0),
+            harm: Some(HarmConfig::default()),
             brain: Brain::hunter,
         }
     }

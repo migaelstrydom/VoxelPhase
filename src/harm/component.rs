@@ -4,18 +4,30 @@ use specs::{Component, DenseVecStorage};
 use super::blow::{Band, Blow};
 use super::config::HarmConfig;
 
-/// A character harm can befall: how its blows are judged, and what has
-/// befallen it. Only the player has one, so a deadly blow restarts the room;
-/// what harm does to creatures is for later.
+/// What a deadly blow ends in, once its beat has run out.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Death {
+    /// The room restarts: the player's.
+    #[default]
+    RestartsRoom,
+    /// The body dies where it lies (`damage::Dead`), and is cleared away
+    /// `lingers` seconds later: a creature's.
+    Dies { lingers: f32 },
+}
+
+/// A body harm can befall, the player's or a creature's: how its blows are
+/// judged, and what has befallen it.
 #[derive(Component, Debug, Clone, Default)]
 #[storage(DenseVecStorage)]
 pub struct Harm {
     /// The bands, and how blows are read.
     pub config: HarmConfig,
+    /// What a deadly blow ends in.
+    pub death: Death,
     /// A knockdown for the character to take, at least this many seconds
     /// down: set by `HarmSystem`, taken by `CharacterControlSystem`.
     pub knock: Option<f32>,
-    /// Seconds left before the room restarts, after a deadly blow.
+    /// Seconds left before a deadly blow ends in `death`.
     pub dying: Option<f32>,
     /// The body's velocity at the end of the last frame: what it moved into
     /// this frame's blows at.
@@ -28,7 +40,7 @@ pub struct Harm {
 impl Harm {
     /// Suffer `blow`: a heavy one knocks the body down, for longer the
     /// more sudden it was (`HarmConfig::time_down`); a deadly one too, and
-    /// starts the beat before the room restarts. A second deadly blow does
+    /// starts the beat before it ends in `death`. A second deadly blow does
     /// not restart the beat.
     pub fn suffer(&mut self, blow: &Blow) {
         let config = self.config;
@@ -37,8 +49,8 @@ impl Harm {
             Band::Light => return,
             Band::Heavy => time_down,
             Band::Deadly => {
-                self.dying.get_or_insert(config.restart_beat);
-                time_down.max(config.restart_beat)
+                self.dying.get_or_insert(config.death_beat);
+                time_down.max(config.death_beat)
             }
         };
         self.knock = Some(self.knock.map_or(down, |knock| knock.max(down)));
@@ -122,7 +134,7 @@ mod tests {
     fn a_deadly_blow_restarts_the_room_a_beat_later() {
         let mut harm = Harm::default();
         harm.suffer(&blow(9.0));
-        assert!(harm.knock.unwrap() >= harm.config.restart_beat);
+        assert!(harm.knock.unwrap() >= harm.config.death_beat);
         let half = beat_frames(&mut harm, 30);
         assert!(half.is_empty());
         harm.suffer(&blow(9.0));

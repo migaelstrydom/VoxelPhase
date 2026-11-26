@@ -1,11 +1,12 @@
 use nalgebra::Vector3;
-use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
+use specs::{Entities, Join, LendJoin, Read, ReadStorage, System, Write, WriteStorage};
 
 use super::blow::{worst, Band, Blow};
-use super::component::Harm;
+use super::component::{Death, Harm};
 use super::config::HarmConfig;
 use crate::character::CharacterState;
 use crate::components::RigidBodyComponent;
+use crate::damage::Dead;
 use crate::debug::DebugLog;
 use crate::physics::{PhysicsWorld, RigidBodyHandle};
 use crate::systems::{LevelRestart, PhysicsResource};
@@ -34,32 +35,43 @@ pub fn worst_blow(
     worst(hits.chain(shoves), config)
 }
 
-/// Judges the blows each harmable character took in the step just run, and
-/// restarts the room when a deadly blow's beat runs out.
+/// Judges the blows each harmable body took in the step just run, and ends
+/// whatever a deadly blow's beat runs out on: the room restarts for the
+/// player, a creature dies.
 ///
 /// Runs after the physics step; the knockdown it sets is taken by the
-/// character's control on the next frame.
+/// character's control on the next frame. A body that is no character
+/// cannot brace, and nothing knocks it down.
 pub struct HarmSystem;
 
 impl<'a> System<'a> for HarmSystem {
     type SystemData = (
+        Entities<'a>,
         Read<'a, Time>,
         Read<'a, PhysicsResource>,
         Write<'a, LevelRestart>,
         Write<'a, DebugLog>,
         WriteStorage<'a, Harm>,
+        WriteStorage<'a, Dead>,
         ReadStorage<'a, RigidBodyComponent>,
         ReadStorage<'a, CharacterState>,
     );
 
     fn run(
         &mut self,
-        (time, physics, mut restart, mut log, mut harms, bodies, states): Self::SystemData,
+        (entities, time, physics, mut restart, mut log, mut harms, mut deads, bodies, states): Self::SystemData,
     ) {
         let dt = time.delta_seconds();
-        for (harm, body, state) in (&mut harms, &bodies, &states).join() {
+        for (entity, harm, body, state) in
+            (&entities, &mut harms, &bodies, (&states).maybe()).join()
+        {
             if harm.beat_out(dt) {
-                restart.requested = true;
+                match harm.death {
+                    Death::RestartsRoom => restart.requested = true,
+                    Death::Dies { lingers } => {
+                        let _ = deads.insert(entity, Dead::lingering(lingers));
+                    }
+                }
             }
             let Some(rigid) = physics.world.body(body.0) else {
                 continue;
@@ -70,7 +82,7 @@ impl<'a> System<'a> for HarmSystem {
                 body.0,
                 rigid.mass(),
                 harm.last_velocity,
-                state.locomotion.in_control(),
+                state.is_some_and(|state| state.locomotion.in_control()),
                 &config,
             );
             if let Some(blow) = worst {
@@ -78,8 +90,11 @@ impl<'a> System<'a> for HarmSystem {
                 harm.suffer(&blow);
             }
             harm.last_velocity = rigid.linear_velocity();
-            if let Some((sudden, band)) = harm.last_blow {
-                log.add("Harm/LastBlow", format!("{sudden:.1} m/s, {}", label(band)));
+            if let Some((sudden, band)) = harm.last_blow.filter(|_| log.is_recording()) {
+                log.add(
+                    format!("Harm/LastBlow/{}", entity.id()),
+                    format!("{sudden:.1} m/s, {}", label(band)),
+                );
             }
         }
     }

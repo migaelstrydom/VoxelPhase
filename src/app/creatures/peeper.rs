@@ -55,6 +55,7 @@ use crate::app::sculpt::{
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::core::error::EngineResult;
 use crate::creature::Brain;
+use crate::harm::HarmConfig;
 use crate::model::MeshPrimitive;
 use crate::rendering::material::MaterialId;
 use crate::rendering::vertex::Vertex;
@@ -1058,9 +1059,6 @@ pub struct PeeperDef {
     /// Hit points a peck takes off.
     #[serde(default = "PeeperDef::default_peck_damage")]
     pub peck_damage: f32,
-    /// Hit points it can take before it dies.
-    #[serde(default = "PeeperDef::default_health")]
-    pub health: f32,
 }
 
 impl PeeperDef {
@@ -1072,9 +1070,6 @@ impl PeeperDef {
     }
     pub fn default_peck_damage() -> f32 {
         14.0
-    }
-    pub fn default_health() -> f32 {
-        55.0
     }
 
     /// Its proportions: almost all leg, with an eye the size of a melon.
@@ -1144,7 +1139,7 @@ impl PeeperDef {
                 windup: PECK_WINDUP,
                 recovery: PECK_RECOVERY,
             }),
-            health: Some(self.health),
+            harm: Some(HarmConfig::default()),
             brain: Brain::hunter,
         }
     }

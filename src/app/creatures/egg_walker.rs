@@ -31,6 +31,7 @@ use crate::app::sculpt::{Clay, Grime, Lump, Mottle, Relief, Spots, VertexPaint};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::core::error::EngineResult;
 use crate::creature::Brain;
+use crate::harm::HarmConfig;
 use crate::model::MeshPrimitive;
 use crate::rendering::material::MaterialId;
 
@@ -414,7 +415,7 @@ impl EggWalkerDef {
                 windup: BUTT_WINDUP,
                 recovery: BUTT_RECOVERY,
             }),
-            health: Some(12.0),
+            harm: Some(HarmConfig::default()),
             brain: Brain::hunter,
         }
     }
