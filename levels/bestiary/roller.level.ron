@@ -1,11 +1,11 @@
-// Bestiary — every creature on one lawn, for looking at them and for
-// meeting each on open ground.
+// Bestiary: the roller, alone on a lawn, for looking at it and for meeting
+// it on open ground. Each creature has a level of its own in this folder,
+// on the same lawn.
 //
-// The walkers stand in a row across the north of the lawn, the ones that do
-// not walk across the middle, and the player starts to the south facing
-// them. Everything here is awake: the piper will lob at whoever it sees.
+// It stands in the middle and the player starts 14 m south of it, facing
+// it. It is awake.
 Level(
-    name: "Bestiary",
+    name: "Bestiary: Roller",
 
     segments: [
         (
@@ -27,20 +27,7 @@ Level(
             ),
 
             objects: [
-                // The walkers, west to east.
-                Peeper(pos: (-10.0, -8.0)),
-                Stalker(pos: (-6.0, -8.0)),
-                EggWalker(pos: (-2.5, -8.0)),
-                EggWalker(pos: (-1.5, -9.2)),
-                EggWalker(pos: (-0.5, -8.0)),
-                FishWalker(pos: (3.0, -8.0)),
-                BellCarrier(pos: (7.0, -8.0)),
-
-                // The ones that do not walk.
-                Roller(pos: (-9.0, -1.0)),
-                Piper(pos: (-4.0, -1.0)),
-                FlyingFish(pos: (1.0, -1.0)),
-                Mussel(pos: (6.0, -1.0)),
+                Roller(pos: (0.0, 0.0)),
             ],
         ),
     ],

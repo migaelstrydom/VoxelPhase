@@ -657,10 +657,9 @@ mod tests {
 
     #[cfg(feature = "level_scenarios")]
     mod shipped {
-        use std::path::Path;
-
         use super::*;
         use crate::level::load_level;
+        use crate::level::loader::shipped_levels;
 
         /// Objects known not to rest where authored, per shipped level: open
         /// placement findings, to be fixed as level work. A level not listed
@@ -690,13 +689,7 @@ mod tests {
         /// disturbs it.
         #[test]
         fn shipped_levels_are_at_rest_where_authored() {
-            let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("levels");
-            let mut paths: Vec<_> = std::fs::read_dir(&dir)
-                .expect("levels directory should be readable")
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.to_string_lossy().ends_with(".level.ron"))
-                .collect();
-            paths.sort();
+            let paths = shipped_levels();
 
             let mut problems = Vec::new();
             for path in &paths {

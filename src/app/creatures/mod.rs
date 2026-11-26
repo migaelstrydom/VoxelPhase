@@ -39,8 +39,8 @@
 //! clay (`app::sculpt`) and painted in the level's one bestiary palette
 //! (`palette`), its likeness made once a run (`likeness`); the ones that are
 //! not on stilts are a `PosedModel` their behaviour poses. `visual_bench
-//! bestiary` draws every creature, and `levels/bestiary.level.ron` stands
-//! them all on one lawn.
+//! bestiary` draws every creature, and each level in `levels/bestiary/`
+//! stands one of them on a lawn.
 
 mod anatomy;
 mod bell_carrier;

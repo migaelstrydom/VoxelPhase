@@ -262,6 +262,30 @@ fn validate_segment(segment: &super::data::SegmentDef) -> Result<(), LevelError>
     Ok(())
 }
 
+/// Every level shipped in `levels/` and the folders under it (the puzzle
+/// rooms, the bestiary), sorted: the `*.level.ron` files, not the other RON
+/// documents beside them, such as the mesh baselines.
+#[cfg(test)]
+pub(crate) fn shipped_levels() -> Vec<std::path::PathBuf> {
+    fn gather(dir: &Path, levels: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("levels directory should be readable") {
+            let path = entry.expect("readable dir entry").path();
+            if path.is_dir() {
+                gather(&path, levels);
+            } else if path.to_string_lossy().ends_with(".level.ron") {
+                levels.push(path);
+            }
+        }
+    }
+    let mut levels = Vec::new();
+    gather(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("levels"),
+        &mut levels,
+    );
+    levels.sort();
+    levels
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,32 +734,16 @@ mod tests {
         }
     }
 
-    /// Every level shipped in `levels/` must parse, validate and place. Guards
-    /// against a `LevelObject` variant or a placement clause changing shape
-    /// without its authored uses being updated.
-    ///
-    /// Levels are the `*.level.ron` files; the directory also holds other RON
-    /// documents about those levels, such as the mesh baselines.
+    /// Every shipped level must parse, validate and place. Guards against a
+    /// `LevelObject` variant or a placement clause changing shape without
+    /// its authored uses being updated.
     #[test]
     fn shipped_levels_parse_and_validate() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("levels");
-        let mut checked = 0;
-
-        for entry in std::fs::read_dir(&dir).expect("levels directory should exist") {
-            let path = entry.expect("readable dir entry").path();
-            let is_level = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.ends_with(".level.ron"));
-            if !is_level {
-                continue;
-            }
-
-            load_level(&path)
+        let levels = shipped_levels();
+        for path in &levels {
+            load_level(path)
                 .unwrap_or_else(|e| panic!("{} failed to load: {:?}", path.display(), e));
-            checked += 1;
         }
-
-        assert!(checked > 0, "no level files found in {}", dir.display());
+        assert!(!levels.is_empty(), "no level files found");
     }
 }

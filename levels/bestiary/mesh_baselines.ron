@@ -1,0 +1,16 @@
+// Committed mesh-integrity baselines for the bestiary, read by `level_check`
+// (see `levels/mesh_baselines.ron` for what the figures mean). Every level
+// here is the same lawn.
+(
+    entries: [
+        (level: "bell_carrier.level.ron", triangles: 97280, open_edges: 0),
+        (level: "egg_walkers.level.ron", triangles: 97280, open_edges: 0),
+        (level: "fish_walker.level.ron", triangles: 97280, open_edges: 0),
+        (level: "flying_fish.level.ron", triangles: 97280, open_edges: 0),
+        (level: "mussel.level.ron", triangles: 97280, open_edges: 0),
+        (level: "peeper.level.ron", triangles: 97280, open_edges: 0),
+        (level: "piper.level.ron", triangles: 97280, open_edges: 0),
+        (level: "roller.level.ron", triangles: 97280, open_edges: 0),
+        (level: "stalker.level.ron", triangles: 97280, open_edges: 0),
+    ],
+)
