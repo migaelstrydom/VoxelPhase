@@ -2,9 +2,9 @@
 //! what it hunts.
 //!
 //! ```text
-//!   CharacterIntent ──▶ level flight toward where the brain steers
+//!   CharacterIntent ──▶ level flight toward where the brain steers, or,
+//!                       below level, a stoop down that line
 //!   TerrainWorld ─────▶ cruise height over the ground beneath
-//!   Perception ───────▶ within stoop range of its target: down to it
 //!   how hard it works ─▶ WingBeat ──poses──▶ PosedModel (its two wings)
 //! ```
 //!
@@ -12,7 +12,8 @@
 //! this turns that into impulses on the body. Gravity pulls a flyer like
 //! anything else; what holds it up is the lift given it here every frame,
 //! so one that dies, and is no longer flown, falls with its wings as they
-//! were.
+//! were. Stooping, it is given none: it folds its wings and falls, and they
+//! only keep it on its line.
 
 use std::f32::consts::{PI, TAU};
 
@@ -21,7 +22,6 @@ use specs::{
     Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, Write, WriteStorage,
 };
 
-use super::perception::Perception;
 use crate::character::CharacterIntent;
 use crate::components::{PosedModel, RigidBodyComponent};
 use crate::damage::Dead;
@@ -147,12 +147,8 @@ pub struct Flyer {
     pub speed: f32,
     /// Seconds it takes to reach that speed from rest.
     pub accel_time: f32,
-    /// Height it holds over the ground while it has nothing to stoop on, m.
+    /// Height it holds over the ground, m.
     pub cruise_height: f32,
-    /// Distance from its target, level, within which it comes down to it, m.
-    pub stoop_range: f32,
-    /// How far above its target's position it aims its stoop, m.
-    pub stoop_height: f32,
     /// How its wings beat.
     pub wings: WingBeat,
     /// How far through a beat its wings are, 0 to 1.
@@ -160,6 +156,11 @@ pub struct Flyer {
 }
 
 impl Flyer {
+    /// The most its wings change its velocity by, m/s².
+    fn accel(&self) -> f32 {
+        self.speed / self.accel_time.max(1e-3)
+    }
+
     /// How hard it is working at `velocity`, 0 to 1: climbing, or making
     /// speed. Gliding level and slow, or coming down, it hardly works.
     fn effort(&self, velocity: Vector3<f32>) -> f32 {
@@ -186,39 +187,21 @@ impl<'a> System<'a> for FlyerLocomotionSystem {
         Option<Read<'a, TerrainWorld>>,
         WriteStorage<'a, Flyer>,
         ReadStorage<'a, CharacterIntent>,
-        ReadStorage<'a, Perception>,
         ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, PosedModel>,
         ReadStorage<'a, Dead>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (
-            entities,
-            time,
-            mut physics,
-            terrain,
-            mut flyers,
-            intents,
-            perceptions,
-            bodies,
-            mut posed,
-            deads,
-        ) = data;
+        let (entities, time, mut physics, terrain, mut flyers, intents, bodies, mut posed, deads) =
+            data;
         let dt = time.delta_seconds();
         if dt <= 0.0 {
             return;
         }
         let gravity = physics.world.config().gravity;
-        for (entity, flyer, intent, perception, rb, _) in (
-            &entities,
-            &mut flyers,
-            &intents,
-            &perceptions,
-            &bodies,
-            !&deads,
-        )
-            .join()
+        for (entity, flyer, intent, rb, _) in
+            (&entities, &mut flyers, &intents, &bodies, !&deads).join()
         {
             let Some(body) = physics.world.body(rb.0) else {
                 continue;
@@ -232,26 +215,31 @@ impl<'a> System<'a> for FlyerLocomotionSystem {
                 flyer.wings.pose_onto(flyer.beat_phase, &mut posed.poses);
             }
 
-            let ground = terrain
-                .as_ref()
-                .and_then(|terrain| terrain.mesh_surface_height_at(position.x, position.z))
-                .unwrap_or(position.y - flyer.cruise_height);
-            let stoop = perception
-                .target
-                .filter(|target| target.visible && target.distance <= flyer.stoop_range)
-                .map(|target| target.position.y + flyer.stoop_height);
-            let change = steer(
-                flyer,
-                Vector3::new(intent.direction.x, 0.0, intent.direction.z),
-                velocity,
-                stoop.unwrap_or(ground + flyer.cruise_height) - position.y,
-                dt,
-            );
-            // Lift: what gravity will take from it this frame, given back.
-            let lift = -gravity * body.gravity_scale() * dt;
-            physics
-                .world
-                .apply_impulse(rb.0, (change + lift) * flyer.mass);
+            // A heading below level is a stoop.
+            let line = intent
+                .direction
+                .try_normalize(1e-4)
+                .filter(|heading| heading.y < 0.0);
+            let change = match line {
+                Some(line) => stoop(flyer, line, velocity, dt),
+                None => {
+                    let ground = terrain
+                        .as_ref()
+                        .and_then(|terrain| terrain.mesh_surface_height_at(position.x, position.z))
+                        .unwrap_or(position.y - flyer.cruise_height);
+                    let level = steer(
+                        flyer,
+                        Vector3::new(intent.direction.x, 0.0, intent.direction.z),
+                        velocity,
+                        ground + flyer.cruise_height - position.y,
+                        dt,
+                    );
+                    // Lift: what gravity will take from it this frame,
+                    // given back.
+                    level - gravity * body.gravity_scale() * dt
+                }
+            };
+            physics.world.apply_impulse(rb.0, change * flyer.mass);
 
             // It faces the way it flies, unless its brain would have it face
             // elsewhere.
@@ -286,7 +274,7 @@ fn steer(
     rise: f32,
     dt: f32,
 ) -> Vector3<f32> {
-    let accel = flyer.speed / flyer.accel_time.max(1e-3);
+    let accel = flyer.accel();
     let flat = Vector3::new(velocity.x, 0.0, velocity.z);
     let wanted_flat = heading
         .try_normalize(1e-4)
@@ -295,6 +283,14 @@ fn steer(
     let wanted_climb = (rise * HEIGHT_GAIN).clamp(-CLIMB_SPEED, CLIMB_SPEED);
     let climb_change = (wanted_climb - velocity.y).clamp(-accel * dt, accel * dt);
     flat_change + Vector3::y() * climb_change
+}
+
+/// The change of velocity a stooping flyer's wings make this step: folded,
+/// they only keep it on `line` (unit length, below level), taking off what
+/// of its velocity is across it. Gravity drives it down the line.
+fn stoop(flyer: &Flyer, line: Vector3<f32>, velocity: Vector3<f32>, dt: f32) -> Vector3<f32> {
+    let across = velocity - line * velocity.dot(&line);
+    (-across).cap_magnitude(flyer.accel() * dt)
 }
 
 fn wrap_angle(angle: f32) -> f32 {
@@ -336,8 +332,6 @@ mod tests {
         speed: 6.0,
         accel_time: 1.0,
         cruise_height: 5.0,
-        stoop_range: 4.0,
-        stoop_height: 0.5,
         wings: WINGS,
         beat_phase: 0.0,
     };
@@ -376,9 +370,30 @@ mod tests {
     }
 
     #[test]
-    fn it_stoops_as_readily_as_it_climbs() {
+    fn it_comes_down_as_readily_as_it_climbs() {
         let (_, height) = fly(Vector3::zeros(), -4.0, 6.0);
         assert!((height + 4.0).abs() < 0.1, "at {height} m");
+    }
+
+    /// Stooping for a second down a line 20° off the vertical, from a hover
+    /// that left it drifting across the line, a flyer is on the line and
+    /// falling down it as fast as gravity takes it there, faster than it
+    /// flies.
+    #[test]
+    fn a_stoop_falls_down_its_line_and_its_wings_keep_it_there() {
+        let gravity = Vector3::new(0.0, -9.81, 0.0);
+        let line = Vector3::new(20f32.to_radians().sin(), -20f32.to_radians().cos(), 0.0);
+        let (dt, mut velocity) = (1.0 / 60.0, Vector3::new(0.0, 0.0, 1.0));
+        for _ in 0..60 {
+            velocity += stoop(&FLYER, line, velocity, dt) + gravity * dt;
+        }
+        let down = velocity.dot(&line);
+        let across = (velocity - line * down).norm();
+        assert!(across < 0.1, "{across} m/s across its line");
+        assert!(
+            down > 0.97 * gravity.dot(&line) && down > FLYER.speed,
+            "{down} m/s"
+        );
     }
 
     #[test]

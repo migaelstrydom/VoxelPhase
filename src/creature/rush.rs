@@ -16,10 +16,12 @@ const NEAREST_SHARE_OF_RUN_UP: f32 = 0.5;
 const FOLLOW_THROUGH: f32 = 0.1;
 
 /// A blow struck with the whole body. Its wind-up over, the striker drives
-/// itself along the way it faces toward `speed`, as hard as its legs or
-/// wings drive it, across the gap to what it strikes: what it gives that
-/// is the two bodies colliding, judged as any other hit. Its weight and its
-/// speed decide how hard, and it is pushed back by what it gives.
+/// itself along a line toward `speed`, as hard as its legs or wings (or,
+/// stooping, gravity) drive it, across the gap to what it strikes: what it
+/// gives that is the two bodies colliding, judged as any other hit. Its
+/// weight and its speed decide how hard, and it is pushed back by what it
+/// gives. The line is the way it faces, level, or straight at what it
+/// strikes ([`RushAim`]).
 ///
 /// ```text
 ///   side view, the striker facing right
@@ -45,6 +47,18 @@ pub struct Rush {
     pub radius: f32,
     /// How far its body reaches above and below its centre, m.
     pub half_height: f32,
+    /// Which way it goes.
+    pub aim: RushAim,
+}
+
+/// Which way a rush goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RushAim {
+    /// Along the way the striker faces, level, at the height of what it
+    /// strikes: a lunge or a charge, which it squares up to first.
+    Facing,
+    /// From where it is straight at what it strikes: a stoop from above.
+    AtTarget,
 }
 
 impl Rush {
@@ -67,12 +81,32 @@ impl Rush {
         getting_up + at_speed + FOLLOW_THROUGH
     }
 
-    /// The first body a rush thrown now would meet, and the gap it would
-    /// cross to it: the striker's body, centred at `centre` and facing
-    /// `facing` (level, unit length), swept `carry` along it at the height
-    /// of its own nearest `height` (what it strikes at), though not so low
-    /// that it meets its own ground. `None` if it would meet nothing, or
-    /// the scenery or a static body first.
+    /// Where a rush thrown now at `target` starts and the way it goes (unit
+    /// length), for a striker centred at `centre` and facing `facing`
+    /// (level, unit length). Along its facing, it goes at the height of its
+    /// own nearest the target's, though not so low that it meets its own
+    /// ground. `None` for a stoop at a target at its centre.
+    pub fn line(
+        &self,
+        centre: Point3<f32>,
+        facing: Vector3<f32>,
+        target: Point3<f32>,
+    ) -> Option<(Point3<f32>, Vector3<f32>)> {
+        match self.aim {
+            RushAim::Facing => {
+                let reach = (self.half_height - self.radius).max(0.0);
+                let lowest = (centre.y - reach + OVER_GROUND).min(centre.y);
+                let at = target.y.clamp(lowest, (centre.y + reach).max(lowest));
+                Some((Point3::new(centre.x, at, centre.z), facing))
+            }
+            RushAim::AtTarget => Some((centre, (target - centre).try_normalize(1e-4)?)),
+        }
+    }
+
+    /// The first body a rush thrown now at `target` would meet, and the gap
+    /// it would cross to it: the striker's body swept `carry` along its
+    /// [`line`](Self::line). `None` if it would meet nothing, or the
+    /// scenery or a static body first.
     pub fn meets(
         &self,
         world: &PhysicsWorld,
@@ -80,16 +114,14 @@ impl Rush {
         striker: RigidBodyHandle,
         centre: Point3<f32>,
         facing: Vector3<f32>,
-        height: f32,
+        target: Point3<f32>,
     ) -> Option<(RigidBodyHandle, f32)> {
-        let reach = (self.half_height - self.radius).max(0.0);
-        let lowest = (centre.y - reach + OVER_GROUND).min(centre.y);
-        let at = height.clamp(lowest, (centre.y + reach).max(lowest));
+        let (origin, direction) = self.line(centre, facing, target)?;
         let touch = world.cast_sphere(
             scenery,
             &SphereCast {
-                origin: Point3::new(centre.x, at, centre.z),
-                direction: facing,
+                origin,
+                direction,
                 length: self.carry,
                 radius: self.radius,
                 exclude: &[striker],
@@ -119,6 +151,7 @@ mod tests {
         carry: 0.8,
         radius: 0.3,
         half_height: 0.6,
+        aim: RushAim::Facing,
     };
 
     /// A rush across its run-up gets up to speed on the way, across more
@@ -147,14 +180,16 @@ mod tests {
         (world, striker, target)
     }
 
-    /// The body a rush from the striker along +x meets, at `height`.
+    /// The body a rush from the striker facing +x meets, thrown at a
+    /// target at `height`.
     fn meets(
         world: &PhysicsWorld,
         striker: RigidBodyHandle,
         height: f32,
     ) -> Option<RigidBodyHandle> {
         let centre = Point3::new(0.0, 0.6, 0.0);
-        RUSH.meets(world, &EmptyGeometry, striker, centre, Vector3::x(), height)
+        let target = Point3::new(0.9, height, 0.0);
+        RUSH.meets(world, &EmptyGeometry, striker, centre, Vector3::x(), target)
             .map(|(body, _)| body)
     }
 
@@ -164,7 +199,14 @@ mod tests {
     fn a_rush_meets_what_is_in_front_within_its_carry() {
         let (world, striker, target) = yard(Point3::new(1.2, 0.6, 0.0));
         let centre = Point3::new(0.0, 0.6, 0.0);
-        let met = RUSH.meets(&world, &EmptyGeometry, striker, centre, Vector3::x(), 0.6);
+        let met = RUSH.meets(
+            &world,
+            &EmptyGeometry,
+            striker,
+            centre,
+            Vector3::x(),
+            Point3::new(1.2, 0.6, 0.0),
+        );
         let (body, gap) = met.expect("it meets what is in front");
         assert_eq!(body, target);
         assert!((gap - 0.6).abs() < 1e-3, "{gap}");
@@ -188,6 +230,30 @@ mod tests {
         let low = ball(&mut world, Point3::new(0.9, 0.15, 0.0), 0.12);
         assert_eq!(meets(&world, striker, 0.6), None, "level with its middle");
         assert_eq!(meets(&world, striker, 0.15), Some(low));
+    }
+
+    /// A stoop is swept from the striker straight at what it strikes,
+    /// whichever way it faces: a body below it and off to one side, which a
+    /// rush along its facing would pass over, is met across the gap between
+    /// them.
+    #[test]
+    fn a_stoop_is_swept_straight_at_what_it_strikes() {
+        let at = Point3::new(0.0, -2.4, 1.2);
+        let (world, striker, target) = yard(at);
+        let centre = Point3::new(0.0, 0.6, 0.0);
+        assert_eq!(
+            RUSH.meets(&world, &EmptyGeometry, striker, centre, Vector3::x(), at),
+            None
+        );
+        let stoop = Rush {
+            aim: RushAim::AtTarget,
+            carry: 4.0,
+            ..RUSH
+        };
+        let met = stoop.meets(&world, &EmptyGeometry, striker, centre, Vector3::x(), at);
+        let (body, gap) = met.expect("it meets what is below it");
+        assert_eq!(body, target);
+        assert!((gap - ((at - centre).norm() - 0.6)).abs() < 1e-3, "{gap}");
     }
 
     /// The first body in the way is the one met.

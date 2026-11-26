@@ -29,7 +29,7 @@ use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, ProceduralMesh, Renderable, RigidBodyComponent,
     Rotation, Velocity,
 };
-use crate::creature::{Brain, MeleeAttack, Perception, Rush, Shell};
+use crate::creature::{Brain, MeleeAttack, Perception, Rush, RushAim, Shell};
 use crate::damage::Ragdoll;
 use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
 use crate::harm::{Death, Harm, HarmConfig};
@@ -209,6 +209,7 @@ impl StiltWalker {
             carry,
             radius,
             half_height: clearance,
+            aim: RushAim::Facing,
         };
         let run_up = self.peck.map_or(0.0, |peck| rush(peck.lunge, 0.0).run_up());
         let standoff = contact + run_up;

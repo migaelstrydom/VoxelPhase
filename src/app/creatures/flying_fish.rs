@@ -2,8 +2,8 @@
 //! wings it was never meant to have.
 //!
 //! The air threat. It holds a height nothing on foot can reach, comes over
-//! whoever it has seen, and stoops to bite when it is over them; standing
-//! in the open is what it punishes. It is frail: one good blow, or a blast
+//! whoever it has seen, hangs there a moment, and folds its wings and drops
+//! on them; standing in the open is what it punishes. It is frail: one good blow, or a blast
 //! anywhere near it, ends it. `visual_bench flying_fish` shows it.
 //!
 //! ```text
@@ -43,7 +43,7 @@ use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{Brain, Flyer, MeleeAttack, Rush, Wing, WingBeat};
+use crate::creature::{Brain, Flyer, MeleeAttack, Rush, RushAim, Wing, WingBeat};
 use crate::damage::{Health, Ragdoll};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
@@ -60,20 +60,17 @@ const DENSITY: f32 = 250.0;
 /// Level speed, m/s, and seconds to reach it.
 const SPEED: f32 = 6.5;
 const ACCEL_TIME: f32 = 0.8;
-/// Height it holds over the ground, and the distance from its target
-/// within which it comes down, m.
+/// Height it holds over the ground, m.
 const CRUISE_HEIGHT: f32 = 6.0;
-const STOOP_RANGE: f32 = 5.0;
 /// How far it sees, m.
 const SIGHT: f32 = 30.0;
-/// Its bite: hit points, and the seconds before and after.
+/// Its bite: hit points, and the seconds before and after. Before it, it
+/// hangs over what it bites as long as it takes to stop from full speed.
 const BITE: f32 = 8.0;
-const BITE_WINDUP: f32 = 0.25;
+const BITE_WINDUP: f32 = ACCEL_TIME;
 const BITE_RECOVERY: f32 = 1.6;
-/// Centre to centre, m, at which it touches what it bites, the player,
-/// with room to spare.
-const TOUCHING: f32 = 0.55;
-/// How far past its standoff it still bites, as a share of it.
+/// How far past where it begins its attack it still stoops, level, as a
+/// share of that.
 const REACH_PAST_STANDOFF: f32 = 0.2;
 /// Hit points it can take.
 const HEALTH: f32 = 14.0;
@@ -927,19 +924,22 @@ impl FlyingFishDef {
         Model::flat(parts)
     }
 
-    /// How its wings beat: each on a hinge along the body at its root.
-    /// Its bite: its body flown along the way it faces at its own speed, as
-    /// hard as its wings fly it, carried as far as `carry`.
-    fn bite(carry: f32) -> Rush {
+    /// Its bite: a stoop, its body dropped straight at what it bites, its
+    /// wings folded, driven by `gravity` (m/s²) as fast as a fall from its
+    /// height makes it, carried as far as `carry`. It stoops from no nearer
+    /// than half its height.
+    fn bite(gravity: f32, carry: f32) -> Rush {
         Rush {
-            speed: SPEED,
-            grip: SPEED / ACCEL_TIME,
+            speed: (2.0 * gravity * CRUISE_HEIGHT).sqrt(),
+            grip: gravity,
             carry,
             radius: RADIUS,
             half_height: RADIUS,
+            aim: RushAim::AtTarget,
         }
     }
 
+    /// How its wings beat: each on a hinge along the body at its root.
     fn wing_beat() -> WingBeat {
         let wing = |part: usize, side: f32| Wing {
             part,
@@ -991,8 +991,9 @@ impl Spawnable for FlyingFishDef {
         };
         // Perched: it takes off when it is first flown.
         let at = Point3::new(self.pos.0, ground + RADIUS, self.pos.1);
-        let (body, mass, level) = {
+        let (body, mass, level, gravity) = {
             let mut physics = world.write_resource::<PhysicsResource>();
+            let gravity = -physics.world.config().gravity.y;
             let body = physics
                 .world
                 .create_body(RigidBodyDesc::dynamic().position(at).angular_damping(0.9));
@@ -1013,14 +1014,17 @@ impl Spawnable for FlyingFishDef {
                     compliance: 0.0,
                     max_impulse: f32::INFINITY,
                 });
-            (body, mass, level)
+            (body, mass, level, gravity)
         };
         let model: Arc<Model> = likeness::model(KIND, materials, Self::sculpt);
-        // Its bite is its body flown at what it bites, as hard as its wings
-        // fly it, so it hovers a run-up away. It weighs a third of what the
-        // player does: a bite barely moves them.
-        let standoff = TOUCHING + Self::bite(0.0).run_up();
+        // Its bite is a stoop: it begins its attack as far from what it
+        // bites as it takes to stop from full speed, so that it hangs over
+        // it, and drops on it from wherever it is then, as far as its height
+        // and its reach. It weighs a third of what the player does: a bite
+        // barely moves them.
+        let standoff = SPEED * ACCEL_TIME / 2.0;
         let reach = standoff * (1.0 + REACH_PAST_STANDOFF);
+        let carry = reach.hypot(CRUISE_HEIGHT);
         vec![world
             .create_entity()
             .with(Position(at.coords))
@@ -1038,13 +1042,11 @@ impl Spawnable for FlyingFishDef {
                 speed: SPEED,
                 accel_time: ACCEL_TIME,
                 cruise_height: CRUISE_HEIGHT,
-                stoop_range: STOOP_RANGE,
-                stoop_height: 0.4,
                 wings: Self::wing_beat(),
                 beat_phase: 0.0,
             })
             .with(
-                MeleeAttack::new(BITE, reach, Self::bite(reach))
+                MeleeAttack::new(BITE, reach, Self::bite(gravity, carry))
                     .with_timing(BITE_WINDUP, BITE_RECOVERY),
             )
             .with(Health::new(HEALTH, 5.0))

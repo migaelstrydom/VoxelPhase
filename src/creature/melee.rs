@@ -5,8 +5,9 @@
 //!                              │
 //!                              ├─► CharacterIntent: planted through the wind-up
 //!                              │     and the recovery, and between them a rush
-//!                              │     along its facing as fast as it can drive
-//!                              │     (`sprint`); left to the brain otherwise
+//!                              │     along its facing, or down at its target,
+//!                              │     as fast as it can drive (`sprint`); left to
+//!                              │     the brain otherwise
 //!                              └─► DamageQueue: hit points off a target with
 //!                                    health that its rush would meet
 //! ```
@@ -32,7 +33,7 @@ use specs::{
 
 use super::brain::{Behaviour, Brain};
 use super::perception::{PerceivedTarget, Perception};
-use super::rush::Rush;
+use super::rush::{Rush, RushAim};
 use crate::character::{facing_from_rotation, CharacterIntent, CharacterState};
 use crate::components::{RigidBodyComponent, Rotation};
 use crate::damage::{DamageKind, DamageQueue};
@@ -63,9 +64,8 @@ pub enum StrikePhase {
     Ready,
     /// Committed, and cannot be called off. `elapsed` counts up.
     Winding { elapsed: f32 },
-    /// The blow thrown: it drives its body along `along` (level, unit
-    /// length), the way it faced as it threw it, for `seconds`. `elapsed`
-    /// counts up.
+    /// The blow thrown: it drives its body along `along` (unit length),
+    /// its rush's line as it threw it, for `seconds`. `elapsed` counts up.
     Rushing {
         elapsed: f32,
         seconds: f32,
@@ -115,11 +115,14 @@ impl MeleeAttack {
     }
 
     /// The velocity its blow drives it at, m/s, while it rushes, and while
-    /// it winds up facing `facing` the one it is about to: a creature
-    /// reared back is as good as coming on, to anything that sees it.
+    /// it winds up facing `facing` the one it is about to, if it rushes the
+    /// way it faces: a creature reared back is as good as coming on, to
+    /// anything that sees it.
     pub fn lunge(&self, facing: Vector3<f32>) -> Option<Vector3<f32>> {
         match self.phase {
-            StrikePhase::Winding { .. } => Some(facing * self.rush.speed),
+            StrikePhase::Winding { .. } => {
+                (self.rush.aim == RushAim::Facing).then(|| facing * self.rush.speed)
+            }
             StrikePhase::Rushing { along, .. } => Some(along * self.rush.speed),
             StrikePhase::Ready | StrikePhase::Recovering { .. } => None,
         }
@@ -228,8 +231,8 @@ impl<'a> System<'a> for MeleeAttackSystem {
             let striker = bodies
                 .get(entity)
                 .and_then(|rb| Some((rb.0, physics.world.body(rb.0)?)));
-            // The way it faces, level: the way its rush goes. A creature
-            // with no front rushes at what it is after.
+            // The way it faces, level: the way a rush along its facing
+            // goes. A creature with no front rushes at what it is after.
             let facing = striker.and_then(|(_, body)| {
                 rotations
                     .get(entity)
@@ -248,16 +251,18 @@ impl<'a> System<'a> for MeleeAttackSystem {
                     handle,
                     body.position(),
                     facing,
-                    target.position.y,
+                    target.position,
                 )?;
                 (Some(met) == bodies.get(target.entity).map(|rb| rb.0)).then_some(gap)
             };
-            // Whether it faces its target squarely.
+            // Whether it faces its target squarely. A stoop is thrown at
+            // its target whichever way it faces.
             let squared = |target: PerceivedTarget| {
                 let toward = striker.and_then(|(_, body)| level(target.position - body.position()));
-                toward
-                    .zip(facing)
-                    .is_some_and(|(toward, facing)| toward.dot(&facing) >= SQUARED_UP)
+                rush.aim == RushAim::AtTarget
+                    || toward
+                        .zip(facing)
+                        .is_some_and(|(toward, facing)| toward.dot(&facing) >= SQUARED_UP)
             };
             // A blow is begun only where its rush would meet its target
             // square on, up to speed. Off it, the creature squares up to it
@@ -275,9 +280,18 @@ impl<'a> System<'a> for MeleeAttackSystem {
                         && gap(target).is_some_and(|gap| gap >= rush.nearest())
                 });
 
-            // Thrown, it drives for as long as the gap to its target takes
-            // to cross; at the air, as far as it carries.
-            let along = facing.unwrap_or_else(Vector3::zeros);
+            // Thrown, it drives along its rush's line for as long as the gap
+            // to its target takes to cross; at the air, along its facing as
+            // far as it carries.
+            let along = striker
+                .zip(facing)
+                .zip(target)
+                .and_then(|(((_, body), facing), target)| {
+                    rush.line(body.position(), facing, target.position)
+                })
+                .map(|(_, along)| along)
+                .or(facing)
+                .unwrap_or_else(Vector3::zeros);
             let seconds = || {
                 let across = target.and_then(|target| gap(target)).unwrap_or(rush.carry);
                 rush.seconds_across(across)
@@ -295,7 +309,7 @@ impl<'a> System<'a> for MeleeAttackSystem {
 
             if let Some(intent) = intents.get_mut(entity) {
                 match attack.phase {
-                    // It throws its body the way it faced as it threw the blow,
+                    // It throws its body along the line it threw the blow on,
                     // as fast as it can drive it, and does not turn: stepping
                     // aside is what beats it.
                     StrikePhase::Rushing { along, .. } => {
@@ -406,6 +420,7 @@ mod tests {
         carry: 0.8,
         radius: 0.3,
         half_height: 0.3,
+        aim: RushAim::Facing,
     };
 
     /// [`advance`], for a rush that lasts 0.2 s.
@@ -576,7 +591,12 @@ mod tests {
             })
             .with(Perception {
                 target: Some(PerceivedTarget {
-                    distance: (target.position - from).norm(),
+                    distance: Vector3::new(
+                        target.position.x - from.x,
+                        0.0,
+                        target.position.z - from.z,
+                    )
+                    .norm(),
                     ..target
                 }),
                 ..Perception::ground_creature(20.0)
@@ -756,6 +776,64 @@ mod tests {
         assert_eq!(intent.direction, along);
         assert!(intent.sprint, "{intent:?}");
         assert_eq!(intent.face, None);
+    }
+
+    /// A stooper 3 m over a ball and off to one side, facing away from it,
+    /// from `phase`, after the system has run a frame: where it is in its
+    /// swing, what it asks of its body, and the way to the ball.
+    fn stooped_from(phase: StrikePhase) -> (StrikePhase, Asked, Vector3<f32>) {
+        let at = Point3::new(0.4, 0.0, 0.0);
+        let (mut world, target) = target_at(at);
+        let from = Point3::new(0.0, 3.0, 0.0);
+        let on_feet = LocomotionState::default();
+        let stooper = striker(
+            &mut world,
+            from,
+            std::f32::consts::PI,
+            phase,
+            target,
+            on_feet,
+        );
+        world
+            .write_storage::<MeleeAttack>()
+            .get_mut(stooper)
+            .unwrap()
+            .rush = Rush {
+            aim: RushAim::AtTarget,
+            carry: 4.0,
+            ..RUSH
+        };
+        world.insert(Time::fixed(1.0 / 60.0));
+        MeleeAttackSystem.run_now(&world);
+        let phase = world
+            .read_storage::<MeleeAttack>()
+            .get(stooper)
+            .unwrap()
+            .phase;
+        let intents = world.read_storage::<CharacterIntent>();
+        let intent = intents.get(stooper).unwrap();
+        let asked = Asked {
+            direction: intent.direction,
+            sprint: intent.sprint,
+            face: intent.face,
+        };
+        (phase, asked, (at - from).normalize())
+    }
+
+    /// A stooper over its target begins its swing whichever way it faces,
+    /// and throws its body straight down at it.
+    #[test]
+    fn a_stoop_is_thrown_straight_at_its_target_whichever_way_it_faces() {
+        let (phase, intent, _) = stooped_from(StrikePhase::Ready);
+        assert!(matches!(phase, StrikePhase::Winding { .. }), "{phase:?}");
+        assert_eq!(intent.direction, Vector3::zeros());
+
+        let (phase, intent, toward) = stooped_from(StrikePhase::Winding { elapsed: 0.39 });
+        let StrikePhase::Rushing { along, .. } = phase else {
+            panic!("the wind-up must expire into a stoop: {phase:?}");
+        };
+        assert!((along - toward).norm() < 1e-4, "{along:?}, not {toward:?}");
+        assert_eq!(intent.direction, along);
     }
 
     /// Knocked down, a striker throws nothing, though its rush would meet
