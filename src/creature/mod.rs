@@ -50,7 +50,7 @@ mod swimmer;
 pub use alert_telegraph::{AlertTelegraph, AlertTelegraphSystem};
 pub use brain::{Behaviour, Brain, BrainSystem, Temperament};
 pub use collectable::{Collectable, CollectionSystem, Reward};
-pub use flyer::{Flyer, FlyerLocomotionSystem, Wing, WingBeat};
+pub use flyer::{FlightPose, Flyer, FlyerLocomotionSystem, Wing, WingBeat};
 pub use lobber::{
     Cheeks, Gaze, Lobber, LobberBody, LobberSystem, Puffing, Rider, Showing, Strut, Swell, Throw,
 };

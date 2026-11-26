@@ -40,6 +40,11 @@ const CLIMB_SPEED: f32 = 6.0;
 const TURN_GAIN: f32 = 5.0;
 const TURN_RATE: f32 = 4.0;
 
+/// Seconds its wings take to fold into a stoop, or to open out of one, and
+/// how fast it tips nose-down into one, or back level, rad/s.
+const FOLD_TIME: f32 = 0.2;
+const TIP_RATE: f32 = 6.0;
+
 /// One wing of a flyer: a part of its model, and the hinge it beats on.
 #[derive(Debug, Clone, Copy)]
 pub struct Wing {
@@ -67,8 +72,8 @@ impl Wing {
     }
 }
 
-/// How a flyer's wings beat. A wing is modelled where it is at rest, so a
-/// model nothing poses is drawn with its wings level.
+/// How a flyer's wings beat, and fold. A wing is modelled where it is at
+/// rest, so a model nothing poses is drawn with its wings level.
 #[derive(Debug, Clone, Copy)]
 pub struct WingBeat {
     /// The right wing and the left.
@@ -84,6 +89,23 @@ pub struct WingBeat {
     pub glide_rate: f32,
     /// Beats a second climbing its hardest or at full speed.
     pub hard_rate: f32,
+    /// Radians a folded wing is raised above its rest.
+    pub tuck_raise: f32,
+    /// Radians a folded wing is swept back, about the vertical through its
+    /// root.
+    pub tuck_sweep: f32,
+}
+
+/// How a flyer is drawn at a moment.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FlightPose {
+    /// How far through a beat its wings are, 0 to 1: at the top of their
+    /// swing at 0, at the bottom at ½.
+    pub phase: f32,
+    /// How far its wings are folded, 0 (open, beating) to 1.
+    pub fold: f32,
+    /// How far it is tipped nose-down about its centre, radians.
+    pub pitch: f32,
 }
 
 impl WingBeat {
@@ -92,9 +114,9 @@ impl WingBeat {
         self.glide_rate + (self.hard_rate - self.glide_rate) * effort.clamp(0.0, 1.0)
     }
 
-    /// Where `wing` is `phase` of the way through a beat, as a pose in the
-    /// entity's frame: at the top of its swing at 0, at the bottom at ½.
-    pub fn pose(&self, wing: &Wing, phase: f32) -> Transform {
+    /// How `wing` is turned about its root `phase` of the way through a
+    /// beat.
+    fn beating(&self, wing: &Wing, phase: f32) -> UnitQuaternion<f32> {
         let (falling, swing) = (phase * TAU).sin_cos();
         let lift = if swing >= 0.0 {
             self.raise * swing
@@ -104,10 +126,25 @@ impl WingBeat {
         // Fastest through the middle of the stroke, and the feathering
         // with it.
         let twist = self.feather * falling;
-        let axis = |v: Vector3<f32>| v.try_normalize(1e-6).unwrap_or_else(Vector3::z);
         let handed = wing.handed();
-        let turn = UnitQuaternion::from_scaled_axis(axis(wing.hinge) * (handed * lift))
-            * UnitQuaternion::from_scaled_axis(axis(wing.span) * (handed * twist));
+        UnitQuaternion::from_scaled_axis(unit(wing.hinge) * (handed * lift))
+            * UnitQuaternion::from_scaled_axis(unit(wing.span) * (handed * twist))
+    }
+
+    /// How `wing` is turned about its root folded: raised, and swept back
+    /// along the body.
+    fn folded(&self, wing: &Wing) -> UnitQuaternion<f32> {
+        let handed = wing.handed();
+        UnitQuaternion::from_scaled_axis(Vector3::y() * (handed * self.tuck_sweep))
+            * UnitQuaternion::from_scaled_axis(unit(wing.hinge) * (handed * self.tuck_raise))
+    }
+
+    /// Where `wing` is `phase` of the way through a beat and `fold` of the
+    /// way folded, as a pose in the entity's frame.
+    pub fn pose(&self, wing: &Wing, phase: f32, fold: f32) -> Transform {
+        let turn = self
+            .beating(wing, phase)
+            .slerp(&self.folded(wing), fold.clamp(0.0, 1.0));
         // Turned about its root, which stays where it is.
         Transform {
             translation: wing.root - turn * wing.root,
@@ -116,21 +153,31 @@ impl WingBeat {
         }
     }
 
-    /// Every part's pose `phase` of the way through a beat, for a model of
-    /// `parts` parts: the wings where the beat has them, the rest at rest.
-    pub fn poses(&self, phase: f32, parts: usize) -> Vec<Transform> {
+    /// Every part's pose for a model of `parts` parts drawn at `pose`: the
+    /// wings where their beat and their fold have them, the rest at rest,
+    /// and the whole of it tipped nose-down (its nose is along +Z).
+    pub fn poses(&self, pose: FlightPose, parts: usize) -> Vec<Transform> {
         let mut poses = vec![Transform::default(); parts];
-        self.pose_onto(phase, &mut poses);
+        self.pose_onto(pose, &mut poses);
         poses
     }
 
-    /// Write the wings' poses `phase` of the way through a beat into
-    /// `poses`, a model's poses in part order.
-    fn pose_onto(&self, phase: f32, poses: &mut [Transform]) {
-        for wing in &self.wings {
-            if let Some(pose) = poses.get_mut(wing.part) {
-                *pose = self.pose(wing, phase);
-            }
+    /// Write every part's pose at `pose` into `poses`, a model's poses in
+    /// part order.
+    fn pose_onto(&self, pose: FlightPose, poses: &mut [Transform]) {
+        let tipped = Transform {
+            rotation: UnitQuaternion::from_axis_angle(&Vector3::x_axis(), pose.pitch),
+            ..Transform::default()
+        };
+        for (part, posed) in poses.iter_mut().enumerate() {
+            let own = self
+                .wings
+                .iter()
+                .find(|wing| wing.part == part)
+                .map_or_else(Transform::default, |wing| {
+                    self.pose(wing, pose.phase, pose.fold)
+                });
+            *posed = tipped.compose(&own);
         }
     }
 }
@@ -149,14 +196,18 @@ pub struct Flyer {
     pub accel_time: f32,
     /// Height it holds over the ground, m.
     pub cruise_height: f32,
-    /// How its wings beat.
+    /// The speed it stoops at, m/s: gravity takes it there, and its wings
+    /// hold it there.
+    pub dive_speed: f32,
+    /// How its wings beat, and fold.
     pub wings: WingBeat,
-    /// How far through a beat its wings are, 0 to 1.
-    pub beat_phase: f32,
+    /// How it is drawn now.
+    pub drawn: FlightPose,
 }
 
 impl Flyer {
-    /// The most its wings change its velocity by, m/s².
+    /// The most its wings change its velocity by, m/s², besides holding it
+    /// up.
     fn accel(&self) -> f32 {
         self.speed / self.accel_time.max(1e-3)
     }
@@ -169,10 +220,17 @@ impl Flyer {
         climbing.max(speeding).clamp(0.0, 1.0)
     }
 
-    /// Carry its wings `dt` seconds on through their beat at `velocity`.
-    fn beat(&mut self, velocity: Vector3<f32>, dt: f32) {
+    /// Carry how it is drawn `dt` seconds on at `velocity`: its wings on
+    /// through their beat, folding while it stoops down `line` and opening
+    /// otherwise, and its body tipping nose-down along the line, or back
+    /// level.
+    fn draw(&mut self, velocity: Vector3<f32>, line: Option<Vector3<f32>>, dt: f32) {
         let rate = self.wings.rate(self.effort(velocity));
-        self.beat_phase = (self.beat_phase + rate * dt).rem_euclid(1.0);
+        let (fold, pitch) = line.map_or((0.0, 0.0), |line| (1.0, (-line.y).asin()));
+        let drawn = &mut self.drawn;
+        drawn.phase = (drawn.phase + rate * dt).rem_euclid(1.0);
+        drawn.fold = toward(drawn.fold, fold, dt / FOLD_TIME);
+        drawn.pitch = toward(drawn.pitch, pitch, TIP_RATE * dt);
     }
 }
 
@@ -209,19 +267,20 @@ impl<'a> System<'a> for FlyerLocomotionSystem {
             let (position, velocity) = (body.position(), body.linear_velocity());
             let (rotation, spin) = (body.rotation(), body.angular_velocity());
 
-            // A flyer drawn as one rigid model has no wings to pose.
-            flyer.beat(velocity, dt);
-            if let Some(posed) = posed.get_mut(entity) {
-                flyer.wings.pose_onto(flyer.beat_phase, &mut posed.poses);
-            }
-
             // A heading below level is a stoop.
             let line = intent
                 .direction
                 .try_normalize(1e-4)
                 .filter(|heading| heading.y < 0.0);
+
+            flyer.draw(velocity, line, dt);
+            if let Some(posed) = posed.get_mut(entity) {
+                flyer.wings.pose_onto(flyer.drawn, &mut posed.poses);
+            }
+
+            let fall = gravity * body.gravity_scale() * dt;
             let change = match line {
-                Some(line) => stoop(flyer, line, velocity, dt),
+                Some(line) => stoop(flyer, line, velocity, fall, dt),
                 None => {
                     let ground = terrain
                         .as_ref()
@@ -236,7 +295,7 @@ impl<'a> System<'a> for FlyerLocomotionSystem {
                     );
                     // Lift: what gravity will take from it this frame,
                     // given back.
-                    level - gravity * body.gravity_scale() * dt
+                    level - fall
                 }
             };
             physics.world.apply_impulse(rb.0, change * flyer.mass);
@@ -285,12 +344,31 @@ fn steer(
     flat_change + Vector3::y() * climb_change
 }
 
-/// The change of velocity a stooping flyer's wings make this step: folded,
-/// they only keep it on `line` (unit length, below level), taking off what
-/// of its velocity is across it. Gravity drives it down the line.
-fn stoop(flyer: &Flyer, line: Vector3<f32>, velocity: Vector3<f32>, dt: f32) -> Vector3<f32> {
-    let across = velocity - line * velocity.dot(&line);
-    (-across).cap_magnitude(flyer.accel() * dt)
+/// The change of velocity a stooping flyer's wings make this step, `fall`
+/// being what gravity will add to it: they keep it on `line` (unit length,
+/// below level), taking off what of its velocity is across it, and leave
+/// gravity to drive it down the line until it is at its dive speed, then
+/// hold it there. They are as strong as when they hold it up and steer it.
+fn stoop(
+    flyer: &Flyer,
+    line: Vector3<f32>,
+    velocity: Vector3<f32>,
+    fall: Vector3<f32>,
+    dt: f32,
+) -> Vector3<f32> {
+    let falling = velocity + fall;
+    let wanted = line * falling.dot(&line).min(flyer.dive_speed);
+    (wanted - falling).cap_magnitude(flyer.accel() * dt + fall.norm())
+}
+
+/// `from` moved toward `to` by no more than `by`.
+fn toward(from: f32, to: f32, by: f32) -> f32 {
+    from + (to - from).clamp(-by, by)
+}
+
+/// `v` at unit length, or +Z if it has none.
+fn unit(v: Vector3<f32>) -> Vector3<f32> {
+    v.try_normalize(1e-6).unwrap_or_else(Vector3::z)
 }
 
 fn wrap_angle(angle: f32) -> f32 {
@@ -299,6 +377,8 @@ fn wrap_angle(angle: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::FRAC_PI_2;
+
     use super::*;
 
     /// Wings a metre long from shoulders a tenth of a metre out, hinged
@@ -324,6 +404,8 @@ mod tests {
         feather: 0.2,
         glide_rate: 1.5,
         hard_rate: 4.0,
+        tuck_raise: 0.6,
+        tuck_sweep: 1.1,
     };
 
     const FLYER: Flyer = Flyer {
@@ -332,8 +414,13 @@ mod tests {
         speed: 6.0,
         accel_time: 1.0,
         cruise_height: 5.0,
+        dive_speed: 4.0,
         wings: WINGS,
-        beat_phase: 0.0,
+        drawn: FlightPose {
+            phase: 0.0,
+            fold: 0.0,
+            pitch: 0.0,
+        },
     };
 
     /// Fly from rest for `seconds`, always `rise_to` above where it started.
@@ -348,11 +435,17 @@ mod tests {
     }
 
     /// Where the point `along` metres out a wing from its root is, `phase`
-    /// through a beat.
-    fn on_wing(wing: &Wing, along: f32, phase: f32) -> Vector3<f32> {
+    /// through a beat and `fold` of the way folded.
+    fn on_folding_wing(wing: &Wing, along: f32, phase: f32, fold: f32) -> Vector3<f32> {
         let at_rest = wing.root + wing.span * along;
-        let pose = WINGS.pose(wing, phase);
+        let pose = WINGS.pose(wing, phase, fold);
         pose.rotation * at_rest + pose.translation
+    }
+
+    /// Where the point `along` metres out a wing from its root is, `phase`
+    /// through a beat, open.
+    fn on_wing(wing: &Wing, along: f32, phase: f32) -> Vector3<f32> {
+        on_folding_wing(wing, along, phase, 0.0)
     }
 
     #[test]
@@ -375,25 +468,28 @@ mod tests {
         assert!((height + 4.0).abs() < 0.1, "at {height} m");
     }
 
-    /// Stooping for a second down a line 20° off the vertical, from a hover
-    /// that left it drifting across the line, a flyer is on the line and
-    /// falling down it as fast as gravity takes it there, faster than it
-    /// flies.
+    /// Stooping down a line 20° off the vertical, from a hover that left
+    /// it drifting across the line, a flyer is soon on the line, falling
+    /// down it as fast as gravity takes it there, until its wings hold it
+    /// at its dive speed.
     #[test]
-    fn a_stoop_falls_down_its_line_and_its_wings_keep_it_there() {
-        let gravity = Vector3::new(0.0, -9.81, 0.0);
+    fn a_stoop_falls_down_its_line_to_its_dive_speed_and_no_faster() {
+        let fall = Vector3::new(0.0, -9.81, 0.0) / 60.0;
         let line = Vector3::new(20f32.to_radians().sin(), -20f32.to_radians().cos(), 0.0);
-        let (dt, mut velocity) = (1.0 / 60.0, Vector3::new(0.0, 0.0, 1.0));
-        for _ in 0..60 {
-            velocity += stoop(&FLYER, line, velocity, dt) + gravity * dt;
-        }
-        let down = velocity.dot(&line);
-        let across = (velocity - line * down).norm();
-        assert!(across < 0.1, "{across} m/s across its line");
-        assert!(
-            down > 0.97 * gravity.dot(&line) && down > FLYER.speed,
-            "{down} m/s"
-        );
+        let mut velocity = Vector3::new(0.0, 0.0, 1.0);
+        let mut stooping = |frames: usize| {
+            for _ in 0..frames {
+                velocity += stoop(&FLYER, line, velocity, fall, 1.0 / 60.0) + fall;
+            }
+            let down = velocity.dot(&line);
+            (down, (velocity - line * down).norm())
+        };
+        let (down, across) = stooping(12);
+        assert!(across < 0.05, "{across} m/s across its line");
+        assert!((down - 12.0 * fall.dot(&line)).abs() < 0.05, "{down} m/s");
+        let (down, across) = stooping(108);
+        assert!(across < 1e-3, "{across} m/s across its line");
+        assert!((down - FLYER.dive_speed).abs() < 1e-3, "{down} m/s");
     }
 
     #[test]
@@ -412,7 +508,7 @@ mod tests {
             assert!((bottom.y - wing.root.y + WINGS.lower.sin()).abs() < 1e-4);
             // Coming down, its leading edge is tipped down.
             let leading = wing.root + wing.span * 0.5 + Vector3::z() * 0.1;
-            let pose = WINGS.pose(wing, 0.25);
+            let pose = WINGS.pose(wing, 0.25, 0.0);
             let edge = pose.rotation * leading + pose.translation;
             assert!(edge.y < on_wing(wing, 0.5, 0.25).y - 0.01);
         }
@@ -429,12 +525,84 @@ mod tests {
 
     #[test]
     fn only_the_wings_are_posed_and_a_model_without_them_is_left_alone() {
-        let poses = WINGS.poses(0.0, 3);
+        let poses = WINGS.poses(FlightPose::default(), 3);
         assert!(poses[0].rotation.angle() < 1e-6 && poses[0].translation.norm() < 1e-6);
         assert!((poses[1].rotation.angle() - WINGS.raise).abs() < 1e-5);
         assert!((poses[2].rotation.angle() - WINGS.raise).abs() < 1e-5);
         // A model of one part has no wings to pose.
-        assert_eq!(WINGS.poses(0.3, 1).len(), 1);
+        let gliding = FlightPose {
+            phase: 0.3,
+            ..FlightPose::default()
+        };
+        assert_eq!(WINGS.poses(gliding, 1).len(), 1);
+    }
+
+    /// Folded, whatever the beat, each wing is raised from its root and
+    /// swept back along the body, the other's mirror; half folded, it is
+    /// between the two.
+    #[test]
+    fn folded_its_wings_are_raised_and_swept_back_along_the_body() {
+        for phase in [0.0, 0.3, 0.5] {
+            for wing in &WINGS.wings {
+                assert!((on_folding_wing(wing, 0.0, phase, 1.0) - wing.root).norm() < 1e-5);
+                let tip = on_folding_wing(wing, 1.0, phase, 1.0) - wing.root;
+                let back = WINGS.tuck_sweep.sin() * WINGS.tuck_raise.cos();
+                assert!((tip.z + back).abs() < 1e-4, "{tip:?}");
+                assert!((tip.y - WINGS.tuck_raise.sin()).abs() < 1e-4, "{tip:?}");
+                let half = on_folding_wing(wing, 1.0, phase, 0.5) - wing.root;
+                assert!(half.z < 0.0 && half.z > tip.z, "{half:?}");
+            }
+            let (right, left) = (
+                on_folding_wing(&WINGS.wings[0], 1.0, phase, 1.0),
+                on_folding_wing(&WINGS.wings[1], 1.0, phase, 1.0),
+            );
+            assert!((right.y - left.y).abs() < 1e-5 && (right.x + left.x).abs() < 1e-5);
+        }
+    }
+
+    /// Tipped, the whole of it turns nose-down about its centre, its wings
+    /// with it.
+    #[test]
+    fn tipped_nose_down_the_whole_of_it_turns_about_its_centre() {
+        let tipped = FlightPose {
+            pitch: FRAC_PI_2,
+            ..FlightPose::default()
+        };
+        let (level, poses) = (
+            WINGS.poses(FlightPose::default(), 3),
+            WINGS.poses(tipped, 3),
+        );
+        let nose = poses[0].rotation * Vector3::z() + poses[0].translation;
+        assert!(
+            (nose - Vector3::new(0.0, -1.0, 0.0)).norm() < 1e-5,
+            "{nose:?}"
+        );
+        let quarter = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), FRAC_PI_2);
+        for part in [1, 2] {
+            let tip =
+                |pose: &Transform| pose.rotation * WINGS.wings[part - 1].span + pose.translation;
+            assert!((tip(&poses[part]) - quarter * tip(&level[part])).norm() < 1e-5);
+        }
+    }
+
+    /// Stooping, its wings fold and its body tips nose-down along the line
+    /// over a moment; out of the stoop, they open and it levels again.
+    #[test]
+    fn into_a_stoop_it_folds_and_tips_and_out_of_it_opens_and_levels() {
+        let mut flyer = FLYER;
+        let down = Some(-Vector3::y());
+        flyer.draw(Vector3::zeros(), down, 0.05);
+        assert!(flyer.drawn.fold > 0.0 && flyer.drawn.fold < 1.0);
+        assert!(flyer.drawn.pitch > 0.0 && flyer.drawn.pitch < FRAC_PI_2);
+        for _ in 0..20 {
+            flyer.draw(Vector3::zeros(), down, 0.05);
+        }
+        assert_eq!(flyer.drawn.fold, 1.0);
+        assert!((flyer.drawn.pitch - FRAC_PI_2).abs() < 1e-5);
+        for _ in 0..20 {
+            flyer.draw(Vector3::zeros(), None, 0.05);
+        }
+        assert_eq!((flyer.drawn.fold, flyer.drawn.pitch), (0.0, 0.0));
     }
 
     #[test]
@@ -443,9 +611,9 @@ mod tests {
             let mut flyer = FLYER;
             let (dt, mut beats, mut last) = (1.0 / 240.0, 0.0, 0.0);
             for _ in 0..240 {
-                flyer.beat(velocity, dt);
-                beats += (flyer.beat_phase - last).rem_euclid(1.0);
-                last = flyer.beat_phase;
+                flyer.draw(velocity, None, dt);
+                beats += (flyer.drawn.phase - last).rem_euclid(1.0);
+                last = flyer.drawn.phase;
             }
             beats
         };

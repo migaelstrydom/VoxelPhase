@@ -43,7 +43,7 @@ use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{Brain, Flyer, MeleeAttack, Rush, RushAim, Wing, WingBeat};
+use crate::creature::{Brain, FlightPose, Flyer, MeleeAttack, Rush, RushAim, Wing, WingBeat};
 use crate::damage::{Health, Ragdoll};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
@@ -62,6 +62,10 @@ const SPEED: f32 = 6.5;
 const ACCEL_TIME: f32 = 0.8;
 /// Height it holds over the ground, m.
 const CRUISE_HEIGHT: f32 = 6.0;
+/// The speed it stoops at, m/s: about a walker's lunge, so that its drop
+/// from its height takes over a second to watch, and is as hard as its
+/// weight makes it at that.
+const DIVE_SPEED: f32 = 4.5;
 /// How far it sees, m.
 const SIGHT: f32 = 30.0;
 /// Its bite: hit points, and the seconds before and after. Before it, it
@@ -91,6 +95,10 @@ const WING_LOWER: f32 = 0.6;
 const WING_FEATHER: f32 = 0.22;
 const GLIDE_BEATS: f32 = 1.5;
 const HARD_BEATS: f32 = 4.2;
+/// How far a folded wing is raised, and swept back along the body,
+/// radians.
+const TUCK_RAISE: f32 = 0.5;
+const TUCK_SWEEP: f32 = 1.0;
 
 /// Side of the grid each part is skinned from, m.
 const TRUNK_GRAIN: f32 = 0.0055;
@@ -925,12 +933,11 @@ impl FlyingFishDef {
     }
 
     /// Its bite: a stoop, its body dropped straight at what it bites, its
-    /// wings folded, driven by `gravity` (m/s²) as fast as a fall from its
-    /// height makes it, carried as far as `carry`. It stoops from no nearer
-    /// than half its height.
+    /// wings folded, driven by `gravity` (m/s²) up to its dive speed,
+    /// carried as far as `carry`.
     fn bite(gravity: f32, carry: f32) -> Rush {
         Rush {
-            speed: (2.0 * gravity * CRUISE_HEIGHT).sqrt(),
+            speed: DIVE_SPEED,
             grip: gravity,
             carry,
             radius: RADIUS,
@@ -954,25 +961,48 @@ impl FlyingFishDef {
             feather: WING_FEATHER,
             glide_rate: GLIDE_BEATS,
             hard_rate: HARD_BEATS,
+            tuck_raise: TUCK_RAISE,
+            tuck_sweep: TUCK_SWEEP,
         }
     }
 
     /// The states it is shown in by tools: its wings at the top of a beat,
-    /// at the bottom, and half way down between them.
+    /// at the bottom, and half way down between them; folded; and folded,
+    /// tipped nose-down in a stoop.
     pub fn exhibits() -> Vec<Exhibit> {
         let model = likeness::model_sculpted(KIND, Self::sculpt);
         let beat = Self::wing_beat();
-        [("wings_up", 0.0), ("wings_down", 0.5), ("mid_beat", 0.25)]
-            .into_iter()
-            .map(|(name, phase)| Exhibit {
-                name,
-                poses: beat.poses(phase, model.parts.len()),
-                model: model.clone(),
-                shaped: Vec::new(),
-                lift: 1.3,
-                reach: 0.82,
-            })
-            .collect()
+        let beating = |phase| FlightPose {
+            phase,
+            ..FlightPose::default()
+        };
+        let folded = FlightPose {
+            fold: 1.0,
+            ..FlightPose::default()
+        };
+        [
+            ("wings_up", beating(0.0)),
+            ("wings_down", beating(0.5)),
+            ("mid_beat", beating(0.25)),
+            ("folded", folded),
+            (
+                "stooping",
+                FlightPose {
+                    pitch: FRAC_PI_2,
+                    ..folded
+                },
+            ),
+        ]
+        .into_iter()
+        .map(|(name, pose)| Exhibit {
+            name,
+            poses: beat.poses(pose, model.parts.len()),
+            model: model.clone(),
+            shaped: Vec::new(),
+            lift: 1.3,
+            reach: 0.82,
+        })
+        .collect()
     }
 }
 
@@ -1042,8 +1072,9 @@ impl Spawnable for FlyingFishDef {
                 speed: SPEED,
                 accel_time: ACCEL_TIME,
                 cruise_height: CRUISE_HEIGHT,
+                dive_speed: DIVE_SPEED,
                 wings: Self::wing_beat(),
-                beat_phase: 0.0,
+                drawn: FlightPose::default(),
             })
             .with(
                 MeleeAttack::new(BITE, reach, Self::bite(gravity, carry))
@@ -1119,8 +1150,8 @@ mod tests {
         };
         assert!(tip("wings_up") > tip("mid_beat") + 0.2);
         assert!(tip("wings_down") < tip("mid_beat") - 0.2);
-        // Nothing moves but the wings.
-        for exhibit in &exhibits {
+        // Nothing moves but the wings, unless it is tipped into a stoop.
+        for exhibit in exhibits.iter().filter(|exhibit| exhibit.name != "stooping") {
             assert!(exhibit.poses[BODY].rotation.angle() < 1e-6);
         }
     }
