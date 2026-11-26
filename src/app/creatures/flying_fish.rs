@@ -1,9 +1,9 @@
 //! Flying fish — a fish that looks a day dead, held up on a pair of skin
 //! wings it was never meant to have.
 //!
-//! The air threat. It holds a height nothing on foot can reach, comes over
-//! whoever it has seen, hangs there a moment, and folds its wings and drops
-//! on them; standing in the open is what it punishes. It is frail: one good blow, or a blast
+//! The air threat. It holds a height nothing on foot can reach, circles
+//! whoever it has seen, hangs a moment, and folds its wings and drops on
+//! them from the side; standing in the open is what it punishes. It is frail: one good blow, or a blast
 //! anywhere near it, ends it. `visual_bench flying_fish` shows it.
 //!
 //! ```text
@@ -69,12 +69,17 @@ const DIVE_SPEED: f32 = 4.5;
 /// How far it sees, m.
 const SIGHT: f32 = 30.0;
 /// Its bite: hit points, and the seconds before and after. Before it, it
-/// hangs over what it bites as long as it takes to stop from full speed.
+/// hangs where it is as long as it takes to stop from full speed; after
+/// it, it climbs back out and circles half way round what it bit.
 const BITE: f32 = 8.0;
 const BITE_WINDUP: f32 = ACCEL_TIME;
-const BITE_RECOVERY: f32 = 1.6;
-/// How far past where it begins its attack it still stoops, level, as a
-/// share of that.
+const BITE_RECOVERY: f32 = 3.0;
+/// How much wider than the tightest turn its wings make at full speed it
+/// circles what it hunts.
+const CIRCLE_ROOM: f32 = 1.25;
+/// Seconds it circles one way before it turns about.
+const CIRCLING: f32 = 12.0;
+/// How far past its circle it still stoops, level, as a share of it.
 const REACH_PAST_STANDOFF: f32 = 0.2;
 /// Hit points it can take.
 const HEALTH: f32 = 14.0;
@@ -1047,13 +1052,13 @@ impl Spawnable for FlyingFishDef {
             (body, mass, level, gravity)
         };
         let model: Arc<Model> = likeness::model(KIND, materials, Self::sculpt);
-        // Its bite is a stoop: it begins its attack as far from what it
-        // bites as it takes to stop from full speed, so that it hangs over
-        // it, and drops on it from wherever it is then, as far as its height
-        // and its reach. It weighs a third of what the player does: a bite
-        // barely moves them.
-        let standoff = SPEED * ACCEL_TIME / 2.0;
-        let reach = standoff * (1.0 + REACH_PAST_STANDOFF);
+        // It circles what it hunts as tight as its wings turn it at full
+        // speed (v²/a), with room to spare, and its bite is a stoop from
+        // there: it hangs where it is, then drops on what it bites from the
+        // side, as far as its height and its reach. It weighs a third of
+        // what the player does.
+        let circle = SPEED * ACCEL_TIME * CIRCLE_ROOM;
+        let reach = circle * (1.0 + REACH_PAST_STANDOFF);
         let carry = reach.hypot(CRUISE_HEIGHT);
         vec![world
             .create_entity()
@@ -1065,7 +1070,10 @@ impl Spawnable for FlyingFishDef {
             .with(Renderable)
             .with(CharacterIntent::default())
             .with(all_round(SIGHT))
-            .with(Brain::hunter(standoff))
+            .with(Brain {
+                strafe_interval: CIRCLING,
+                ..Brain::hunter(circle)
+            })
             .with(Flyer {
                 mass,
                 yaw_inertia: 0.4 * mass * RADIUS * RADIUS,

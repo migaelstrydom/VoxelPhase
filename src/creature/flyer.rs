@@ -40,6 +40,10 @@ const CLIMB_SPEED: f32 = 6.0;
 const TURN_GAIN: f32 = 5.0;
 const TURN_RATE: f32 = 4.0;
 
+/// Level speed below which it hovers, m/s: it turns to where its brain would
+/// have it face, rather than the way it drifts.
+const HOVERING: f32 = 1.0;
+
 /// Seconds its wings take to fold into a stoop, or to open out of one, and
 /// how fast it tips nose-down into one, or back level, rad/s.
 const FOLD_TIME: f32 = 0.2;
@@ -300,12 +304,18 @@ impl<'a> System<'a> for FlyerLocomotionSystem {
             };
             physics.world.apply_impulse(rb.0, change * flyer.mass);
 
-            // It faces the way it flies, unless its brain would have it face
-            // elsewhere.
+            // It faces down the line it stoops on, and otherwise the way it
+            // flies, or, hovering, where its brain would have it face.
+            let level = |v: Vector3<f32>| Vector3::new(v.x, 0.0, v.z).try_normalize(1e-3);
             let flat = Vector3::new(velocity.x, 0.0, velocity.z);
-            let Some(travel) = intent
-                .face
-                .and_then(|face| Vector3::new(face.x, 0.0, face.z).try_normalize(1e-3))
+            let Some(travel) = line
+                .and_then(level)
+                .or_else(|| {
+                    intent
+                        .face
+                        .filter(|_| flat.norm() < HOVERING)
+                        .and_then(level)
+                })
                 .or_else(|| flat.try_normalize(0.1))
             else {
                 continue;
@@ -346,7 +356,8 @@ fn steer(
 
 /// The change of velocity a stooping flyer's wings make this step, `fall`
 /// being what gravity will add to it: they keep it on `line` (unit length,
-/// below level), taking off what of its velocity is across it, and leave
+/// below level), taking off what of its velocity is across it or back up
+/// it, and leave
 /// gravity to drive it down the line until it is at its dive speed, then
 /// hold it there. They are as strong as when they hold it up and steer it.
 fn stoop(
@@ -357,7 +368,7 @@ fn stoop(
     dt: f32,
 ) -> Vector3<f32> {
     let falling = velocity + fall;
-    let wanted = line * falling.dot(&line).min(flyer.dive_speed);
+    let wanted = line * falling.dot(&line).clamp(0.0, flyer.dive_speed);
     (wanted - falling).cap_magnitude(flyer.accel() * dt + fall.norm())
 }
 

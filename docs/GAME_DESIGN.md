@@ -95,9 +95,9 @@ blasts) knocks down at worst:
 - **Creatures** push, trap and knock down. Their strikes do not kill: the
   danger is where their shove sends the player (off a ledge, into water,
   under a falling stone). A walker's peck or ram is its whole body thrown
-  at the player after a wind-up, from a run-up away; a flying fish's bite
-  is its whole body dropped on the player, its wings folded, after it has
-  hung overhead a moment. Either blow lands on whatever is in the way, as
+  at the player after a wind-up, from a run-up away; a flying fish circles
+  the player, hangs a moment, and drops its whole body on them from the
+  side, its wings folded. Either blow lands on whatever is in the way, as
   hard as the creature's weight and speed make it, and pushes the creature
   back as much as it pushes. A heavy creature shoves the player back, the stalker
   at times off their feet; a light one barely moves them. A creature

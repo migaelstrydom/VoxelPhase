@@ -4,10 +4,10 @@
 //!   Brain (Attacking) ─► MeleeAttackSystem ─► StrikePhase ─► whatever draws the creature
 //!                              │
 //!                              ├─► CharacterIntent: planted through the wind-up
-//!                              │     and the recovery, and between them a rush
-//!                              │     along its facing, or down at its target,
-//!                              │     as fast as it can drive (`sprint`); left to
-//!                              │     the brain otherwise
+//!                              │     and, after a lunge, the recovery, and between
+//!                              │     them a rush along its facing, or down at its
+//!                              │     target, as fast as it can drive (`sprint`);
+//!                              │     left to the brain otherwise
 //!                              └─► DamageQueue: hit points off a target with
 //!                                    health that its rush would meet
 //! ```
@@ -318,12 +318,24 @@ impl<'a> System<'a> for MeleeAttackSystem {
                         intent.face = None;
                     }
                     // A swing costs the creature its feet: it neither closes nor
-                    // circles while it winds up or recovers.
-                    StrikePhase::Winding { .. } | StrikePhase::Recovering { .. } => {
+                    // circles while it winds up. A stooper hangs where it is,
+                    // turned to what it will drop on.
+                    StrikePhase::Winding { .. } => {
+                        intent.direction = Vector3::zeros();
+                        intent.face = target
+                            .filter(|_| rush.aim == RushAim::AtTarget)
+                            .zip(striker)
+                            .and_then(|(target, (_, body))| {
+                                level(target.position - body.position())
+                            });
+                    }
+                    // Nor while it recovers from a lunge. A stooper climbs back
+                    // out of its stoop as its brain takes it.
+                    StrikePhase::Recovering { .. } if rush.aim == RushAim::Facing => {
                         intent.direction = Vector3::zeros();
                         intent.face = None;
                     }
-                    StrikePhase::Ready => {}
+                    StrikePhase::Recovering { .. } | StrikePhase::Ready => {}
                 }
             }
             if attack.is_committed() {
@@ -821,12 +833,14 @@ mod tests {
     }
 
     /// A stooper over its target begins its swing whichever way it faces,
-    /// and throws its body straight down at it.
+    /// hanging where it is turned to its target, and throws its body
+    /// straight down at it.
     #[test]
     fn a_stoop_is_thrown_straight_at_its_target_whichever_way_it_faces() {
         let (phase, intent, _) = stooped_from(StrikePhase::Ready);
         assert!(matches!(phase, StrikePhase::Winding { .. }), "{phase:?}");
         assert_eq!(intent.direction, Vector3::zeros());
+        assert_eq!(intent.face, Some(Vector3::x()));
 
         let (phase, intent, toward) = stooped_from(StrikePhase::Winding { elapsed: 0.39 });
         let StrikePhase::Rushing { along, .. } = phase else {
@@ -834,6 +848,21 @@ mod tests {
         };
         assert!((along - toward).norm() < 1e-4, "{along:?}, not {toward:?}");
         assert_eq!(intent.direction, along);
+    }
+
+    /// Recovering from a lunge, a striker stands where it is; recovering
+    /// from a stoop, it goes where its brain takes it.
+    #[test]
+    fn after_a_lunge_a_striker_stands_and_after_a_stoop_it_flies_on() {
+        let recovering = StrikePhase::Recovering { remaining: 0.3 };
+        let (_, lunger) = struck_from(
+            Point3::new(0.0, 0.0, 0.9),
+            recovering,
+            LocomotionState::default(),
+        );
+        assert_eq!(lunger.direction, Vector3::zeros());
+        let (_, stooper, _) = stooped_from(recovering);
+        assert_eq!(stooper.direction, Vector3::x());
     }
 
     /// Knocked down, a striker throws nothing, though its rush would meet
