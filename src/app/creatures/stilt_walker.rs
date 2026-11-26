@@ -29,7 +29,7 @@ use crate::components::{
     Orientation, PoseFrame, PosedModel, Position, ProceduralMesh, Renderable, RigidBodyComponent,
     Rotation, Velocity,
 };
-use crate::creature::{Brain, MeleeAttack, Perception, Swing};
+use crate::creature::{Brain, MeleeAttack, Perception, Shell, Swing};
 use crate::damage::Ragdoll;
 use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
 use crate::harm::{Death, Harm, HarmConfig};
@@ -106,6 +106,9 @@ pub struct StiltWalker {
     pub peck: Option<Peck>,
     /// How the blows it takes are judged; `None` for one nothing harms.
     pub harm: Option<HarmConfig>,
+    /// Its shell, if it wears one, which the blow that kills it breaks off
+    /// in shards: the parts of its dress worn brittle.
+    pub shell: Option<Shell>,
     /// Its wits, given the distance it holds from what it attacks.
     pub brain: fn(f32) -> Brain,
 }
@@ -294,6 +297,12 @@ impl StiltWalker {
         }
         if let Some(drape) = drape {
             entity = entity.with(drape);
+        }
+        if let Some(shell) = self.shell {
+            entity = entity.with(Shell {
+                parts: self.dress.brittle_parts(),
+                ..shell
+            });
         }
         vec![entity.build()]
     }

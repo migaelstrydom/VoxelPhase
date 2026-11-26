@@ -30,8 +30,8 @@ use crate::animation::{FootPlacerConfig, FootSide};
 use crate::app::sculpt::{Clay, Grime, Lump, Mottle, Relief, Spots, VertexPaint};
 use crate::app::spawnables::{MaterialCtx, Spawnable};
 use crate::core::error::EngineResult;
-use crate::creature::Brain;
-use crate::harm::HarmConfig;
+use crate::creature::{Brain, Shell};
+use crate::harm::{Band, HarmConfig};
 use crate::model::MeshPrimitive;
 use crate::rendering::material::MaterialId;
 
@@ -48,6 +48,17 @@ const BUTT_RECOVERY: f32 = 0.6;
 /// The impulse its butt drives into what it strikes, N·s: about 5.5 m/s on
 /// the player, which only just knocks them down.
 const BUTT_BLOW: f32 = 310.0;
+/// How sudden a blow its shell takes before it breaks, m/s: one that would
+/// knock the player down. A blast breaks it as surely as a fall or a
+/// thrown stone does.
+const SHELL_STRENGTH: f32 = 5.0;
+/// How many shards its shell breaks into, and how dense their boxes are,
+/// kg/m³.
+const SHARDS: usize = 10;
+const SHARD_DENSITY: f32 = 300.0;
+/// Radius of what is left of it once its shell is gone, m: the wet mass
+/// inside, well within the shell's wall.
+const BARE_RADIUS: f32 = 0.15;
 
 /// The shell (linear), and how thick it is, m.
 const SHELL: (f32, f32, f32) = (0.8, 0.74, 0.6);
@@ -357,7 +368,7 @@ impl EggWalkerDef {
             drive: Drive::Lid { shut },
         };
         let mut pieces = vec![
-            (Worn::on(Joint::Head), vec![Self::shell(&shell)]),
+            (Worn::on(Joint::Head).brittle(), vec![Self::shell(&shell)]),
             (Worn::on(Joint::Head).breathing(0.035), vec![innards]),
             (
                 Worn::on(Joint::Head),
@@ -415,7 +426,18 @@ impl EggWalkerDef {
                 windup: BUTT_WINDUP,
                 recovery: BUTT_RECOVERY,
             }),
-            harm: Some(HarmConfig::default()),
+            harm: Some(HarmConfig {
+                heavy: SHELL_STRENGTH,
+                deadly: SHELL_STRENGTH,
+                shove_at_worst: Band::Deadly,
+                ..HarmConfig::default()
+            }),
+            shell: Some(Shell {
+                parts: Vec::new(),
+                shards: SHARDS,
+                density: SHARD_DENSITY,
+                bare_radius: BARE_RADIUS,
+            }),
             brain: Brain::hunter,
         }
     }

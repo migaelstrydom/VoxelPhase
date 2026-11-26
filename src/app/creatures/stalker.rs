@@ -1540,6 +1540,7 @@ impl StalkerDef {
                 recovery: PECK_RECOVERY,
             }),
             harm: Some(HarmConfig::default()),
+            shell: None,
             brain: Brain::hunter,
         }
     }

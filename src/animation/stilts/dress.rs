@@ -85,12 +85,25 @@ pub struct Worn {
     /// How far it swells and sinks as the walker breathes, as a share of
     /// its width. Zero for anything that is not flesh.
     pub breath: f32,
+    /// Whether it is shell, which a deadly blow breaks off in shards
+    /// (`creature::Shell`).
+    pub brittle: bool,
 }
 
 impl Worn {
     /// Worn on `joint`, still.
     pub fn on(joint: Joint) -> Self {
-        Self { joint, breath: 0.0 }
+        Self {
+            joint,
+            breath: 0.0,
+            brittle: false,
+        }
+    }
+
+    /// Shell, which a deadly blow breaks off in shards.
+    pub fn brittle(mut self) -> Self {
+        self.brittle = true;
+        self
     }
 
     /// Swelling by `breath` of its width with each breath.
@@ -148,6 +161,16 @@ impl Dress {
             worn: self.worn.clone(),
             drape: self.drape.as_ref().map(|drape| drape.recoloured(&material)),
         }
+    }
+
+    /// The parts of its model that are shell (`Worn::brittle`).
+    pub fn brittle_parts(&self) -> Vec<usize> {
+        let brittle = self
+            .worn
+            .iter()
+            .enumerate()
+            .filter(|(_, worn)| worn.brittle);
+        brittle.map(|(part, _)| part).collect()
     }
 
     /// Triangles in the whole dress.

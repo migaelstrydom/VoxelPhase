@@ -963,6 +963,7 @@ impl BellCarrierDef {
             }),
             // Nothing breaks the bell.
             harm: None,
+            shell: None,
             brain: |standoff| Brain::hunter(standoff).relentless(),
         }
     }

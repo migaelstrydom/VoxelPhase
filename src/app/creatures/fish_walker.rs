@@ -1032,6 +1032,7 @@ impl FishWalkerDef {
                 recovery: BITE_RECOVERY,
             }),
             harm: Some(HarmConfig::default()),
+            shell: None,
             brain: Brain::hunter,
         }
     }

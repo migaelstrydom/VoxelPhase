@@ -116,7 +116,9 @@ blasts) knocks down at worst:
 
 Creatures are harmed by the same law, in the same bands. A blow that would
 knock the player down knocks a walker down: it is flung, lies limp and gets
-up again. One that would kill the player kills it.
+up again. One that would kill the player kills it. An egg-walker's shell
+breaks under any blow that would knock the player down: it flies apart in
+shards that carry on as the shell was moving, and what was inside dies.
 
 ### How a knock looks
 

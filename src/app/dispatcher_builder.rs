@@ -9,7 +9,7 @@ use crate::character::{ContactGroundingSystem, ImmersionSystem};
 use crate::cleave::{SolidCleaveSystem, SolidShareSystem};
 use crate::creature::{
     AlertTelegraphSystem, BrainSystem, CollectionSystem, FlyerLocomotionSystem, LobberSystem,
-    MeleeAttackSystem, PerceptionSystem, RollerLocomotionSystem, SnapTrapSystem,
+    MeleeAttackSystem, PerceptionSystem, RollerLocomotionSystem, ShellSystem, SnapTrapSystem,
     SwimmerLocomotionSystem,
 };
 use crate::damage::{
@@ -308,7 +308,10 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
                 "snap_trap",
             ],
         )
-        .with(DeathSystem, "death", &["damage_apply"])
+        .with(DeathSystem, "death", &["damage_apply", "harm"])
+        // A shell breaks the frame its deadly blow lands, from where it is
+        // drawn.
+        .with(ShellSystem, "shell", &["harm", "stilt_animation"])
         .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
         // Scree falls against the terrain as remeshed this frame.
         .with(ScreeSystem::default(), "scree", &["terrain_update"])

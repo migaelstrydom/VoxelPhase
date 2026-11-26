@@ -18,8 +18,8 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::creature::{
-    AlertTelegraph, Brain, Collectable, Flyer, Lobber, MeleeAttack, Perception, Roller, SnapTrap,
-    Swimmer,
+    AlertTelegraph, Brain, Collectable, Flyer, Lobber, MeleeAttack, Perception, Roller, Shell,
+    SnapTrap, Swimmer,
 };
 use crate::damage::{DamageConfig, DamageQueue, Dead, Health, LastVelocity, Ragdoll};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
@@ -107,6 +107,7 @@ impl WorldBuilder {
         world.register::<Lobber>();
         world.register::<SnapTrap>();
         world.register::<MeleeAttack>();
+        world.register::<Shell>();
         // Only ever registered by `AlertTelegraphSystem`'s setup before now,
         // which meant a world built without a dispatcher panicked the moment a
         // level with a creature in it was spawned.
