@@ -28,7 +28,7 @@
 //!            along each and a boss raised under every thorn; split
 //!            along one seam, its lips curling back from a bed of pith
 //!   seeds    seated in the pith in rows, flattened, wet and red          (Wet)
-//!   thorns   horn, one to a boss, their tips on the sphere it rolls as;  (Horn)
+//!   thorns   horn, one to a boss, their tips past the sphere it rolls as;(Horn)
 //!            some short, some broken to stumps
 //!   stem     dried, with a curl of dead leaf; a withered crown opposite  (Husk)
 //! ```
@@ -65,11 +65,17 @@ use crate::utils::noise::fbm_perlin_3d;
 /// The name its look is kept under.
 const KIND: &str = "roller";
 
-/// The radius it is sculpted at, m: a roller of another size is this one
-/// scaled.
+/// The radius of the sphere it rolls as at the size it is sculpted, m: a
+/// roller of another size is this one scaled.
 const SCULPTED_RADIUS: f32 = 0.6;
-/// The sculpture's own radius, for the lengths below.
+/// How far its thorns reach as they are sculpted, before it is drawn
+/// [`DRAWN_OVER`] bigger, for the lengths below.
 const R: f32 = SCULPTED_RADIUS;
+/// How much bigger it is drawn than the sphere it rolls as. Its thorns
+/// reach past that sphere, so they are sunk into whatever it rests on or
+/// rolls into (6 cm deep at the sculpted size) rather than balanced on
+/// their points; its husk and stem stay clear of it.
+const DRAWN_OVER: f32 = 1.1;
 
 /// Lobes round the pod, from stem to crown.
 const LOBES: u32 = 7;
@@ -708,7 +714,7 @@ impl Pod {
         );
         for (index, thorn) in self.thorns.iter().enumerate() {
             let key = index as u32;
-            // Most reach the sphere it rolls as; some stop short of it.
+            // Most reach out to `R`; some stop short of it.
             let lot = 0.5 + 0.5 * scatter(key, 41);
             let tip_out = if lot < 0.74 {
                 R
@@ -942,26 +948,32 @@ impl RollerDef {
         25.0
     }
 
-    /// Its look against the palette's slots, at [`SCULPTED_RADIUS`]: one
-    /// rigid part, about the middle of the sphere it rolls as.
+    /// Its look against the palette's slots, rolling as a sphere of
+    /// [`SCULPTED_RADIUS`] and drawn [`DRAWN_OVER`] bigger: one rigid
+    /// part, about the middle of that sphere.
     pub fn sculpt() -> Model {
         let pod = Pod::new();
         let husk = pod.husk();
         let [pith, seeds] = pod.seeds(&husk);
-        Model::flat(vec![ModelPart::new(vec![
+        let pod = Model::flat(vec![ModelPart::new(vec![
             pod.husk_skin(&husk),
             pith,
             seeds,
             pod.horn(),
             pod.stem(),
             pod.threads(),
-        ])])
+        ])]);
+        Self::scaled(&pod, DRAWN_OVER)
     }
 
     /// `sculpted` as a roller of `radius`.
     fn sized(sculpted: &Model, radius: f32) -> Model {
-        let scale = radius / SCULPTED_RADIUS;
-        let mut model = sculpted.clone();
+        Self::scaled(sculpted, radius / SCULPTED_RADIUS)
+    }
+
+    /// `model` `scale` times as big, about its middle.
+    fn scaled(model: &Model, scale: f32) -> Model {
+        let mut model = model.clone();
         let meshes = model.parts.iter_mut().flat_map(|part| &mut part.primitives);
         for vertex in meshes.flat_map(|mesh| &mut mesh.vertices) {
             vertex.pos *= scale;
@@ -1117,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn it_is_tens_of_thousands_of_triangles_and_rolls_on_the_tips_of_its_thorns() {
+    fn it_is_tens_of_thousands_of_triangles_and_rolls_on_thorns_sunk_into_the_ground() {
         let model = RollerDef::sculpt();
         let mut triangles = 0;
         for mesh in model.parts.iter().flat_map(|part| &part.primitives) {
@@ -1131,10 +1143,12 @@ mod tests {
             assert!(mesh.indices.iter().all(|index| *index < count));
             for vertex in &mesh.vertices {
                 assert!(vertex.pos.iter().all(|x| x.is_finite()));
-                // Nothing of it stands out of the sphere it collides as.
+                // Nothing of it but its thorns stands out of the sphere it
+                // collides as.
                 assert!(
-                    vertex.pos.norm() < SCULPTED_RADIUS + 1e-3,
-                    "part of it is {} m from its middle",
+                    mesh.material == Paint::Horn.id() || vertex.pos.norm() < SCULPTED_RADIUS,
+                    "{:?} is {} m from its middle",
+                    mesh.material,
                     vertex.pos.norm()
                 );
             }
@@ -1146,7 +1160,7 @@ mod tests {
         );
         let tips = furthest(&model, Paint::Horn);
         assert!(
-            (SCULPTED_RADIUS - tips).abs() < 1e-3,
+            (SCULPTED_RADIUS * DRAWN_OVER - tips).abs() < 1e-3,
             "its thorns reach {tips} m"
         );
     }
@@ -1178,7 +1192,7 @@ mod tests {
     fn a_roller_of_another_size_is_the_same_pod_scaled() {
         let sculpted = RollerDef::sculpt();
         let big = RollerDef::sized(&sculpted, 0.9);
-        assert!((furthest(&big, Paint::Horn) - 0.9).abs() < 2e-3);
+        assert!((furthest(&big, Paint::Horn) - 0.9 * DRAWN_OVER).abs() < 2e-3);
         assert_eq!(big.parts.len(), sculpted.parts.len());
     }
 }
