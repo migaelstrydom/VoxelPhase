@@ -26,8 +26,8 @@
 //! strikes with its own body, surging at its target once it is close
 //! (`Lunge`). Neither strikes a character that is down.
 //!
-//! A creature that wears a shell (`Shell`) loses it in shards to the blow
-//! that kills it.
+//! A creature that wears a shell (`Shell`) loses it in pieces to the blow
+//! that kills it; a roller, all shell, splits in two.
 //!
 //! The definitions of individual creatures — geometry, materials, physics —
 //! live in `crate::app::creatures`, mirroring the spawnables library.
@@ -56,7 +56,7 @@ pub use lobber::{
 pub use melee::{MeleeAttack, MeleeAttackSystem, StrikePhase};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
 pub use roller::{Drive, Lunge, LungePhase, Quarry, Roller, RollerLocomotionSystem};
-pub use shell::{Shell, ShellSystem};
+pub use shell::{Cracks, Shell, ShellSystem};
 pub use snap_trap::{Caught, Cycle, Hinge, Moment, SnapTrap, SnapTrapSystem, TrapPart, TrapRig};
 pub use swimmer::{Swimmer, SwimmerLocomotionSystem};
 pub use swing::Swing;

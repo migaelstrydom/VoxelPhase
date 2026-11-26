@@ -4,21 +4,19 @@
 //! brain, perception and steering layers wholesale and adds only a rolling
 //! body.
 //!
-//! **A roller cannot be killed.** It has no `Health` and no `Flammable`, so
-//! nothing in `crate::damage` touches it. You deal with one by outrunning it or
-//! by blowing a hole in the ground and stranding it — and since explosion
-//! knockback is applied to `Velocity` independently of damage, a grenade is
-//! still the tool for the job, just as a way to *move* the creature rather than
-//! to destroy it.
+//! **Only rock cracks a roller.** Its blows are judged as everything's are
+//! (`crate::harm`), and its husk is hard, so a stop on rock is sudden where
+//! the same stop on soil is not. Its [`STRENGTH`] is past anything it does to
+//! itself while it hunts, its full-speed charge into a rock wall included: a
+//! drop of over 4 m onto rock splits it in two along its seam (`Shell`),
+//! and no fall onto soil ever does. A grenade only moves it. You deal with one
+//! by outrunning it, by blowing a hole in the ground and stranding it, or by
+//! digging down to the rock and dropping it in: trapping a roller uses the
+//! terrain destruction the game is built around, where shooting it until it
+//! pops would use none of it.
 //!
-//! That is a deliberate design choice, not an unfinished one. It play-tests
-//! better than the alternative: trapping a roller uses the terrain destruction
-//! the game is built around, where shooting it until it pops uses none of it.
-//! It also avoids committing to a death model — corpses, ragdolls, respawns —
-//! before there is a reason to prefer one.
-//!
-//! The consequence to keep in mind is that rollers are permanent. Nothing
-//! despawns them, so a level's population only ever grows.
+//! A roller that is never cracked is never cleared away, so a level's
+//! population does not shrink by itself.
 //!
 //! It tumbles, so it has no front and no top, and is sculpted to be looked
 //! at from every side (`visual_bench roller`):
@@ -53,7 +51,8 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{AlertTelegraph, Brain, Lunge, Perception, Roller};
+use crate::creature::{AlertTelegraph, Brain, Cracks, Lunge, Perception, Roller, Shell};
+use crate::harm::{Band, Death, Harm, HarmConfig};
 use crate::model::{MeshPrimitive, Model, ModelPart, Transform};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
@@ -76,6 +75,17 @@ const R: f32 = SCULPTED_RADIUS;
 /// rolls into (6 cm deep at the sculpted size) rather than balanced on
 /// their points; its husk and stem stay clear of it.
 const DRAWN_OVER: f32 = 1.1;
+
+/// How sudden a blow it takes before its husk splits, m/s: past its own
+/// charge into stone at its lunge's speed (about 35), and reached by a drop
+/// of about 4.4 m onto rock. Husk on rock gives 2 mm, about 4.3 times the
+/// speed it stops from; soil gives fifteen times as much, so the same fall
+/// onto it is about four times gentler and never splits it.
+const STRENGTH: f32 = 40.0;
+
+/// Where its husk splits, the way round its stem from +Z: along the split
+/// down the furrow there, and straight across from it, in two.
+const SEAM: f32 = 0.0;
 
 /// Lobes round the pod, from stem to crown.
 const LOBES: u32 = 7;
@@ -1046,6 +1056,15 @@ impl Spawnable for RollerDef {
         let initial_pos = Point3::new(self.pos.0, surface_y + self.radius, self.pos.1);
 
         let model = self.look(materials);
+        let husk = Shell {
+            parts: (0..model.parts.len()).collect(),
+            cracks: Cracks::Halves {
+                seam: SEAM,
+                radius: self.radius,
+            },
+            density: DENSITY,
+            remains: None,
+        };
 
         let body_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
@@ -1072,10 +1091,7 @@ impl Spawnable for RollerDef {
         // It circles what it hunts at `CIRCLING`, always the same way round,
         // and attacks by its lunge: a boulder that turned back every second
         // and a half would read as one that cannot make up its mind.
-        // Relentless because a roller has no health to break off over —
-        // `next_behaviour` would reach the same conclusion from a missing
-        // `Health`, but saying it here means the intent survives someone later
-        // giving rollers health back.
+        // Relentless: a roller is whole or split, and never breaks off.
         let brain = Brain {
             strafe_interval: f32::INFINITY,
             ..Brain::hunter(CIRCLING).relentless()
@@ -1089,6 +1105,17 @@ impl Spawnable for RollerDef {
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
+            .with(Harm {
+                config: HarmConfig {
+                    heavy: STRENGTH,
+                    deadly: STRENGTH,
+                    shove_at_worst: Band::Deadly,
+                    ..HarmConfig::default()
+                },
+                death: Death::Dies { lingers: 0.0 },
+                ..Harm::default()
+            })
+            .with(husk)
             // Intent is the seam: `BrainSystem` writes it, `RollerLocomotionSystem`
             // reads it. Neither knows about the other.
             .with(CharacterIntent::default())

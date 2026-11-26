@@ -119,6 +119,10 @@ knock the player down knocks a walker down: it is flung, lies limp and gets
 up again. One that would kill the player kills it. An egg-walker's shell
 breaks under any blow that would knock the player down: it flies apart in
 shards that carry on as the shell was moving, and what was inside dies.
+Only rock cracks a roller. Its husk is hard, so nothing it does to itself
+while it hunts comes near breaking it, but dropped onto rock from over four
+metres it splits in two, and the halves fall open. No fall onto soil ever
+does it.
 
 ### How a knock looks
 
