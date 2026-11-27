@@ -13,6 +13,7 @@
 //!   Runoff     what has run down a limb from above
 //!   moved      a mesh turned and shifted: a part modelled in one frame, worn in another
 //!   surface_along  where a clay form's surface is, out from a point inside it
+//!                  (`surface_within` for a form more than two metres across)
 //! ```
 //!
 //! A fin is not clay: a web is thinner than any grid clay could be skinned
@@ -641,10 +642,21 @@ impl VertexPaint for Runoff {
 }
 
 /// Where `clay`'s surface is met, going out from `from` inside it along
-/// `along`.
+/// `along`, within two metres.
 pub fn surface_along(clay: &Clay, from: Vector3<f32>, along: Vector3<f32>) -> Vector3<f32> {
+    surface_within(clay, from, along, 2.0)
+}
+
+/// Where `clay`'s surface is met, going out from `from` inside it along
+/// `along`, within `reach` metres.
+pub fn surface_within(
+    clay: &Clay,
+    from: Vector3<f32>,
+    along: Vector3<f32>,
+    reach: f32,
+) -> Vector3<f32> {
     let along = along.normalize();
-    let (mut inside, mut outside) = (0.0, 2.0);
+    let (mut inside, mut outside) = (0.0, reach);
     for _ in 0..28 {
         let middle = 0.5 * (inside + outside);
         if clay.distance(from + along * middle) < 0.0 {

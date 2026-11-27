@@ -2,6 +2,7 @@ use specs::{World, WorldExt};
 
 use crate::aim::AimState;
 use crate::animation::critter::CritterAnimator;
+use crate::animation::fish::FishRig;
 use crate::animation::stilts::StiltAnimator;
 use crate::animation::{AnimationDebugConfig, CharacterAnimator};
 use crate::camera::{CameraConfig, FollowTarget};
@@ -40,7 +41,7 @@ use crate::objective::{Brazier, Goal, Hover, LevelProgress};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
 use crate::physics::PhysicsImpulseQueue;
 use crate::plants::PlantPiece;
-use crate::platform::MovingPlatform;
+use crate::platform::{FacesTravel, MovingPlatform};
 use crate::player::Player;
 use crate::projectile::{
     Grenade, GrenadeConfig, GrenadeCooldown, GrenadeModelResource, HeldGrenade, Lifetime,
@@ -115,6 +116,7 @@ impl WorldBuilder {
         world.register::<CharacterAnimator>();
         world.register::<CritterAnimator>();
         world.register::<StiltAnimator>();
+        world.register::<FishRig>();
         world.register::<Collectable>();
         world.register::<Hover>();
         world.register::<Goal>();
@@ -127,6 +129,7 @@ impl WorldBuilder {
         world.register::<DriveIntent>();
         world.register::<BodyMotion>();
         world.register::<MovingPlatform>();
+        world.register::<FacesTravel>();
         world.register::<Trampoline>();
         world.register::<Foliage>();
         world.register::<PlantPiece>();

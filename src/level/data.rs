@@ -30,8 +30,8 @@ use super::daylight::Daylight;
 use super::footprint::{Footprint, Support};
 
 use crate::app::creatures::{
-    BellCarrierDef, EggWalkerDef, FishDef, FishWalkerDef, FlyingFishDef, HeartCritterDef,
-    MusselDef, PeeperDef, PiperDef, RollerDef, StalkerDef, TurtleDef,
+    BellCarrierDef, EggWalkerDef, FerryFishDef, FishDef, FishWalkerDef, FlyingFishDef,
+    HeartCritterDef, MusselDef, PeeperDef, PiperDef, RollerDef, StalkerDef, TurtleDef,
 };
 use crate::app::spawnables::{
     BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, BrazierDef, CapsuleDef, CrateDef,
@@ -1509,6 +1509,25 @@ pub enum LevelObject {
         #[serde(default = "MovingPlatformDef::default_suspension")]
         suspension: DeckSuspension,
     },
+    /// FerryFish — a flatfish the size of a cart that swims through the air along
+    /// a patrol, a moving platform the player rides on its back. See
+    /// `src/app/creatures/ferry_fish/`.
+    FerryFish {
+        /// The patrol, where its middle passes, in order. Explicit Y, as a
+        /// platform's. It starts on the first, facing the second.
+        waypoints: Vec<(f32, f32, f32)>,
+        /// Wrap and go round again, or turn around at the end of the list.
+        #[serde(default = "FerryFishDef::default_looping")]
+        looping: RouteLoop,
+        #[serde(default = "FerryFishDef::default_speed")]
+        speed: f32,
+        /// Spin-up time in seconds, and with it how wide it corners.
+        #[serde(default = "FerryFishDef::default_spin_up")]
+        spin_up: f32,
+        /// How far its back tips under a player on its edge.
+        #[serde(default = "FerryFishDef::default_suspension")]
+        suspension: DeckSuspension,
+    },
     /// Spinning playground wheel anchored to terrain. Spins freely around Y.
     PlayWheel {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -1960,6 +1979,10 @@ impl LevelObject {
                 // making every caller handle a case a level should not author.
                 waypoints.first().map_or(Free(Point3::origin()), point),
             ),
+            LevelObject::FerryFish { waypoints, .. } => (
+                "FerryFish",
+                waypoints.first().map_or(Free(Point3::origin()), point),
+            ),
             LevelObject::PlayWheel { pos, .. } => ("PlayWheel", anchored(pos)),
             LevelObject::Seesaw { pos, .. } => ("Seesaw", anchored(pos)),
             LevelObject::Tetrahedron { pos, .. } => ("Tetrahedron", point(pos)),
@@ -2272,6 +2295,9 @@ impl LevelObject {
             LevelObject::MovingPlatform { half_extents, .. } => {
                 rect(half_extents.0, half_extents.2, 0.0)
             }
+            // Its deck: the disc of its body, its fins and wings overhead of
+            // nothing it is placed on.
+            LevelObject::FerryFish { .. } => rect(1.55, 2.2, 0.0),
             // Both stand on a single post or fulcrum; what reaches out sideways
             // is overhead and touches nothing.
             LevelObject::Pendulum { .. } => Point,
@@ -2399,6 +2425,7 @@ impl LevelObject {
             // would rotate the deck's footprint but not the direction it
             // travels. Turning it means turning `axis` too.
             | LevelObject::MovingPlatform { .. }
+            | LevelObject::FerryFish { .. }
             | LevelObject::VoussoirArch { .. }
             | LevelObject::Temple { .. } => Fixed,
             LevelObject::Dropped(inner) => inner.orientability(),
@@ -2517,7 +2544,8 @@ impl LevelObject {
             LevelObject::FlyingFish { pos } => p2(pos),
             LevelObject::Mussel { pos } => p2(pos),
             LevelObject::Pendulum { pos, .. } => p2(pos),
-            LevelObject::MovingPlatform { waypoints, .. } => {
+            LevelObject::MovingPlatform { waypoints, .. }
+            | LevelObject::FerryFish { waypoints, .. } => {
                 for waypoint in waypoints.iter_mut() {
                     p3(waypoint);
                 }
@@ -3049,6 +3077,20 @@ impl LevelObject {
                 speed: *speed,
                 spin_up: *spin_up,
                 density: *density,
+                suspension: *suspension,
+            }),
+
+            LevelObject::FerryFish {
+                waypoints,
+                looping,
+                speed,
+                spin_up,
+                suspension,
+            } => Box::new(FerryFishDef {
+                waypoints: waypoints.clone(),
+                looping: *looping,
+                speed: *speed,
+                spin_up: *spin_up,
                 suspension: *suspension,
             }),
 

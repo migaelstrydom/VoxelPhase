@@ -1,7 +1,7 @@
 //! Common geometry generation utilities.
 //!
 //! This module provides reusable mesh generation functions for
-//! procedural model creation.
+//! procedural model creation, and the convex hull of a cloud of points.
 
 mod capsule;
 mod cube;
@@ -10,6 +10,7 @@ mod dome;
 mod ellipsoid_rings;
 mod fissured_shell;
 mod heart;
+mod hull;
 mod icosphere;
 mod platonic;
 mod sphere;
@@ -26,6 +27,7 @@ pub use fissured_shell::{
     generate_fissured_shell, FissureBand, FissuredShell, FissuredShellConfig,
 };
 pub use heart::{generate_heart, HeartSpec};
+pub use hull::convex_hull;
 pub use icosphere::{generate_geodesic, generate_icosphere, Icosphere};
 pub use platonic::{PlatonicSolid, Polyhedron};
 pub use sphere::{

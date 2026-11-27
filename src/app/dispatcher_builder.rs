@@ -2,6 +2,7 @@ use specs::Dispatcher;
 
 use crate::aim::AimPredictionSystem;
 use crate::animation::critter::{CritterAnimationSystem, CritterProbeConfigSystem};
+use crate::animation::fish::FishRigSystem;
 use crate::animation::stilts::{StiltAnimationSystem, StiltProbeConfigSystem};
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
 use crate::character::ledge::LedgeSensorSystem;
@@ -207,6 +208,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "stilt_animation",
             &["sensor_probe", "contact_grounding", "melee_attack"],
         )
+        // A fish's fins, wings and eyes are drawn from this frame's speed.
+        .with(FishRigSystem, "fish_rig", &["physics_sync"])
         // Catching happens on this frame's synced positions, so a critter
         // caught at a sprint is caught where the player saw it.
         .with(CollectionSystem, "collection", &["physics_sync"])

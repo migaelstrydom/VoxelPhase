@@ -86,7 +86,7 @@ pub use jack::JackDef;
 pub use jenga::JengaDef;
 pub use menhir::MenhirDef;
 pub use metal_cube::{Metal, MetalCubeDef};
-pub use moving_platform::MovingPlatformDef;
+pub use moving_platform::{MovingPlatformDef, PoweredBody};
 pub use octahedron::OctahedronDef;
 pub use pendulum::PendulumDef;
 pub use plank_bridge::PlankBridgeDef;

@@ -2,6 +2,7 @@
 
 mod contract;
 mod driver;
+mod ferry_scenarios;
 mod harm_scenarios;
 mod ledge_scenarios;
 mod pilot;

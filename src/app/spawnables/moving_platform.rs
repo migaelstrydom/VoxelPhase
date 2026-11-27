@@ -20,10 +20,14 @@
 //! switched on, so a platform that loses its `Actuator` component — the same
 //! trick `DeathSystem` uses on the player — stops being a platform and becomes
 //! a falling box.
+//!
+//! [`PoweredBody`] is the part of that every platform shares, whatever it
+//! looks like: the body, its suspension and its motor. The striped deck here
+//! is one look on it; the ferry fish (`app::creatures`) is another.
 
-use nalgebra::{Point3, UnitVector3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector3};
 use serde::Deserialize;
-use specs::{Builder, Entity, World, WorldExt};
+use specs::{Builder, Entity, EntityBuilder, World, WorldExt};
 
 use super::box_object::create_box_material_for_style;
 use super::shared::finish::ColliderSurface;
@@ -166,34 +170,87 @@ impl Spawnable for MovingPlatformDef {
             .map(|&(x, y, z)| Vector3::new(x, y, z))
             .collect();
         let from = waypoints.first().copied().unwrap_or_else(Vector3::zeros);
-        let pos = Point3::from(from);
         let half_extents = Vector3::new(
             self.half_extents.0,
             self.half_extents.1,
             self.half_extents.2,
         );
         let model = cuboid_model(half_extents, materials[0]);
-        let tuning = self.suspension.tune(&half_extents);
+        let body = PoweredBody {
+            at: Point3::from(from),
+            facing: UnitQuaternion::identity(),
+            suspension: self.suspension,
+            reach: half_extents,
+        };
+        let platform = MovingPlatform::new(
+            waypoints,
+            self.looping,
+            SeekMotion {
+                speed: self.speed,
+                tau: self.spin_up,
+            },
+        );
+        let collider = ColliderDesc::box_shape(half_extents).with_physical_surface(self.surface());
 
+        vec![body
+            .spawn(
+                world,
+                vec![collider],
+                platform,
+                Actuator::medium(MOTOR_MAX_ACCEL, 0.0),
+            )
+            .with(ModelInstance::new(model))
+            .with(Renderable)
+            .build()]
+    }
+}
+
+/// What every powered platform is, whatever it looks like: a dynamic body
+/// with nothing anchoring it, held upright by its suspension, under a motor
+/// that patrols a route. Gravity stays on, so one that loses its motor
+/// falls.
+pub struct PoweredBody {
+    /// Where it starts: its centre of mass, which is its origin.
+    pub at: Point3<f32>,
+    /// Which way it is turned to start with, about the world's up.
+    pub facing: UnitQuaternion<f32>,
+    /// How its deck answers a load, and how hard it is to slew.
+    pub suspension: DeckSuspension,
+    /// Half the box its deck fills, across, through and along: the lever a
+    /// load on its edge stands at.
+    pub reach: Vector3<f32>,
+}
+
+impl PoweredBody {
+    /// The platform's entity: its body, built of `colliders` about its
+    /// origin, patrolling as `platform` says under `motor`. Its look is the
+    /// caller's to add.
+    pub fn spawn<'w>(
+        &self,
+        world: &'w mut World,
+        colliders: Vec<ColliderDesc>,
+        platform: MovingPlatform,
+        motor: Actuator,
+    ) -> EntityBuilder<'w> {
+        let tuning = self.suspension.tune(&self.reach);
         let body_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
 
             // Linear damping is left at zero: the motor already sets the
             // speed, and damping would only fight it. Angular damping is the
-            // suspension's, and damps only the wobble — the motor drives
-            // through the centre of mass and has no angular authority to lose.
-            // Gravity stays on so an unpowered platform falls.
+            // suspension's, and damps only the wobble. Gravity stays on so an
+            // unpowered platform falls.
             let body_desc = RigidBodyDesc::dynamic()
-                .position(pos)
+                .position(self.at)
+                .rotation(self.facing)
                 .gravity_scale(1.0)
                 .linear_damping(0.0)
                 .angular_damping(tuning.angular_damping);
 
             let body_handle = physics.world.create_body(body_desc);
-            physics.world.attach_collider(
-                body_handle,
-                ColliderDesc::box_shape(half_extents).with_physical_surface(self.surface()),
-            );
+            for collider in colliders {
+                physics.world.attach_collider(body_handle, collider);
+            }
 
             // Yaw is the axis `KeepUpright` leaves free, so the only thing
             // opposing a slew is the deck's own inertia. Scaling it here rather
@@ -218,27 +275,15 @@ impl Spawnable for MovingPlatformDef {
             body_handle
         };
 
-        let platform = MovingPlatform::new(
-            waypoints,
-            self.looping,
-            SeekMotion {
-                speed: self.speed,
-                tau: self.spin_up,
-            },
-        );
-
-        vec![world
+        world
             .create_entity()
-            .with(Position(from))
+            .with(Position(self.at.coords))
             .with(Velocity(Vector3::zeros()))
-            .with(Orientation(nalgebra::UnitQuaternion::identity()))
+            .with(Orientation(self.facing))
             .with(RigidBodyComponent(body_handle))
-            .with(Actuator::medium(MOTOR_MAX_ACCEL, 0.0))
+            .with(motor)
             .with(DriveIntent::default())
             .with(BodyMotion::default())
             .with(platform)
-            .with(ModelInstance::new(model))
-            .with(Renderable)
-            .build()]
     }
 }

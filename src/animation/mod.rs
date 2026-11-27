@@ -13,11 +13,16 @@
 //! all: feet, probes, and the frame they are measured in. Any two-legged
 //! thing can own a `LeggedLocomotion` and draw whatever rig it likes around
 //! the feet that come out of it.
+//!
+//! `critter`, `stilts` and `fish` are the rigs of things that are not the
+//! player: a hopping heart, the walkers on stilts, and a fish's fins, wings
+//! and eyes.
 
 mod animator;
 mod config;
 pub mod critter;
 mod debug_config;
+pub mod fish;
 mod foot_placer;
 pub mod humanoid;
 mod legged;

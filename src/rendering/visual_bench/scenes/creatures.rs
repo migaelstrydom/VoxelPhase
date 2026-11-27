@@ -20,8 +20,8 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 use crate::animation::stilts::{Dress, Mood, StiltAnimator, StiltRigConfig};
 use crate::app::creatures::{
-    creature_materials, BellCarrierDef, EggWalkerDef, Exhibit, FishWalkerDef, FlyingFishDef,
-    MusselDef, PeeperDef, PiperDef, RollerDef, StalkerDef,
+    creature_materials, BellCarrierDef, EggWalkerDef, Exhibit, FerryFishDef, FishWalkerDef,
+    FlyingFishDef, MusselDef, PeeperDef, PiperDef, RollerDef, StalkerDef,
 };
 use crate::character::{CharacterIntent, Grounding};
 use crate::core::error::EngineResult;
@@ -50,6 +50,8 @@ pub enum Creature {
     Piper,
     FlyingFish,
     Mussel,
+    /// The fish that ferries the player: a platform, so not in the row.
+    FerryFish,
     /// All of them, in a row.
     Bestiary,
 }
@@ -87,6 +89,7 @@ impl Creature {
             Creature::Piper => PiperDef::exhibits(),
             Creature::FlyingFish => FlyingFishDef::exhibits(),
             Creature::Mussel => MusselDef::exhibits(),
+            Creature::FerryFish => FerryFishDef::exhibits(),
             _ => Vec::new(),
         }
     }
@@ -329,6 +332,30 @@ fn exhibit_shots(exhibits: &[Exhibit]) -> Vec<SceneShot> {
     shots
 }
 
+/// The shots of the ferry fish: its exhibits as any creature's, then as
+/// the player meets it: from a ledge above as it comes to be boarded, from
+/// under it against the sky, and side on.
+fn ferry_shots(exhibits: &[Exhibit]) -> Vec<SceneShot> {
+    let mut shots = exhibit_shots(exhibits);
+    let Some(gliding) = exhibits.first() else {
+        return shots;
+    };
+    let middle = Point3::new(0.0, gliding.lift, 0.0);
+    let meshes = || {
+        let mut meshes = posed_meshes(&gliding.model, &gliding.poses, middle.coords);
+        meshes.extend(shaped_meshes(&gliding.shaped, middle.coords));
+        meshes
+    };
+    for (label, eye) in [
+        ("boarding", Point3::new(3.5, 5.2, -7.5)),
+        ("under", Point3::new(2.5, 0.25, 4.0)),
+        ("side", Point3::new(9.5, 2.2, 0.5)),
+    ] {
+        shots.push(shot(label, eye, middle, meshes()));
+    }
+    shots
+}
+
 impl VisualScene for Creature {
     fn name(&self) -> &str {
         match self {
@@ -341,6 +368,7 @@ impl VisualScene for Creature {
             Creature::Piper => "piper",
             Creature::FlyingFish => "flying_fish",
             Creature::Mussel => "mussel",
+            Creature::FerryFish => "ferry_fish",
             Creature::Bestiary => "bestiary",
         }
     }
@@ -355,6 +383,9 @@ impl VisualScene for Creature {
     fn shots(&self, _ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
         if *self == Creature::Bestiary {
             return Ok(vec![row()]);
+        }
+        if *self == Creature::FerryFish {
+            return Ok(ferry_shots(&self.exhibits()));
         }
         Ok(match self.walker() {
             Some((rig, dress)) => walker_shots(rig, &dress),

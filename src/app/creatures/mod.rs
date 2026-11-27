@@ -31,6 +31,8 @@
 //!   Mussel         does not move         snaps shut on whoever steps in
 //!   Fish, Turtle   swimming              harmless; they keep clear
 //!   HeartCritter   hopping               a collectable that runs away
+//!   FerryFish      flying, on a patrol   not a foe: a moving platform the
+//!                                        player rides across the garden
 //! ```
 //!
 //! The five on stilts share one rig, body and spawn (`stilt_walker`,
@@ -46,6 +48,7 @@ mod anatomy;
 mod bell_carrier;
 mod bird_anatomy;
 mod egg_walker;
+mod ferry_fish;
 mod fish;
 mod fish_anatomy;
 mod fish_walker;
@@ -65,6 +68,7 @@ mod turtle;
 
 pub use bell_carrier::BellCarrierDef;
 pub use egg_walker::EggWalkerDef;
+pub use ferry_fish::FerryFishDef;
 pub use fish::FishDef;
 pub use fish_walker::FishWalkerDef;
 pub use flying_fish::FlyingFishDef;

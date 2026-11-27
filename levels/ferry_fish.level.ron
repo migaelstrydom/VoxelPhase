@@ -1,0 +1,126 @@
+// Ferry Fish — a strait of water between two headlands, and a fish the size of
+// a cart that swims the air round it with whoever is on its back.
+//
+//                    N (+z)
+//     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+//     ▓▓  north headland, top 5 m  ◎ ▓▓      brazier
+//     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓      cliff edge z ≈ +10
+//        ~ ╭◀═════ fish ════════╮ ~        it passes 2.8 m off each cliff,
+//        ~ │     the strait     │ ~        its deck level with the tops
+//        ~ ╰═════════ fish ═══▶╯ ~
+//     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓      cliff edge z ≈ −10
+//     ▓▓  south headland     ☺      ▓▓      spawn
+//     ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+//
+// The strait is 20 m: past any jump. Wait on the south cliff for the fish to
+// come by heading east, hop the three metres onto its back, and ride
+// it round to the north cliff. Fall off and it is a swim.
+Level(
+    name: "Ferry Fish",
+
+    segments: [
+        (
+            name: "strait",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (-40.0, -10.0, -40.0), max: (40.0, 16.0, 40.0)),
+                base_height: -4.0,
+                material_layers: [
+                    (depth: 0.6,   material: Grass),
+                    (depth: 2.5,   material: Dirt),
+                    (depth: 999.0, material: Limestone),
+                ],
+                surface_bands: [
+                    // Cliffs are bare stone.
+                    (steeper_than: Some(1.5), layers: [(depth: 999.0, material: Limestone)]),
+                    // The strait's bed and its shingle are sand.
+                    (below: Some(0.6), layers: [
+                        (depth: 1.5,   material: Sand),
+                        (depth: 999.0, material: Limestone),
+                    ]),
+                ],
+
+                features: [
+                    TerrainRoughness(frequency: 0.05, amplitude: 0.8, octaves: 2, seed: 5),
+
+                    // The south headland: a cliff onto the strait along
+                    // z = −10, rolling lawn behind it.
+                    Landmass(
+                        outline: [(-38.0, -10.0), (38.0, -10.0), (38.0, -38.0), (-38.0, -38.0)],
+                        shore_height: 4.6, height: 5.0, rise: 3.0, skirt: 0.0,
+                        warp: 0.4, relief: 0.5, seed: 1,
+                    ),
+                    // The north headland, its cliff along z = +10.
+                    Landmass(
+                        outline: [(-38.0, 10.0), (-38.0, 38.0), (38.0, 38.0), (38.0, 10.0)],
+                        shore_height: 4.6, height: 5.0, rise: 3.0, skirt: 0.0,
+                        warp: 0.4, relief: 0.5, seed: 2,
+                    ),
+                ],
+            ),
+
+            objects: [
+                // Round the strait: east along the south cliff, west along
+                // the north. Its deck's top is level with the cliff tops; its
+                // deck's edge passes 2.8 m off them and its wingtips 0.8 m.
+                FerryFish(
+                    // A stadium: east along the south cliff, round the east
+                    // end, west along the north cliff, round the west end.
+                    // Thirty degrees a waypoint round each end, so it banks
+                    // round rather than stopping to turn.
+                    waypoints: [
+                        (-9.00, 4.75, -5.60),
+                        (9.00, 4.75, -5.60),
+                        (11.80, 4.75, -4.85),
+                        (13.85, 4.75, -2.80),
+                        (14.60, 4.75, 0.00),
+                        (13.85, 4.75, 2.80),
+                        (11.80, 4.75, 4.85),
+                        (9.00, 4.75, 5.60),
+                        (-9.00, 4.75, 5.60),
+                        (-11.80, 4.75, 4.85),
+                        (-13.85, 4.75, 2.80),
+                        (-14.60, 4.75, 0.00),
+                        (-13.85, 4.75, -2.80),
+                        (-11.80, 4.75, -4.85),
+                    ],
+                ),
+
+                Dropped(Brazier(pos: (0.0, 6.5, 20.0), radius: 2.0)),
+
+                Tree(pos: (-14.0, -18.0), height: 5.0, crown_radius: 1.2, crowns: 3),
+                Tree(pos: (16.0, -22.0), height: 4.4, crown_radius: 1.1),
+                Cypress(pos: (-6.0, -24.0), height: 5.6, radius: 0.65),
+                Cypress(pos: (-3.5, -25.5), height: 4.6, radius: 0.55),
+                Shrub(pos: (9.0, -15.0), radius: 0.9),
+                Shrub(pos: (-20.0, -14.0), radius: 0.8),
+
+                Tree(pos: (12.0, 20.0), height: 5.0, crown_radius: 1.2, crowns: 3),
+                Tree(pos: (-15.0, 24.0), height: 4.2, crown_radius: 1.0),
+                Cypress(pos: (5.0, 27.0), height: 5.2, radius: 0.6),
+                Shrub(pos: (-8.0, 16.0), radius: 0.9),
+            ],
+        ),
+    ],
+
+    placements: [Root(segment: "strait")],
+
+    player_spawn: (0.0, 7.0, -18.0),
+
+    meadow: Some(()),
+
+    daylight: (
+        sun_bearing: 125.0,
+        sun_elevation: 26.0,
+        sun_colour: (1.0, 0.78, 0.52),
+        sun_intensity: 2.0,
+        fill_colour: (0.06, 0.06, 0.08),
+        visibility: Some(160.0),
+    ),
+
+    water: Some((
+        ocean: Some((level: 0.0)),
+        bodies: [],
+    )),
+)

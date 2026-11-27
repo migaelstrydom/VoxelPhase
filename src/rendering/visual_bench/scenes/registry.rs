@@ -28,6 +28,7 @@ pub fn all_scenes() -> Vec<Box<dyn VisualScene>> {
         Box::new(Creature::Roller),
         Box::new(Creature::Piper),
         Box::new(Creature::FlyingFish),
+        Box::new(Creature::FerryFish),
         Box::new(Creature::Mussel),
         Box::new(Marble),
         Box::new(GradeSweep),

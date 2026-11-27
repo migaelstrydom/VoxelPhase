@@ -42,5 +42,6 @@
         (level: "ledge_garden.level.ron", triangles: 252648, open_edges: 0),
         (level: "shrub_garden.level.ron", triangles: 245296, open_edges: 0),
         (level: "traversal_garden.level.ron", triangles: 433596, open_edges: 0),
+        (level: "ferry_fish.level.ron", triangles: 148768, open_edges: 0),
     ],
 )

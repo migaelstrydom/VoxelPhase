@@ -35,7 +35,8 @@ use crate::anim_viewer::{Beat, Script};
 
 use super::scenario::{CameraRig, Judged, Scenario};
 use super::{
-    harm_scenarios, ledge_scenarios, room_scenarios, shrub_scenarios, traversal_scenarios, turning,
+    ferry_scenarios, harm_scenarios, ledge_scenarios, room_scenarios, shrub_scenarios,
+    traversal_scenarios, turning,
 };
 
 const LEVEL: &str = "levels/swim_test.level.ron";
@@ -524,6 +525,7 @@ pub fn catalogue() -> Vec<Scenario> {
             judged: Judged::Motion,
         },
     ];
+    scenarios.extend(ferry_scenarios::catalogue());
     scenarios.extend(harm_scenarios::catalogue());
     scenarios.extend(ledge_scenarios::catalogue());
     scenarios.extend(shrub_scenarios::catalogue());
