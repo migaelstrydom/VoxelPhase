@@ -4,9 +4,10 @@
 //!   PoweredBody (deck hull + eye balls) ── MovingPlatform ── FacesTravel
 //!     the same body, suspension and          its patrol        nose first
 //!     motor every platform has
-//!   PosedModel (body, wings, eyes) ─┐
+//!   PosedModel (body, wings, eyes, ─┐
+//!               jaw)                │
 //!   ProceduralMesh (fringe, tail) ──┴── FishRig: the wave, the wingbeat,
-//!                                        the eyes' glances
+//!                                        the eyes' glances, its gulps
 //! ```
 
 use std::sync::Arc;
@@ -19,8 +20,8 @@ use super::super::likeness;
 use super::super::palette::{self, Paint, BESTIARY};
 use super::super::sculpted::Exhibit;
 use super::form::{self, Deck, EYE_REACH};
-use super::sculpt::{self, EYE_PARTS, LEFT_WING, RIGHT_WING};
-use crate::animation::fish::{FinWave, FishRig, RippledFin, RovingEye};
+use super::sculpt::{self, EYE_PARTS, JAW, LEFT_WING, RIGHT_WING};
+use crate::animation::fish::{FinWave, FishRig, GulpingJaw, RippledFin, RovingEye};
 use crate::app::spawnables::shared::finish::ColliderSurface;
 use crate::app::spawnables::{MaterialCtx, PoweredBody, Spawnable};
 use crate::components::{PoseFrame, PosedModel, ProceduralMesh, Renderable};
@@ -85,6 +86,16 @@ const WING_LOWER: f32 = 0.5;
 const WING_FEATHER: f32 = 0.12;
 const GLIDE_BEATS: f32 = 0.32;
 const HARD_BEATS: f32 = 0.75;
+
+/// How its jaw works: a slow gulp of air every few seconds, now and then
+/// two together, how wide (radians) and how long (s); and a little with
+/// every breath between, how far and how often (a second).
+const GULP_WIDE: f32 = 0.55;
+const GULP_FOR: f32 = 1.7;
+const GULP_BETWEEN: (f32, f32) = (3.5, 9.0);
+const GULP_AGAIN: f32 = 0.3;
+const BREATH: f32 = 0.05;
+const BREATHS: f32 = 0.4;
 
 /// How far its eyes turn from where they look at rest, radians; how much
 /// of their glances each gives whoever is near; and how far off that is.
@@ -185,11 +196,25 @@ impl FerryFishDef {
                 seed: 261 + eye as u32,
             })
             .collect();
-        FishRig::new(fins, WAVE, Some(Self::wing_beat()), eyes, speed, SIGHT)
+        let (pivot, axis) = sculpt::jaw_hinge();
+        let jaw = GulpingJaw {
+            part: JAW,
+            pivot,
+            axis,
+            wide: GULP_WIDE,
+            breath: BREATH,
+            breath_rate: BREATHS,
+            gulp_for: GULP_FOR,
+            between: GULP_BETWEEN,
+            again: GULP_AGAIN,
+            seed: 271,
+        };
+        FishRig::new(fins, WAVE, Some(Self::wing_beat()), eyes, speed, SIGHT).with_jaw(jaw)
     }
 
     /// The states tools show it in: gliding, its wings at the top of a
-    /// beat and at the bottom, with its fins rippling as they do at speed.
+    /// beat and at the bottom, with its fins rippling as they do at speed;
+    /// and its mouth wide in a gulp.
     pub fn exhibits() -> Vec<Exhibit> {
         let model = likeness::model_sculpted(KIND, Self::sculpt);
         let fins = FINS
@@ -199,24 +224,32 @@ impl FerryFishDef {
         let mut rig = Self::rig(fins, Self::default_speed());
         // A wingbeat at cruise is about 1.3 s: shown a quarter apart.
         let beat = 1.0 / HARD_BEATS;
-        [("gliding", 0.3), ("wings_down", 0.5), ("wings_up", 0.5)]
-            .into_iter()
-            .map(|(name, share)| {
-                rig.advance(beat * share, Self::default_speed(), None);
-                let mut poses = vec![Default::default(); model.parts.len()];
-                rig.pose(&mut poses);
-                let mut shaped: Vec<MeshPrimitive> = Vec::new();
-                rig.shape(&mut shaped);
-                Exhibit {
-                    name,
-                    model: model.clone(),
-                    poses,
-                    shaped,
-                    lift: 1.6,
-                    reach: 2.3,
-                }
-            })
-            .collect()
+        [
+            ("gliding", beat * 0.3, false),
+            ("wings_down", beat * 0.5, false),
+            ("wings_up", beat * 0.5, false),
+            ("gulping", GULP_FOR * 0.42, true),
+        ]
+        .into_iter()
+        .map(|(name, wait, gulping)| {
+            if gulping {
+                rig.gulp();
+            }
+            rig.advance(wait, Self::default_speed(), None);
+            let mut poses = vec![Default::default(); model.parts.len()];
+            rig.pose(&mut poses);
+            let mut shaped: Vec<MeshPrimitive> = Vec::new();
+            rig.shape(&mut shaped);
+            Exhibit {
+                name,
+                model: model.clone(),
+                poses,
+                shaped,
+                lift: 1.6,
+                reach: 2.3,
+            }
+        })
+        .collect()
     }
 }
 

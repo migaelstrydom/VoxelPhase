@@ -400,6 +400,8 @@ pub struct Clay {
     lumps: Vec<Pressed>,
     /// Lumps carved out, each with how far its edge is rounded off.
     cuts: Vec<(Lump, f32)>,
+    /// Lumps the form is kept within: whatever lies outside any is gone.
+    within: Vec<Lump>,
     relief: Vec<Relief>,
     /// Thickness of the shell kept, if the form is hollow.
     shell: Option<f32>,
@@ -438,6 +440,14 @@ impl Clay {
         self
     }
 
+    /// Keep only what lies within `lump`, cut off sharp at its surface: a
+    /// piece of the form to skin apart from the rest (finer, say), which
+    /// the rest, with `lump` cut from it, meets face to face.
+    pub fn within(mut self, lump: Lump) -> Self {
+        self.within.push(lump);
+        self
+    }
+
     /// Raise `relief` on the surface.
     pub fn relief(mut self, relief: Relief) -> Self {
         self.relief.push(relief);
@@ -466,6 +476,9 @@ impl Clay {
         for (cut, blend) in &self.cuts {
             d = -smooth_min(-d, cut.distance(p), *blend);
         }
+        for keep in &self.within {
+            d = d.max(keep.distance(p));
+        }
         d
     }
 
@@ -493,7 +506,13 @@ impl Clay {
             high = high.sup(&(centre + Vector3::repeat(radius)));
         }
         let swell: f32 = self.relief.iter().map(Relief::reach).sum();
-        (low.add_scalar(-swell), high.add_scalar(swell))
+        let (mut low, mut high) = (low.add_scalar(-swell), high.add_scalar(swell));
+        for keep in &self.within {
+            let (centre, radius) = keep.bounds();
+            low = low.sup(&(centre - Vector3::repeat(radius)));
+            high = high.inf(&(centre + Vector3::repeat(radius)));
+        }
+        (low, high)
     }
 
     /// The form's skin, cut from a grid of about `spacing` metres, in
@@ -880,6 +899,26 @@ mod tests {
             .filter(|v| v.pos.norm() < 0.385)
             .count();
         assert!(inner > mesh.vertices.len() / 4, "no inside wall");
+    }
+
+    #[test]
+    fn a_piece_kept_within_a_lump_meets_the_rest_cut_from_it_face_to_face() {
+        let whole = Clay::new(0.0).add(Lump::ball(0.4, (0.0, 0.0, 0.0)), WHITE);
+        let keeper = Lump::ball(0.25, (0.4, 0.0, 0.0));
+        let piece = whole.clone().within(keeper).skin(0.01, MaterialId(0));
+        let rest = whole.clone().cut(keeper, 0.0).skin(0.01, MaterialId(0));
+        assert!(closed(&piece));
+        assert!(closed(&rest));
+        // Only what is in both, and skinned from no bigger a grid than it.
+        assert!(piece
+            .vertices
+            .iter()
+            .all(|v| v.pos.norm() < 0.41 && (v.pos - Vector3::x() * 0.4).norm() < 0.26));
+        assert!(piece.vertices.len() < rest.vertices.len());
+        // Together they hold what the whole did.
+        let full = enclosed(&whole.skin(0.01, MaterialId(0)));
+        let parts = enclosed(&piece) + enclosed(&rest);
+        assert!((parts - full).abs() < 0.01 * full, "{parts} against {full}");
     }
 
     #[test]

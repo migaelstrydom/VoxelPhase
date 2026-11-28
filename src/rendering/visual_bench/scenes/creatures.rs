@@ -334,24 +334,32 @@ fn exhibit_shots(exhibits: &[Exhibit]) -> Vec<SceneShot> {
 
 /// The shots of the ferry fish: its exhibits as any creature's, then as
 /// the player meets it: from a ledge above as it comes to be boarded, from
-/// under it against the sky, and side on.
+/// under it against the sky, and side on; and its mouth close to, shut and
+/// in a gulp.
 fn ferry_shots(exhibits: &[Exhibit]) -> Vec<SceneShot> {
     let mut shots = exhibit_shots(exhibits);
+    let meshes = |exhibit: &Exhibit| {
+        let middle = Vector3::new(0.0, exhibit.lift, 0.0);
+        let mut meshes = posed_meshes(&exhibit.model, &exhibit.poses, middle);
+        meshes.extend(shaped_meshes(&exhibit.shaped, middle));
+        meshes
+    };
     let Some(gliding) = exhibits.first() else {
         return shots;
     };
     let middle = Point3::new(0.0, gliding.lift, 0.0);
-    let meshes = || {
-        let mut meshes = posed_meshes(&gliding.model, &gliding.poses, middle.coords);
-        meshes.extend(shaped_meshes(&gliding.shaped, middle.coords));
-        meshes
-    };
     for (label, eye) in [
         ("boarding", Point3::new(3.5, 5.2, -7.5)),
         ("under", Point3::new(2.5, 0.25, 4.0)),
         ("side", Point3::new(9.5, 2.2, 0.5)),
     ] {
-        shots.push(shot(label, eye, middle, meshes()));
+        shots.push(shot(label, eye, middle, meshes(gliding)));
+    }
+    let mouth = middle + Vector3::new(0.03, -0.05, 2.15);
+    let close = middle + Vector3::new(0.75, 0.15, 3.3);
+    shots.push(shot("mouth_shut", close, mouth, meshes(gliding)));
+    if let Some(gulping) = exhibits.iter().find(|exhibit| exhibit.name == "gulping") {
+        shots.push(shot("mouth_open", close, mouth, meshes(gulping)));
     }
     shots
 }

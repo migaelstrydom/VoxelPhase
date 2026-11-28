@@ -3,10 +3,13 @@
 //! ```text
 //!   body   its back sand, spotted vermilion, each spot ringed pale and the
 //!          whole freckled; its belly mother-of-pearl; the edge of a gill
-//!          cover, a ridge of knobs behind its eyes, its lateral line; a
-//!          crooked mouth of thick lips, a gilt ring through the lower  (part 0)
+//!          cover, a ridge of knobs behind its eyes, its lateral line;
+//!          over it, its muzzle skinned finer: a thick upper lip, the
+//!          socket its jaw sits in, and the wet pocket of its mouth  (part 0)
 //!   wings  a fan of long rays under a web as pale as pearl           (parts 1, 2)
 //!   eyes   gold, each on a turret of its own                        (parts 3, 4)
+//!   jaw    its chin and thick lower lip, a gilt ring through it,    (part 5)
+//!          turned on the corners of its mouth to gulp
 //!   fins   its fringe down either edge and its tail: `Ripple`s the rig
 //!          swings, drawn apart from the model
 //! ```
@@ -19,7 +22,7 @@ use std::f32::consts::PI;
 use nalgebra::{UnitQuaternion, Vector3};
 
 use super::super::fish_anatomy::{
-    flay, glass_eye, moved, point, surface_along, Crevices, Fin, FinPaint, GlassLook, Ray,
+    glass_eye, moved, point, surface_along, Crevices, Fin, FinPaint, GlassLook, Ray,
 };
 use super::super::palette::Paint;
 use super::form::{self, Deck, EYES, EYE_RADIUS, SAND, SNOUT, TAIL_ROOT};
@@ -31,14 +34,17 @@ use crate::rendering::material::MaterialId;
 use crate::rendering::vertex::Vertex;
 use crate::utils::noise::fbm_perlin_3d;
 
-/// The parts of its model: the body, a wing each side, and an eye each.
+/// The parts of its model: the body, a wing each side, an eye each, and
+/// its lower jaw.
 pub const BODY: usize = 0;
 pub const RIGHT_WING: usize = 1;
 pub const LEFT_WING: usize = 2;
 pub const EYE_PARTS: [usize; 2] = [3, 4];
+pub const JAW: usize = 5;
 
 /// Side of the grid its body is skinned from, and its smaller pieces, m.
 const BODY_GRAIN: f32 = 0.017;
+const MOUTH_GRAIN: f32 = 0.01;
 const RING_GRAIN: f32 = 0.0045;
 
 /// Its belly (linear): pale as pearl, and its lips.
@@ -52,12 +58,48 @@ const GILT: (f32, f32, f32) = (0.85, 0.6, 0.28);
 const SPOT_HEART: (f32, f32, f32) = (2.25, 0.8, 0.34);
 const SPOT_RING: (f32, f32, f32) = (1.45, 1.4, 1.25);
 
-/// The crooked line of its mouth: the corner on −X and on +X; how far
-/// forward and how high each lip pouts at its middle, and how thick it is
-/// there.
+/// The crooked line of its mouth: the corner on −X and on +X, which its
+/// jaw turns on; how far forward and how high each lip pouts at its
+/// middle, and how thick it is there.
 const MOUTH_CORNERS: [(f32, f32, f32); 2] = [(-0.12, 0.05, 1.98), (0.22, -0.06, 1.96)];
 const UPPER_LIP: ((f32, f32, f32), f32) = ((0.04, 0.07, 2.24), 0.065);
 const LOWER_LIP: ((f32, f32, f32), f32) = ((0.07, -0.07, 2.22), 0.078);
+
+/// Ellipsoids in the frame of its mouth (across it toward its +X corner,
+/// up, and forward, about the middle of its corners), radii and centre:
+/// its muzzle, which holds the whole of its mouth, open or shut, skinned
+/// finer than the rest of its body and laid over it; its chin, under its
+/// lower lip and jutting below and ahead of its snout so that its jaw
+/// reads as one; and the pocket of its mouth behind its lips, roofed over
+/// the chin.
+const MUZZLE: ((f32, f32, f32), (f32, f32, f32)) = ((0.34, 0.28, 0.34), (0.0, -0.03, 0.08));
+const CHIN: ((f32, f32, f32), (f32, f32, f32)) = ((0.21, 0.12, 0.19), (0.0, -0.1, 0.0));
+const POCKET: ((f32, f32, f32), (f32, f32, f32)) = ((0.16, 0.065, 0.15), (0.0, 0.0, -0.02));
+/// How much bigger than its jaw the socket cut for it is, m: as much as
+/// the jaw's skin is roughened by and the muzzle stands proud, so that the
+/// jaw never stands proud of the socket's walls.
+const SOCKET_ROOM: f32 = 0.004;
+/// How wide the band is, all round its muzzle, in which the muzzle lies
+/// over the skin of its body, and how far proud of that skin, m: enough
+/// that the muzzle is always the one seen there.
+const MUZZLE_OVERLAP: f32 = 0.03;
+const MUZZLE_PROUD: f32 = 0.0012;
+
+/// The inside of its mouth (linear): raw at its lips, dark down its
+/// gullet, and how deep in that takes, m.
+const MOUTH_RAW: (f32, f32, f32) = (0.42, 0.1, 0.09);
+const MOUTH_DEEP: (f32, f32, f32) = (0.05, 0.007, 0.009);
+const MOUTH_DEPTH: f32 = 0.12;
+/// How deep inside its skin the flesh of its mouth starts to show, and
+/// where it is all flesh, m: deeper than the groove its chin sits in, which
+/// is skin.
+const FLESH: (f32, f32) = (0.012, 0.03);
+
+/// Paint settled in the creases of its skin.
+const CREVICES: Crevices = Crevices {
+    depth: 0.55,
+    lift: 0.2,
+};
 
 /// A fringe along an edge: where along its rim it starts and ends, how many
 /// rays it is stretched on, and how far its longest reaches out, m.
@@ -216,11 +258,12 @@ fn placed(mut mesh: MeshPrimitive) -> MeshPrimitive {
     mesh
 }
 
-/// The two halves of `mesh`: the triangles `keep` takes, and the rest in
-/// `material`, each with only the vertices it uses.
+/// The two halves of `mesh`: the triangles `keep` takes (by their
+/// vertices' indices), and the rest in `material`, each with only the
+/// vertices it uses.
 fn split(
     mesh: &MeshPrimitive,
-    keep: impl Fn(&[&Vertex; 3]) -> bool,
+    keep: impl Fn([usize; 3]) -> bool,
     material: MaterialId,
 ) -> (MeshPrimitive, MeshPrimitive) {
     let mut halves = [
@@ -228,8 +271,8 @@ fn split(
         (Vec::new(), Vec::new(), vec![u32::MAX; mesh.vertices.len()]),
     ];
     for triangle in mesh.indices.chunks_exact(3) {
-        let corners = [0, 1, 2].map(|i| &mesh.vertices[triangle[i] as usize]);
-        let (vertices, indices, remap) = &mut halves[usize::from(!keep(&corners))];
+        let corners = [0, 1, 2].map(|i| triangle[i] as usize);
+        let (vertices, indices, remap) = &mut halves[usize::from(!keep(corners))];
         for &index in triangle {
             if remap[index as usize] == u32::MAX {
                 remap[index as usize] = vertices.len() as u32;
@@ -253,45 +296,71 @@ fn split(
     )
 }
 
-/// What is carved out of its snout for its mouth: a slit between its lips,
-/// along the crooked line of their corners.
-fn gape() -> Lump {
+/// The frame of its mouth: the middle of its corners, and the turn from
+/// the body's axes to the mouth's.
+fn mouth_frame() -> (Vector3<f32>, UnitQuaternion<f32>) {
     let [left, right] = MOUTH_CORNERS.map(point);
-    let along = (right - left).normalize();
-    let middle = (point(UPPER_LIP.0) + point(LOWER_LIP.0)) * 0.5 - Vector3::z() * 0.06;
+    let turn = UnitQuaternion::rotation_between(&Vector3::x(), &(right - left))
+        .unwrap_or_else(UnitQuaternion::identity);
+    ((left + right) * 0.5, turn)
+}
+
+/// An ellipsoid laid out in the frame of its mouth, `grow` metres bigger
+/// all round.
+fn in_mouth((radii, at): ((f32, f32, f32), (f32, f32, f32)), grow: f32) -> Lump {
+    let (middle, turn) = mouth_frame();
     Lump::Ball(Ellipsoid {
-        radii: Vector3::new(0.5 * (right - left).norm() * 0.95, 0.022, 0.1),
-        centre: middle,
-        turn: UnitQuaternion::rotation_between(&Vector3::x(), &along)
-            .unwrap_or_else(UnitQuaternion::identity),
+        radii: point(radii).add_scalar(grow),
+        centre: middle + turn * point(at),
+        turn,
     })
 }
 
-/// A lip from corner to corner of its mouth, pouting through `pout`.
-fn lip(clay: Clay, (pout, thick): ((f32, f32, f32), f32)) -> Clay {
+/// Where its jaw turns, in its body's frame: a point on the hinge, and the
+/// hinge's axis, signed so that a positive turn opens its mouth.
+pub fn jaw_hinge() -> (Vector3<f32>, Vector3<f32>) {
     let [left, right] = MOUTH_CORNERS.map(point);
+    (
+        Deck::get().placed((left + right) * 0.5),
+        (right - left).normalize(),
+    )
+}
+
+/// The line of a lip pouting through `pout`, `t` from its −X corner (0)
+/// to its +X corner (1): a curve through both and the pout.
+fn lip_line(pout: Vector3<f32>, t: f32) -> Vector3<f32> {
+    let [left, right] = MOUTH_CORNERS.map(point);
+    let (a, b) = (left.lerp(&pout, t), pout.lerp(&right, t));
+    a.lerp(&b, t)
+}
+
+/// A lip from corner to corner of its mouth, pouting through `pout`, as
+/// limbs.
+fn lip_limbs((pout, thick): ((f32, f32, f32), f32)) -> Vec<Lump> {
     let pout = point(pout);
     let joints = 8;
-    (0..joints).fold(clay, |clay, joint| {
-        let at = |t: f32| {
-            // A curve through both corners and the pout.
-            let (a, b) = (left.lerp(&pout, t), pout.lerp(&right, t));
-            a.lerp(&b, t)
-        };
-        let (from, to) = (
-            joint as f32 / joints as f32,
-            (joint + 1) as f32 / joints as f32,
-        );
-        let girth = |t: f32| thick * (0.55 + 0.45 * (PI * t).sin());
-        clay.add(
+    let at = |t: f32| lip_line(pout, t);
+    let girth = |t: f32| thick * (0.55 + 0.45 * (PI * t).sin());
+    (0..joints)
+        .map(|joint| {
+            let (from, to) = (
+                joint as f32 / joints as f32,
+                (joint + 1) as f32 / joints as f32,
+            );
             Lump::Limb {
                 from: at(from),
                 to: at(to),
                 radii: (girth(from), girth(to)),
-            },
-            LIP,
-        )
-    })
+            }
+        })
+        .collect()
+}
+
+/// `clay` with a lip added.
+fn lip(clay: Clay, lip: ((f32, f32, f32), f32)) -> Clay {
+    lip_limbs(lip)
+        .into_iter()
+        .fold(clay, |clay, limb| clay.add(limb, LIP))
 }
 
 /// The edge of its gill cover, `t` from −1 (the −X edge) to 1: an arc
@@ -313,12 +382,12 @@ const LATERAL_LINE: [(f32, f32); 8] = [
     (0.0, -2.55),
 ];
 
-/// Its body, carved: lips, the ridge behind its eyes, its lateral line,
-/// the edge of its gill cover, and the sockets its eyes sit in.
+/// Its body, carved: its upper lip, the ridge behind its eyes, its
+/// lateral line, the edge of its gill cover, and the sockets its eyes sit
+/// in; its mouth not yet opened.
 fn carved() -> Clay {
     let mut clay = form::body_form().smoothing(0.05);
     clay = lip(clay, UPPER_LIP);
-    clay = lip(clay, LOWER_LIP);
 
     // A fleshy collar round each eye, puckered, that it turns in.
     clay = clay.smoothing(0.03);
@@ -392,7 +461,6 @@ fn carved() -> Clay {
         );
     }
 
-    clay = clay.cut(gape(), 0.02);
     for eye in 0..EYES.len() {
         let at = form::eye_centre(eye);
         clay = clay.cut(Lump::ball(EYE_RADIUS + 0.01, (at.x, at.y, at.z)), 0.015);
@@ -409,14 +477,35 @@ fn carved() -> Clay {
     })
 }
 
-/// Its body: carved, skinned and painted, its back and its belly apart.
-fn body() -> Vec<MeshPrimitive> {
-    let mut mesh = carved().skin(BODY_GRAIN, Paint::Skin.id());
+/// `body` with its mouth opened: the socket its chin sits in, and the
+/// pocket behind its lips. Its lower lip is left to meet its upper lip
+/// where it will: they part as its jaw drops, and at the corners, where
+/// the jaw turns, they hardly move.
+fn opened(body: Clay) -> Clay {
+    body.cut(in_mouth(CHIN, SOCKET_ROOM), 0.02)
+        .cut(in_mouth(POCKET, 0.0), 0.03)
+}
 
-    // Pale as pearl beneath, the sand of its back above.
+/// Its lower jaw: its chin and lower lip, roughened finely as its body is.
+fn jaw_form() -> Clay {
+    lip(Clay::new(0.03).add(in_mouth(CHIN, 0.0), SAND), LOWER_LIP).relief(Relief::Lumps {
+        frequency: 15.0,
+        depth: 0.0028,
+        seed: 202,
+    })
+}
+
+/// Both its lips, for the paint that leaves them be.
+fn lips() -> Clay {
+    lip(lip(Clay::new(0.0), UPPER_LIP), LOWER_LIP)
+}
+
+/// Paint its skin on `mesh`: pale as pearl beneath and the sand of its
+/// back above, mottled and spotted as a plaice's is; its lips left
+/// flushed.
+fn paint_skin(mesh: &mut MeshPrimitive) {
     let pearl = point(PEARL);
-    let lips = Clay::new(0.0);
-    let lips = lip(lip(lips, UPPER_LIP), LOWER_LIP);
+    let lips = lips();
     for vertex in &mut mesh.vertices {
         let under = 1.0 - of_the_back(vertex);
         let on_lips = lips.distance(vertex.pos) < 0.02;
@@ -433,14 +522,14 @@ fn body() -> Vec<MeshPrimitive> {
         warmth: 0.18,
         seed: 203,
     }
-    .paint(&mut mesh);
+    .paint(mesh);
     Mottle {
         frequency: 7.0,
         value: 0.1,
         warmth: 0.1,
         seed: 204,
     }
-    .paint(&mut mesh);
+    .paint(mesh);
     // A flatfish's mottle, the ground its spots lie on: dark blotches,
     // pale flecks between them, and freckles.
     let marks = [
@@ -456,9 +545,9 @@ fn body() -> Vec<MeshPrimitive> {
             tint: point(tint),
             salt,
         };
-        paint_where(&mut mesh, &layer, of_the_back);
+        paint_where(mesh, &layer, of_the_back);
     }
-    Speckle::BACK.paint(&mut mesh, |vertex| {
+    Speckle::BACK.paint(mesh, |vertex| {
         let on_lips = lips.distance(vertex.pos) < 0.03;
         if on_lips {
             0.0
@@ -466,6 +555,88 @@ fn body() -> Vec<MeshPrimitive> {
             smooth(0.2, 0.55, vertex.normal.y)
         }
     });
+}
+
+/// How deep in the flesh of its mouth `at` lies: how far inside `whole`
+/// (its body before its mouth was opened), within its muzzle; nothing
+/// anywhere else.
+fn mouth_depth(at: Vector3<f32>, whole: &Clay, muzzle: &Clay) -> f32 {
+    if muzzle.distance(at) > -FLESH.0 {
+        return 0.0;
+    }
+    (-whole.distance(at)).max(0.0)
+}
+
+/// Paint the inside of its mouth on `mesh`, raw at its lips and dark down
+/// its gullet, `whole` being its body before its mouth was opened.
+fn paint_mouth(mesh: &mut MeshPrimitive, whole: &Clay) {
+    let muzzle = Clay::new(0.0).add(in_mouth(MUZZLE, 0.0), SAND);
+    let (raw, deep) = (point(MOUTH_RAW), point(MOUTH_DEEP));
+    for vertex in &mut mesh.vertices {
+        let depth = mouth_depth(vertex.pos, whole, &muzzle);
+        let shown = smooth(FLESH.0, FLESH.1, depth);
+        if shown > 0.0 {
+            let flesh = raw.lerp(&deep, (depth / MOUTH_DEPTH).clamp(0.0, 1.0).sqrt());
+            let colour = vertex.color.xyz().lerp(&flesh, shown);
+            vertex.color.x = colour.x;
+            vertex.color.y = colour.y;
+            vertex.color.z = colour.z;
+        }
+    }
+}
+
+/// Which vertices of `mesh` are all the flesh of its mouth, in order.
+fn inside_mouth(mesh: &MeshPrimitive, whole: &Clay) -> Vec<bool> {
+    let muzzle = Clay::new(0.0).add(in_mouth(MUZZLE, 0.0), SAND);
+    mesh.vertices
+        .iter()
+        .map(|vertex| mouth_depth(vertex.pos, whole, &muzzle) > FLESH.1)
+        .collect()
+}
+
+/// `mesh` in its materials, moved into its body's frame: its back sand,
+/// its belly pearl, and the inside of its mouth (`inside`, by vertex) wet.
+fn dressed(mesh: &MeshPrimitive, inside: &[bool]) -> Vec<MeshPrimitive> {
+    let (skin, mouth) = split(
+        mesh,
+        |triangle| triangle.iter().filter(|&&i| inside[i]).count() < 2,
+        Paint::Wet.id(),
+    );
+    let (back, belly) = split(
+        &skin,
+        |triangle| {
+            triangle
+                .iter()
+                .map(|&i| skin.vertices[i].normal.y)
+                .sum::<f32>()
+                > -0.75
+        },
+        Paint::Nacre.id(),
+    );
+    [back, belly, mouth]
+        .into_iter()
+        .filter(|mesh| !mesh.indices.is_empty())
+        .map(placed)
+        .collect()
+}
+
+/// Where the middle of `triangle` of `mesh` is.
+fn middle_of(mesh: &MeshPrimitive, triangle: [usize; 3]) -> Vector3<f32> {
+    triangle
+        .iter()
+        .map(|&i| mesh.vertices[i].pos)
+        .sum::<Vector3<f32>>()
+        / 3.0
+}
+
+/// Its body: carved, skinned and painted, all but its muzzle; and its
+/// muzzle, where its mouth is opened, skinned finer and laid over it.
+fn body() -> Vec<MeshPrimitive> {
+    let whole = carved();
+    let muzzle = Clay::new(0.0).add(in_mouth(MUZZLE, 0.0), SAND);
+
+    let mut mesh = whole.skin(BODY_GRAIN, Paint::Skin.id());
+    paint_skin(&mut mesh);
     // Its lateral line, paler than what it runs over.
     let line = LATERAL_LINE.windows(2).fold(Clay::new(0.0), |clay, pair| {
         clay.add(
@@ -484,24 +655,48 @@ fn body() -> Vec<MeshPrimitive> {
             vertex.color.z *= 1.2;
         }
     }
-    // Its mouth is dark all the way in, its lips flushed.
-    let gape = Clay::new(0.0).add(gape(), LIP);
-    let lips_front = point(UPPER_LIP.0).z;
-    flay(&mut mesh, |at, _| {
-        (gape.distance(at) < 0.006).then(|| 0.45 + (lips_front - at.z) / 0.12)
-    });
-    Crevices {
-        depth: 0.55,
-        lift: 0.2,
-    }
-    .paint(&mut mesh);
-
-    let (back, belly) = split(
+    CREVICES.paint(&mut mesh);
+    let (rest, _) = split(
         &mesh,
-        |corners| corners.iter().map(|v| v.normal.y).sum::<f32>() > -0.75,
-        Paint::Nacre.id(),
+        |triangle| muzzle.distance(middle_of(&mesh, triangle)) > 0.0,
+        Paint::Skin.id(),
     );
-    vec![placed(back), placed(belly)]
+    let mut meshes = dressed(&rest, &vec![false; rest.vertices.len()]);
+
+    // Skinned a little past the band it overlaps the body in, so that its
+    // cut edge falls outside what is kept.
+    let reach = in_mouth(MUZZLE, MUZZLE_OVERLAP + 2.0 * MOUTH_GRAIN);
+    let mut mesh = opened(whole.clone())
+        .within(reach)
+        .skin(MOUTH_GRAIN, Paint::Skin.id());
+    paint_skin(&mut mesh);
+    paint_mouth(&mut mesh, &whole);
+    CREVICES.paint(&mut mesh);
+    let (mut patch, _) = split(
+        &mesh,
+        |triangle| muzzle.distance(middle_of(&mesh, triangle)) < MUZZLE_OVERLAP,
+        Paint::Skin.id(),
+    );
+    let inside = inside_mouth(&patch, &whole);
+    for vertex in &mut patch.vertices {
+        vertex.pos += vertex.normal * MUZZLE_PROUD;
+    }
+    meshes.extend(dressed(&patch, &inside));
+    meshes
+}
+
+/// Its lower jaw: skinned as finely as its muzzle and painted to run on
+/// from it, with the gilt ring through its lip.
+fn jaw() -> Vec<MeshPrimitive> {
+    let whole = carved();
+    let mut mesh = jaw_form().skin(MOUTH_GRAIN, Paint::Skin.id());
+    paint_skin(&mut mesh);
+    paint_mouth(&mut mesh, &whole);
+    CREVICES.paint(&mut mesh);
+    let inside = inside_mouth(&mesh, &whole);
+    let mut meshes = dressed(&mesh, &inside);
+    meshes.push(ring());
+    meshes
 }
 
 /// The gilt ring through its lower lip, hung from it forward and down.
@@ -741,12 +936,12 @@ pub fn tail() -> Ripple {
     Ripple::rooted(placed(mesh), &root)
 }
 
-/// The whole model, against the palette's slots: its body, wings and eyes.
+/// The whole model, against the palette's slots: its body, wings, eyes and
+/// jaw.
 pub fn model() -> Model {
-    let mut body = body();
-    body.push(ring());
-    let mut parts = vec![ModelPart::new(Vec::new()); 5];
-    parts[BODY] = ModelPart::new(body);
+    let mut parts = vec![ModelPart::new(Vec::new()); 6];
+    parts[BODY] = ModelPart::new(body());
+    parts[JAW] = ModelPart::new(jaw());
     parts[RIGHT_WING] = ModelPart::new(vec![wing(1.0)]);
     parts[LEFT_WING] = ModelPart::new(vec![wing(-1.0)]);
     for (eye_index, part) in EYE_PARTS.into_iter().enumerate() {
@@ -799,6 +994,36 @@ mod tests {
             "its belly faces {}",
             facing(&body[1])
         );
+    }
+
+    #[test]
+    fn its_jaw_turns_on_the_corners_of_its_mouth_and_drops_as_it_opens() {
+        let (pivot, axis) = jaw_hinge();
+        let deck = Deck::get();
+        for corner in MOUTH_CORNERS.map(point) {
+            let off = deck.placed(corner) - pivot;
+            assert!(
+                (off - axis * off.dot(&axis)).norm() < 1e-5,
+                "a corner is off its hinge"
+            );
+        }
+        let lip = deck.placed(point(LOWER_LIP.0)) - pivot;
+        let opened = UnitQuaternion::from_scaled_axis(axis * 0.3) * lip;
+        assert!(opened.y < lip.y - 0.05, "its lip went to {}", opened.y);
+    }
+
+    #[test]
+    fn shut_its_lips_meet_and_behind_them_its_mouth_is_hollow() {
+        let (body, jaw) = (opened(carved()), jaw_form());
+        let solid = |at: Vector3<f32>| body.distance(at).min(jaw.distance(at)) < 0.0;
+        for step in 1..8 {
+            let t = step as f32 / 8.0;
+            let between = (lip_line(point(UPPER_LIP.0), t) + lip_line(point(LOWER_LIP.0), t)) * 0.5;
+            assert!(solid(between), "its lips part at {t}");
+        }
+        let (middle, turn) = mouth_frame();
+        let pocket = middle + turn * Vector3::new(0.0, 0.035, -0.02);
+        assert!(!solid(pocket), "its mouth is solid behind its lips");
     }
 
     #[test]

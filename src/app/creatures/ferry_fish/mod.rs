@@ -6,7 +6,8 @@
 //!           from the same clay: what is stood on is what is seen
 //!   sculpt  its look: a back of sand spotted vermilion, a pearl belly,
 //!           goggling gold eyes, a crooked mouth with a gilt ring through
-//!           it, pale wings, and fringe fins the rig ripples
+//!           its lower lip, whose jaw the rig drops to gulp, pale wings,
+//!           and fringe fins the rig ripples
 //!   def     the level object: the body every platform has, its look, and
 //!           its rig
 //! ```

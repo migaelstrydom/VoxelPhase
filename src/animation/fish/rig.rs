@@ -6,6 +6,7 @@ use std::sync::Arc;
 use nalgebra::{UnitQuaternion, Vector3};
 use specs::{Component, DenseVecStorage};
 
+use super::jaw::{GulpingJaw, Mouth};
 use crate::creature::WingBeat;
 use crate::model::{Hinge, MeshPrimitive, Ripple, Transform};
 
@@ -72,8 +73,8 @@ struct Gaze {
     glances: u32,
 }
 
-/// A fish's rig: fins down which a wave runs, wings that beat, and eyes
-/// that rove; each quicker the faster it goes.
+/// A fish's rig: fins down which a wave runs, wings that beat, eyes that
+/// rove, each quicker the faster it goes; and a jaw that gulps.
 #[derive(Component, Clone)]
 #[storage(DenseVecStorage)]
 pub struct FishRig {
@@ -100,6 +101,8 @@ pub struct FishRig {
     clock: f32,
     /// Where each eye is looking.
     gazes: Vec<Gaze>,
+    /// Its mouth, if it has a jaw that moves.
+    mouth: Option<Mouth>,
 }
 
 impl FishRig {
@@ -134,6 +137,20 @@ impl FishRig {
             effort: 0.0,
             clock: 0.0,
             gazes,
+            mouth: None,
+        }
+    }
+
+    /// The rig with a jaw that breathes and gulps.
+    pub fn with_jaw(mut self, jaw: GulpingJaw) -> Self {
+        self.mouth = Some(Mouth::new(jaw));
+        self
+    }
+
+    /// Gulp now, if it has a jaw and is not gulping already.
+    pub fn gulp(&mut self) {
+        if let Some(mouth) = &mut self.mouth {
+            mouth.gulp(self.clock);
         }
     }
 
@@ -148,6 +165,9 @@ impl FishRig {
             self.wing_phase = (self.wing_phase + wings.rate(self.effort) * dt).rem_euclid(1.0);
         }
         self.clock += dt;
+        if let Some(mouth) = &mut self.mouth {
+            mouth.advance(self.clock);
+        }
 
         let sight = self.sight;
         let watched = watched.filter(|at| at.norm() < sight);
@@ -183,8 +203,8 @@ impl FishRig {
         }
     }
 
-    /// Write the pose of every part the rig moves (the wings, the eyes)
-    /// into `poses`, a model's poses in part order. The rest it leaves.
+    /// Write the pose of every part the rig moves (the wings, the eyes, the
+    /// jaw) into `poses`, a model's poses in part order. The rest it leaves.
     pub fn pose(&self, poses: &mut [Transform]) {
         if let Some(wings) = &self.wings {
             for wing in &wings.wings {
@@ -204,6 +224,11 @@ impl FishRig {
                 rotation: turn,
                 scale: Vector3::repeat(1.0),
             };
+        }
+        if let Some(mouth) = &self.mouth {
+            if let Some(posed) = poses.get_mut(mouth.jaw.part) {
+                *posed = mouth.pose(self.clock);
+            }
         }
     }
 
@@ -254,7 +279,7 @@ fn within_reach(eye: &RovingEye, aim: Vector3<f32>) -> Vector3<f32> {
 
 /// A number in `0..1` that is always the same for `key` and `salt`, and
 /// looks unrelated to its neighbours'.
-fn hashed(key: u32, salt: u32) -> f32 {
+pub(super) fn hashed(key: u32, salt: u32) -> f32 {
     let mut n = key.wrapping_mul(0x27d4_eb2d) ^ salt.wrapping_mul(0x1656_67b1);
     n ^= n >> 15;
     n = n.wrapping_mul(0x85eb_ca6b);
