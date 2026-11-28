@@ -47,6 +47,16 @@ pub struct PostProcessConfig {
     /// Width of the soft ramp either side of the threshold.
     pub bloom_knee: f32,
 
+    /// Luminance a pixel is held to before it feeds bloom.
+    ///
+    /// A glossy surface catching the sun can reach a hundred times the
+    /// threshold, and bloom spreads a pixel as far as its brightness carries,
+    /// so a speck of highlight would glare wider than the sun. Held to this,
+    /// nothing blooms wider than the sun's disc (`SUN_DISC_RADIANCE` in
+    /// `shader/sky_model.glsl`, about 25), which with every emissive
+    /// material sits below it untouched.
+    pub bloom_ceiling: f32,
+
     /// How strongly the blurred bloom is added back over the scene.
     pub bloom_intensity: f32,
 
@@ -79,6 +89,7 @@ impl Default for PostProcessConfig {
             // placed above that: only genuinely emissive things bloom.
             bloom_threshold: 1.3,
             bloom_knee: 0.4,
+            bloom_ceiling: 32.0,
             bloom_intensity: 0.7,
             exposure: 0.7,
             hue_preservation: 1.0,
@@ -280,7 +291,7 @@ impl PostProcessRenderer {
         let bright_params = [
             self.config.bloom_threshold,
             self.config.bloom_knee,
-            0.0,
+            self.config.bloom_ceiling,
             0.0,
         ];
         self.record_stage(

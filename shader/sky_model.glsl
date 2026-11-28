@@ -43,7 +43,9 @@ const float SKY_RADIANCE_SCALE = 1.2;
 ///
 /// This is the dial for the sun's *apparent* size, far more than the disc
 /// radius below is. Bloom spreads brightness, so overdriving the radiance
-/// inflates the glow around the sun until it dominates the sky.
+/// inflates the glow around the sun until it dominates the sky. Bloom holds
+/// every pixel to `PostProcessConfig::bloom_ceiling` (32), set just above
+/// this: raising one means raising the other.
 const float SUN_DISC_RADIANCE = 24.0;
 
 /// How much wider than life the disc is drawn.

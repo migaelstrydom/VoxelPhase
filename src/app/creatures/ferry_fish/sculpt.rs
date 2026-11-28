@@ -621,7 +621,9 @@ pub fn wing_rays(side: f32) -> Vec<Ray> {
 }
 
 /// The wing on `side`: a pale web on long rays, veined and faintly
-/// spotted, its root flushed.
+/// spotted, its root flushed. Horn, as the walking fish's fins are: the
+/// belly's nacre on a web this broad, bowed and beating catches the sun in
+/// a highlight a hundred times as bright as anything meant to bloom.
 fn wing(side: f32) -> MeshPrimitive {
     let paint = FinPaint {
         ray: (0.8, 0.73, 0.6),
@@ -632,7 +634,7 @@ fn wing(side: f32) -> MeshPrimitive {
         .thick(0.014, 0.0035)
         .edged(0.1, 0.05)
         .bellied(-side * 0.035)
-        .mesh(9, 34, Paint::Nacre.id());
+        .mesh(9, 34, Paint::Horn.id());
     Mottle {
         frequency: 3.0,
         value: 0.15,
