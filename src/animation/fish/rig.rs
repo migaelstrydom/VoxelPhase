@@ -6,9 +6,9 @@ use std::sync::Arc;
 use nalgebra::{UnitQuaternion, Vector3};
 use specs::{Component, DenseVecStorage};
 
-use super::jaw::{GulpingJaw, Mouth};
+use super::jaw::{Gulps, Mouth};
 use crate::creature::WingBeat;
-use crate::model::{Hinge, MeshPrimitive, Ripple, Transform};
+use crate::model::{Hinge, Jaw, MeshPrimitive, Ripple, Transform};
 
 /// The quickest an eye's turn to a new aim is over, s: a fish's eye does not
 /// drift, it jumps.
@@ -141,9 +141,10 @@ impl FishRig {
         }
     }
 
-    /// The rig with a jaw that breathes and gulps.
-    pub fn with_jaw(mut self, jaw: GulpingJaw) -> Self {
-        self.mouth = Some(Mouth::new(jaw));
+    /// The rig with a jaw that breathes and gulps as `gulps` says, drawn
+    /// into the entity's procedural meshes after the fins.
+    pub fn with_jaw(mut self, jaw: Arc<Jaw>, gulps: Gulps) -> Self {
+        self.mouth = Some(Mouth::new(jaw, gulps));
         self
     }
 
@@ -203,8 +204,8 @@ impl FishRig {
         }
     }
 
-    /// Write the pose of every part the rig moves (the wings, the eyes, the
-    /// jaw) into `poses`, a model's poses in part order. The rest it leaves.
+    /// Write the pose of every part the rig moves (the wings, the eyes)
+    /// into `poses`, a model's poses in part order. The rest it leaves.
     pub fn pose(&self, poses: &mut [Transform]) {
         if let Some(wings) = &self.wings {
             for wing in &wings.wings {
@@ -225,26 +226,37 @@ impl FishRig {
                 scale: Vector3::repeat(1.0),
             };
         }
-        if let Some(mouth) = &self.mouth {
-            if let Some(posed) = poses.get_mut(mouth.jaw.part) {
-                *posed = mouth.pose(self.clock);
-            }
-        }
     }
 
-    /// Shape the fins into `meshes`, one to a fin, in order.
+    /// The meshes the rig shapes, as sculpted: the fins, one to a fin, then
+    /// the jaw's.
+    pub fn rest_meshes(&self) -> Vec<MeshPrimitive> {
+        let fins = self.fins.iter().map(|fin| fin.ripple.rest().clone());
+        let jaw = self
+            .mouth
+            .iter()
+            .flat_map(|mouth| mouth.jaw.rest().to_vec());
+        fins.chain(jaw).collect()
+    }
+
+    /// Shape the fins and the jaw into `meshes`, in the order
+    /// [`Self::rest_meshes`] gives them.
     pub fn shape(&self, meshes: &mut Vec<MeshPrimitive>) {
-        if meshes.len() != self.fins.len() {
-            *meshes = self
-                .fins
-                .iter()
-                .map(|fin| fin.ripple.rest().clone())
-                .collect();
+        let count = self.fins.len()
+            + self
+                .mouth
+                .as_ref()
+                .map_or(0, |mouth| mouth.jaw.rest().len());
+        if meshes.len() != count {
+            *meshes = self.rest_meshes();
         }
         let share = self.wave.idle_swing + (1.0 - self.wave.idle_swing) * self.effort;
         for (fin, mesh) in self.fins.iter().zip(meshes.iter_mut()) {
             let swing = fin.swing * share;
             fin.ripple.shape(|hinge| self.swing_at(hinge, swing), mesh);
+        }
+        if let Some(mouth) = &self.mouth {
+            mouth.shape(self.clock, &mut meshes[self.fins.len()..]);
         }
     }
 

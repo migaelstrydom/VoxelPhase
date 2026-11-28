@@ -1,6 +1,6 @@
-//! A fish's mouth: a lower jaw that works a little with every breath and
-//! now and then drops wide in a slow gulp, as a carp's does at the
-//! surface.
+//! A fish's mouth: a jaw (`model::Jaw`) that works a little with every
+//! breath and now and then drops wide in a slow gulp, as a carp's does at
+//! the surface.
 //!
 //! ```text
 //!   gape ▲      gulp                    gulp, and again
@@ -12,11 +12,10 @@
 //! ```
 
 use std::f32::consts::TAU;
-
-use nalgebra::{UnitQuaternion, Vector3};
+use std::sync::Arc;
 
 use super::rig::hashed;
-use crate::model::Transform;
+use crate::model::{Jaw, MeshPrimitive};
 
 /// Share of a gulp spent opening, and where it starts to close.
 const OPENED: f32 = 0.35;
@@ -24,20 +23,12 @@ const CLOSING: f32 = 0.5;
 /// The pause before a gulp that follows straight on from another, s.
 const AGAIN_AFTER: f32 = 0.15;
 
-/// A lower jaw that breathes and gulps, turning on a hinge across the
-/// corners of its mouth.
+/// How a mouth works: a little with every breath, and now and then wide.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GulpingJaw {
-    /// The model's part it is.
-    pub part: usize,
-    /// A point on its hinge, in the entity's frame.
-    pub pivot: Vector3<f32>,
-    /// Its hinge's axis, in the entity's frame, signed so that a positive
-    /// turn opens its mouth.
-    pub axis: Vector3<f32>,
-    /// How far it drops in a gulp, radians.
+pub struct Gulps {
+    /// How far its jaw drops in a gulp, radians.
     pub wide: f32,
-    /// How far it drops with each breath, radians.
+    /// How far its jaw drops with each breath, radians.
     pub breath: f32,
     /// Breaths a second.
     pub breath_rate: f32,
@@ -51,44 +42,48 @@ pub struct GulpingJaw {
     pub seed: u32,
 }
 
-/// A jaw and where it is through its gulps.
-#[derive(Debug, Clone, Copy)]
+/// A jaw, how it gulps, and where it is through its gulps.
+#[derive(Clone)]
 pub struct Mouth {
-    /// The jaw.
-    pub jaw: GulpingJaw,
+    /// The flesh that opens.
+    pub jaw: Arc<Jaw>,
+    /// How it gulps.
+    pub gulps: Gulps,
     /// When the gulp under way began, on the rig's clock.
     started: Option<f32>,
     /// When it next gulps, on the rig's clock.
     next: f32,
     /// How many gulps it has made.
-    gulps: u32,
+    made: u32,
 }
 
 impl Mouth {
-    /// `jaw` shut, its first gulp a wait away.
-    pub fn new(jaw: GulpingJaw) -> Self {
-        let (shortest, longest) = jaw.between;
+    /// `jaw` as sculpted, its first gulp a wait away.
+    pub fn new(jaw: Arc<Jaw>, gulps: Gulps) -> Self {
+        let (shortest, longest) = gulps.between;
         Self {
             jaw,
+            gulps,
             started: None,
-            next: shortest + (longest - shortest) * hashed(jaw.seed, 0),
-            gulps: 0,
+            next: shortest + (longest - shortest) * hashed(gulps.seed, 0),
+            made: 0,
         }
     }
 
     /// Carry it on to `clock`: begin the gulp that is due, and finish the
     /// one that is over.
     pub fn advance(&mut self, clock: f32) {
+        let gulps = self.gulps;
         if let Some(started) = self.started {
-            if clock - started < self.jaw.gulp_for {
+            if clock - started < gulps.gulp_for {
                 return;
             }
             self.started = None;
-            self.gulps += 1;
-            let roll = |salt: u32| hashed(self.jaw.seed.wrapping_add(self.gulps * 7919), salt);
-            let (shortest, longest) = self.jaw.between;
+            self.made += 1;
+            let roll = |salt: u32| hashed(gulps.seed.wrapping_add(self.made * 7919), salt);
+            let (shortest, longest) = gulps.between;
             self.next = clock
-                + if roll(1) < self.jaw.again {
+                + if roll(1) < gulps.again {
                     AGAIN_AFTER
                 } else {
                     shortest + (longest - shortest) * roll(2)
@@ -104,25 +99,21 @@ impl Mouth {
         self.started.get_or_insert(clock);
     }
 
-    /// How far open it is at `clock`, radians.
+    /// How far its jaw is open at `clock` past where it was sculpted,
+    /// radians.
     pub fn gape(&self, clock: f32) -> f32 {
-        let jaw = &self.jaw;
-        let breath = jaw.breath * 0.5 * (1.0 - (TAU * jaw.breath_rate * clock).cos());
+        let gulps = &self.gulps;
+        let breath = gulps.breath * 0.5 * (1.0 - (TAU * gulps.breath_rate * clock).cos());
         let gulp = self.started.map_or(0.0, |started| {
-            let through = ((clock - started) / jaw.gulp_for).clamp(0.0, 1.0);
-            jaw.wide * gulp_shape(through)
+            let through = ((clock - started) / gulps.gulp_for).clamp(0.0, 1.0);
+            gulps.wide * gulp_shape(through)
         });
         breath.max(gulp)
     }
 
-    /// The jaw's pose at `clock`.
-    pub fn pose(&self, clock: f32) -> Transform {
-        let turn = UnitQuaternion::from_scaled_axis(self.jaw.axis * self.gape(clock));
-        Transform {
-            translation: self.jaw.pivot - turn * self.jaw.pivot,
-            rotation: turn,
-            scale: Vector3::repeat(1.0),
-        }
+    /// Shape `out`, one mesh to each of the jaw's, as it is at `clock`.
+    pub fn shape(&self, clock: f32, out: &mut [MeshPrimitive]) {
+        self.jaw.shape(self.gape(clock), out);
     }
 }
 
@@ -144,12 +135,13 @@ fn gulp_shape(through: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use nalgebra::{Vector2, Vector3, Vector4};
 
-    const JAW: GulpingJaw = GulpingJaw {
-        part: 2,
-        pivot: Vector3::new(0.0, 0.0, 1.0),
-        axis: Vector3::new(1.0, 0.0, 0.0),
+    use super::*;
+    use crate::rendering::material::MaterialId;
+    use crate::rendering::vertex::Vertex;
+
+    const GULPS: Gulps = Gulps {
         wide: 0.4,
         breath: 0.05,
         breath_rate: 0.5,
@@ -159,29 +151,49 @@ mod tests {
         seed: 9,
     };
 
+    /// A chin 0.3 m ahead of a hinge across X, all of it the jaw's.
+    fn mouth() -> Mouth {
+        let chin = Vertex {
+            pos: Vector3::new(0.0, 0.0, 1.3),
+            color: Vector4::repeat(1.0),
+            tex_coords: Vector2::zeros(),
+            normal: Vector3::z(),
+            ao: 1.0,
+        };
+        let mesh = MeshPrimitive {
+            vertices: vec![chin],
+            indices: Vec::new(),
+            material: MaterialId(0),
+        };
+        let jaw = Jaw::new(
+            vec![mesh],
+            vec![vec![1.0]],
+            Vector3::new(0.0, 0.0, 1.0),
+            Vector3::x(),
+        );
+        Mouth::new(Arc::new(jaw), GULPS)
+    }
+
     #[test]
     fn a_gulp_opens_wide_drops_the_chin_and_shuts_again() {
-        let mut mouth = Mouth::new(JAW);
+        let mut mouth = mouth();
         // On a breath's trough, so only the gulp opens it.
         let clock = 4.0;
         mouth.gulp(clock);
         assert!(mouth.gape(clock).abs() < 1e-6);
-        let widest = clock + JAW.gulp_for * 0.42;
-        assert!((mouth.gape(widest) - JAW.wide).abs() < 1e-6);
-        let chin = Vector3::new(0.0, 0.0, 1.3);
-        let posed = mouth.pose(widest);
-        let dropped = posed.rotation * chin + posed.translation;
-        assert!(dropped.y < -0.1, "the chin went to {dropped:?}");
-        // The hinge stays where it is.
-        let hinge = posed.rotation * JAW.pivot + posed.translation;
-        assert!((hinge - JAW.pivot).norm() < 1e-6);
-        mouth.advance(clock + JAW.gulp_for);
-        assert!(mouth.gape(clock + JAW.gulp_for) < JAW.breath + 1e-6);
+        let widest = clock + GULPS.gulp_for * 0.42;
+        assert!((mouth.gape(widest) - GULPS.wide).abs() < 1e-6);
+        let mut shaped = mouth.jaw.rest().to_vec();
+        mouth.shape(widest, &mut shaped);
+        let chin = shaped[0].vertices[0].pos;
+        assert!(chin.y < -0.1, "the chin went to {chin:?}");
+        mouth.advance(clock + GULPS.gulp_for);
+        assert!(mouth.gape(clock + GULPS.gulp_for) < GULPS.breath + 1e-6);
     }
 
     #[test]
     fn between_gulps_it_only_breathes() {
-        let mut mouth = Mouth::new(JAW);
+        let mut mouth = mouth();
         let (mut clock, mut starts) = (0.0, Vec::new());
         while clock < 120.0 {
             let was = mouth.started;
@@ -190,15 +202,15 @@ mod tests {
                 starts.push(clock);
             }
             if mouth.started.is_none() {
-                assert!(mouth.gape(clock) <= JAW.breath + 1e-6);
+                assert!(mouth.gape(clock) <= GULPS.breath + 1e-6);
             }
             clock += 1.0 / 60.0;
         }
         assert!(starts.len() > 8, "{} gulps in two minutes", starts.len());
         for pair in starts.windows(2) {
-            let wait = pair[1] - pair[0] - JAW.gulp_for;
+            let wait = pair[1] - pair[0] - GULPS.gulp_for;
             let again = wait < AGAIN_AFTER + 0.05;
-            let between = (JAW.between.0 - 0.05..JAW.between.1 + 0.05).contains(&wait);
+            let between = (GULPS.between.0 - 0.05..GULPS.between.1 + 0.05).contains(&wait);
             assert!(again || between, "it waited {wait} s");
         }
     }

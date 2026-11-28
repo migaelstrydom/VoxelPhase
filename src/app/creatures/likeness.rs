@@ -18,7 +18,7 @@ use rustc_hash::FxHashMap;
 
 use super::palette::in_level;
 use crate::animation::stilts::Dress;
-use crate::model::{Bulge, Model, Ripple};
+use crate::model::{Bulge, Jaw, Model, Ripple};
 use crate::rendering::material::MaterialId;
 
 /// One kind's look: as sculpted, and as last drawn in a level's materials.
@@ -85,6 +85,7 @@ static DRESSES: Looks<Dress> = Looks::new();
 static MODELS: Looks<Model> = Looks::new();
 static BULGES: Looks<Bulge> = Looks::new();
 static RIPPLES: Looks<Ripple> = Looks::new();
+static JAWS: Looks<Jaw> = Looks::new();
 
 /// The dress of the walkers of `kind`, drawn in the level's bestiary
 /// materials `ids`; `sculpt` makes it against the palette's slots, the
@@ -143,4 +144,16 @@ pub fn ripple(kind: &'static str, ids: &[MaterialId], sculpt: fn() -> Ripple) ->
 /// A fin the creatures of `kind` ripple, against the palette's slots.
 pub fn ripple_sculpted(kind: &'static str, sculpt: fn() -> Ripple) -> Arc<Ripple> {
     RIPPLES.sculpted(kind, sculpt)
+}
+
+/// The flesh of the creatures of `kind` that opens as a jaw (a ferry
+/// fish's muzzle), as [`model`] is.
+pub fn jaw(kind: &'static str, ids: &[MaterialId], sculpt: fn() -> Jaw) -> Arc<Jaw> {
+    JAWS.get(kind, ids, sculpt, |jaw, ids| jaw.recoloured(in_level(ids)))
+}
+
+/// The flesh of the creatures of `kind` that opens as a jaw, against the
+/// palette's slots.
+pub fn jaw_sculpted(kind: &'static str, sculpt: fn() -> Jaw) -> Arc<Jaw> {
+    JAWS.sculpted(kind, sculpt)
 }

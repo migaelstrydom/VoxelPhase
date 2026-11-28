@@ -4,10 +4,9 @@
 //!   PoweredBody (deck hull + eye balls) ── MovingPlatform ── FacesTravel
 //!     the same body, suspension and          its patrol        nose first
 //!     motor every platform has
-//!   PosedModel (body, wings, eyes, ─┐
-//!               jaw)                │
-//!   ProceduralMesh (fringe, tail) ──┴── FishRig: the wave, the wingbeat,
-//!                                        the eyes' glances, its gulps
+//!   PosedModel (body, wings, eyes) ──┐
+//!   ProceduralMesh (fringe, tail, ───┴── FishRig: the wave, the wingbeat,
+//!                   muzzle)               the eyes' glances, its gulps
 //! ```
 
 use std::sync::Arc;
@@ -20,22 +19,24 @@ use super::super::likeness;
 use super::super::palette::{self, Paint, BESTIARY};
 use super::super::sculpted::Exhibit;
 use super::form::{self, Deck, EYE_REACH};
-use super::sculpt::{self, EYE_PARTS, JAW, LEFT_WING, RIGHT_WING};
-use crate::animation::fish::{FinWave, FishRig, GulpingJaw, RippledFin, RovingEye};
+use super::mouth;
+use super::sculpt::{self, EYE_PARTS, LEFT_WING, RIGHT_WING};
+use crate::animation::fish::{FinWave, FishRig, Gulps, RippledFin, RovingEye};
 use crate::app::spawnables::shared::finish::ColliderSurface;
 use crate::app::spawnables::{MaterialCtx, PoweredBody, Spawnable};
 use crate::components::{PoseFrame, PosedModel, ProceduralMesh, Renderable};
 use crate::core::error::EngineResult;
 use crate::creature::{Wing, WingBeat};
 use crate::drive::Actuator;
-use crate::model::{MeshPrimitive, Model, Ripple};
+use crate::model::{Jaw, MeshPrimitive, Model, Ripple};
 use crate::physics::ColliderDesc;
 use crate::platform::{DeckSuspension, FacesTravel, MovingPlatform, RouteLoop, SeekMotion};
 use crate::rendering::material::MaterialId;
 use crate::rendering::physical_finish::PhysicalSurface;
 
-/// The names its look is kept under: its model, and each fin.
+/// The names its look is kept under: its model, its muzzle, and each fin.
 const KIND: &str = "ferry_fish";
+const MUZZLE: &str = "ferry_fish/muzzle";
 const FINS: [(&str, fn() -> Ripple, f32); 5] = [
     ("ferry_fish/dorsal", sculpt::dorsal, DORSAL_SWING),
     ("ferry_fish/anal", sculpt::anal, DORSAL_SWING),
@@ -87,15 +88,17 @@ const WING_FEATHER: f32 = 0.12;
 const GLIDE_BEATS: f32 = 0.32;
 const HARD_BEATS: f32 = 0.75;
 
-/// How its jaw works: a slow gulp of air every few seconds, now and then
-/// two together, how wide (radians) and how long (s); and a little with
-/// every breath between, how far and how often (a second).
-const GULP_WIDE: f32 = 0.55;
-const GULP_FOR: f32 = 1.7;
-const GULP_BETWEEN: (f32, f32) = (3.5, 9.0);
-const GULP_AGAIN: f32 = 0.3;
-const BREATH: f32 = 0.05;
-const BREATHS: f32 = 0.4;
+/// How its mouth works: a slow gulp of air every few seconds, now and then
+/// two together, and a little with every breath between.
+const GULPS: Gulps = Gulps {
+    wide: 0.42,
+    breath: 0.06,
+    breath_rate: 0.4,
+    gulp_for: 1.7,
+    between: (3.5, 9.0),
+    again: 0.3,
+    seed: 271,
+};
 
 /// How far its eyes turn from where they look at rest, radians; how much
 /// of their glances each gives whoever is near; and how far off that is.
@@ -176,8 +179,8 @@ impl FerryFishDef {
         }
     }
 
-    /// Its rig, on `fins`, cruising at `speed`.
-    fn rig(fins: Vec<Arc<Ripple>>, speed: f32) -> FishRig {
+    /// Its rig, on `fins` and `muzzle`, cruising at `speed`.
+    fn rig(fins: Vec<Arc<Ripple>>, muzzle: Arc<Jaw>, speed: f32) -> FishRig {
         let deck = Deck::get();
         let fins = fins
             .into_iter()
@@ -196,20 +199,8 @@ impl FerryFishDef {
                 seed: 261 + eye as u32,
             })
             .collect();
-        let (pivot, axis) = sculpt::jaw_hinge();
-        let jaw = GulpingJaw {
-            part: JAW,
-            pivot,
-            axis,
-            wide: GULP_WIDE,
-            breath: BREATH,
-            breath_rate: BREATHS,
-            gulp_for: GULP_FOR,
-            between: GULP_BETWEEN,
-            again: GULP_AGAIN,
-            seed: 271,
-        };
-        FishRig::new(fins, WAVE, Some(Self::wing_beat()), eyes, speed, SIGHT).with_jaw(jaw)
+        FishRig::new(fins, WAVE, Some(Self::wing_beat()), eyes, speed, SIGHT)
+            .with_jaw(muzzle, GULPS)
     }
 
     /// The states tools show it in: gliding, its wings at the top of a
@@ -221,14 +212,15 @@ impl FerryFishDef {
             .iter()
             .map(|(kind, sculpt, _)| likeness::ripple_sculpted(kind, *sculpt))
             .collect();
-        let mut rig = Self::rig(fins, Self::default_speed());
+        let muzzle = likeness::jaw_sculpted(MUZZLE, mouth::muzzle);
+        let mut rig = Self::rig(fins, muzzle, Self::default_speed());
         // A wingbeat at cruise is about 1.3 s: shown a quarter apart.
         let beat = 1.0 / HARD_BEATS;
         [
             ("gliding", beat * 0.3, false),
             ("wings_down", beat * 0.5, false),
             ("wings_up", beat * 0.5, false),
-            ("gulping", GULP_FOR * 0.42, true),
+            ("gulping", GULPS.gulp_for * 0.42, true),
         ]
         .into_iter()
         .map(|(name, wait, gulping)| {
@@ -304,10 +296,11 @@ impl Spawnable for FerryFishDef {
             .iter()
             .map(|(kind, sculpt, _)| likeness::ripple(kind, materials, *sculpt))
             .collect();
+        let muzzle = likeness::jaw(MUZZLE, materials, mouth::muzzle);
+        let rig = Self::rig(fins, muzzle, self.speed);
         let shaped = ProceduralMesh {
-            primitives: fins.iter().map(|fin| fin.rest().clone()).collect(),
+            primitives: rig.rest_meshes(),
         };
-        let rig = Self::rig(fins, self.speed);
 
         vec![body
             .spawn(

@@ -334,8 +334,8 @@ fn exhibit_shots(exhibits: &[Exhibit]) -> Vec<SceneShot> {
 
 /// The shots of the ferry fish: its exhibits as any creature's, then as
 /// the player meets it: from a ledge above as it comes to be boarded, from
-/// under it against the sky, and side on; and its mouth close to, shut and
-/// in a gulp.
+/// under it against the sky, side on, and from its back looking past its
+/// eyes; and its mouth close to and straight on, at rest and in a gulp.
 fn ferry_shots(exhibits: &[Exhibit]) -> Vec<SceneShot> {
     let mut shots = exhibit_shots(exhibits);
     let meshes = |exhibit: &Exhibit| {
@@ -348,18 +348,29 @@ fn ferry_shots(exhibits: &[Exhibit]) -> Vec<SceneShot> {
         return shots;
     };
     let middle = Point3::new(0.0, gliding.lift, 0.0);
-    for (label, eye) in [
-        ("boarding", Point3::new(3.5, 5.2, -7.5)),
-        ("under", Point3::new(2.5, 0.25, 4.0)),
-        ("side", Point3::new(9.5, 2.2, 0.5)),
+    for (label, eye, at) in [
+        ("boarding", Point3::new(3.5, 5.2, -7.5), middle),
+        ("under", Point3::new(2.5, 0.25, 4.0), middle),
+        ("side", Point3::new(9.5, 2.2, 0.5), middle),
+        (
+            "from_its_back",
+            middle + Vector3::new(0.5, 0.75, -1.2),
+            middle + Vector3::new(0.35, 0.3, 1.4),
+        ),
     ] {
-        shots.push(shot(label, eye, middle, meshes(gliding)));
+        shots.push(shot(label, eye, at, meshes(gliding)));
     }
     let mouth = middle + Vector3::new(0.03, -0.05, 2.15);
-    let close = middle + Vector3::new(0.75, 0.15, 3.3);
-    shots.push(shot("mouth_shut", close, mouth, meshes(gliding)));
-    if let Some(gulping) = exhibits.iter().find(|exhibit| exhibit.name == "gulping") {
-        shots.push(shot("mouth_open", close, mouth, meshes(gulping)));
+    let gulping = exhibits.iter().find(|exhibit| exhibit.name == "gulping");
+    for (label, off) in [
+        ("mouth", Vector3::new(0.75, 0.15, 1.15)),
+        ("mouth_ahead", Vector3::new(0.0, 0.1, 1.5)),
+    ] {
+        shots.push(shot(label, mouth + off, mouth, meshes(gliding)));
+        if let Some(gulping) = gulping {
+            let label = format!("{label}_gulping");
+            shots.push(shot(&label, mouth + off, mouth, meshes(gulping)));
+        }
     }
     shots
 }

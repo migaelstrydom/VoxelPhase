@@ -3,19 +3,20 @@
 //! jaw that breathes and gulps.
 //!
 //! ```text
-//!   Velocity ──speed──► FishRig::advance ──► pose ──► PosedModel (wings, eyes,
-//!   Player ──watched──►  (wave, beat,    │                        jaw)
-//!                         glances, gulps)└──► shape ─► ProceduralMesh (fins)
+//!   Velocity ──speed──► FishRig::advance ──► pose ──► PosedModel (wings, eyes)
+//!   Player ──watched──►  (wave, beat,    └──► shape ─► ProceduralMesh (fins,
+//!                         glances, gulps)                          jaw)
 //! ```
 //!
 //! The fins are `model::Ripple`s, each vertex swung about the root it grows
-//! from; the wings beat as a flyer's do (`creature::WingBeat`). The rig only
+//! from; the jaw is a `model::Jaw`, each vertex turned by its share of the
+//! gape; the wings beat as a flyer's do (`creature::WingBeat`). The rig only
 //! draws: the body is whatever moves it.
 
 mod jaw;
 mod rig;
 mod system;
 
-pub use jaw::GulpingJaw;
+pub use jaw::Gulps;
 pub use rig::{FinWave, FishRig, RippledFin, RovingEye};
 pub use system::FishRigSystem;
