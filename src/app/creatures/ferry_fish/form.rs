@@ -3,9 +3,10 @@
 //! collides as, so that what the player stands on is what they see.
 //!
 //! ```text
-//!   deck_form (disc + head) ──sampled in rings──► Deck::hull ──┐
-//!   eye turrets ──────────────────────────────► Deck::eyes ───┴─► Deck::centre
-//!   body_form = deck_form + tail stalk + eye turrets + shoulders
+//!   broad_form (disc + dome + head)
+//!     + tail stalk = outline_form ──sampled in rings──► Deck::hull ──┐
+//!   eye turrets ───────────────────────────────────────► Deck::eyes ──┴─► Deck::centre
+//!   body_form = outline_form + eye turrets + shoulders
 //!   rim(side, z), top(x, z) ──► where its fins root, its eyes sit, its wings hinge
 //! ```
 //!
@@ -72,8 +73,9 @@ const HULL_ROUND: usize = 20;
 const HULL_RINGS: [f32; 4] = [0.95, 0.85, 0.6, 0.3];
 const HULL_UNDER: f32 = 0.7;
 
-/// The lumps that bear a load: the disc and the head.
-pub fn deck_form() -> Clay {
+/// Its broad body, which its eyes and wings are set on: the disc, the dome
+/// along its back and its head.
+pub fn broad_form() -> Clay {
     [DISC, DOME, HEAD]
         .into_iter()
         .fold(Clay::new(DECK_BLEND), |clay, (radii, at)| {
@@ -81,11 +83,13 @@ pub fn deck_form() -> Clay {
         })
 }
 
-/// Its outline: the deck and the stalk its tail grows from.
+/// Its outline: its broad body and the stalk its tail grows from. Its deck
+/// is sampled from this, so all of its body can be stood on, though none
+/// of its fins.
 pub fn outline_form() -> Clay {
     STALK
         .iter()
-        .fold(deck_form().smoothing(0.3), |clay, (radii, at)| {
+        .fold(broad_form().smoothing(0.3), |clay, (radii, at)| {
             clay.add(Lump::mass(*radii, *at), SAND)
         })
 }
@@ -122,9 +126,10 @@ pub fn rim(side: f32, z: f32) -> Vector3<f32> {
     )
 }
 
-/// The skin of its back over (`x`, `z`), which must be within its deck.
+/// The skin of its back over (`x`, `z`), which must be within its broad
+/// body.
 pub fn top(x: f32, z: f32) -> Vector3<f32> {
-    surface_along(&deck_form(), Vector3::new(x, 0.0, z), Vector3::y())
+    surface_along(&broad_form(), Vector3::new(x, 0.0, z), Vector3::y())
 }
 
 /// The middle of eye `eye`, in the frame it is sculpted in.
@@ -215,7 +220,7 @@ impl Deck {
 /// (each a share of the way out to the rim), in one ring under it, and the
 /// middle of its back and of its belly.
 fn hull_corners() -> Vec<Vector3<f32>> {
-    let deck = deck_form();
+    let deck = outline_form();
     let middle = Vector3::new(0.0, 0.0, DISC.1 .2);
     let mut corners = Vec::new();
     for round in 0..HULL_ROUND {
@@ -241,7 +246,7 @@ mod tests {
     #[test]
     fn the_deck_lies_on_the_skin_of_its_back_and_is_about_its_weight() {
         let deck = Deck::get();
-        let form = deck_form();
+        let form = outline_form();
         // Every corner of the hull is on the skin, so what is stood on is
         // what is drawn; and the faces between them sag no more than a few
         // centimetres inside it.
@@ -266,11 +271,44 @@ mod tests {
         }
         println!("the deck sags {worst} m at worst");
         assert!(worst < 0.03, "a face sags {worst} m inside the skin");
+        // Nor does it stand out into the air beside the body, where the hull
+        // bridges the stalk narrowing out of the disc, by more than the fins
+        // there hide.
+        const STEPS: usize = 8;
+        let mut out: (f32, Vector3<f32>) = (0.0, Vector3::zeros());
+        for face in &deck.hull.faces {
+            let corners: Vec<_> = face
+                .vertex_indices
+                .iter()
+                .map(|&i| deck.hull.vertices[i as usize] + deck.centre)
+                .collect();
+            for fan in 1..corners.len() - 1 {
+                let (a, b, c) = (corners[0], corners[fan], corners[fan + 1]);
+                for i in 0..=STEPS {
+                    for j in 0..=STEPS - i {
+                        let at = a
+                            + (b - a) * (i as f32 / STEPS as f32)
+                            + (c - a) * (j as f32 / STEPS as f32);
+                        let off = form.distance(at);
+                        if off > out.0 {
+                            out = (off, at);
+                        }
+                    }
+                }
+            }
+        }
+        println!("it stands {} m out of the body at worst", out.0);
+        assert!(
+            out.0 < 0.08,
+            "it stands {} m out of the body at {:?}",
+            out.0,
+            out.1
+        );
         // It is about as big as it is sculpted: a deck three metres across
-        // and four long, half a metre thick.
+        // and five long, tail stalk and all, half a metre thick.
         assert!((deck.reach.x - 1.55).abs() < 0.08, "{:?}", deck.reach);
         assert!((0.25..0.35).contains(&deck.reach.y), "{:?}", deck.reach);
-        assert!(deck.reach.z > 2.0 && deck.reach.z < 2.3, "{:?}", deck.reach);
+        assert!(deck.reach.z > 2.4 && deck.reach.z < 2.6, "{:?}", deck.reach);
         // The hull and the eyes' balls weigh about the origin.
         let volume = deck.hull.compute_volume();
         let ball = 4.0 / 3.0 * PI * EYE_REACH.powi(3);
@@ -290,7 +328,7 @@ mod tests {
             let root = wing_root(side);
             assert!(root.x * side > 1.2, "a wing is hinged {root:?}");
             assert!(
-                deck_form().distance(root) < 0.0,
+                broad_form().distance(root) < 0.0,
                 "a wing's root is not in the body"
             );
         }
